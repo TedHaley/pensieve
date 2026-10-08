@@ -239,17 +239,20 @@ class Repos:
         for root, remote in self.discover():
             name = Path(root).name
             head = git(root, "rev-parse", "HEAD").strip()
-            row = self.db.execute("SELECT head FROM repos WHERE root=?", (root,)).fetchone()
+            with self.lock:
+                row = self.db.execute("SELECT head FROM repos WHERE root=?", (root,)).fetchone()
             if row and row[0] == head:
                 continue
             log(f"repo {name}: indexing @ {head[:8]}")
             if not row:
-                self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, None, time.time()))
-                self.db.commit()
+                with self.lock:
+                    self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, None, time.time()))
+                    self.db.commit()
             self._load_commits(root)
             n = self._index_repo(root, name, remote, head, log)
-            self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, head, time.time()))
-            self.db.commit()
+            with self.lock:
+                self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, head, time.time()))
+                self.db.commit()
             touched += n
             self.reproject()
         if touched:
@@ -259,7 +262,8 @@ class Repos:
 
     def _index_repo(self, root, name, remote, head, log):
         listing = git(root, "ls-files", "-s").strip().split("\n")
-        have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM code_files WHERE repo=?", (root,))}
+        with self.lock:
+            have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM code_files WHERE repo=?", (root,))}
         cur, n_new = {}, 0
         for ln in listing:
             m = re.match(r"\d+ (\w+) \d+\t(.+)", ln)
@@ -315,6 +319,7 @@ class Repos:
             self.db.execute("DELETE FROM code_chunks WHERE repo=? AND path=?", (root, path))
             self.db.execute("DELETE FROM code_files WHERE repo=? AND path=?", (root, path))
 
+    @locked
     def _load_commits(self, root):
         out = git(root, "log", "--format=%H%x1f%at%x1f%ae%x1f%s", "-n", "5000")
         rows = [l.split("\x1f") for l in out.strip().split("\n") if l]
@@ -341,11 +346,22 @@ class Repos:
         """Per-repo UMAP plus one joint layout across repos. A layout is refit when new or grown >15%;
         otherwise new chunks are placed next to their nearest neighbours."""
         changed = False
-        for (root,) in self.db.execute("SELECT root FROM repos").fetchall():
+        with self.lock:
+            roots = [r[0] for r in self.db.execute("SELECT root FROM repos").fetchall()]
+            multi = self.db.execute("SELECT COUNT(DISTINCT repo) FROM code_chunks").fetchone()[0] > 1
+        for root in roots:
             changed |= self._layout(root, "WHERE repo=?", (root,), ("x", "y", "z"), force)
-        if self.db.execute("SELECT COUNT(DISTINCT repo) FROM code_chunks").fetchone()[0] > 1:
+        if multi:
             changed |= self._layout(ALL, "", (), ("gx", "gy", "gz"), force)
         return changed
+
+    @locked
+    def needs_layout(self):
+        """True when some code chunks have no map position yet (e.g. a layout attempt failed)."""
+        q = "SELECT 1 FROM code_chunks WHERE x IS NULL LIMIT 1"
+        multi = self.db.execute("SELECT COUNT(DISTINCT repo) FROM code_chunks").fetchone()[0] > 1
+        return bool(self.db.execute(q).fetchone() or (multi and self.db.execute(
+            "SELECT 1 FROM code_chunks WHERE gx IS NULL LIMIT 1").fetchone()))
 
     def _layout(self, key, where, args, cols, force):
         cx, cy, cz = cols

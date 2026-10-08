@@ -113,7 +113,8 @@ class Store:
     def sync_files(self, log=lambda m: print(m, flush=True), on_progress=None) -> int:
         """Index new/changed transcript files. Returns number of sessions touched."""
         import time
-        known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
+        with self.lock:
+            known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
         touched = 0
         for source, path in parsers.discover():
             st = path.stat()
@@ -185,6 +186,10 @@ class Store:
                 r = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
                 return r[0] if r else None
             self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(value)))
+
+    def needs_layout(self):
+        with self.lock:
+            return bool(self.db.execute("SELECT 1 FROM chunks WHERE x IS NULL LIMIT 1").fetchone())
 
     def reproject(self, force=False):
         """UMAP refit when the corpus grew meaningfully (or on first run); otherwise place new points by neighbours."""

@@ -62,8 +62,15 @@ async def watcher():
                 broadcast({"type": "updated", "sessions": n})
             if await loop.run_in_executor(None, repos.sync):
                 broadcast({"type": "repos"})
+            # self-heal: if an earlier layout attempt failed, points without positions would never appear
+            if await loop.run_in_executor(None, store.needs_layout) and await loop.run_in_executor(None, store.reproject):
+                broadcast({"type": "updated"})
+            if await loop.run_in_executor(None, repos.needs_layout) and await loop.run_in_executor(None, repos.reproject):
+                broadcast({"type": "repos"})
             broadcast({"type": "status", **status})
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             status.update(indexing=False, layout=False, message=f"error: {e!r}")
         await asyncio.sleep(config.POLL_SECONDS)
 
