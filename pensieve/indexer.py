@@ -9,11 +9,12 @@ from pathlib import Path
 
 import numpy as np
 
-from . import config, parsers
+from . import config, parsers, settings
 from .layout import cluster, fit3d, place_new, unit
 from .projects import project_name
 
 LAYOUT_VERSION = "umap-v1"
+ACTIVE_SECONDS = 30  # re-index a transcript that's still growing at most this often
 
 _embedder = None
 _embed_lock = threading.Lock()
@@ -79,6 +80,7 @@ class Store:
     def __init__(self):
         from turbovec import IdMapIndex
         self.lock = threading.RLock()
+        self._indexed_at = {}
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions(
@@ -113,15 +115,18 @@ class Store:
     def sync_files(self, log=lambda m: print(m, flush=True), on_progress=None) -> int:
         """Index new/changed transcript files. Returns number of sessions touched."""
         import time
+        touched = self._purge_disabled(log)
         with self.lock:
             known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
-        touched = 0
         for source, path in parsers.discover():
             st = path.stat()
             if known.get(str(path)) == (st.st_mtime, st.st_size):
                 continue
-            if time.time() - st.st_mtime < config.SETTLE_SECONDS:
+            # transcripts are append-only JSONL (a half-written last line is skipped), so no need to wait for quiet;
+            # a session that's still being written re-indexes at most every ACTIVE_SECONDS (new turns only)
+            if str(path) in known and time.time() - self._indexed_at.get(str(path), 0) < ACTIVE_SECONDS:
                 continue
+            self._indexed_at[str(path)] = time.time()
             try:
                 self._index_session(source, path, st)
                 touched += 1
@@ -136,6 +141,25 @@ class Store:
             with self.lock:
                 self.index.sync(str(config.INDEX_PATH))
         return touched
+
+    def _purge_disabled(self, log):
+        """Drop sessions from agents that were switched off in Sources."""
+        with self.lock:
+            off = [s for (s,) in self.db.execute("SELECT DISTINCT source FROM sessions") if not settings.enabled(f"agents/{s}")]
+            n = 0
+            for src in off:
+                for (cid,) in self.db.execute("SELECT c.id FROM chunks c JOIN sessions s ON s.id=c.session_id WHERE s.source=?", (src,)).fetchall():
+                    try:
+                        self.index.remove(cid)
+                    except Exception:
+                        pass
+                self.db.execute("DELETE FROM chunks WHERE session_id IN (SELECT id FROM sessions WHERE source=?)", (src,))
+                self.db.execute("DELETE FROM session_files WHERE session_id IN (SELECT id FROM sessions WHERE source=?)", (src,))
+                n += self.db.execute("DELETE FROM sessions WHERE source=?", (src,)).rowcount
+                log(f"removed {src} sessions (source switched off)")
+            if n:
+                self.db.commit()
+        return n
 
     def save_session_files(self, sid, touched: dict):
         with self.lock:

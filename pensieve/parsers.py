@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import settings
 from .config import SOURCES
 
 _REMINDER = re.compile(r"<(system-reminder|task-notification|local-command-\w+|command-\w+)>.*?</\1>", re.S)
@@ -114,7 +115,7 @@ PARSERS = {"claude": parse_claude, "qwen": parse_qwen, "codex": parse_codex}
 def discover():
     """Yield (source, path) for every transcript file currently on disk."""
     for name, root, pattern in SOURCES:
-        if root.exists():
+        if settings.enabled(f"agents/{name}") and root.exists():
             for p in root.glob(pattern):
                 if p.is_file() and "subagents" not in p.parts:
                     yield name, p

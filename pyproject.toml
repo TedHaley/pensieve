@@ -1,19 +1,22 @@
 [project]
 name = "pensieve"
 version = "0.1.0"
-description = "A local 3D knowledge map of your AI coding sessions (Claude Code, Codex, Qwen Code), linked to your git repos."
+description = "Spotlight-style semantic and exact search over your documents, git repos and AI agent sessions, with a 3D map and an MCP server for agents."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.142.3",
     "httpx>=0.28.1",
+    "mcp>=1.12",
     "numpy>=2.5.3",
+    "pypdf>=6.19.0",
     "scikit-learn>=1.9.1",
     "sentence-transformers>=6.1.0",
     "turbovec>=1.1.2",
     "umap-learn>=0.5.12",
     "uvicorn[standard]>=0.54.0",
+    "watchdog>=6.0.0",
 ]
 
 [project.scripts]

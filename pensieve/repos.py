@@ -10,7 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
-from . import config
+from . import config, settings
+from .files import secret
 from .indexer import LAYOUT_VERSION, embed, reconcile
 from .layout import fit3d, place_new, unit
 from .projects import project_root
@@ -71,9 +72,67 @@ def chunk_code(text: str):
     return [c for c in out if c[2].strip()]
 
 
-def blame_lines(root, path):
-    """line number (1-based) -> (author 'Name <email>', epoch)."""
-    out = git(root, "blame", "-w", "--line-porcelain", "HEAD", "--", path)
+def find_repos(base: Path, depth: int, exclude: set) -> list[str]:
+    """Git repo roots at or below base (not descending into a repo once found, nor hidden/excluded folders)."""
+    import os
+    if not base.is_dir():
+        return []
+    if (base / ".git").exists():
+        return [str(base.resolve())]
+    out, depth0 = [], len(base.parts)
+    for d, dirs, files in os.walk(base):
+        if ".git" in dirs or ".git" in files:
+            out.append(str(Path(d).resolve()))
+            dirs[:] = []
+            continue
+        dirs[:] = [x for x in dirs if not x.startswith(".") and x not in exclude] if len(Path(d).parts) - depth0 < depth else []
+    return out
+
+
+def _sig(state: dict) -> str:
+    return hashlib.sha1("\n".join(f"{p} {b}" for p, b in sorted(state.items())).encode()).hexdigest()
+
+
+def tree_state(checkout) -> dict:
+    """repo-relative path -> blob hash of what's on disk now: tracked files (modified ones re-hashed) plus
+    untracked files that aren't ignored. Deleted files are left out."""
+    state = {}
+    for ln in git(checkout, "ls-files", "-s", "-z").split("\0"):
+        m = re.match(r"\d+ (\w+) \d+\t(.+)", ln)
+        if m:
+            state[m.group(2)] = m.group(1)
+    deleted = set(x for x in git(checkout, "ls-files", "-d", "-z").split("\0") if x)
+    changed = [x for x in git(checkout, "ls-files", "-m", "-o", "--exclude-standard", "-z").split("\0")
+               if x and x not in deleted and Path(Path(checkout) / x).is_file()
+               and Path(x).suffix.lower() not in SKIP_EXT][:5000]
+    for p in deleted:
+        state.pop(p, None)
+    if changed:
+        r = subprocess.run(["git", "-C", checkout, "hash-object", "--stdin-paths"], input="\n".join(changed),
+                           capture_output=True, text=True)
+        for p, h in zip(changed, r.stdout.split()):
+            state[p] = h
+    return state
+
+
+def worktree_list(root):
+    """[(path, branch)] for the repo's checkouts, from `git worktree list` (includes .claude/worktrees)."""
+    out, cur = [], {}
+    for ln in git(root, "worktree", "list", "--porcelain").split("\n") + [""]:
+        if ln.startswith("worktree "):
+            cur = {"path": ln[9:]}
+        elif ln.startswith("branch "):
+            cur["branch"] = ln[7:].removeprefix("refs/heads/")
+        elif not ln and cur:
+            out.append((cur["path"], cur.get("branch", "detached")))
+            cur = {}
+    return out
+
+
+def blame_lines(root, path, me=None):
+    """line number (1-based) -> (author 'Name <email>', epoch) for the file as it is on disk; lines not committed
+    yet are credited to `me` (name, email)."""
+    out = git(root, "blame", "-w", "--line-porcelain", "--", path)
     res, cur_a, cur_m, cur_t, n = {}, "", "", 0, 0
     for ln in out.split("\n"):
         if ln.startswith("author "):
@@ -84,7 +143,10 @@ def blame_lines(root, path):
             cur_t = int(ln[12:])
         elif ln.startswith("\t"):
             n += 1
-            res[n] = (f"{cur_a} <{cur_m}>", cur_t)
+            if cur_a == "Not Committed Yet" and me:
+                res[n] = (f"{me[0]} <{me[1]}>", cur_t)
+            else:
+                res[n] = (f"{cur_a} <{cur_m}>", cur_t)
     return res
 
 
@@ -103,47 +165,60 @@ class Repos:
         CREATE INDEX IF NOT EXISTS cc_repo ON code_chunks(repo, path);
         CREATE TABLE IF NOT EXISTS commits(repo TEXT, sha TEXT, ts INTEGER, author TEXT, subject TEXT, PRIMARY KEY(repo, sha));
         """)
-        for col in ("gx REAL", "gy REAL", "gz REAL"):  # joint cross-repo layout
+        for col in ("gx REAL", "gy REAL", "gz REAL", "wt TEXT DEFAULT ''"):  # joint layout; linked worktree path
             try:
                 self.db.execute(f"ALTER TABLE code_chunks ADD COLUMN {col}")
             except Exception:
                 pass
+        self.db.executescript("""
+        CREATE TABLE IF NOT EXISTS checkout_files(repo TEXT, wt TEXT, path TEXT, blob TEXT, PRIMARY KEY(repo, wt, path));
+        CREATE TABLE IF NOT EXISTS worktrees(path TEXT PRIMARY KEY, repo TEXT, branch TEXT);
+        """)
+        if not self.db.execute("SELECT 1 FROM checkout_files LIMIT 1").fetchone():  # carry over the old per-repo table
+            self.db.execute("INSERT OR IGNORE INTO checkout_files SELECT repo, '', path, blob FROM code_files")
+        self.db.commit()
         self.index = IdMapIndex.load(str(CODE_INDEX_PATH)) if CODE_INDEX_PATH.exists() else IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
         if reconcile(self.index, self.db, "code_chunks"):
             self.index.sync(str(CODE_INDEX_PATH))
         self._cache = {}
+        self.pending = None   # callable -> set of repo roots with changes waiting (set by the server's file watcher)
+        self.requeue = None   # callable(set) to put them back
+        self._servicing = False
+        self._recheck = set()
         self._last = 0
         self._scope = (None, None)
         self._team = {}
 
     # ---- discovery ---------------------------------------------------------
     def _extra_roots(self):
-        """Repos named with --repos / PENSIEVE_REPOS: repo roots, or folders searched 3 levels deep for repos."""
+        """Repos beyond the ones sessions ran in: settings `repos`, repos inside the indexed `folders`, and (with
+        the repos/sweep source) repos found under `sweep_roots`. Folders are searched `sweep_depth` levels deep."""
         hit = getattr(self, "_extra", None)
-        if hit and time.time() - hit[0] < 600:
-            return hit[1]
-        import os
-        skip = {"node_modules", ".venv", "venv", "__pycache__", "Library", ".Trash"}
-        out = []
-        for base in config.EXTRA_REPOS:
-            if (base / ".git").exists():
-                out.append(str(base.resolve()))
-                continue
-            depth0 = len(base.parts)
-            for d, dirs, files in os.walk(base):
-                if ".git" in dirs or ".git" in files:
-                    out.append(str(Path(d).resolve()))
-                    dirs[:] = []
-                    continue
-                dirs[:] = [x for x in dirs if not x.startswith(".") and x not in skip] if len(Path(d).parts) - depth0 < 3 else []
-        self._extra = (time.time(), out)
+        if hit and hit[0] == settings.load() and time.time() - hit[1] < 600:
+            return hit[2]
+        s = settings.load()
+        ex = set(s["exclude"])
+        out = [r for base in settings.paths("repos") for r in find_repos(base, s["sweep_depth"], ex)]
+        swept = [r for base in (settings.paths("folders") + settings.paths("sweep_roots") if settings.enabled("repos/sweep") else [])
+                 for r in find_repos(base, s["sweep_depth"], ex)]
+        self.skipped = []
+        for r in dict.fromkeys(swept):  # found by the sweep: skip giant repos unless named explicitly or used by sessions
+            n = git(r, "ls-files").count("\n")
+            if n > s["max_repo_files"]:
+                self.skipped.append(dict(root=r, files=n))
+            else:
+                out.append(r)
+        out = list(dict.fromkeys(out))
+        self._extra = (s, time.time(), out)
         return out
 
     @locked
     def discover(self):
         """Repos your sessions ran in (plus any --repos); clones of the same remote collapse to the most-used root."""
+        if not settings.enabled("repos"):
+            return []
         use = Counter()
-        for (p,) in self.db.execute("SELECT project FROM sessions"):
+        for (p,) in (self.db.execute("SELECT project FROM sessions") if settings.enabled("repos/sessions") else []):
             r = project_root(p or "")
             if r and Path(r).exists():
                 use[r] += 1
@@ -154,7 +229,7 @@ class Repos:
         for r, n in use.most_common():
             remote = norm_remote(git(r, "config", "--get", "remote.origin.url")) or r
             by_remote.setdefault(remote, (r, remote))
-        return list(by_remote.values())
+        return [v for v in by_remote.values() if settings.enabled(f"repos/{v[0]}")]
 
     @locked
     def canon_map(self):
@@ -230,94 +305,194 @@ class Repos:
         return out
 
     # ---- indexing ----------------------------------------------------------
-    def sync(self, log=lambda m: print(m, flush=True), force=False):
-        if not force and time.time() - self._last < 30:
+    def sync(self, log=lambda m: print(m, flush=True), force=False, only=None):
+        """Bring every repo (or just `only`: canonical roots) up to date with what's on disk: committed, staged,
+        modified and untracked files in the main checkout, plus files that differ from it in each linked worktree."""
+        if not force and only is None and time.time() - self._last < 30:
             return 0
-        self._last = time.time()
-        self.backfill_session_files()
+        if only is None:
+            self._last = time.time()
+            self.backfill_session_files()
         touched = 0
-        for root, remote in self.discover():
-            name = Path(root).name
-            head = git(root, "rev-parse", "HEAD").strip()
+        found = self.discover()
+        if only is None:  # repos no longer found or switched off: remove them
+            keep = {r for r, _ in found}
             with self.lock:
-                row = self.db.execute("SELECT head FROM repos WHERE root=?", (root,)).fetchone()
-            if row and row[0] == head:
+                stale = [r for (r,) in self.db.execute("SELECT root FROM repos") if r not in keep]
+            for r in stale:
+                self.purge(r)
+                log(f"repo {Path(r).name}: removed from the index")
+                touched += 1
+        for root, remote in found:
+            if only is not None and root not in only:
                 continue
-            log(f"repo {name}: indexing @ {head[:8]}")
-            if not row:
-                with self.lock:
-                    self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, None, time.time()))
-                    self.db.commit()
-            self._load_commits(root)
-            n = self._index_repo(root, name, remote, head, log)
-            with self.lock:
-                self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, head, time.time()))
-                self.db.commit()
-            touched += n
-            self.reproject()
+            touched += self._service(root, log)
+            try:
+                touched += self._sync_repo(root, remote, log)
+            except Exception as e:  # one broken repo shouldn't stop the rest
+                log(f"repo {root}: {e!r}")
+        if self._recheck and self.requeue:  # repos edited while they were being swept: one more pass
+            self.requeue(self._recheck)
+            self._recheck = set()
         if touched:
+            self.reproject()
             with self.lock:
                 self.index.sync(str(CODE_INDEX_PATH))
         return touched
 
-    def _index_repo(self, root, name, remote, head, log):
-        listing = git(root, "ls-files", "-s").strip().split("\n")
+    def _service(self, current, log):
+        """During a long sweep, sync other repos that changed meanwhile so edits don't wait for the sweep to end."""
+        if not self.pending or self._servicing:
+            return 0
+        roots = self.pending()
+        if not roots:
+            return 0
+        self._servicing, n = True, 0
+        try:
+            if current in roots:  # the repo being swept: refresh its main checkout now, worktrees after the sweep
+                self._recheck.add(current)
+                state = tree_state(current)
+                sig = _sig(state)
+                if self.store.meta(f"tree:{current}") != sig:
+                    n += self._index_checkout(current, "", state, None, log)
+                    self.store.meta(f"tree:{current}", sig)
+            with self.lock:
+                remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
+            for r in roots - {current}:
+                if r in remotes:
+                    n += self._sync_repo(r, remotes[r], log)
+        finally:
+            self._servicing = False
+        return n
+
+    def checkouts(self):
+        """Every checkout path we index -> canonical repo root (main checkouts and their linked worktrees)."""
         with self.lock:
-            have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM code_files WHERE repo=?", (root,))}
-        cur, n_new = {}, 0
-        for ln in listing:
-            m = re.match(r"\d+ (\w+) \d+\t(.+)", ln)
-            if m:
-                cur[m.group(2)] = m.group(1)
-        # drop deleted/changed files
+            out = {r[0]: r[0] for r in self.db.execute("SELECT root FROM repos")}
+            out.update({r[0]: r[1] for r in self.db.execute("SELECT path, repo FROM worktrees")})
+        return out
+
+    def _sync_repo(self, root, remote, log):
+        name = Path(root).name
+        head = git(root, "rev-parse", "HEAD").strip()
+        with self.lock:
+            row = self.db.execute("SELECT head FROM repos WHERE root=?", (root,)).fetchone()
+            if not row:
+                self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, None, time.time()))
+                self.db.commit()
+        if not row or row[0] != head:
+            self._load_commits(root)
+        state = tree_state(root)
+        n = 0
+        main_sig = _sig(state)
+        main_changed = self.store.meta(f"tree:{root}") != main_sig
+        if main_changed:
+            n += self._index_checkout(root, "", state, None, log)
+            self.store.meta(f"tree:{root}", main_sig)
+        live = {}
+        for wt, branch in worktree_list(root):
+            if wt == root or not Path(wt).is_dir():
+                continue
+            n += self._service(root, log)
+            live[wt] = branch
+            ws = tree_state(wt)
+            sig = _sig(ws) + main_sig
+            if self.store.meta(f"tree:{wt}") != sig:
+                n += self._index_checkout(root, wt, ws, state, log, branch)
+                self.store.meta(f"tree:{wt}", sig)
+        with self.lock:
+            gone = [r[0] for r in self.db.execute("SELECT path FROM worktrees WHERE repo=?", (root,)) if r[0] not in live]
+            for wt in gone:  # worktree removed: its branch-only chunks go too
+                for (path,) in self.db.execute("SELECT path FROM checkout_files WHERE repo=? AND wt=?", (root, wt)).fetchall():
+                    self._drop_file(root, path, wt)
+                self.db.execute("DELETE FROM worktrees WHERE path=?", (wt,))
+                n += 1
+            self.db.executemany("INSERT OR REPLACE INTO worktrees VALUES(?,?,?)", [(w, root, b) for w, b in live.items()])
+            self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, head, time.time()))
+            self.db.commit()
+        if n:
+            self._cache.clear()
+            self._team.clear()
+        return n
+
+    def _index_checkout(self, root, wt, state, base, log, branch=""):
+        """Index one checkout. For a linked worktree (`wt`), only files that differ from the main checkout (`base`)."""
+        target = state if base is None else {p: b for p, b in state.items() if base.get(p) != b}
+        with self.lock:
+            have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
         for path in list(have):
-            if path not in cur or cur[path] != have[path]:
-                self._drop_file(root, path)
-        for path, blob in cur.items():
+            if target.get(path) != have[path]:
+                self._drop_file(root, path, wt)
+        checkout = wt or root
+        me = git(checkout, "config", "user.name").strip(), git(checkout, "config", "user.email").strip()
+        secrets = settings.get("exclude_files")
+        label = f"{Path(root).name}" + (f" @ {branch or Path(wt).name}" if wt else "")
+        n_new = 0
+        for path, blob in target.items():
             if have.get(path) == blob:
                 continue
+            self._service(root, log)  # keep other repos' edits flowing during a long index
             p = Path(path)
-            if p.suffix.lower() in SKIP_EXT or p.name in SKIP_NAMES or ".min." in p.name:
+            if p.suffix.lower() in SKIP_EXT or p.name in SKIP_NAMES or ".min." in p.name or secret(p.name, secrets):
                 continue
-            body = git(root, "show", f"{blob}")
-            if len(body) > MAX_BYTES or "\x00" in body[:2000] or not body.strip():
+            try:
+                raw = (Path(checkout) / path).read_bytes()
+            except OSError:
                 continue
-            chunks = chunk_code(body)
+            if len(raw) > MAX_BYTES or b"\x00" in raw[:2000] or not raw.strip():
+                continue
+            chunks = chunk_code(raw.decode("utf8", "replace"))
             if not chunks:
                 continue
-            bl = blame_lines(root, path)
+            bl = blame_lines(checkout, path, me)
+            now = int(time.time())
             vecs = embed([f"{path}\n{c[2]}" for c in chunks])
             ids = []
             with self.lock:
                 for (s, e, text), v in zip(chunks, vecs):
-                    au = Counter(bl[i][0] for i in range(s, e + 1) if i in bl)
-                    ts = max((bl[i][1] for i in range(s, e + 1) if i in bl), default=0)
-                    parts = p.parts
-                    d = parts[0] if len(parts) > 1 else "."
+                    # lines without blame (untracked file) are the user's own, written just now
+                    au = Counter(bl[i][0] if i in bl else f"{me[0]} <{me[1]}>" for i in range(s, e + 1))
+                    ts = max((bl[i][1] if i in bl else now for i in range(s, e + 1)), default=0)
+                    d = p.parts[0] if len(p.parts) > 1 else "."
                     cur_ = self.db.execute(
-                        "INSERT INTO code_chunks(repo,path,dir,start,end,text,vec,authors,last_ts) VALUES(?,?,?,?,?,?,?,?,?)",
-                        (root, path, d, s, e, text, v.astype(np.float16).tobytes(), json.dumps(au), ts))
+                        "INSERT INTO code_chunks(repo,path,dir,start,end,text,vec,authors,last_ts,wt) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (root, path, d, s, e, text, v.astype(np.float16).tobytes(), json.dumps(au), ts, wt))
                     ids.append(cur_.lastrowid)
                 self.index.add_with_ids(vecs, np.array(ids, dtype=np.uint64))
-                self.db.execute("INSERT OR REPLACE INTO code_files VALUES(?,?,?)", (root, path, blob))
+                self.db.execute("INSERT OR REPLACE INTO checkout_files VALUES(?,?,?,?)", (root, wt, path, blob))
                 self.db.commit()
             n_new += 1
             if n_new % 100 == 0:
-                log(f"  {name}: {n_new} files")
+                log(f"  {label}: {n_new} files")
                 with self.lock:
                     self.index.sync(str(CODE_INDEX_PATH))
-        self._cache.clear()
+        if n_new:
+            log(f"repo {label}: {n_new} files updated")
         return n_new
 
-    def _drop_file(self, root, path):
+    def purge(self, root):
         with self.lock:
-            for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=? AND path=?", (root, path)).fetchall():
+            for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=?", (root,)).fetchall():
                 try:
                     self.index.remove(cid)
                 except Exception:
                     pass
-            self.db.execute("DELETE FROM code_chunks WHERE repo=? AND path=?", (root, path))
-            self.db.execute("DELETE FROM code_files WHERE repo=? AND path=?", (root, path))
+            for t, col in (("code_chunks", "repo"), ("checkout_files", "repo"), ("commits", "repo"), ("worktrees", "repo"), ("repos", "root")):
+                self.db.execute(f"DELETE FROM {t} WHERE {col}=?", (root,))
+            self.db.execute("DELETE FROM meta WHERE key LIKE ?", (f"tree:{root}%",))
+            self.db.commit()
+        self._cache.clear()
+        self._team.clear()
+
+    def _drop_file(self, root, path, wt=""):
+        with self.lock:
+            for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=? AND path=? AND wt=?", (root, path, wt)).fetchall():
+                try:
+                    self.index.remove(cid)
+                except Exception:
+                    pass
+            self.db.execute("DELETE FROM code_chunks WHERE repo=? AND path=? AND wt=?", (root, path, wt))
+            self.db.execute("DELETE FROM checkout_files WHERE repo=? AND wt=? AND path=?", (root, wt, path))
 
     @locked
     def _load_commits(self, root):
@@ -661,7 +836,7 @@ class Repos:
 
     @locked
     def chunk(self, cid):
-        r = self.db.execute("SELECT repo, path, start, end, text, authors, last_ts FROM code_chunks WHERE id=?", (cid,)).fetchone()
+        r = self.db.execute("SELECT repo, path, start, end, text, authors, last_ts, wt FROM code_chunks WHERE id=?", (cid,)).fetchone()
         if not r:
             return None
         links = self._session_links(r[0]).get(r[1], [])
@@ -669,8 +844,10 @@ class Repos:
             f"SELECT id, title, source FROM sessions WHERE id IN ({','.join('?' * len(links)) or 'NULL'})", [s for s, _ in links])}
         sess = [dict(id=s, edited=e, title=titles.get(s, ("", ""))[0], source=titles.get(s, ("", ""))[1]) for s, e in links]
         commits = [dict(sha=c[0][:8], ts=c[1], author=c[2], subject=c[3]) for c in self._file_commits(r[0], r[1])]
+        br = self.db.execute("SELECT branch FROM worktrees WHERE path=?", (r[7],)).fetchone() if r[7] else None
         return dict(id=cid, repo=Path(r[0]).name, path=r[1], start=r[2], end=r[3], text=r[4],
-                    authors=json.loads(r[5] or "{}"), last_ts=r[6], sessions=sess, commits=commits)
+                    authors=json.loads(r[5] or "{}"), last_ts=r[6], sessions=sess, commits=commits,
+                    worktree=r[7] or None, branch=br[0] if br else None, checkout=r[7] or r[0])
 
     def _file_commits(self, root, path):
         out = git(root, "log", "--format=%H%x1f%at%x1f%ae%x1f%s", "-n", "8", "--", path)

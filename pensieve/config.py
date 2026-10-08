@@ -7,6 +7,8 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = DATA_DIR / "pensieve.db"
 INDEX_PATH = DATA_DIR / "index.tv"
+PORT = int(os.environ.get("PENSIEVE_PORT", 8765))
+URL = f"http://127.0.0.1:{PORT}"
 
 # Session sources: (name, root, glob). Add more agents here.
 SOURCES = [
@@ -14,10 +16,6 @@ SOURCES = [
     ("qwen", HOME / ".qwen" / "projects", "*/chats/*.jsonl"),
     ("codex", HOME / ".codex" / "sessions", "**/rollout-*.jsonl"),
 ]
-
-# Repos are discovered from the folders your agent sessions ran in. These add more: repo roots, or parent
-# folders that are searched (3 levels deep) for git repos. Set via `pensieve --repos` or PENSIEVE_REPOS.
-EXTRA_REPOS = [Path(p).expanduser() for p in os.environ.get("PENSIEVE_REPOS", "").split(os.pathsep) if p.strip()]
 
 EMBED_MODEL = os.environ.get("PENSIEVE_EMBED_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 EMBED_DIM = 1024
@@ -32,8 +30,7 @@ if "HF_HUB_OFFLINE" not in os.environ:
     except Exception:
         pass
 
-LLM_URL = os.environ.get("PENSIEVE_LLM_URL", "http://localhost:1234/v1")
-LLM_MODEL = os.environ.get("PENSIEVE_LLM_MODEL", "qwen/qwen3.5-9b")
+# Folders, repos, LLM endpoint and the other user-facing options live in settings.py (~/.pensieve/settings.json).
 
 CHUNK_CHARS = 1800
 POLL_SECONDS = 5

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,69 +10,131 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import config, summarize
+from . import actions, config, search as search_mod, settings, sources, summarize
+from .files import Files
+from .watch import Watch
 from .indexer import Store
 from .repos import Repos
+from . import mcp_server
 
 store: Store | None = None
 repos: Repos | None = None
+files: Files | None = None
+searcher: search_mod.Searcher | None = None
 subscribers: set[asyncio.Queue] = set()
 status = {"indexing": False, "message": "starting", "layout": False, "insights_running": False, "insights_scope": None}
+wake_files = asyncio.Event()  # set (thread-safely) by the file watcher
+wake_repos = asyncio.Event()
+watch: "Watch | None" = None
 inflight: set[str] = set()  # background LLM jobs (scoped topic names, team summaries) already running
-
-SYSTEM = (
-    "You are Pensieve, a sharp research assistant over the user's past conversations with AI coding agents "
-    "(Claude Code, Qwen Code, Codex). Answer from the numbered excerpts and session summaries below; cite them "
-    "inline like [1] or [2][5]. Write in concise Markdown: lead with the direct answer, then short bullets. "
-    "Mention dates and projects when they matter. If the material doesn't contain the answer, say what is missing "
-    "instead of guessing."
-)
-CODE_SYS = (
-    "You are Pensieve answering questions about a codebase. Use the numbered code excerpts and cite them like [1]. "
-    "Write concise Markdown. When asked who to talk to, recommend people from the git-blame list and say what they wrote."
-)
-
 
 def broadcast(event: dict):
     for q in list(subscribers):
         q.put_nowait(event)
 
 
+FULL_SWEEP_SECONDS = 300  # safety net behind the file watcher; also discovers new repos and folders
+
+
+async def _run(fn, *a):
+    return await asyncio.get_running_loop().run_in_executor(None, fn, *a)
+
+
+async def _wait(ev: asyncio.Event, timeout):
+    try:
+        await asyncio.wait_for(ev.wait(), timeout)
+    except asyncio.TimeoutError:
+        pass
+    ev.clear()
+
+
 async def watcher():
+    """Sessions and documents: re-indexed as soon as the file watcher reports a change (and polled every few
+    seconds). Repos run in their own loop so a long first index of a big repo doesn't hold these up."""
     loop = asyncio.get_running_loop()
-    first = True
+    status.update(layout=True, message="building exact-match index")
+    broadcast({"type": "status", **status})
+    try:
+        await _run(search_mod.ensure_fts, store.db, store.lock, store.meta)
+        status.update(message="laying out map")
+        broadcast({"type": "status", **status})
+        if await _run(store.reproject):
+            broadcast({"type": "updated"})
+        if await _run(repos.reproject):
+            broadcast({"type": "repos"})
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    status.update(layout=False)
+    watch.configure(repos.checkouts())
+    asyncio.create_task(repo_watcher())
+    last_full = 0
     while True:
         try:
-            if first:  # bring layouts up to the current algorithm (UMAP) without blocking startup
-                status.update(layout=True, message="laying out map")
-                broadcast({"type": "status", **status})
-                if await loop.run_in_executor(None, store.reproject):
-                    broadcast({"type": "updated"})
-                if await loop.run_in_executor(None, repos.reproject):
-                    broadcast({"type": "repos"})
-                status.update(layout=False)
-                first = False
-            status.update(indexing=True, message="indexing")
-            broadcast({"type": "status", **status})
-            n = await loop.run_in_executor(
-                None, lambda: store.sync_files(
-                    on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
-            status.update(indexing=False, message="idle")
+            d = watch.take()
+            n = await _run(lambda: store.sync_files(
+                on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
             if n:
                 broadcast({"type": "updated", "sessions": n})
-            if await loop.run_in_executor(None, repos.sync):
-                broadcast({"type": "repos"})
+            if d["full_files"] or time.time() - last_full > FULL_SWEEP_SECONDS:
+                last_full = time.time()
+                status.update(indexing=True, message="indexing files")
+                broadcast({"type": "status", **status})
+                if await _run(lambda: files.sync(force=True, on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "files"}))):
+                    broadcast({"type": "files"})
+                watch.configure(repos.checkouts())
+            elif d["files"]:
+                changed, retry = await _run(files.sync_paths, d["files"])
+                if changed:
+                    broadcast({"type": "files"})
+                if retry:  # still being written: look again once it settles
+                    watch.requeue_files(retry)
+                    loop.call_later(config.SETTLE_SECONDS + 0.5, wake_files.set)
             # self-heal: if an earlier layout attempt failed, points without positions would never appear
-            if await loop.run_in_executor(None, store.needs_layout) and await loop.run_in_executor(None, store.reproject):
+            if await _run(store.needs_layout) and await _run(store.reproject):
                 broadcast({"type": "updated"})
-            if await loop.run_in_executor(None, repos.needs_layout) and await loop.run_in_executor(None, repos.reproject):
-                broadcast({"type": "repos"})
+            if await _run(files.needs_layout) and await _run(files.reproject):
+                broadcast({"type": "files"})
+            if status.get("repo_busy"):
+                status.update(message="indexing repos")
+            else:
+                status.update(indexing=False, message="idle")
             broadcast({"type": "status", **status})
         except Exception as e:
             import traceback
             traceback.print_exc()
             status.update(indexing=False, layout=False, message=f"error: {e!r}")
-        await asyncio.sleep(config.POLL_SECONDS)
+        await _wait(wake_files, config.POLL_SECONDS)
+        await asyncio.sleep(0.8)  # let a burst of saves land together
+
+
+async def repo_watcher():
+    last_full = 0
+    while True:
+        try:
+            d_repos, asked = watch.take_repos()
+            full = asked or time.time() - last_full > FULL_SWEEP_SECONDS
+            if full or d_repos:
+                status.update(indexing=True, repo_busy=True, message="indexing repos")
+                broadcast({"type": "status", **status})
+                if full:
+                    last_full = time.time()
+                    n = await _run(lambda: repos.sync(force=True))
+                else:
+                    n = await _run(lambda: repos.sync(only=d_repos))
+                status.update(repo_busy=False, indexing=False, message="idle")
+                watch.configure(repos.checkouts())
+                if n:
+                    broadcast({"type": "repos"})
+                if await _run(repos.needs_layout) and await _run(repos.reproject):
+                    broadcast({"type": "repos"})
+                broadcast({"type": "status", **status})
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            status.update(repo_busy=False, indexing=False, message=f"error: {e!r}")
+        await _wait(wake_repos, 30)
+        await asyncio.sleep(1.5)
 
 
 def _person(author):
@@ -204,16 +266,36 @@ async def enricher():
 
 @asynccontextmanager
 async def lifespan(app):
-    global store, repos
+    global store, repos, files, searcher
     store = Store()
     repos = Repos(store)
+    files = Files(store)
+    searcher = search_mod.Searcher(store, repos, files)
+    actions.bind(store=store, repos=repos, files=files, searcher=searcher, status=status, port=config.PORT)
+    loop = asyncio.get_running_loop()
+
+    def changed(keys):  # settings edited from the UI or MCP: re-sweep promptly, tell the Mac app and the UI
+        repos._extra = None  # re-run the repo sweep with the new folders/roots
+        watch.force_full()
+        loop.call_soon_threadsafe(broadcast, {"type": "settings", "keys": sorted(keys)})
+    settings.on_change(changed)
+
+    def wake():
+        loop.call_soon_threadsafe(wake_files.set)
+        loop.call_soon_threadsafe(wake_repos.set)
+    global watch
+    watch = Watch(wake)
+    repos.pending = watch.take_changed_repos
+    repos.requeue = watch.requeue_repos
     tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher())]
-    yield
+    async with mcp_server.mcp.session_manager.run():
+        yield
     for t in tasks:
         t.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
+app.router.routes.extend(mcp_server.app.routes)  # MCP at /mcp
 STATIC = Path(__file__).parent / "static"
 NO_CACHE = {"Cache-Control": "no-store"}
 
@@ -241,12 +323,14 @@ def _status():
     db = store.db
     n = db.execute("SELECT COUNT(*), COALESCE(SUM(n_chunks),0) FROM sessions WHERE n_chunks>0").fetchone()
     return {**status, "sessions": n[0], "chunks": n[1],
+            "files": db.execute("SELECT COUNT(*) FROM files").fetchone()[0],
+            "repos": db.execute("SELECT COUNT(*) FROM repos").fetchone()[0],
             "summarized_sessions": db.execute("SELECT COUNT(*) FROM sessions WHERE summary IS NOT NULL AND n_chunks>0").fetchone()[0],
             "summarized_chunks": db.execute("SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL").fetchone()[0],
             "topics_named": db.execute("SELECT COUNT(*) FROM topics WHERE name IS NOT NULL").fetchone()[0],
             "topics": db.execute("SELECT COUNT(*) FROM topics").fetchone()[0],
             "code_chunks": db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0],
-            "llm": config.LLM_MODEL, "llm_url": config.LLM_URL, "embed": config.EMBED_MODEL}
+            "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL}
 
 
 @app.get("/api/projects")
@@ -431,119 +515,100 @@ def session_code(sid: str):
     return r
 
 
-class ChatReq(BaseModel):
-    messages: list[dict]
-    mode: str = "ask"  # ask | code
-    session_id: str | None = None
-    projects: list[str] = []
-    sources: list[str] = []
-    since: str | None = None
-    until: str | None = None
-    repo: str | None = None
-    session_ids: list[str] | None = None
+# ---- unified search, files, settings, opening things -------------------------------
+@app.get("/api/find")
+def find(q: str, limit: int = 20, kinds: str = ""):
+    return searcher.find(q, limit, _csv(kinds) or None)
 
 
-def _sse(obj):
-    return f"data: {json.dumps(obj)}\n\n"
+@app.get("/api/files/points")
+def file_points():
+    return files.points()
 
 
-_RELATIVE = [("today", 1), ("yesterday", 2), ("this week", 7), ("past week", 7), ("last week", 14), ("past few days", 5),
-             ("this month", 31), ("past month", 31), ("last month", 62), ("recently", 14), ("lately", 14)]
+@app.get("/api/file")
+def file_detail(path: str):
+    r = files.file(path)
+    if r is None:
+        raise HTTPException(404)
+    return {**r, "similar": files.similar(path)}
 
 
-def _time_scope(question: str):
-    """'What did I do this week?' -> only sessions active in that window."""
-    ql = question.lower()
-    for phrase, days in _RELATIVE:
-        if phrase in ql:
-            return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(), phrase
-    return None, None
+@app.get("/api/item")
+def item(id: str, max_chars: int = 20000):
+    try:
+        return actions.read(id, max_chars)
+    except KeyError:
+        raise HTTPException(404)
 
 
-def _build_context(req: ChatReq, question: str):
-    sources = []
-    if req.mode == "code":
-        res = repos.experts(q=question, repo=req.repo)
-        ctx = []
-        for i, c in enumerate(res["chunks"][:6]):
-            ch = repos.chunk(c["id"])
-            ctx.append(f"[{i + 1}] {ch['repo']}/{ch['path']}:{ch['start']}-{ch['end']}\n{ch['text'][:1400]}")
-            sources.append(dict(n=i + 1, code=c["id"], title=f"{ch['path']}:{ch['start']}", repo=ch["repo"], score=c["score"]))
-        people = "\n".join(f"- {e['author']} ({round(e['share'] * 100)}% of matching code; files: {', '.join(e['files'][:3])})"
-                           for e in res["experts"])
-        return CODE_SYS + "\n\nCode excerpts:\n" + "\n\n".join(ctx) + "\n\nPeople who wrote the matching code (git blame):\n" + people, sources
-    since, phrase = (req.since, None) if req.since or req.session_id else _time_scope(question)
-    hits = store.search(question, 10, req.session_id, req.projects, req.sources, since, req.until, req.session_ids)
-    if phrase and len(hits) < 3:  # too narrow -> fall back to everything
-        hits, phrase = store.search(question, 10, None, req.projects, req.sources, None, req.until, req.session_ids), None
-    scope = repos.session_scope()
-    for h in hits:
-        h["project"] = scope.get(h["session"], {}).get("project", h["project"])
-    seen, summaries = set(), []
-    for i, h in enumerate(hits):
-        sources.append(dict(n=i + 1, session=h["session"], title=h["title"], project=h["project"],
-                            source=h["source"], started=h["started"], score=h["score"], summary=h["summary"]))
-        if h["session"] not in seen:
-            seen.add(h["session"])
-            with store.lock:
-                r = store.db.execute("SELECT summary FROM sessions WHERE id=?", (h["session"],)).fetchone()
-            if r and r[0]:
-                summaries.append(f"- {h['title']} ({h['project']}, {(h['started'] or '')[:10]}): {r[0]}")
-    topics = "; ".join(f"{t['name']} ({len(t['sessions'])})" for t in store.topics())
-    excerpts = "\n\n".join(
-        f"[{i + 1}] {h['source']} · {h['project']} · {(h['started'] or '')[:10]} · {h['title']}\n{h['text'][:1600]}"
-        for i, h in enumerate(hits))
-    when = f"Today is {datetime.now():%A %B %d, %Y}." + (f" Only sessions active {phrase} were retrieved." if phrase else "")
-    system = (SYSTEM + f"\n\n{when}\n\nTopics across all sessions: {topics}\n\nSummaries of the matching sessions:\n"
-              + "\n".join(summaries) + "\n\nExcerpts:\n" + excerpts)
-    return system, sources
+class OpenReq(BaseModel):
+    id: str
+    action: str = "open"  # open | reveal | visualize
 
 
-@app.post("/api/chat")
-async def chat(req: ChatReq):
-    loop = asyncio.get_running_loop()
-    question = next((m["content"] for m in reversed(req.messages) if m["role"] == "user"), "")
-    system, sources = await loop.run_in_executor(None, _build_context, req, question)
-    msgs = [{"role": "system", "content": system}] + req.messages[-10:]
+@app.post("/api/open")
+def open_item(req: OpenReq):
+    try:
+        return actions.open_item(req.id, req.action)
+    except KeyError:
+        raise HTTPException(404)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
-    async def gen():
-        yield _sse({"sources": sources})
-        in_think, buf = False, ""
-        try:
-            async with httpx.AsyncClient(timeout=None) as c:
-                async with c.stream("POST", f"{config.LLM_URL}/chat/completions", json={
-                        "model": config.LLM_MODEL, "messages": msgs, "stream": True, "temperature": 0.5,
-                        "reasoning_effort": "none"}) as r:
-                    if r.status_code != 200:
-                        yield _sse({"error": (await r.aread()).decode()[:300]})
-                        return
-                    async for line in r.aiter_lines():
-                        if not line.startswith("data: ") or line.endswith("[DONE]"):
-                            continue
-                        buf += json.loads(line[6:])["choices"][0]["delta"].get("content") or ""
-                        while True:  # drop <think>...</think> if the model emits it inline
-                            if in_think:
-                                j = buf.find("</think>")
-                                if j < 0:
-                                    buf = buf[-8:]; break
-                                buf, in_think = buf[j + 8:], False
-                            else:
-                                j = buf.find("<think>")
-                                if j < 0:
-                                    emit, buf = (buf[:-7], buf[-7:]) if len(buf) > 7 else ("", buf)
-                                    if emit:
-                                        yield _sse({"token": emit})
-                                    break
-                                if j:
-                                    yield _sse({"token": buf[:j]})
-                                buf, in_think = buf[j + 7:], True
-                    if buf and not in_think:
-                        yield _sse({"token": buf})
-        except httpx.HTTPError as e:
-            yield _sse({"error": f"LLM server unreachable at {config.LLM_URL}: {e!r}"})
-        yield _sse({"done": True})
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+@app.get("/api/sources")
+def get_sources():
+    return sources.catalog(store, repos, files)
+
+
+class SourceReq(BaseModel):
+    id: str
+    enabled: bool
+
+
+@app.put("/api/sources")
+def put_source(req: SourceReq):
+    try:
+        sources.set_source(req.id, req.enabled, repos)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return sources.catalog(store, repos, files)
+
+
+class FolderReq(BaseModel):
+    path: str
+
+
+@app.post("/api/sources/folders")
+def add_folder(req: FolderReq):
+    p = Path(req.path).expanduser()
+    if not p.is_dir():
+        raise HTTPException(400, f"not a folder: {req.path}")
+    cur = settings.get("folders")
+    if req.path not in cur:
+        settings.update({"folders": cur + [req.path]})
+    return sources.catalog(store, repos, files)
+
+
+@app.delete("/api/sources/folders")
+def remove_folder(path: str):
+    settings.update({"folders": [f for f in settings.get("folders") if f != path],
+                     "disabled": [d for d in settings.get("disabled") if d != f"files/{path}"]})
+    return sources.catalog(store, repos, files)
+
+
+@app.get("/api/settings")
+def get_settings():
+    return {"settings": settings.load(), "defaults": settings.DEFAULTS, "descriptions": settings.DESCRIPTIONS}
+
+
+@app.put("/api/settings")
+def put_settings(changes: dict):
+    try:
+        return {"settings": settings.update(changes)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 def main():

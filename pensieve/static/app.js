@@ -1,8 +1,6 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {CSS2DRenderer, CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
-import {marked} from 'https://cdn.jsdelivr.net/npm/marked@12.0.2/lib/marked.esm.js';
-import DOMPurify from 'https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.es.mjs';
 
 /* ============================== utilities ============================== */
 const $ = (s, r = document) => r.querySelector(s);
@@ -68,7 +66,9 @@ const S = {
   highlight: null, pulse: new Set(), selected: null, status: {},
   code: {repos: [], repo: store.get('repo', null), points: [], owners: [], people: [], colorBy: 'dir', focus: null, dirSlot: new Map(), authorSlot: new Map(), highlight: null,
          treeSel: new Set(), treeOpen: new Set(), ctree: null},
-  chat: {messages: [], abort: null, mode: 'ask', scopeSession: null},
+  files: {points: [], byId: new Map(), colorBy: store.get('filesColor', 'folder'), folderSlot: new Map(), kinds: new Set(),
+          folders: new Set(), treeOpen: new Set(store.get('filesTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false},
+  set: null,
   insights: null,
   insAuto: new Set(),
   scope: null,                 // {key, sids, topics, topicById, assign} when a repo / directory filter is active
@@ -260,18 +260,19 @@ function sessionColorSlot(s) {
 }
 function itemColor(it) {
   if (S.view === 'code') return codeColor(it);
+  if (S.view === 'files') return fileColor(it);
   const s = S.byId.get(it.session) || it;
   if (S.colorBy === 'recency') { const [a, b] = S.tRange; return seqColor(b > a ? (s.t1 - a) / (b - a) : 1); }
   return slotColor(sessionColorSlot(s));
 }
 
 function buildMap() {
-  mapPts = S.view === 'code' ? S.code.points : S.level === 'chunk' ? (S.chunks || []) : S.sessions;
+  mapPts = S.view === 'code' ? S.code.points : S.view === 'files' ? S.files.points : S.level === 'chunk' ? (S.chunks || []) : S.sessions;
   const n = mapPts.length, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n), st = new Float32Array(n);
   const c = new THREE.Color();
   mapPts.forEach((p, i) => {
     pos.set(p.p, i * 3); c.set(itemColor(p)); col.set([c.r, c.g, c.b], i * 3);
-    size[i] = S.view === 'code' ? 0.028 : S.level === 'chunk' ? 0.03 : 0.045 + Math.min(0.06, Math.sqrt(p.n || 1) * 0.008);
+    size[i] = S.view === 'code' ? 0.028 : S.view === 'files' ? 0.034 + Math.min(0.03, Math.sqrt(p.n || 1) * 0.004) : S.level === 'chunk' ? 0.03 : 0.045 + Math.min(0.06, Math.sqrt(p.n || 1) * 0.008);
   });
   gl.setData(pos, col, size, st);
   selIdx = S.selected ? mapPts.findIndex(p => matchSel(p)) : -1;
@@ -281,9 +282,13 @@ function buildMap() {
   if (n && (firstFit || cams[camKey()] == null)) { gl.fit(null, true); firstFit = false; }
   gl.setRings(-1, selIdx);
 }
-const camKey = () => S.view === 'code' ? 'code:' + S.code.repo : 'map:' + S.level;
-const matchSel = p => S.selected && (S.selected.kind === 'code' ? S.view === 'code' && p.id === S.selected.id :
-  S.view !== 'code' && (S.level === 'chunk' ? (S.selected.chunk ? p.id === S.selected.chunk : p.session === S.selected.id) : p.id === S.selected.id));
+const camKey = () => S.view === 'code' ? 'code:' + S.code.repo : S.view === 'files' ? 'files' : 'map:' + S.level;
+function matchSel(p) {
+  const sel = S.selected; if (!sel) return false;
+  if (S.view === 'code') return sel.kind === 'code' && p.id === sel.id;
+  if (S.view === 'files') return sel.kind === 'file' && p.id === sel.id;
+  return sel.kind === 'session' && (S.level === 'chunk' ? (sel.chunk ? p.id === sel.chunk : p.session === sel.id) : p.id === sel.id);
+}
 
 function recolor() {
   const a = gl.attr('aColor'); if (!a) return;
@@ -294,6 +299,11 @@ function recolor() {
 
 function refreshStates() {
   const a = gl.attr('aState'); if (!a) return;
+  if (S.view === 'files') {
+    const hl = S.files.highlight;
+    mapPts.forEach((p, i) => { let v = filePass(p) ? 1 : 0; if (v && hl) v = hl.has(p.id) ? 2 : 0.5; a.array[i] = v; });
+    a.needsUpdate = true; return;
+  }
   const code = S.view === 'code';
   const hl = code ? S.code.highlight : S.highlight;
   mapPts.forEach((p, i) => {
@@ -311,7 +321,7 @@ function refresh() {
   // re-apply filters everywhere; a changed repo/folder filter also re-clusters topics (async)
   if ((S.scope?.key || '') !== scopeKey()) applyScope();  // sets a loading placeholder synchronously
   if (S.view !== 'insights') { refreshStates(); renderLabels(); }
-  renderSidebar(); renderTimeline(); renderScope();
+  renderSidebar(); renderTimeline();
   if (S.view === 'insights') renderInsights();
 }
 
@@ -322,7 +332,13 @@ function centroid(idx) {
 
 function renderLabels() {
   const items = [];
-  if (S.view === 'code') {
+  if (S.view === 'files') {
+    if (S.files.colorBy === 'folder') for (const [k, slot] of S.files.folderSlot) {
+      const idx = []; mapPts.forEach((p, i) => { if (p.top === k) idx.push(i); });
+      if (idx.length) items.push({text: k, color: slotColor(slot), pos: centroid(idx), title: `Files in ${k}`,
+        dim: S.files.folders.size && ![...S.files.folders].some(f => k === f || k.startsWith(f + '/') || f.startsWith(k + '/')), onClick: () => toggleFolder(k)});
+    }
+  } else if (S.view === 'code') {
     const by = new Map();
     mapPts.forEach((p, i) => { const k = p.area; if (!by.has(k)) by.set(k, []); by.get(k).push(i); });
     [...by.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 10).forEach(([k, idx]) => {
@@ -351,7 +367,13 @@ function renderLabels() {
 
 function renderLegend() {
   const L = $('#legend'); let html = '';
-  if (S.view === 'code') {
+  if (S.view === 'files') {
+    const cb = S.files.colorBy;
+    if (cb === 'recency') html = legendRamp('Older', 'Recently modified');
+    else if (cb === 'folder') html = [...S.files.folderSlot].map(([k, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(k)}</span>`).join('') + `<span><i class="sw" style="background:${pal().other}"></i>Other</span>`;
+    else if (cb === 'kind') html = Object.entries(KIND_SLOT).filter(([k]) => S.files.points.some(p => p.kind === k)).map(([k, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${KIND_NAME[k]}</span>`).join('');
+    else if (cb === 'topic') html = `<span class="muted">Colors group files with similar content</span>`;
+  } else if (S.view === 'code') {
     const cb = S.code.colorBy;
     if (cb === 'recency') html = legendRamp('Older', 'Recently changed');
     else if (cb === 'repo') html = [...(S.code.repoSlot || [])].map(([r, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(r)}</span>`).join('');
@@ -390,12 +412,13 @@ canvas.addEventListener('pointerup', e => {
   const i = gl.pick(e.clientX, e.clientY);
   if (i < 0) return;
   const p = mapPts[i];
-  if (S.view === 'code') openCode(p.id); else openSession(p.session, S.level === 'chunk' ? p.id : null);
+  if (S.view === 'code') openCode(p.id); else if (S.view === 'files') openFile(p.path); else openSession(p.session, S.level === 'chunk' ? p.id : null);
 });
 canvas.addEventListener('dblclick', () => gl.fit(visibleIdx()));
 const visibleIdx = () => { const out = []; gl.states?.forEach((v, i) => { if (v >= 0.75) out.push(i); }); return out.length ? out : null; };
 
 function hoverHtml(p) {
+  if (S.view === 'files') return `<b>${esc(p.name)}</b><div class="m">${esc(p.dir)}</div><div class="m">${KIND_NAME[p.kind] || p.kind} · ${fmtSize(p.size)} · modified ${rel(p.mtime * 1000)}</div>`;
   if (S.view === 'code') {
     return `<b>${esc(p.path)}</b><div class="m">lines ${p.start}–${p.end} · ${esc(person(p.author))}${p.ts ? ' · ' + rel(p.ts * 1000) : ''}</div>` +
       (p.sessions.length ? `<p>Touched in ${plural(p.sessions.length, 'session')}</p>` : '');
@@ -409,7 +432,15 @@ function hoverHtml(p) {
 /* ============================== toolbar ============================== */
 function renderToolbar() {
   const tb = $('#toolbar');
-  if (S.view === 'code') {
+  if (S.view === 'files') {
+    tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Folders</button>
+      <div class="seg" id="fcolor"><span class="seg-label">Color</span>${[['folder', 'Folder'], ['kind', 'Kind'], ['topic', 'Topic'], ['recency', 'Recency']].map(([k, l]) => `<button data-v="${k}" class="${S.files.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <span style="flex:1"></span>
+      ${S.files.highlight ? `<button class="btn on" data-act="clearfhl">✕ Clear highlight</button>` : ''}
+      <button class="btn ${gl.controls.autoRotate ? 'on' : ''}" data-act="rotate" title="Auto-rotate">⟳</button>
+      <button class="btn" data-act="fit" title="Fit (F)">Fit</button>`;
+    $$('#fcolor button', tb).forEach(b => b.onclick = () => { S.files.colorBy = b.dataset.v; store.set('filesColor', S.files.colorBy); renderToolbar(); recolor(); });
+  } else if (S.view === 'code') {
     tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Panel</button>
       <div class="seg" id="ccolor"><span class="seg-label">Color</span>${[...(S.code.repo === ALL ? [['repo', 'Repo']] : []), ['dir', 'Area'], ['author', 'Author'], ['recency', 'Recency'], ['linked', 'My sessions']].map(([k, l]) => `<button data-v="${k}" class="${S.code.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <button class="btn" data-act="who">Who knows about…</button>
@@ -433,6 +464,7 @@ function renderToolbar() {
     fit: () => gl.fit(visibleIdx()),
     rotate: () => { gl.controls.autoRotate = !gl.controls.autoRotate; store.set('autorotate', gl.controls.autoRotate); renderToolbar(); },
     clearhl: () => { S.highlight = null; refreshStates(); renderToolbar(); },
+    clearfhl: () => { S.files.highlight = null; refreshStates(); renderToolbar(); },
     side: () => $('#side').classList.toggle('open'),
     who: () => openPalette('who: '),
     overlaps: showOverlaps,
@@ -453,6 +485,8 @@ async function setLevel(l) {
 function renderSidebar() {
   const side = $('#side');
   if (S.view === 'code') return renderCodeSidebar(side);
+  if (S.view === 'files') return renderFilesSidebar(side);
+  if (S.view === 'settings') { side.innerHTML = settingsNav(); bindSettingsNav(side); return; }
   const all = S.sessions, fs = filtered();
   const parts = [];
   // active filters summary
@@ -535,8 +569,8 @@ function treeCounts(list) {
   return cnt;
 }
 function treeRow(k, label, depth, n, kids, kind, sub = '', open = false) {
-  const on = (kind === 'proj' ? S.f.projects : S.code.treeSel).has(k);
-  const part = !on && [...(kind === 'proj' ? S.f.projects : S.code.treeSel)].some(x => x.startsWith(k + '/'));
+  const selSet = kind === 'proj' ? S.f.projects : kind === 'fdir' ? S.files.folders : S.code.treeSel;
+  const on = selSet.has(k), part = !on && [...selSet].some(x => x.startsWith(k + '/'));
   return `<div class="trow ${on ? 'on' : part ? 'part' : ''}" style="--d:${depth}">
     ${kids.length ? `<button class="tw ${open ? 'open' : ''}" data-tw="${esc(k)}" title="${open ? 'Collapse' : 'Expand'}">▶</button>` : '<span class="tw"></span>'}
     <button class="tname" data-${kind}="${esc(k)}" title="${esc(k)}"><span class="check"></span><span class="name ${depth ? 'dir' : ''}">${esc(label)}</span><span class="n">${n.toLocaleString()}</span></button>
@@ -600,7 +634,7 @@ async function applyScope(force = false) {
   const changed = await syncScope(force);
   if (!changed) return;
   if (S.view === 'map') { recolor(); refreshStates(); renderLabels(); }
-  renderSidebar(); renderTimeline(); renderScope();
+  renderSidebar(); renderTimeline();
   if (S.view === 'insights') { S.ins.key = null; loadInsights().then(renderInsights); }
 }
 const toggleSet = (set, v) => set.has(v) ? set.delete(v) : set.add(v);
@@ -625,7 +659,7 @@ const tl = {bins: [], x0: 0, x1: 1, drag: null};
 function renderTimeline() {
   const svg = $('#tl');
   const W = svg.clientWidth || 600, H = svg.clientHeight || 70, padB = 16, padT = 4;
-  const code = S.view === 'code';
+  const code = S.view !== 'map';
   $('#timeline').style.display = code ? 'none' : '';
   $('#gl').style.bottom = code ? '0' : '';
   $('#drawer').style.bottom = code ? '0' : '';
@@ -707,7 +741,7 @@ function openDrawer(titleHtml, bodyHtml) {
 }
 function closeDrawer() {
   $('#drawer').classList.remove('open'); $('#drawer').setAttribute('aria-hidden', 'true');
-  S.selected = null; selIdx = -1; gl.setRings(hoverIdx, -1); renderScope();
+  S.selected = null; selIdx = -1; gl.setRings(hoverIdx, -1);
 }
 $('#drawer-close').onclick = closeDrawer;
 
@@ -730,7 +764,6 @@ async function openSession(sid, chunkId = null) {
      ${s.tags ? `<div class="chips">${s.tags.split(',').map(x => `<span class="chip">${esc(x)}</span>`).join('')}</div>` : ''}
      ${leafDirs(base?.dirs || []).length ? `<div class="h4">Worked in</div><div class="chips">${leafDirs(base.dirs).slice(0, 10).map(d => `<button class="chip" data-dirkey="${esc(d)}" title="Filter to sessions that touched ${esc(d)}" style="font:11px var(--mono)">${esc(keyLabel(d))}</button>`).join('')}</div>` : ''}
      <div class="actions">
-       <button class="btn" data-a="ask">✦ Ask about this session</button>
        ${resume ? `<button class="btn" data-a="resume" title="${esc(resume)}">⧉ Copy resume command</button>` : ''}
        <button class="btn" data-a="similar">Show similar on map</button>
      </div>
@@ -746,12 +779,10 @@ async function openSession(sid, chunkId = null) {
   $$('[data-topic]', $('#drawer')).forEach(b => b.onclick = () => toggleTopic(+b.dataset.topic));
   $$('[data-file]', body).forEach(b => b.onclick = () => gotoCode(b.dataset.repo, b.dataset.file));
   $$('[data-person]', body).forEach(b => b.onclick = () => gotoCode(b.dataset.repo, null, b.dataset.person));
-  $('[data-a=ask]', body).onclick = () => { S.chat.scopeSession = sid; setChatMode('ask'); renderScope(); openChat(); $('#askin').focus(); };
   $('[data-a=resume]', body)?.addEventListener('click', () => { navigator.clipboard?.writeText(resume); toast('Resume command copied'); });
   $('[data-a=similar]', body).onclick = () => { S.highlight = new Set([sid, ...sim.map(x => x.id)]); refreshStates(); renderToolbar(); gl.fit(visibleIdx()); };
   renderTurns(s.turns, '', chunkId);
   $('#tfind').oninput = debounce(e => renderTurns(s.turns, $('#tfind').value.trim(), null), 150);
-  renderScope();
 }
 // deepest directories only (drop 'a/b' when 'a/b/c' is present)
 const leafDirs = dirs => dirs.filter(d => !dirs.some(x => x.startsWith(d + '/')));
@@ -885,14 +916,14 @@ function showArea(dir) {
   const touched = new Set(pts.flatMap(p => p.sessions));
   openDrawer(`<div class="meta"><span class="badge">Folder</span>${esc(repoLabel(S.code.repo))} · ${plural(files.size, 'file')}</div><h2 style="font-family:var(--mono);font-size:15px">${esc(dir)}</h2>`,
     `<div class="h4" style="margin-top:4px">Who owns it</div><p class="muted" style="margin:0 0 6px;font-size:11.5px">Share of code chunks where they wrote the most lines (git blame).</p><div class="list">${owners.map(([a, n]) => `<button class="item" data-person="${esc(a)}"><div class="t"><i class="sw" style="background:${codeColorFor('author', a)}"></i><span class="grow">${esc(person(a))}</span><span class="muted">${Math.round(n / tot * 100)}%</span></div><div class="hbar" style="margin-top:4px"><i style="width:${n / tot * 100}%;background:${codeColorFor('author', a)}"></i></div></button>`).join('')}</div>
-     <div class="actions"><button class="btn" data-a="ask">✦ Ask about this folder</button><button class="btn" data-a="sessions">Show my sessions here</button></div>
+     <div class="actions"><button class="btn" data-a="who">Who knows this folder</button><button class="btn" data-a="sessions">Show my sessions here</button></div>
      ${touched.size ? `<div class="h4">Your sessions here</div><div class="list">${[...touched].map(id => S.byId.get(id)).filter(Boolean).sort((a, b) => b.t1 - a.t1).slice(0, 8).map(s => `<button class="item" data-sid="${esc(s.id)}"><div class="t"><span class="grow">${esc(s.title)}</span></div><div class="s">${rel(s.t1)}</div></button>`).join('')}</div>` : '<p class="muted" style="font-size:12px">None of your sessions have touched this folder yet.</p>'}
      <div class="h4">Largest files</div><div class="list">${[...files].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([f, n]) => `<button class="item" data-file="${esc(f)}"><div class="t"><span class="grow" style="font:12px var(--mono)">${esc(dir === '.' ? f : f.slice(dir.length + 1))}</span><span class="muted">${n}</span></div></button>`).join('')}</div>`);
   const body = $('#drawer-body');
   $$('[data-person]', body).forEach(b => b.onclick = () => openPerson(b.dataset.person));
   $$('[data-sid]', body).forEach(b => b.onclick = () => openSession(b.dataset.sid));
   $$('[data-file]', body).forEach(b => b.onclick = () => focusFile(b.dataset.file));
-  $('[data-a=ask]', body).onclick = () => { setChatMode('code'); openChat(); $('#askin').value = `What does ${dir} do, and who should I talk to about it?`; $('#askin').focus(); };
+  $('[data-a=who]', body).onclick = () => whoKnows(dir.split('/').slice(-2).join(' '));
   $('[data-a=sessions]', body).onclick = () => { S.f.projects = new Set([S.code.repo === ALL ? dir : `${S.code.repo}/${dir}`]); setView('map').then(() => { refresh(); setTimeout(() => gl.fit(visibleIdx()), 400); }); };
 }
 async function gotoArea(repoName, area) {
@@ -919,7 +950,7 @@ function openPerson(author) {
   openDrawer(`<div class="meta"><span class="badge">Person</span>${esc(repoLabel(S.code.repo))}</div><h2>${esc(person(author))}</h2><div class="meta">${esc(email)}</div>`,
     p ? `<div class="kpis" style="grid-template-columns:repeat(3,1fr)"><div class="kpi"><div class="l">Share of code</div><div class="v">${(p.share * 100).toFixed(1)}%</div></div><div class="kpi"><div class="l">Files</div><div class="v">${p.files}</div></div><div class="kpi"><div class="l">Last change</div><div class="v" style="font-size:15px">${rel(p.last_active * 1000)}</div></div></div>
      <div class="h4">Main areas</div><div class="list">${p.dirs.map(d => `<button class="item" data-dir="${esc(d)}"><div class="t"><i class="sw" style="background:${codeColorFor('dir', d)}"></i><span class="grow" style="font:12px var(--mono)">${esc(d)}</span><span class="muted">→</span></div></button>`).join('')}</div>
-     <div class="actions"><button class="btn" data-a="ask">✦ Ask what ${esc(person(author))} works on</button>${email && !email.includes('noreply') ? `<a class="btn" href="mailto:${esc(email)}">✉ Email</a>` : ''}</div>` : '');
+     <div class="actions">${email && !email.includes('noreply') ? `<a class="btn" href="mailto:${esc(email)}">✉ Email</a>` : ''}</div>` : '');
   const body = $('#drawer-body');
   body.insertAdjacentHTML('beforeend', '<div id="precent"><div class="shimmer" style="height:60px;margin-top:14px;border-radius:8px"></div></div>');
   const repo = S.code.repo === ALL ? (S.code.points.find(x => x.author === author)?.repo || S.code.repos.find(r => !r.all)?.name) : S.code.repo;
@@ -939,7 +970,6 @@ function openPerson(author) {
     $$('[data-dir]', box).forEach(b => b.onclick = () => focusArea(b.dataset.dir));
   }).catch(() => $('#precent')?.remove());
   $$('[data-dir]', body).forEach(b => b.onclick = () => focusArea(b.dataset.dir));
-  $('[data-a=ask]', body)?.addEventListener('click', () => { setChatMode('code'); openChat(); $('#askin').value = `What parts of ${repoLabel(S.code.repo)} has ${person(author)} built, and what would they be the best person to ask about?`; $('#askin').focus(); });
 }
 async function openCode(id) {
   S.selected = {kind: 'code', id};
@@ -950,14 +980,15 @@ async function openCode(id) {
   const lines = c.text.split('\n');
   openDrawer(`<div class="meta"><span class="badge">Code</span>${esc(c.repo)} · lines ${c.start}–${c.end}</div><h2 style="font:600 14px var(--mono);word-break:break-all">${esc(c.path)}</h2>`,
     `<pre class="code" style="counter-reset:ln ${c.start - 1}">${lines.map(l => `<span>${esc(l) || ' '}</span>`).join('')}</pre>
-     <div class="actions"><button class="btn" data-a="ask">✦ Explain this code</button><button class="btn" data-a="file">Show whole file</button><button class="btn" data-a="area">Area: ${esc(areaOf(c.path))}</button></div>
+     <div class="actions"><button class="btn" data-a="open" title="Open in your editor (Settings → editor)">Open in editor</button><button class="btn" data-a="reveal">Reveal in Finder</button><button class="btn" data-a="file">Show whole file</button><button class="btn" data-a="area">Area: ${esc(areaOf(c.path))}</button></div>
      <div class="h4">Written by</div><div class="list">${Object.entries(c.authors).sort((a, b) => b[1] - a[1]).map(([a, n]) => `<button class="item" data-person="${esc(a)}"><div class="t"><i class="sw" style="background:${codeColorFor('author', a)}"></i><span class="grow">${esc(person(a))}</span><span class="muted">${n} lines</span></div><div class="hbar" style="margin-top:4px"><i style="width:${n / tot * 100}%;background:${codeColorFor('author', a)}"></i></div></button>`).join('')}</div>
      ${c.commits.length ? `<div class="h4">Recent commits to this file</div><div class="list">${c.commits.map(x => `<div class="item"><div class="t"><code style="font:11px var(--mono);color:var(--text-3)">${x.sha}</code><span class="grow">${esc(x.subject)}</span></div><div class="s">${esc(x.author)} · ${rel(x.ts * 1000)}</div></div>`).join('')}</div>` : ''}
      ${c.sessions.length ? `<div class="h4">Your sessions that touched this file</div><div class="list">${c.sessions.map(s => `<button class="item" data-sid="${esc(s.id)}"><div class="t">${s.edited ? '<span class="badge">edited</span>' : '<span class="badge">read</span>'}<span class="grow">${esc(s.title)}</span><span class="muted">→</span></div></button>`).join('')}</div>` : ''}`);
   const body = $('#drawer-body');
   $$('[data-person]', body).forEach(b => b.onclick = () => openPerson(b.dataset.person));
   $$('[data-sid]', body).forEach(b => b.onclick = () => openSession(b.dataset.sid));
-  $('[data-a=ask]', body).onclick = () => { setChatMode('code'); openChat(); $('#askin').value = `Explain ${c.path} (lines ${c.start}-${c.end}) and who I should talk to about it.`; $('#askin').focus(); };
+  $('[data-a=open]', body).onclick = () => openOnMac('code:' + id, 'open');
+  $('[data-a=reveal]', body).onclick = () => openOnMac('code:' + id, 'reveal');
   const full = S.code.repo === ALL ? `${c.repo}/${c.path}` : c.path;
   $('[data-a=file]', body).onclick = () => focusFile(full);
   $('[data-a=area]', body).onclick = () => focusArea(areaOf(full, S.code.repo === ALL ? 3 : 2));
@@ -990,31 +1021,345 @@ async function whoKnows(q) {
   openDrawer(`<div class="meta"><span class="badge">Who knows</span>${esc(repoLabel(S.code.repo))}</div><h2>${esc(q)}</h2>`,
     `<p class="muted">Ranked by how much of the most relevant code each person wrote (git blame, weighted by relevance).</p>
      <div class="list">${r.experts.map((e, i) => `<button class="item" data-person="${esc(e.author)}"><div class="t"><b style="width:18px;color:var(--text-3)">${i + 1}</b><span class="grow">${esc(person(e.author))}</span><span class="muted">${Math.round(e.share * 100)}% · ${rel(e.last_active * 1000)}</span></div><div class="hbar" style="margin:4px 0 0 24px"><i style="width:${e.share * 100}%"></i></div><div class="s" style="margin-left:24px">${esc(e.files.slice(0, 3).join(' · '))}</div></button>`).join('') || '<div class="empty">No matching code.</div>'}</div>
-     <div class="h4">Most relevant code</div><div class="list">${r.chunks.map(c => `<button class="item" data-code="${c.id}"><div class="t"><span class="grow" style="font:12px var(--mono)">${esc(c.path)}:${c.start}</span><span class="muted">${Math.round(c.score * 100)}%</span></div></button>`).join('')}</div>
-     <div class="actions"><button class="btn" data-a="ask">✦ Ask Pensieve about “${esc(q)}”</button></div>`);
+     <div class="h4">Most relevant code</div><div class="list">${r.chunks.map(c => `<button class="item" data-code="${c.id}"><div class="t"><span class="grow" style="font:12px var(--mono)">${esc(c.path)}:${c.start}</span><span class="muted">${Math.round(c.score * 100)}%</span></div></button>`).join('')}</div>`);
   const body = $('#drawer-body');
   $$('[data-person]', body).forEach(b => b.onclick = () => openPerson(b.dataset.person));
   $$('[data-code]', body).forEach(b => b.onclick = () => openCode(+b.dataset.code));
-  $('[data-a=ask]', body).onclick = () => { setChatMode('code'); openChat(); send(`Who should I talk to about ${q}, and where is it implemented?`); };
 }
+
+/* ============================== files view ============================== */
+const KIND_SLOT = {doc: 0, pdf: 1, code: 2, data: 3, slides: 4, notebook: 5, other: -1};
+const KIND_NAME = {doc: 'Documents', pdf: 'PDFs', code: 'Code & text', data: 'Data', slides: 'Slides', notebook: 'Notebooks', other: 'Other files'};
+const fmtSize = b => b == null ? '' : b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(b < 10240 ? 1 : 0)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+// a file's color area: its root folder plus one level ('Documents/notes'), or just the root for top-level files
+const topOf = rel => { const p = rel.split('/'); return p.length > 2 ? p.slice(0, 2).join('/') : p[0]; };
+const dirOf = rel => rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+async function loadFiles() {
+  let pts = [];
+  try { pts = await api('/api/files/points'); } catch {}
+  S.files.points = pts.map(p => ({...p, top: topOf(p.rel), dir: dirOf(p.rel)}));
+  S.files.byId = new Map(S.files.points.map(p => [p.id, p]));
+  const c = new Map(); S.files.points.forEach(p => c.set(p.top, (c.get(p.top) || 0) + 1));
+  S.files.folderSlot = new Map([...c].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i]));
+  const ts = S.files.points.map(p => p.mtime).filter(Boolean).sort((a, b) => a - b);
+  S.files.tRange = [ts[Math.floor(ts.length * 0.05)] || 0, ts[ts.length - 1] || 1];
+  S.files.tree = null; S.files.loaded = true; S.files.stale = false;
+}
+function fileColor(p) {
+  switch (S.files.colorBy) {
+    case 'folder': return slotColor(S.files.folderSlot.has(p.top) ? S.files.folderSlot.get(p.top) : -1);
+    case 'kind': return slotColor(KIND_SLOT[p.kind] ?? -1);
+    case 'topic': return slotColor(p.cluster ?? -1);
+    case 'recency': { const [a, b] = S.files.tRange; return seqColor(Math.max(0, Math.min(1, (p.mtime - a) / Math.max(1, b - a)))); }
+  }
+  return pal().other;
+}
+const inFolder = (p, k) => p.rel.startsWith(k + '/');
+function filePass(p, skip) {
+  if (skip !== 'kinds' && S.files.kinds.size && !S.files.kinds.has(p.kind)) return false;
+  if (skip !== 'folders' && S.files.folders.size && ![...S.files.folders].some(k => inFolder(p, k))) return false;
+  return true;
+}
+function filesTree() {
+  if (S.files.tree?.n === S.files.points.length) return S.files.tree;
+  const children = new Map(), seen = new Set();
+  for (const p of S.files.points) {
+    const parts = p.dir.split('/'); let key = '';
+    for (const part of parts) {
+      const k = key ? key + '/' + part : part;
+      if (!seen.has(k)) { seen.add(k); if (key) { if (!children.has(key)) children.set(key, []); children.get(key).push(k); } }
+      key = k;
+    }
+  }
+  return (S.files.tree = {n: S.files.points.length, children, roots: [...seen].filter(k => !k.includes('/'))});
+}
+function renderFilesSidebar(side) {
+  const F = S.files, T = filesTree(), all = F.points, vis = all.filter(p => filePass(p));
+  const cnt = new Map();
+  all.filter(p => filePass(p, 'folders')).forEach(p => { const parts = p.dir.split('/'); for (let i = 1; i <= parts.length; i++) { const k = parts.slice(0, i).join('/'); cnt.set(k, (cnt.get(k) || 0) + 1); } });
+  const kc = {}; all.filter(p => filePass(p, 'kinds')).forEach(p => kc[p.kind] = (kc[p.kind] || 0) + 1);
+  const kinds = Object.keys(KIND_SLOT).filter(k => all.some(p => p.kind === k));
+  const af = [...F.kinds].map(k => ['kind', k, KIND_NAME[k]]).concat([...F.folders].map(k => ['folder', k, k]));
+  side.innerHTML = `${af.length ? `<div class="active-filters">${af.map(([t, v, l]) => `<span class="chip">${esc(l)}<button class="x" data-frm="${t}" data-v="${esc(v)}">✕</button></span>`).join('')}<button class="chip" data-fclear>Clear all</button></div>` : ''}
+    <div class="sec"><div class="sec-h"><span>Showing</span></div><div style="padding:0 4px;font-size:13px"><b>${vis.length.toLocaleString()}</b> <span class="muted">of ${plural(all.length, 'file')}</span></div>
+      ${all.length ? '' : '<div class="sec-note" style="margin-top:6px">Files appear here once they are indexed. Choose which folders in <a href="#settings">Settings</a>.</div>'}</div>
+    <div class="sec"><div class="sec-h"><span>Kinds</span></div><div class="chips">${kinds.map(k => `<button class="chip ${F.kinds.has(k) ? 'on' : ''}" data-kind="${k}"><i class="sw" style="background:${slotColor(KIND_SLOT[k])}"></i>${KIND_NAME[k]}<span class="n">${kc[k] || 0}</span></button>`).join('')}</div></div>
+    <div class="sec"><div class="sec-h"><span>Folders</span>${F.folders.size ? '<button data-fclearf>Clear</button>' : ''}</div><div class="sec-note">Click a folder to filter the map; expand to drill in.</div>
+      <div class="tree">${T.roots.filter(k => cnt.get(k)).sort((a, b) => cnt.get(b) - cnt.get(a)).map(k => treeHtml(k, 0, cnt, 'fdir', T.children, null, F.treeOpen)).join('') || '<div class="empty" style="padding:8px">No files yet</div>'}</div></div>`;
+  $$('[data-kind]', side).forEach(b => b.onclick = () => { toggleSet(F.kinds, b.dataset.kind); filesChanged(); });
+  bindTree(side, 'fdir', k => toggleFolder(k), () => renderSidebar(), F.treeOpen, 'filesTreeOpen');
+  $$('[data-frm]', side).forEach(b => b.onclick = () => { (b.dataset.frm === 'kind' ? F.kinds : F.folders).delete(b.dataset.v); filesChanged(); });
+  $('[data-fclear]', side)?.addEventListener('click', () => { F.kinds.clear(); F.folders.clear(); filesChanged(); });
+  $('[data-fclearf]', side)?.addEventListener('click', () => { F.folders.clear(); filesChanged(); });
+}
+function filesChanged(fit = true) {
+  refreshStates(); renderSidebar(); renderLabels();
+  if (fit && S.view === 'files') setTimeout(() => gl.fit(visibleIdx()), 30);
+}
+function toggleFolder(k) {
+  const F = S.files;
+  if (F.folders.has(k)) F.folders.delete(k);
+  else {
+    [...F.folders].forEach(x => { if (x.startsWith(k + '/') || k.startsWith(x + '/')) F.folders.delete(x); });
+    F.folders.add(k);
+    const parts = k.split('/'); for (let i = 1; i < parts.length; i++) F.treeOpen.add(parts.slice(0, i).join('/'));
+    store.set('filesTreeOpen', [...F.treeOpen]);
+  }
+  filesChanged();
+}
+async function openOnMac(id, action) {
+  try {
+    const r = await api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, action})});
+    toast(action === 'reveal' ? 'Shown in Finder' : r.editor ? `Opened in ${r.editor}` : 'Opened');
+  } catch (e) { toast('Could not open it: ' + e.message); }
+}
+const PROSE = new Set(['doc', 'pdf', 'slides', 'other']);
+async function openFile(path) {
+  if (S.view !== 'files') await setView('files');
+  const id = 'file:' + path;
+  S.selected = {kind: 'file', id};
+  selIdx = mapPts.findIndex(matchSel); gl.setRings(hoverIdx, selIdx);
+  if (selIdx >= 0) gl.focusPoint(selIdx, 0.6);
+  const p0 = S.files.byId.get(id);
+  openDrawer(`<div class="meta"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Loading…</div><h2>${esc(p0?.name || path.split('/').pop())}</h2>`, '');
+  let f;
+  try { f = await api('/api/file?path=' + enc(path)); } catch { openDrawer(`<h2>${esc(path.split('/').pop())}</h2>`, '<p class="muted">This file is not in the index (it may have moved or been excluded).</p>'); return; }
+  if (S.selected?.id !== id) return;
+  const mono = !PROSE.has(f.kind);
+  const chunks = f.chunks.slice(0, 3);
+  const preview = chunks.length ? chunks.map(c => `<pre class="fprev ${mono ? 'mono' : ''}">${esc(c.text.length > 2400 ? c.text.slice(0, 2400) + '…' : c.text)}</pre>`).join('') +
+    (f.chunks.length > 3 ? `<p class="muted" style="font-size:12px">${plural(f.chunks.length - 3, 'more section')} not shown.</p>` : '')
+    : '<p class="muted" style="font-size:12px">Indexed by name only (no readable text).</p>';
+  openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${slotColor(KIND_SLOT[f.kind] ?? -1)}"></i>${esc(KIND_NAME[f.kind] || f.kind)}</span>${f.ext ? `<span class="chip">.${esc(f.ext)}</span>` : ''}</div>
+      <h2 style="word-break:break-word">${esc(f.name)}</h2>
+      <div class="fmeta"><span style="font-family:var(--mono);word-break:break-all">${esc(f.display)}</span></div>
+      <div class="fmeta"><span>${fmtSize(f.size)}</span><span>modified ${rel(f.mtime * 1000)}</span>${f.n ? `<span>${plural(f.n, 'section')}</span>` : ''}</div>`,
+    `<div class="actions" style="margin-top:0"><button class="btn" data-a="open">Open</button><button class="btn" data-a="reveal">Reveal in Finder</button><button class="btn" data-a="copy">Copy path</button><button class="btn" data-a="sim">Show similar on map</button></div>
+     <div class="h4">Preview</div>${preview}
+     ${f.similar?.length ? `<div class="h4">Similar files</div><div class="list">${f.similar.map(x => `<button class="item" data-fpath="${esc(x.path)}"><div class="t"><span class="grow">${esc(x.name)}</span><span class="muted" style="font-size:11px">${Math.round(x.score * 100)}%</span></div><div class="s" style="font-family:var(--mono);font-size:11px">${esc(x.display)}</div></button>`).join('')}</div>` : ''}`);
+  const body = $('#drawer-body');
+  $('[data-a=open]', body).onclick = () => openOnMac(id, 'open');
+  $('[data-a=reveal]', body).onclick = () => openOnMac(id, 'reveal');
+  $('[data-a=copy]', body).onclick = () => { navigator.clipboard?.writeText(path); toast('Path copied'); };
+  $('[data-a=sim]', body).onclick = () => { S.files.highlight = new Set([id, ...(f.similar || []).map(x => x.id)]); refreshStates(); renderToolbar(); gl.fit(visibleIdx()); };
+  $$('[data-fpath]', body).forEach(b => b.onclick = () => openFile(b.dataset.fpath));
+}
+
+/* ============================== settings view ============================== */
+const SET_GROUPS = [
+  ['What gets indexed', ['exclude', 'exclude_files', 'max_file_mb']],
+  ['Git repositories', ['sweep_roots', 'sweep_depth', 'max_repo_files', 'repos']],
+  ['Mac app', ['hotkey', 'editor']],
+  ['Language model', ['llm_url', 'llm_model']],
+];
+const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
+const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos']);  // managed in the Sources section
+const SRC_ICON = {
+  agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
+  repos: '<circle cx="6" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.2v7.6M18 10.2c0 4-6 3-11 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  apps: '<rect x="4" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+};
+const srcCount = (n, unit) => n == null ? '' : `${n.toLocaleString()} ${n === 1 && unit ? unit.replace(/s$/, '') : unit || ''}`;
+const srcState = {cat: null, hints: new Map(), err: null};
+async function loadSources() { try { srcState.cat = await api('/api/sources'); } catch { srcState.cat = srcState.cat || []; } }
+function srcHint(id) {
+  const h = srcState.hints.get(id);
+  if (!h) return '';
+  if (Date.now() - h.t > 20000) { srcState.hints.delete(id); return ''; }
+  return `<span class="src-hint">${h.on ? 'indexing…' : 'removing…'}</span>`;
+}
+function srcItem(it, catOn) {
+  const off = !it.available;
+  const detail = off ? 'Not found on this Mac' : it.detail;
+  return `<div class="src-item ${it.kind === 'rule' ? 'rule' : ''} ${catOn ? '' : 'muted-all'} ${off ? 'na' : ''}">
+    <label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>
+    <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(detail)}</div></div>
+    <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}</div>
+    ${it.removable ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.id.slice(6))}" title="Stop indexing this folder">✕</button>` : '<span></span>'}
+  </div>`;
+}
+function sourcesHtml() {
+  const cat = srcState.cat;
+  if (!cat) return '<div class="set-card"><div class="shimmer" style="height:120px"></div></div>';
+  return `<div class="src-head"><h2>Sources</h2><p>What Pensieve indexes. Switching a source off removes its data from the index on the next sweep; switching it back on re-indexes it.</p>${srcState.err ? `<p class="err">${esc(srcState.err)}</p>` : ''}</div>
+    <div class="src-grid">${cat.map(c => {
+      const rules = c.items.filter(i => i.kind === 'rule'), rest = c.items.filter(i => i.kind !== 'rule');
+      return `<div class="set-card src-card ${c.enabled ? '' : 'off'}">
+        <div class="src-top"><span class="src-ic"><svg viewBox="0 0 24 24" width="18" height="18">${SRC_ICON[c.id] || SRC_ICON.apps}</svg></span>
+          <div class="src-tx"><h3>${esc(c.label)}${srcHint(c.id)}</h3><p>${esc(c.description)}</p></div>
+          <div class="src-n big">${c.count != null ? srcCount(c.count, c.id === 'agents' ? 'sessions' : c.id === 'apps' ? 'items' : 'files') : ''}</div>
+          <label class="tog" title="${c.enabled ? 'Switch off everything in ' + esc(c.label) : 'Switch on'}"><input type="checkbox" data-src-id="${esc(c.id)}" ${c.enabled ? 'checked' : ''}></label></div>
+        ${rules.length ? `<div class="src-rules">${rules.map(i => srcItem(i, c.enabled)).join('')}</div>` : ''}
+        <div class="src-items">${rest.map(i => srcItem(i, c.enabled)).join('') || `<div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div>`}</div>
+        ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="Add a folder, e.g. ~/notes" data-src-add-in><button class="btn" data-src-add>Add folder</button></div><div class="err" data-src-add-err></div>` : ''}
+      </div>`;
+    }).join('')}</div>`;
+}
+function renderSources() {
+  const box = $('#srcbox'); if (!box) return;
+  box.innerHTML = sourcesHtml();
+  $$('[data-src-id]', box).forEach(i => i.onchange = async () => {
+    const id = i.dataset.srcId, on = i.checked;
+    i.disabled = true;
+    try {
+      srcState.cat = await api('/api/sources', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, enabled: on})});
+      srcState.hints.set(id, {on, t: Date.now()}); srcState.err = null;
+      setTimeout(renderSources, 20500);
+    } catch (e) { srcState.err = `Could not change ${id}: ${e.message}`; }
+    renderSources();
+  });
+  $$('[data-src-rm]', box).forEach(b => b.onclick = async () => {
+    try { srcState.cat = await api('/api/sources/folders?path=' + enc(b.dataset.srcRm), {method: 'DELETE'}); toast('Folder removed — its files leave the index on the next sweep'); }
+    catch (e) { srcState.err = 'Could not remove folder: ' + e.message; }
+    renderSources();
+  });
+  const add = async () => {
+    const inp = $('[data-src-add-in]', box), path = inp.value.trim(); if (!path) return;
+    const r = await fetch('/api/sources/folders', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({path})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('[data-src-add-err]', box).textContent = typeof j.detail === 'string' ? j.detail : 'Could not add that folder'; return; }
+    srcState.cat = j; srcState.hints.set('files', {on: true, t: Date.now()}); renderSources(); toast('Folder added — indexing it now');
+  };
+  $('[data-src-add]', box)?.addEventListener('click', add);
+  $('[data-src-add-in]', box)?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+}
+const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await loadSources(); renderSources(); }, 1200);
+const settingsNav = () => `<div class="sec"><div class="sec-h"><span>Settings</span></div><div class="rows"><button class="row" data-setgo="Sources"><span class="name">Sources</span></button>${SET_GROUPS.map(([g]) => `<button class="row" data-setgo="${esc(g)}"><span class="name">${esc(g)}</span></button>`).join('')}<button class="row" data-setgo="Connect an agent"><span class="name">Connect an agent</span></button><button class="row" data-setgo="Index"><span class="name">Index</span></button></div></div>`;
+function bindSettingsNav(side) {
+  $$('[data-setgo]', side).forEach(b => b.onclick = () => document.getElementById('set-' + b.dataset.setgo.replace(/\W+/g, '-'))?.scrollIntoView({behavior: 'smooth', block: 'start'}));
+}
+async function loadSettings(force = false) {
+  if (S.set && !force) return;
+  const [r, st] = await Promise.all([api('/api/settings'), api('/api/status').catch(() => S.status), loadSources()]);
+  Object.assign(S.status, st);
+  S.set = {orig: r.settings, draft: structuredClone(r.settings), defaults: r.defaults, desc: r.descriptions, err: null, errKey: null};
+}
+const setDirty = () => S.set ? Object.keys(S.set.draft).filter(k => JSON.stringify(S.set.draft[k]) !== JSON.stringify(S.set.orig[k])) : [];
+function setField(k) {
+  const v = S.set.draft[k], d = S.set.defaults[k] ?? v;
+  const id = `sf-${k}`;
+  if (typeof d === 'boolean') return `<label class="tog"><input type="checkbox" data-sk="${k}" ${v ? 'checked' : ''}>${v ? 'On' : 'Off'}</label>`;
+  if (typeof d === 'number') return `<input class="set-in" type="number" min="0" step="1" data-sk="${k}" value="${esc(v)}" style="max-width:140px">`;
+  if (Array.isArray(d)) {
+    if (CHIP_LISTS.has(k)) return `<div class="set-chips">${v.map((x, i) => `<span class="chip">${esc(x)}<button class="x" data-lrm="${k}" data-i="${i}" title="Remove">✕</button></span>`).join('')}</div>
+      <div class="set-add"><input class="set-in" id="${id}" placeholder="Add a name or pattern…" data-ladd-in="${k}"><button class="btn" data-ladd="${k}">Add</button></div>`;
+    return `<div class="set-list">${v.map((x, i) => `<div class="li"><input class="set-in" data-li="${k}" data-i="${i}" value="${esc(x)}"><button class="iconbtn" data-lrm="${k}" data-i="${i}" title="Remove">✕</button></div>`).join('') || '<span class="muted" style="font-size:12px">None</span>'}</div>
+      <div class="set-add"><input class="set-in" id="${id}" placeholder="${k === 'repos' ? '~/code/some-repo' : '~/path/to/folder'}" data-ladd-in="${k}"><button class="btn" data-ladd="${k}">Add</button></div>`;
+  }
+  if (d && typeof d === 'object') return Object.keys({...d, ...v}).map(n => `<label class="tog"><input type="checkbox" data-sobj="${k}" data-n="${n}" ${v[n] !== false ? 'checked' : ''}>${esc(AGENT_NAME[n] || n)}</label>`).join('');
+  if (k === 'editor') return `<select class="set-in" data-sk="${k}" style="max-width:200px">${[['default', 'Default app'], ['vscode', 'VS Code'], ['cursor', 'Cursor'], ['zed', 'Zed']].map(([o, l]) => `<option value="${o}" ${v === o ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  return `<input class="set-in" data-sk="${k}" value="${esc(v)}">`;
+}
+async function renderSettings() {
+  const el = $('#settings');
+  if (!S.set) { el.innerHTML = '<div class="empty"><div class="spinner" style="margin:auto"></div></div>'; try { await loadSettings(); } catch { el.innerHTML = '<div class="empty">Could not load settings.</div>'; return; } }
+  const st = S.status, dirty = setDirty(), port = location.port || '8765', mcpUrl = `http://127.0.0.1:${port}/mcp`;
+  const known = new Set([...SET_GROUPS.flatMap(g => g[1]), ...SET_HIDDEN]);
+  const groups = [...SET_GROUPS.map(([g, ks]) => [g, ks.filter(k => k in S.set.draft)]), ['Other', Object.keys(S.set.draft).filter(k => !known.has(k))]].filter(g => g[1].length);
+  const row = k => `<div class="set-row ${dirty.includes(k) ? 'changed' : ''}"><div><div class="k">${esc(k)}</div><div class="d">${esc(S.set.desc[k] || '')}</div></div>
+    <div>${setField(k)}${S.set.errKey === k ? `<div class="err">${esc(S.set.err)}</div>` : ''}</div></div>`;
+  const cmd = (c, label) => `<div class="cmd"><code>${esc(c)}</code><button class="btn" data-copy="${esc(c)}">${label || 'Copy'}</button></div>`;
+  const kpi = (l, v) => `<div class="kpi"><div class="l">${l}</div><div class="v">${(v || 0).toLocaleString()}</div></div>`;
+  el.innerHTML = `<div class="set-wrap">
+    <div class="set-bar"><div><h1>Settings</h1><div class="msg ${S.set.err ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : dirty.length ? `${plural(dirty.length, 'unsaved change')}` : 'Changes apply within seconds; agents can change these too over MCP.'}</div></div>
+      <div style="display:flex;gap:8px"><button class="btn" id="setreset" ${dirty.length ? '' : 'disabled'}>Discard</button><button class="btn primary" id="setsave" ${dirty.length ? '' : 'disabled'}>Save</button></div></div>
+    <div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>
+    <h2 class="set-h2">Advanced</h2>
+    ${groups.map(([g, ks]) => `<div class="set-card" id="set-${g.replace(/\W+/g, '-')}"><h3>${esc(g)}</h3>${ks.map(row).join('')}</div>`).join('')}
+    <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
+      <p class="muted" style="margin:0 0 6px;font-size:12.5px">Pensieve is an MCP server, so Claude Code, Codex, Cursor and other agents can search your files, code and sessions, find who knows what, and change these settings.</p>
+      <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">Claude Code (HTTP)</div>${cmd(`claude mcp add --transport http pensieve ${mcpUrl}`)}
+      <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">Agents that only speak stdio</div>${cmd('pensieve mcp')}
+      <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
+    </div>
+    <div class="set-card" id="set-Index"><h3>Index</h3><div class="set-stats">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
+      <p class="muted" style="font-size:12px;margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}</p></div>
+  </div>`;
+  const D = S.set.draft, again = () => { const y = el.scrollTop; renderSettings().then(() => { el.scrollTop = y; }); };
+  $$('[data-sk]', el).forEach(i => i.onchange = () => {
+    const k = i.dataset.sk, d = S.set.defaults[k];
+    D[k] = typeof d === 'boolean' ? i.checked : typeof d === 'number' ? (i.value === '' ? i.value : Number(i.value)) : i.value;
+    again();
+  });
+  $$('[data-sobj]', el).forEach(i => i.onchange = () => { D[i.dataset.sobj] = {...D[i.dataset.sobj], [i.dataset.n]: i.checked}; again(); });
+  $$('[data-li]', el).forEach(i => i.onchange = () => { D[i.dataset.li] = D[i.dataset.li].map((x, j) => j === +i.dataset.i ? i.value.trim() : x).filter(Boolean); again(); });
+  $$('[data-lrm]', el).forEach(b => b.onclick = () => { D[b.dataset.lrm] = D[b.dataset.lrm].filter((_, j) => j !== +b.dataset.i); again(); });
+  const addTo = k => { const i = $(`[data-ladd-in="${k}"]`, el), v = i.value.trim(); if (v && !D[k].includes(v)) { D[k] = [...D[k], v]; again(); } };
+  $$('[data-ladd]', el).forEach(b => b.onclick = () => addTo(b.dataset.ladd));
+  $$('[data-ladd-in]', el).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); addTo(i.dataset.laddIn); } });
+  $$('[data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
+  $('#setreset').onclick = () => { S.set.draft = structuredClone(S.set.orig); S.set.err = S.set.errKey = null; again(); };
+  $('#setsave').onclick = saveSettings;
+  renderSources();
+}
+async function saveSettings() {
+  const ks = setDirty(); if (!ks.length) return;
+  const body = Object.fromEntries(ks.map(k => [k, S.set.draft[k]]));
+  const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail || j);
+    S.set.err = msg; S.set.errKey = ks.find(k => msg.startsWith(k + ' ') || msg.includes(`'${k}'`)) || (ks.length === 1 ? ks[0] : null);
+  } else {
+    S.set.orig = j.settings; S.set.draft = structuredClone(j.settings); S.set.err = S.set.errKey = null;
+    toast(`Saved ${ks.join(', ')}`);
+  }
+  if (S.view === 'settings') renderSettings();
+}
+
+/* ============================== deep links (#open=, #view=, #settings) ============================== */
+const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings'};
+async function openItem(id) {
+  const i = id.indexOf(':'), kind = id.slice(0, i), ref = id.slice(i + 1);
+  if (kind === 'file') return openFile(ref);
+  if (kind === 'session') return openSession(ref);
+  if (kind === 'code') {
+    const c = await api('/api/code/' + enc(ref)).catch(() => null);
+    if (!c) return toast('That code is no longer in the index.');
+    if (!S.code.repos.length) await loadRepos();
+    const inAll = S.code.repo === ALL && S.view === 'code';
+    await setView('code', inAll ? null : c.repo);
+    return openCode(+ref);
+  }
+  toast('Unknown item: ' + id);
+}
+async function route() {
+  const h = location.hash.slice(1);
+  if (!h) return;
+  history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
+  if (h === 'settings') return setView('settings');
+  if (h === 'sources') {
+    await setView('settings');
+    for (let i = 0; i < 60 && !$('#srcbox'); i++) await new Promise(r => setTimeout(r, 50));  // settings render is async
+    return $('#set-Sources')?.scrollIntoView({block: 'start'});
+  }
+  const q = new URLSearchParams(h);
+  if (q.get('view')) await setView(VIEW_ALIAS[q.get('view')] || 'code');
+  if (q.get('open')) await openItem(q.get('open'));
+}
+window.addEventListener('hashchange', route);
 
 /* ============================== views ============================== */
 async function setView(v, repo) {
   if (S.view === v && !repo) return;
-  if (S.view !== 'insights') cams[camKey()] = gl.saveCam();
+  if (S.view !== 'insights' && S.view !== 'settings') cams[camKey()] = gl.saveCam();
   const prev = S.view;
   S.view = v; store.set('view', v);
   $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
-  $('#stage').hidden = v === 'insights'; $('#insights').hidden = v !== 'insights';
+  const page = v === 'insights' || v === 'settings';
+  $('#stage').hidden = page; $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
   if (v === 'code') {
     if (!S.code.repos.length) await loadRepos();
     if (repo && repo !== S.code.repo || !S.code.points.length) await loadRepo(repo || S.code.repo);
-    setChatMode('code');
-  } else if (prev === 'code') setChatMode('ask');
-  if (v !== 'insights') { renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]); if (!cams[camKey()]) gl.fit(null, true); }
-  renderSidebar(); renderTimeline(); renderScope();
+  }
+  if (v === 'files' && (!S.files.loaded || S.files.stale)) await loadFiles();
+  if (v === 'files') $('#loadingtext').textContent = S.files.points.length ? '' : 'Indexing your files — the map appears once the first batch is laid out…';
+  if (!page) { renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]); if (!cams[camKey()]) gl.fit(null, true); }
+  renderSidebar(); renderTimeline();
   if (v === 'insights') renderInsights();
+  if (v === 'settings') renderSettings();
 }
 $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view));
 
@@ -1101,14 +1446,12 @@ function renderInsights() {
   drawActivity(ss); drawHeat(ss); drawTopicBars(ss); drawProjTable(ss);
   $$('[data-sid]', el).forEach(b => b.onclick = () => openSession(b.dataset.sid));
   $$('[data-tid]', el).forEach(b => b.onclick = () => toggleTopic(+b.dataset.tid));
-  $$('[data-askq]', el).forEach(b => b.onclick = () => { openChat(); send(b.dataset.askq); });
-  $$('[data-askcode]', el).forEach(b => b.onclick = async () => { await setRepoForChat(b.dataset.repo); setChatMode('code'); openChat(); send(b.dataset.askcode); });
+  $$('[data-findq]', el).forEach(b => b.onclick = () => openPalette(b.dataset.findq));
   $$('[data-area]', el).forEach(b => b.onclick = () => gotoArea(b.dataset.repo || repo, b.dataset.area));
   $$('[data-author]', el).forEach(b => b.onclick = e => { e.stopPropagation(); gotoCode(b.dataset.repo || repo, null, b.dataset.author); });
   $$('[data-insrepo]', el).forEach(b => b.onclick = () => { S.ins.repo = b.dataset.insrepo; S.ins.key = null; renderInsights(); });
   $$('.frow', el).forEach(b => { b.onmousemove = e => tip(b.dataset.tip, e.clientX, e.clientY); b.onmouseleave = () => tip(null); });
 }
-async function setRepoForChat(name) { if (name && name !== S.code.repo) { S.code.repo = name; store.set('repo', name); if (S.view === 'code') { await loadRepo(name); buildMap(); renderSidebar(); } else S.code.points = []; } }
 const actBin = ss => { const span = ss.length ? Math.max(...ss.map(s => s.t1)) - Math.min(...ss.map(s => s.t0)) : 0; return span < 45 * DAY ? DAY : 7 * DAY; };
 const actBinLabel = ss => actBin(ss) === DAY ? 'day' : 'week';
 function aiSection(ins, running, scopeName) {
@@ -1121,7 +1464,7 @@ function aiSection(ins, running, scopeName) {
   return `<div class="ai-grid">
     ${card('◎', 'Recurring themes', 'Ideas you keep coming back to', ins.themes || [])}
     ${card('⇄', 'Unexpected connections', 'Links between topics that could reinforce each other', ins.connections || [])}
-    ${card('◔', 'Open threads', 'Work that looks started but unfinished', ins.open_threads || [], it => `<button class="chip" style="margin-bottom:6px" data-askq="${esc('What is the current state of: ' + it.title + '? What was left unfinished and what would the next step be?')}">✦ Pick this back up</button>`)}
+    ${card('◔', 'Open threads', 'Work that looks started but unfinished', ins.open_threads || [], it => `<button class="chip" style="margin-bottom:6px" data-findq="${esc(it.title)}" title="Search for everything related">⌕ Find related</button>`)}
     ${card('✧', 'Unexplored directions', 'Suggestions grounded in your sessions, the code you haven’t touched, and what teammates are doing', ins.unexplored || [], unexplored)}
   </div><p class="muted" style="font-size:11.5px;margin:-4px 0 14px">Insights cover ${ins.n_sessions ? plural(ins.n_sessions, 'session') + ' in ' : ''}${where}${ins.generated ? ` · generated ${rel(ins.generated * 1000)}` : ''} by ${esc(S.status.llm || 'local model')} — verify before acting.</p>`;
 }
@@ -1149,8 +1492,7 @@ function codebaseSection(repo) {
     return `<div class="sg"><div class="h"><code>${esc(x.area)}</code><span class="muted" style="font-size:11.5px">${x.chunks.toLocaleString()} chunks</span></div>
       <div class="why">${x.near ? `Next to <a href="#" data-area="${esc(x.near)}"><code>${esc(x.near)}</code></a>, where you’ve worked (${Math.round(x.near_sim * 100)}% similar). ` : ''}${x.recent_commits ? `Active: ${plural(x.recent_commits, 'file change')} in the last 90 days.` : `Quiet: no teammate changes in 90 days${x.last_ts ? `, last touched ${rel(x.last_ts * 1000)}` : ''}.`}</div>
       <div class="acts">${people.slice(0, 3).map(([a, n]) => `<button class="chip" data-author="${esc(a)}" title="Open in Code view">👤 ${esc(n)}</button>`).join('')}
-        <button class="chip" data-area="${esc(x.area)}">⌗ Explore</button>
-        <button class="chip" data-repo="${esc(repo)}" data-askcode="${esc(`What does ${x.area} do in ${repo}${x.near ? `, how does it relate to ${x.near}` : ''}, and who should I talk to about it?`)}">✦ Ask</button></div></div>`;
+        <button class="chip" data-area="${esc(x.area)}">⌗ Explore</button></div></div>`;
   }).join('') || '<div class="empty">Nothing obvious — you’ve touched every sizeable area.</div>';
   // team
   const myAreas = terr.footprint.filter(f => f.sessions).map(f => f.area);
@@ -1244,116 +1586,6 @@ function drawProjTable(ss) {
   $$('#projtbl tr[data-p]').forEach(tr => tr.onclick = () => { S.f.projects = new Set([tr.dataset.p]); setView('map').then(refresh); });
 }
 
-/* ============================== chat ============================== */
-marked.setOptions({breaks: true, gfm: true});
-function setChatMode(m) {
-  S.chat.mode = m;
-  $$('#chatmode button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
-  $('#askin').placeholder = m === 'code' ? `Ask about ${S.code.repo ? repoLabel(S.code.repo) : 'your code'} — e.g. who knows X?` : 'Ask about your sessions…';
-  renderScope(); if (!S.chat.messages.length) renderWelcome();
-}
-$$('#chatmode button').forEach(b => b.onclick = async () => { if (b.dataset.m === 'code' && !S.code.repos.length) await loadRepos(); setChatMode(b.dataset.m); });
-const openChat = () => $('#chat').classList.add('open');
-$('#chattoggle').onclick = () => $('#chat').classList.toggle('open');
-function scopeParams() {
-  const f = S.f;
-  const ids = f.projects.size || f.topic != null ? filtered('range').map(s => s.id) : null;
-  return {session_ids: ids, sources: [...f.sources], since: f.range ? new Date(f.range[0]).toISOString() : null,
-          until: f.range ? new Date(f.range[1]).toISOString() : null, session_id: S.chat.scopeSession};
-}
-function renderScope() {
-  const el = $('#scope');
-  if (S.chat.mode === 'code') { el.innerHTML = `Answering from <span class="chip">${esc(S.code.repo ? repoLabel(S.code.repo) : 'code')}</span> code + git blame`; return; }
-  const bits = [];
-  if (S.chat.scopeSession) bits.push(`<span class="chip on">This session: ${esc((S.byId.get(S.chat.scopeSession)?.title || '').slice(0, 28))}<button class="x" data-unscope style="border:0;background:none;padding:0 0 0 4px;color:inherit">✕</button></span>`);
-  else {
-    S.f.projects.forEach(p => bits.push(`<span class="chip">${esc(keyLabel(p))}</span>`));
-    if (S.f.topic != null) bits.push(`<span class="chip">${esc(topicOf(S.f.topic)?.name || 'Topic')}</span>`);
-    S.f.sources.forEach(p => bits.push(`<span class="chip">${esc(AGENT_NAME[p] || p)}</span>`));
-    if (S.f.range) bits.push(`<span class="chip">${fmtD(S.f.range[0])} – ${fmtD(S.f.range[1])}</span>`);
-  }
-  el.innerHTML = 'Answering from ' + (bits.length ? bits.join('') : `<span class="chip">all ${plural(S.sessions.length, 'session')}</span>`);
-  $('[data-unscope]', el)?.addEventListener('click', () => { S.chat.scopeSession = null; renderScope(); });
-}
-function renderWelcome() {
-  const topP = S.f.projects.size ? keyLabel([...S.f.projects][0]) : S.projects[0]?.name, topT = TOPICS()[0]?.name;
-  const qs = S.chat.mode === 'code'
-    ? (S.code.repo === ALL ? ['Which parts of my repos solve similar problems and could share code?', 'Who should I talk to about infrastructure across my repos?', 'Where is authentication handled in each repo?'] : [`Who should I talk to about the data pipeline in ${S.code.repo}?`, `Where is authentication handled in ${S.code.repo}?`, `What are the main components of ${S.code.repo} and who owns each?`])
-    : ['What have I been working on this week?', 'Which ideas did I start but never finish?', topP && `Summarize the key decisions I made in ${topP}.`, topT && `What have I learned about ${topT}?`, 'What problems keep recurring across my sessions?'].filter(Boolean);
-  $('#msgs').innerHTML = `<div class="welcome"><h3>${S.chat.mode === 'code' ? 'Ask your codebase' : 'Ask your past sessions'}</h3>
-    <p>${S.chat.mode === 'code' ? 'Answers come from the most relevant code and who wrote it.' : 'Answers are grounded in your transcripts with clickable citations. Filters on the left narrow what Pensieve reads.'}</p>
-    <div class="suggest">${qs.map(q => `<button>${esc(q)}</button>`).join('')}</div></div>`;
-  $$('.suggest button').forEach(b => b.onclick = () => send(b.textContent));
-}
-function mdWithCites(text, sources) {
-  let html = DOMPurify.sanitize(marked.parse(text));
-  html = html.replace(/\[(\d{1,2})\](?![^<]*<\/code>)/g, (m, n) => sources[+n - 1] ? `<button class="cite" data-n="${n}" title="${esc(sources[+n - 1].title)}">${n}</button>` : m);
-  return html;
-}
-function bindCites(el, sources) {
-  $$('.cite', el).forEach(b => {
-    const s = sources[+b.dataset.n - 1];
-    b.onclick = () => s.code ? (S.view === 'code' ? openCode(s.code) : setView('code', s.repo).then(() => openCode(s.code))) : openSession(s.session);
-    b.onmouseenter = e => tip(s.code ? `<b>${esc(s.title)}</b><div class="m">${esc(s.repo)}</div>` : `<b>${esc(s.title)}</b><div class="m">${esc(s.project)} · ${rel(T(s.started))}</div>${s.summary ? `<p>${esc(s.summary)}</p>` : ''}`, e.clientX, e.clientY);
-    b.onmouseleave = () => tip(null);
-  });
-}
-async function send(text) {
-  text = text.trim(); if (!text || S.chat.abort) return;
-  if (!S.chat.messages.length) $('#msgs').innerHTML = '';
-  S.chat.messages.push({role: 'user', content: text});
-  const u = document.createElement('div'); u.className = 'msg user'; u.innerHTML = `<div>${esc(text)}</div>`; $('#msgs').append(u);
-  const m = document.createElement('div'); m.className = 'msg bot'; m.innerHTML = `<div class="md"><span class="typing"><i></i><i></i><i></i></span></div>`; $('#msgs').append(m);
-  const md = $('.md', m), box = $('#msgs');
-  box.scrollTop = box.scrollHeight;
-  $('#askin').value = ''; autosize();
-  const ctl = new AbortController(); S.chat.abort = ctl; setSendState(true);
-  let acc = '', sources = [], raf = 0;
-  const paint = () => { raf = 0; md.innerHTML = mdWithCites(acc, sources); bindCites(md, sources); if (box.scrollHeight - box.scrollTop - box.clientHeight < 120) box.scrollTop = box.scrollHeight; };
-  try {
-    const body = {messages: S.chat.messages, mode: S.chat.mode, repo: S.code.repo, ...(S.chat.mode === 'ask' ? scopeParams() : {})};
-    const r = await fetch('/api/chat', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body), signal: ctl.signal});
-    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
-    while (true) {
-      const {done, value} = await rd.read(); if (done) break;
-      buf += dec.decode(value, {stream: true});
-      const parts = buf.split('\n\n'); buf = parts.pop();
-      for (const p of parts) {
-        if (!p.startsWith('data: ')) continue;
-        const ev = JSON.parse(p.slice(6));
-        if (ev.sources) {
-          sources = ev.sources;
-          if (S.chat.mode === 'ask' && S.view === 'map') { S.highlight = new Set(sources.map(s => s.session)); refreshStates(); renderToolbar(); }
-          if (S.chat.mode === 'code' && S.view === 'code') { S.code.highlight = new Set(sources.map(s => s.code)); refreshStates(); }
-        }
-        if (ev.token) { acc += ev.token; if (!raf) raf = requestAnimationFrame(paint); }
-        if (ev.error) acc += `\n\n> ⚠️ ${ev.error}`;
-      }
-    }
-  } catch (e) { if (e.name !== 'AbortError') acc += `\n\n> ⚠️ ${e.message}`; }
-  paint();
-  S.chat.messages.push({role: 'assistant', content: acc});
-  if (sources.length) {
-    const d = document.createElement('details'); d.className = 'sources';
-    d.innerHTML = `<summary>${plural(sources.length, 'source')}</summary><div class="list">${sources.map(s => `<button class="item" data-n="${s.n}"><div class="t"><span class="cite">${s.n}</span><span class="grow">${esc(s.title)}</span></div><div class="s">${s.code ? esc(s.repo) : `${esc(s.project)} · ${rel(T(s.started))}`}</div></button>`).join('')}</div>`;
-    m.append(d);
-    $$('.item', d).forEach(b => b.onclick = () => { const s = sources[+b.dataset.n - 1]; s.code ? openCode(s.code) : openSession(s.session); });
-  }
-  const act = document.createElement('div'); act.className = 'msg-actions';
-  act.innerHTML = `<button data-copy>Copy</button>`; m.append(act);
-  $('[data-copy]', act).onclick = () => { navigator.clipboard?.writeText(acc); toast('Copied'); };
-  S.chat.abort = null; setSendState(false);
-}
-function setSendState(busy) {
-  const b = $('#askbtn'); b.classList.toggle('stop', busy); b.title = busy ? 'Stop' : 'Send (Enter)';
-  b.innerHTML = busy ? '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor"/></svg>' : '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-}
-const autosize = () => { const t = $('#askin'); t.style.height = 'auto'; t.style.height = Math.min(160, t.scrollHeight) + 'px'; };
-$('#askin').addEventListener('input', autosize);
-$('#askin').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send($('#askin').value); } });
-$('#ask').addEventListener('submit', e => { e.preventDefault(); if (S.chat.abort) S.chat.abort.abort(); else send($('#askin').value); });
-$('#chatclear').onclick = () => { S.chat.abort?.abort(); S.chat.messages = []; S.highlight = null; refreshStates(); renderToolbar(); renderWelcome(); };
-
 /* ============================== command palette ============================== */
 const pl = {items: [], sel: 0, q: '', seq: 0};
 function openPalette(prefill = '') {
@@ -1362,19 +1594,31 @@ function openPalette(prefill = '') {
 const closePalette = () => { $('#palette').hidden = true; };
 $('#searchbtn').onclick = () => openPalette();
 $('#palette').addEventListener('mousedown', e => { if (e.target.id === 'palette') closePalette(); });
-const palSemantic = debounce(async (q, seq) => {
-  if (q.length < 3) return;
+const palFind = debounce(async (q, seq) => {
   try {
-    const hits = await api(`/api/search?k=24&q=${enc(q)}`);
+    const r = await api(`/api/find?limit=18&q=${enc(q)}`);
     if (seq !== pl.seq) return;
-    const by = new Map(); hits.forEach(h => { if (!by.has(h.session)) by.set(h.session, h); });
-    pl.semantic = [...by.values()].slice(0, 8); palRender();
-  } catch {}
-}, 220);
+    pl.found = r; palRender();
+  } catch { if (seq === pl.seq) { pl.found = {results: []}; palRender(); } }
+}, 160);
 function palSearch() {
-  pl.q = $('#palin').value; pl.seq++; pl.semantic = null; pl.sel = 0; palRender();
+  pl.q = $('#palin').value; pl.seq++; pl.found = null; pl.sel = 0; palRender();
   const q = pl.q.trim();
-  if (q && !q.startsWith('who:') && !q.startsWith('>')) palSemantic(q, pl.seq);
+  if (q && !q.startsWith('who:') && !q.startsWith('>') && q.replace(/[^\w]/g, '').length >= 2) palFind(q, pl.seq);
+}
+// snippet with server-provided highlight ranges, escaped piecewise
+function hlSnip(t, hl) {
+  if (!t) return '';
+  let out = '', at = 0;
+  for (const [a, b] of (hl || []).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])) { if (a < at) continue; out += esc(t.slice(at, a)) + '<mark>' + esc(t.slice(a, b)) + '</mark>'; at = b; }
+  return out + esc(t.slice(at));
+}
+const FIND_GROUP = {file: 'Files', code: 'Code', session: 'Agent sessions'};
+const FIND_IC = {file: '▤', code: '⌗', session: '◌'};
+function findItem(r) {
+  const ex = r.match === 'exact' || r.match === 'both';
+  return {ic: FIND_IC[r.kind], title: r.title + (r.line && r.kind === 'code' ? `:${r.line}` : ''), titleHtml: esc(r.title) + (r.kind === 'code' && r.line ? `<span class="muted">:${r.line}</span>` : '') + (ex ? '<span class="ex">exact</span>' : ''),
+          subHtml: `<span style="font-family:var(--mono);font-size:11px">${esc(r.subtitle)}</span>${r.snippet ? ' — ' + hlSnip(r.snippet, r.highlights) : ''}`, run: () => openItem(r.id)};
 }
 function palRender() {
   const raw = pl.q.trim(), q = raw.toLowerCase(), items = [];
@@ -1383,29 +1627,29 @@ function palRender() {
     const t = raw.slice(4).trim();
     add('Code', {ic: '👤', title: t ? `Who knows about “${t}”?` : 'Type a topic, e.g. who: billing retries', sub: `Ranks people by blame on the most relevant code in ${S.code.repo ? repoLabel(S.code.repo) : 'your repos'}`, run: () => t && whoKnows(t)});
   } else if (raw) {
-    add('Ask', {ic: '✦', title: `Ask Pensieve: “${raw}”`, sub: 'Answer from your sessions with citations', run: () => { setChatMode('ask'); openChat(); send(raw); }});
-    const local = S.sessions.filter(s => (s.title + ' ' + (s.summary || '') + ' ' + s.project + ' ' + (s.tags || '')).toLowerCase().includes(q)).slice(0, 5);
-    local.forEach(s => add('Sessions', sessItem(s)));
-    if (pl.semantic) pl.semantic.filter(h => !local.some(l => l.id === h.session)).slice(0, 6).forEach(h => { const s = S.byId.get(h.session); if (s) add('Related sessions', {...sessItem(s), sub: h.summary || s.summary || ''}); });
-    else if (q.length >= 3) add('Related sessions', {ic: '…', title: 'Searching by meaning…', sub: '', run: () => {}});
-    if (pl.semantic?.length) add('Map', {ic: '◉', title: `Highlight ${plural(pl.semantic.length, 'related session')} on the map`, sub: '', run: () => { setView('map').then(() => { S.highlight = new Set(pl.semantic.map(h => h.session)); refreshStates(); renderToolbar(); gl.fit(visibleIdx()); }); }});
-    TOPICS().filter(t => (t.name + ' ' + t.keywords).toLowerCase().includes(q)).slice(0, 3).forEach(t => add('Topics', {ic: `<i class="sw" style="background:${slotColor(t.id)}"></i>`, title: t.name, sub: t.description, run: () => { setView('map'); S.f.topic = null; toggleTopic(t.id); }}));
-    [...S.tree.children.values()].flat().filter(k => k.toLowerCase().includes(q)).slice(0, 4).forEach(k => add('Folders', {ic: '▤', title: keyLabel(k), sub: 'Filter sessions to this folder', run: () => { S.f.projects = new Set([k]); setView('map').then(refresh); }}));
-    S.projects.filter(p => p.name.toLowerCase().includes(q)).slice(0, 3).forEach(p => add('Projects', {ic: '▣', title: p.name, sub: `${plural(p.sessions, 'session')} · filter to this project`, run: () => { S.f.projects = new Set([p.name]); setView('map').then(refresh); }}));
-    if (S.code.points.length) {
-      S.code.people.filter(p => p.author.toLowerCase().includes(q)).slice(0, 3).forEach(p => add('People', {ic: '👤', title: person(p.author), sub: `${(p.share * 100).toFixed(1)}% of ${repoLabel(S.code.repo)} · ${p.dirs.slice(0, 2).join(', ')}`, run: () => setView('code').then(() => openPerson(p.author))}));
-      [...new Set(S.code.points.filter(p => p.path.toLowerCase().includes(q)).map(p => p.path))].slice(0, 4).forEach(f => add('Files', {ic: '⌗', title: f, sub: repoLabel(S.code.repo), run: () => setView('code').then(() => focusFile(f))}));
+    if (pl.found) {
+      const rs = pl.found.results || [];
+      for (const k of ['file', 'code', 'session']) rs.filter(r => r.kind === k).slice(0, 6).forEach(r => add(FIND_GROUP[k], findItem(r)));
+      if (!rs.length) add('Search', {ic: '∅', title: 'No matching files, code or sessions', sub: pl.found.query?.exact?.length ? 'Exact phrases must appear word for word; try fewer quotes.' : 'Try other words, or "quotes" for exact text.', run: () => {}});
+    } else {
+      const local = S.sessions.filter(s => (s.title + ' ' + (s.summary || '') + ' ' + s.project + ' ' + (s.tags || '')).toLowerCase().includes(q)).slice(0, 4);
+      local.forEach(s => add('Agent sessions', sessItem(s)));
+      add('Search', {ic: '…', title: 'Searching files, code and sessions…', sub: '', run: () => {}});
     }
-    add('Code', {ic: '👤', title: `Who knows about “${raw}”?`, sub: 'Find the people behind the most relevant code', run: () => whoKnows(raw)});
+    TOPICS().filter(t => (t.name + ' ' + t.keywords).toLowerCase().includes(q)).slice(0, 3).forEach(t => add('Topics', {ic: `<i class="sw" style="background:${slotColor(t.id)}"></i>`, title: t.name, sub: t.description, run: () => { setView('map'); S.f.topic = null; toggleTopic(t.id); }}));
+    [...S.tree.children.values()].flat().filter(k => k.toLowerCase().includes(q)).slice(0, 3).forEach(k => add('Folders', {ic: '▤', title: keyLabel(k), sub: 'Filter sessions to this folder', run: () => { S.f.projects = new Set([k]); setView('map').then(refresh); }}));
+    S.projects.filter(p => p.name.toLowerCase().includes(q)).slice(0, 3).forEach(p => add('Projects', {ic: '▣', title: p.name, sub: `${plural(p.sessions, 'session')} · filter to this project`, run: () => { S.f.projects = new Set([p.name]); setView('map').then(refresh); }}));
+    if (S.code.points.length) S.code.people.filter(p => p.author.toLowerCase().includes(q)).slice(0, 3).forEach(p => add('People', {ic: '👤', title: person(p.author), sub: `${(p.share * 100).toFixed(1)}% of ${repoLabel(S.code.repo)} · ${p.dirs.slice(0, 2).join(', ')}`, run: () => setView('code').then(() => openPerson(p.author))}));
+    add('People', {ic: '👤', title: `Who knows about “${raw.replace(/"/g, '')}”?`, sub: 'Find the people behind the most relevant code', run: () => whoKnows(raw.replace(/"/g, ''))});
   } else {
-    S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 6).forEach(s => add('Recent sessions', sessItem(s)));
+    S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));
   }
-  const cmds = [['Go to Map', '1', () => setView('map')], ['Go to Insights', '2', () => setView('insights')], ['Go to Code', '3', () => setView('code')],
+  const cmds = [['Go to Code', '1', () => setView('code')], ['Go to Files', '2', () => setView('files')], ['Go to Sessions', '3', () => setView('map')], ['Go to Insights', '4', () => setView('insights')], ['Open Settings', '', () => setView('settings')],
     ['Toggle light / dark', 'T', toggleTheme], ['Clear all filters', '', clearFilters], ['Fit map to view', 'F', () => gl.fit(visibleIdx())], ['Keyboard shortcuts', '?', () => ($('#helpmodal').hidden = false)]];
   cmds.filter(([t]) => !q || t.toLowerCase().includes(q.replace(/^>/, '').trim())).slice(0, raw ? 3 : 7).forEach(([t, k, run]) => add('Commands', {ic: '›', title: t, rt: k, run}));
   pl.items = items; pl.sel = Math.min(pl.sel, items.length - 1);
   let g = '';
-  $('#palres').innerHTML = items.map((it, i) => `${it.group !== g ? `<div class="pal-group">${(g = it.group)}</div>` : ''}<div class="pal-item ${i === pl.sel ? 'sel' : ''}" data-i="${i}"><span class="ic">${it.ic.startsWith('<') ? it.ic : esc(it.ic)}</span><div class="tx"><b>${esc(it.title)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</div>${it.rt ? `<span class="rt">${it.rt.startsWith('<') ? it.rt : esc(it.rt)}</span>` : ''}</div>`).join('') || '<div class="empty">No results</div>';
+  $('#palres').innerHTML = items.map((it, i) => `${it.group !== g ? `<div class="pal-group">${(g = it.group)}</div>` : ''}<div class="pal-item ${i === pl.sel ? 'sel' : ''}" data-i="${i}"><span class="ic">${it.ic.startsWith('<') ? it.ic : esc(it.ic)}</span><div class="tx"><b>${it.titleHtml || esc(it.title)}</b>${it.subHtml ? `<small>${it.subHtml}</small>` : it.sub ? `<small>${esc(it.sub)}</small>` : ''}</div>${it.rt ? `<span class="rt">${it.rt.startsWith('<') ? it.rt : esc(it.rt)}</span>` : ''}</div>`).join('') || '<div class="empty">No results</div>';
   $$('.pal-item', $('#palres')).forEach(el => { el.onmouseenter = () => { pl.sel = +el.dataset.i; $$('.pal-item').forEach(x => x.classList.toggle('sel', x === el)); }; el.onclick = () => palRun(+el.dataset.i); });
 }
 const sessItem = s => ({ic: `<i class="sw" style="background:${slotColor(cl(s))}"></i>`, title: s.title, sub: s.summary || '', rt: `${esc(s.project)} · ${rel(s.t1)}`, run: () => openSession(s.id)});
@@ -1417,7 +1661,7 @@ $('#palin').addEventListener('keydown', e => {
     $$('.pal-item').forEach((x, j) => x.classList.toggle('sel', j === pl.sel)); $('.pal-item.sel')?.scrollIntoView({block: 'nearest'});
   } else if (e.key === 'Enter') {
     e.preventDefault();
-    if (e.shiftKey && pl.q.trim()) { closePalette(); setChatMode(S.view === 'code' ? 'code' : 'ask'); openChat(); send(pl.q); } else palRun(pl.sel);
+    palRun(pl.sel);
   } else if (e.key === 'Escape') closePalette();
 });
 
@@ -1426,7 +1670,7 @@ function toggleTheme() {
   const t = theme() === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = t; store.set('theme', t);
   try { localStorage.setItem('pensieve.theme', t); } catch {}
-  gl.setTheme(); recolor(); renderSidebar(); renderTimeline(); if (S.view === 'insights') renderInsights();
+  gl.setTheme(); recolor(); renderSidebar(); renderTimeline(); if (S.view === 'insights') renderInsights(); if (S.view === 'settings') renderSettings();
 }
 $('#themebtn').onclick = toggleTheme;
 $('#helpbtn').onclick = () => ($('#helpmodal').hidden = false);
@@ -1439,15 +1683,14 @@ document.addEventListener('keydown', e => {
     if (!$('#helpmodal').hidden) return ($('#helpmodal').hidden = true);
     if (typing) return document.activeElement.blur();
     if ($('#drawer').classList.contains('open')) return closeDrawer();
-    if (S.highlight || S.code.highlight) { S.highlight = null; S.code.highlight = null; S.code.focus = null; refreshStates(); renderToolbar(); renderSidebar(); return; }
+    if (S.highlight || S.code.highlight || S.files.highlight) { S.highlight = null; S.code.highlight = null; S.files.highlight = null; S.code.focus = null; refreshStates(); renderToolbar(); renderSidebar(); return; }
     return;
   }
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === '/') { e.preventDefault(); openPalette(); }
-  else if (k === '1') setView('map'); else if (k === '2') setView('insights'); else if (k === '3') setView('code');
+  else if (k === '1') setView('code'); else if (k === '2') setView('files'); else if (k === '3') setView('map'); else if (k === '4') setView('insights');
   else if (k === 'f') gl.fit(visibleIdx());
-  else if (k === 'c') { e.preventDefault(); openChat(); $('#askin').focus(); }
   else if (k === 't') toggleTheme();
   else if (k === '?') $('#helpmodal').hidden = false;
 });
@@ -1459,14 +1702,12 @@ function renderStatus() {
   pill.className = 'pill ' + (st.message?.startsWith('error') ? '' : busy ? 'busy' : 'live');
   if (st.llm_offline) {
     pill.className = 'pill'; label.textContent = 'LLM offline';
-    pill.title = `No chat model at ${st.llm_url || 'the LLM URL'}. Start LM Studio (or pass --llm-url) for summaries, topic names, insights and chat. Search, maps and code views still work.`;
-    $('#chatmodel').textContent = ' offline';
+    pill.title = `No language model at ${st.llm_url || 'the LLM URL'}. Start LM Studio (or set llm_url in Settings) for summaries, topic names and insights. Search, maps, files and code views still work.`;
     return;
   }
   label.textContent = st.layout ? 'Laying out map…' : st.summarized_sessions < st.sessions ? `Summarizing ${st.summarized_sessions}/${st.sessions}` :
-    st.topics_named < st.topics ? 'Naming topics…' : st.insights_running ? 'Generating insights…' : `Live · ${plural(st.sessions || 0, 'session')}`;
-  pill.title = `${(st.sessions || 0)} sessions · ${(st.chunks || 0).toLocaleString()} moments · ${(st.code_chunks || 0).toLocaleString()} code chunks\nSummaries: ${st.summarized_sessions}/${st.sessions} sessions, ${st.summarized_chunks?.toLocaleString()} moments\nModels: ${st.llm} + ${st.embed}`;
-  $('#chatmodel').textContent = st.llm ? ` ${st.llm} · local` : '';
+    st.topics_named < st.topics ? 'Naming topics…' : st.insights_running ? 'Generating insights…' : st.indexing && st.message && st.message !== 'idle' ? st.message[0].toUpperCase() + st.message.slice(1) + '…' : `Live · ${plural(st.files || 0, 'file')} · ${plural(st.sessions || 0, 'session')}`;
+  pill.title = `${(st.files || 0).toLocaleString()} files · ${(st.repos || 0)} repos · ${(st.sessions || 0)} sessions · ${(st.chunks || 0).toLocaleString()} moments · ${(st.code_chunks || 0).toLocaleString()} code chunks\nSummaries: ${st.summarized_sessions}/${st.sessions} sessions, ${st.summarized_chunks?.toLocaleString()} moments\nModels: ${st.llm} + ${st.embed}`;
 }
 $('#statuspill').onclick = () => toast(S.status.llm_offline ? $('#statuspill').title : $('#statuspill').title.split('\n')[0]);
 
@@ -1511,31 +1752,37 @@ function connect() {
 async function handleEvent(m) {
   {
     if (m.type === 'status') { Object.assign(S.status, m); pollStatus(); }
-    else if (m.type === 'updated') reloadAll();
+    else if (m.type === 'updated') { reloadAll(); refetchSourcesSoon(); }
     else if (m.type === 'summaries') { await loadSessions(); renderSidebar(); pollStatus(); }
     else if (m.type === 'topics') { await loadSessions(); renderSidebar(); if (S.view === 'map') renderLabels(); if (S.view === 'insights') renderInsights(); pollStatus(); }
     else if (m.type === 'insights') { await loadInsights(); if (S.view === 'insights') renderInsights(); toast('New insights are ready'); pollStatus(); }
-    else if (m.type === 'repos') { await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
+    else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); refetchSourcesSoon(); }
+    else if (m.type === 'settings') { if (S.set && !setDirty().length) { const y = $('#settings').scrollTop; S.set = null; if (S.view === 'settings') renderSettings().then(() => { $('#settings').scrollTop = y; }); } else refetchSourcesSoon(); }
+    else if (m.type === 'repos') { refetchSourcesSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
   }
 }
+const reloadFilesSoon = debounce(async () => {
+  if (S.view !== 'files') return;
+  await loadFiles(); const c = gl.saveCam(); buildMap(); gl.loadCam(c); renderSidebar();
+}, 1500);
 const pollStatus = debounce(async () => { try { Object.assign(S.status, await api('/api/status')); renderStatus(); } catch {} }, 300);
 
 async function init() {
-  setChatMode('ask');
   try {
     await Promise.all([loadSessions(), loadInsights(), api('/api/status').then(s => Object.assign(S.status, s))]);
   } catch (e) { $('#loadingtext').textContent = 'Could not reach the Pensieve server.'; return; }
   renderStatus();
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
-  renderToolbar(); buildMap(); refresh(); renderWelcome();
+  renderToolbar(); buildMap(); refresh();
   if (!gl.controls.autoRotate) $('#hint').classList.add('gone');
   setTimeout(() => $('#hint').classList.add('gone'), 9000);
   connect();
   await loadRepos().catch(() => {});
   const v = store.get('view', 'code');
-  if (v !== 'map' && S.code.repos.length) await setView(v);
+  if (location.hash.length > 1) await route();
+  else if (v !== 'map' && (S.code.repos.length || v !== 'code')) await setView(v);
 }
 init();
