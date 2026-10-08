@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import actions, config, scopes, search as search_mod, settings, sources, summarize
+from . import actions, config, llm, scopes, search as search_mod, settings, sources, summarize
 from .files import Files
 from .watch import Watch
 from .indexer import Store
@@ -201,7 +201,9 @@ async def run_insights(scope=None, sids=None):
         await loop.run_in_executor(None, job)
         broadcast({"type": "insights", "scope": scope})
     except Exception as e:
-        broadcast({"type": "toast", "message": f"Insight generation failed: {e!r}"[:200]})
+        msg = ("Choose an AI engine in Settings → AI & Insights to generate insights." if isinstance(e, llm.Offline)
+               else f"Insight generation failed: {e!r}"[:200])
+        broadcast({"type": "toast", "message": msg})
     finally:
         status.update(insights_running=False, insights_scope=None)
         broadcast({"type": "status", **status})
@@ -240,7 +242,15 @@ async def enricher():
     pool = ThreadPoolExecutor(3)
     while True:
         try:
+            if llm.provider() == "none":  # not chosen yet, or off: nothing to do (and nothing to report as broken)
+                if status.get("llm_offline"):
+                    status["llm_offline"] = False
+                    broadcast({"type": "status", **status})
+                await asyncio.sleep(10)
+                continue
             sess, topics, chunks = summarize.pending(store)
+            if llm.provider() in ("claude", "codex"):
+                chunks = []  # one CLI call per conversation chunk would be thousands of cloud calls
             if sess:
                 await asyncio.gather(*[loop.run_in_executor(pool, summarize.summarize_session, store, s) for s in sess[:3]])
                 broadcast({"type": "summaries"})
@@ -256,7 +266,7 @@ async def enricher():
             if status.get("llm_offline"):
                 status["llm_offline"] = False
                 broadcast({"type": "status", **status})
-        except httpx.ConnectError:  # LM Studio (or other server) not running: everything but LLM features still works
+        except (httpx.ConnectError, llm.Offline):  # engine not running/available: everything but AI features still works
             if not status.get("llm_offline"):
                 status["llm_offline"] = True
                 broadcast({"type": "status", **status})
@@ -277,6 +287,8 @@ async def lifespan(app):
     loop = asyncio.get_running_loop()
 
     def changed(keys):  # settings edited from the UI or MCP: re-sweep promptly, tell the Mac app and the UI
+        if "ai" in keys and settings.get("ai") != "builtin":
+            llm.stop_builtin()
         repos._extra = None  # re-run the repo sweep with the new folders/roots
         watch.force_full()
         loop.call_soon_threadsafe(broadcast, {"type": "settings", "keys": sorted(keys)})
@@ -294,6 +306,7 @@ async def lifespan(app):
         yield
     for t in tasks:
         t.cancel()
+    llm.stop_builtin()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -332,7 +345,8 @@ def _status():
             "topics_named": db.execute("SELECT COUNT(*) FROM topics WHERE name IS NOT NULL").fetchone()[0],
             "topics": db.execute("SELECT COUNT(*) FROM topics").fetchone()[0],
             "code_chunks": db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0],
-            "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL}
+            "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL,
+            "ai": settings.get("ai")}
 
 
 @app.get("/api/projects")
@@ -613,6 +627,11 @@ def open_item(req: OpenReq):
         raise HTTPException(404)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/ai")
+async def ai_status():
+    return await asyncio.get_running_loop().run_in_executor(None, llm.status)
 
 
 @app.get("/api/sources")

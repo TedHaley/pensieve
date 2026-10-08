@@ -35,5 +35,6 @@ if [ "${1:-}" = "--install" ]; then
   cp -R "$APP" "$HOME/Applications/"
   DEST="$HOME/Applications/Pensieve.app"
 fi
-"$LSREGISTER" -f "$DEST"  # so pensieve:// links open this copy
+# so pensieve:// links open this copy (PENSIEVE_NO_REGISTER=1 for dev builds next to an installed app)
+[ -n "${PENSIEVE_NO_REGISTER:-}" ] || "$LSREGISTER" -f "$DEST"
 echo "Built $DEST"

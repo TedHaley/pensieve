@@ -711,3 +711,99 @@ body[data-view=insights] #gl .labels,body[data-view=settings] #gl .labels{displa
 .sheet .set-card .cmd,.sheet .set-card .sc-cat{background:var(--card-2)}
 @media (prefers-reduced-transparency:reduce){.sheet,#drawer,.modal .palette,#sidepanel,.menu{background:var(--glass-strong)}}
 .src-items{overflow-x:hidden}
+
+/* ---- round 4: Data type switch, appearance controls, no clipped text ---- */
+.toolbar .seg.dtype{background:var(--surface-3);padding:2px;border-radius:999px;margin-right:4px}
+.toolbar .seg.dtype button{padding:5px 12px}
+.toolbar .seg.dtype button.on{background:var(--glass-strong);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+:root[data-theme="dark"] .toolbar .seg.dtype button.on{background:rgba(255,255,255,.18)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .toolbar .seg.dtype button.on{background:rgba(255,255,255,.18)}}
+.toolbar .seg.dtype+.seg{border-left:0}
+.menu-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px;font-size:13px;color:var(--text)}
+.seg.mini,.seg.app-seg{background:var(--surface-3);padding:2px;border-radius:999px;display:inline-flex}
+.seg.mini button{padding:3px 10px;font-size:12px;opacity:.85}
+.seg.app-seg button{padding:6px 16px;font-size:13px}
+.seg.mini button.on,.seg.app-seg button.on{background:var(--accent);color:#fff;opacity:1}
+.menu .seg.mini button:hover{background:var(--surface-2);color:var(--text)}
+.menu .seg.mini button.on:hover{background:var(--accent);color:#fff}
+/* long text wraps instead of clipping; single-line rows keep an ellipsis and get a hover title from JS */
+#drawer-title h2,.ins-head h1,.card h3,.ai-item b,.set-row .k,.src-l,.sc-top h3,.kpi .l,.kpi .d{overflow-wrap:anywhere}
+.chip,.links .chip{white-space:normal;overflow-wrap:anywhere;text-align:left}
+.legend span,.legend-row span{min-width:0;overflow-wrap:anywhere}
+.fmeta span{overflow-wrap:anywhere}
+.set-row>div{min-width:0}
+.pal-item .tx small{overflow-wrap:anywhere}
+.menu-status span{overflow-wrap:anywhere}
+.row .name,.trow .name{min-width:0}
+#tabs button{white-space:nowrap}
+.item .t .grow{white-space:normal;overflow-wrap:anywhere}
+.row .sub,.trow .tsub{overflow-wrap:anywhere}
+.frow{grid-template-columns:minmax(0,260px) 1fr 74px}
+
+/* ---- AI engine chooser ---- */
+.ai-status{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.5px;margin:6px 0 10px}
+.ai-status .muted{overflow-wrap:anywhere}
+.ai-status .dot{width:8px;height:8px;border-radius:50%;background:var(--text-3);flex:none}
+.ai-status .dot.live{background:var(--good)}.ai-status .dot.busy{background:var(--accent);animation:bl 1.4s infinite}.ai-status .dot.warn{background:var(--warn)}.ai-status .dot.off{background:var(--critical)}
+.ai-opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin:4px 0 10px}
+.ai-opt{position:relative;text-align:left;border:0;border-radius:14px;padding:12px 14px 14px;background:var(--card-2);color:var(--text);box-shadow:inset 0 0 0 1px var(--line);display:flex;flex-direction:column;gap:4px;transition:box-shadow .18s var(--ease),background .18s var(--ease)}
+.ai-opt:hover:not(:disabled){box-shadow:inset 0 0 0 1px var(--accent)}
+.ai-opt.on{box-shadow:inset 0 0 0 2px var(--accent);background:var(--accent-soft)}
+.ai-opt:disabled{opacity:.5;cursor:default}
+.ai-opt-h{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.ai-opt-h b{font-size:13px;overflow-wrap:anywhere}
+.ai-opt p{margin:0;font-size:12px;color:var(--text-2);line-height:1.45;overflow-wrap:anywhere}
+.ai-opt p.note{color:var(--text-3)}
+.ai-check{font-size:11.5px;font-weight:600;color:var(--accent);margin-top:2px}
+.priv{flex:none;font-size:10.5px;font-weight:600;border-radius:999px;padding:1px 8px}
+.priv.local{background:color-mix(in srgb,var(--good) 18%,transparent);color:var(--good)}
+.priv.cloud{background:color-mix(in srgb,var(--warn) 22%,transparent);color:color-mix(in srgb,var(--warn) 70%,var(--text))}
+.ai-setup h3{font-size:14px}
+.ai-sheet{width:min(760px,calc(100vw - 2 * var(--gap)))}
+.ai-sheet-b{padding:22px 24px 18px;max-height:76vh;overflow:auto}
+.ai-sheet-h{display:flex;gap:14px;align-items:flex-start;margin-bottom:8px}
+.ai-sheet-h h2{margin:0 0 4px;font-size:19px;font-weight:700;letter-spacing:-.015em}
+.ai-sheet-h p{margin:0;color:var(--text-2);font-size:12.5px;line-height:1.5}
+.ai-sheet-h .brand{width:auto;height:auto;flex:none;margin-top:2px}
+.ai-sheet-f{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;margin-top:6px}
+.err{color:var(--critical);font-size:12px}
+
+/* ---- search at the top of the left panel ---- */
+#sidesearch{flex:none;padding:12px 12px 8px;border-bottom:1px solid var(--line)}
+#sidesearch .pal-input{display:flex;align-items:center;gap:8px;padding:0 10px;height:36px;border:0;border-radius:12px;background:var(--surface-2);box-shadow:inset 0 0 0 .5px var(--line);color:var(--text-3)}
+#sidesearch .pal-input:focus-within{background:var(--glass-strong);box-shadow:0 0 0 3px var(--accent-soft),inset 0 0 0 1px var(--accent)}
+#palin{flex:1;min-width:0;border:0;outline:none;background:none;font:15px var(--sans);color:var(--text);padding:0}
+#palin::-webkit-search-cancel-button{cursor:pointer}
+#palin::placeholder{color:var(--text-3)}
+.palkbd{flex:none}
+#sidesearch .pal-input:focus-within .palkbd{display:none}
+.pal-opts{display:flex;align-items:center;gap:8px;margin-top:6px;min-width:0}
+.pal-opts .syn{font-size:11px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pal-opts .pal-scope-sel[hidden]+.syn{margin-left:2px}
+#palres{flex:1;min-height:0;overflow:auto;padding:6px 8px 12px;max-height:none}
+body.searching #side,body.searching #legend{display:none}
+#palres .pal-item{padding:7px 10px;align-items:flex-start}
+#palres .pal-item .ic{margin-top:1px}
+#palres .pal-item .tx b{white-space:normal;overflow-wrap:anywhere}
+#palres .pal-item .rt{display:none}
+#palres .pal-group:first-child{padding-top:4px}
+.pal-opts .syn{white-space:normal;overflow:visible;line-height:1.3}
+.frow .a{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;direction:ltr!important;overflow-wrap:anywhere;text-align:left}
+.sg code,.sg .h{overflow-wrap:anywhere;white-space:normal;min-width:0}
+.sg .h{flex-wrap:wrap}
+@media (max-width:640px){.frow{grid-template-columns:minmax(0,1fr) 60px}.frow>span:nth-child(2){grid-column:1/-1;grid-row:2}}
+.card .row .name,#side .row .name{white-space:normal;overflow-wrap:anywhere}
+.src-d{white-space:normal;overflow-wrap:anywhere;text-overflow:clip}
+
+/* ---- type switch under the search field; any open overlay hides map labels ---- */
+#dtypebar{display:flex;margin:0 12px 8px;padding:2px;border-radius:10px;background:var(--surface-3);flex:none;gap:2px}
+#dtypebar button{flex:1;border-radius:8px;padding:5px 6px;font-size:12.5px;opacity:.8}
+#dtypebar button.on{background:var(--glass-strong);color:var(--text);opacity:1;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+:root[data-theme="dark"] #dtypebar button.on{background:rgba(255,255,255,.18)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) #dtypebar button.on{background:rgba(255,255,255,.18)}}
+body[data-view=insights] #dtypebar{display:none}
+#sidesearch{border-bottom:0}
+#dtypebar+#palres,#dtypebar~#side{border-top:1px solid var(--line)}
+.dtype-sel{display:none;border:0;background:var(--surface-3);color:var(--text);border-radius:999px;padding:5px 10px;font:500 12.5px var(--sans);margin-right:4px}
+body:not(.side-open) .dtype-sel{display:inline-block}
+body:has(.modal:not([hidden])) #gl .labels,body:has(.menu:not([hidden])) #gl .labels{display:none}

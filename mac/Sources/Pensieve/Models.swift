@@ -24,8 +24,60 @@ struct Hit: Decodable, Identifiable, Equatable {
     let score: Double?
     let match: String?  // exact | semantic | both
     let ext: String?
+    let isDir: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, title, subtitle, path, line, snippet, highlights, score, match, ext
+        case isDir = "is_dir"
+    }
 
     var isExact: Bool { match == "exact" || match == "both" }
+    var isFolder: Bool { isDir == true }
+    var pathExists: Bool { path.map { FileManager.default.fileExists(atPath: $0) } ?? false }
+}
+
+/// What can be done with a result, shown in the side action list (⌃ or →).
+enum ResultAction: String, Identifiable {
+    case open, reveal, map, copy
+
+    var id: String { rawValue }
+
+    static func list(for hit: Hit) -> [ResultAction] {
+        if hit.kind == "session" { return [.open] }  // opening a session already shows it on the map
+        if hit.path == nil { return [.open, .map] }
+        var out: [ResultAction] = [.open]
+        if hit.pathExists { out.append(.reveal) }
+        if !hit.isFolder { out.append(.map) }
+        out.append(.copy)
+        return out
+    }
+
+    func title(for hit: Hit) -> String {
+        switch self {
+        case .open: return hit.kind == "session" ? "Open on map" : hit.isFolder ? "Open in Finder" : "Open"
+        case .reveal: return "Show in Finder"
+        case .map: return "Show on map"
+        case .copy: return "Copy path"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .open: return "arrow.up.forward.app"
+        case .reveal: return "folder"
+        case .map: return "circle.hexagongrid"
+        case .copy: return "doc.on.doc"
+        }
+    }
+
+    var shortcut: String {
+        switch self {
+        case .open: return "↩"
+        case .reveal: return "⌘↩"
+        case .map: return "⌥↩"
+        case .copy: return "⌘C"
+        }
+    }
 }
 
 struct FindResponse: Decodable {

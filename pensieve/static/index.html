@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pensieve</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='none' stroke='%230a84ff' stroke-width='1.6'/%3E%3Ccircle cx='9' cy='10' r='1.6' fill='%230a84ff'/%3E%3Ccircle cx='15' cy='9' r='1.2' fill='%230a84ff'/%3E%3Ccircle cx='13' cy='15' r='1.9' fill='%230a84ff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/app.css">
-<script>try{const t=localStorage.getItem('pensieve.theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<script>try{const t=localStorage.getItem('pensieve.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body data-view="code">
 <div id="app">
@@ -18,24 +19,28 @@
       <div id="timeline" class="glass"><svg id="tl"></svg></div>
       <aside id="drawer" class="glass" aria-hidden="true"><div class="drawer-head"><div id="drawer-title"></div><button class="iconbtn round" id="drawer-close" title="Close (Esc)" aria-label="Close">✕</button></div><div id="drawer-body"></div></aside>
     </section>
-    <aside id="sidepanel" class="glass"><div id="side"></div><div id="legend" class="legend"></div></aside>
+    <aside id="sidepanel" class="glass">
+      <div id="sidesearch"><div class="pal-input"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><input id="palin" type="search" placeholder="Search" aria-label="Search files, code, sessions and people" autocomplete="off" spellcheck="false" title="Plain words search by meaning · &quot;exact words&quot; · -exclude · kind:code · ext:pdf · in:folder"><kbd class="palkbd">⌘K</kbd></div>
+        <div class="pal-opts"><select id="palscope" class="pal-scope-sel" title="Search within a scope"></select><span class="syn">"exact" · -exclude · kind:code · ext:pdf</span></div></div>
+      <div id="dtypebar" class="seg dtype-full" role="radiogroup" aria-label="What to show on the map"></div>
+      <div id="palres" role="listbox" aria-label="Search results" hidden></div>
+      <div id="side"></div><div id="legend" class="legend"></div>
+    </aside>
     <section id="insights" class="glass sheet" hidden></section>
     <section id="settings" class="glass sheet" hidden></section>
   </main>
 
   <header id="top">
     <div class="top-l">
-      <span class="brand" title="Pensieve"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/><path d="M9 10 15 9 13 15Z" fill="none" stroke="currentColor" stroke-width=".8" opacity=".6"/></svg></span>
+      <span class="brand" title="Pensieve"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg></span>
       <button id="sidetoggle" class="iconbtn round glass" title="Show or hide the filter panel" aria-label="Toggle filter panel"><svg viewBox="0 0 24 24" width="17" height="17"><rect x="3.5" y="5" width="17" height="14" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 5v14" stroke="currentColor" stroke-width="1.7"/></svg></button>
     </div>
     <nav id="tabs" role="tablist" class="glass">
-      <button role="tab" data-view="code" class="on" title="Code (1)">Code</button>
-      <button role="tab" data-view="files" title="Files (2)">Files</button>
-      <button role="tab" data-view="map" title="Agent sessions (3)">Sessions</button>
-      <button role="tab" data-view="insights" title="Insights (4)">Insights</button>
+      <button role="tab" data-view="data" class="on" title="Code, files and agent sessions on one map (1)">Data</button>
+      <button role="tab" data-view="insights" title="Insights (2)">Insights</button>
+      <button role="tab" data-view="settings" title="Settings (3)">Settings</button>
     </nav>
     <div class="top-r">
-      <button id="searchbtn" class="searchbtn glass" title="Search (⌘K)"><svg viewBox="0 0 24 24" width="15" height="15"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Search</span><kbd>⌘K</kbd></button>
       <button id="gearbtn" class="iconbtn round glass" title="Settings and more" aria-label="Settings and more" aria-haspopup="menu" data-state="off"><svg viewBox="0 0 24 24" width="17" height="17"><circle cx="5.5" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="18.5" cy="12" r="1.7" fill="currentColor"/></svg><i class="sdot"></i></button>
       <div id="gearmenu" class="menu glass" role="menu" hidden>
         <button id="statuspill" class="menu-status" role="menuitem"><i class="dot"></i><span>Connecting…</span></button>
@@ -44,19 +49,18 @@
         <button role="menuitem" data-go="sources">Sources</button>
         <button role="menuitem" data-go="scopes">Scopes</button>
         <div class="menu-sep"></div>
-        <button role="menuitem" id="themebtn">Switch to dark appearance</button>
+        <div class="menu-row"><span>Appearance</span><div class="seg mini" id="appseg" role="radiogroup" aria-label="Appearance"><button data-app="system">System</button><button data-app="light">Light</button><button data-app="dark">Dark</button></div></div>
         <button role="menuitem" id="helpbtn">Keyboard shortcuts <kbd>?</kbd></button>
       </div>
     </div>
   </header>
 </div>
 
-<div id="palette" class="modal" hidden><div class="palette glass"><div class="pal-input"><svg viewBox="0 0 24 24" width="22" height="22"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><input id="palin" placeholder="Search files, code, sessions, people…" autocomplete="off" spellcheck="false"><select id="palscope" class="pal-scope-sel" title="Search within a scope"></select></div><div id="palres"></div><div class="pal-foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span class="syn" title="Plain words search by meaning">"exact words" · -exclude · kind:code · ext:pdf · in:folder</span></div></div></div>
 <div id="helpmodal" class="modal" hidden><div class="card help glass"><h3>Keyboard shortcuts</h3><dl>
 <dt><kbd>⌘K</kbd> or <kbd>/</kbd></dt><dd>Search everything</dd>
-<dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></dt><dd>Code · Files · Sessions · Insights</dd>
+<dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Data · Insights · Settings</dd>
 <dt><kbd>F</kbd></dt><dd>Fit map to visible points</dd>
-<dt><kbd>T</kbd></dt><dd>Toggle light / dark</dd>
+<dt><kbd>T</kbd></dt><dd>Switch between light and dark</dd>
 <dt><kbd>Esc</kbd></dt><dd>Close panel · clear selection</dd>
 <dt>Drag on the timeline</dt><dd>Filter to a date range (double-click clears)</dd>
 <dt>Click a topic label</dt><dd>Focus that topic</dd>

@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.142.3",
     "httpx>=0.28.1",
     "mcp>=1.12",
+    "mlx-lm>=0.32 ; platform_machine == 'arm64' and sys_platform == 'darwin'",
     "numpy>=2.5.3",
     "pypdf>=6.19.0",
     "scikit-learn>=1.9.1",

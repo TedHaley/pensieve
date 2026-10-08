@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)"
 
-sh build.sh
+PENSIEVE_NO_REGISTER=1 sh build.sh
 APP=build/Pensieve.app
 
 # backend installer: the wheel built from this checkout, and a uv binary

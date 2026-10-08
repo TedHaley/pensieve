@@ -9,13 +9,29 @@ struct SearchView: View {
         VStack(spacing: 0) {
             bar
             HintLine(model: model, backend: backend)
-                .frame(height: SearchModel.hintHeight, alignment: .top)
+                .frame(height: model.hintHeight, alignment: .top)
             if model.listHeight > 0 {
                 Divider().opacity(0.6).padding(.horizontal, 14)
                 ResultsList(model: model)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .overlayPreferenceValue(SelectedRowKey.self) { anchor in
+            GeometryReader { geo in
+                if model.actionsOpen, let anchor, let hit = model.selectedHit {
+                    let row = geo[anchor]
+                    let h = model.actionMenuHeight
+                    let minY = SearchModel.barHeight + 4
+                    let y = min(max(row.midY - h / 2, minY), geo.size.height - h - 10)
+                    ActionMenu(model: model, hit: hit)
+                        .frame(width: SearchModel.actionWidth, height: h)
+                        .offset(x: geo.size.width - SearchModel.actionWidth - 18, y: max(minY, y))
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(x: 16)).combined(with: .scale(scale: 0.97, anchor: .leading)),
+                            removal: .opacity.combined(with: .offset(x: 10))))
+                }
+            }
+        }
         .panelGlass()
     }
 
@@ -41,78 +57,97 @@ struct SearchView: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("Open visualizer ⌘O")
+            Button {
+                model.actions?.settings()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Settings ⌘,")
         }
         .padding(.leading, 20)
-        .padding(.trailing, 14)
+        .padding(.trailing, 12)
         .frame(height: SearchModel.barHeight)
     }
 }
 
-/// The small line under the field: how the query is being read, or the backend's state.
+/// The line under the field: how the query is being read, or the backend's state. Wraps rather than clipping;
+/// SearchModel.hintHeight sizes the panel for it.
 struct HintLine: View {
     @ObservedObject var model: SearchModel
     @ObservedObject var backend: Backend
 
     var body: some View {
-        HStack(spacing: 10) {
-            content
+        HStack(alignment: .top, spacing: 6) {
+            if model.statusShowsSpinner {
+                ProgressView().controlSize(.mini).padding(.top, 1)
+            }
+            Group {
+                if let status = model.statusText {
+                    Text(status)
+                } else {
+                    Text(model.parsedText)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
             Spacer(minLength: 0)
         }
-        .font(.system(size: 11.5))
+        .font(.system(size: SearchModel.hintFontSize))
         .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .padding(.leading, 53)
-        .padding(.trailing, 20)
+        .lineLimit(4)
+        .padding(.top, 2)
+        .padding(.leading, SearchModel.hintInsets.leading)
+        .padding(.trailing, SearchModel.hintInsets.trailing)
     }
+}
 
-    @ViewBuilder private var content: some View {
-        switch backend.state {
-        case .checking, .starting:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.mini)
-                Text("Starting Pensieve…")
-            }
-        case .installing(let msg):
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.mini)
-                Text(msg)
-            }
-        case .missing:
-            Text("Pensieve isn't installed. In Terminal: curl -fsSL https://tedhaley.ca/pensieve/install.sh | sh")
-                .textSelection(.enabled)
-        case .failed(let msg):
-            Text(msg)
-        case .up:
-            if let err = model.error {
-                Text(err)
-            } else if model.trimmed.isEmpty {
-                Text("Search by meaning  ·  \"quotes\" for exact words  ·  kind:code  ext:pdf  ·  -word to exclude")
-            } else {
-                parsedHint(model.hint)
-            }
-        }
+/// Where the selected row is, so the action list can pop out beside it.
+struct SelectedRowKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
+}
 
-    @ViewBuilder private func parsedHint(_ p: ParsedQuery) -> some View {
-        if let exact = p.exact, !exact.isEmpty {
-            label("Exact", exact.map { "\"\($0)\"" }.joined(separator: " "))
-        }
-        if let s = p.semantic, !s.isEmpty {
-            label("Meaning", s)
-        }
-        if let ex = p.exclude, !ex.isEmpty {
-            label("Without", ex.joined(separator: ", "))
-        }
-        ForEach(p.filterPairs, id: \.0) { k, v in
-            Text("\(k):\(v)").fontWeight(.semibold)
-        }
-    }
+struct ActionMenu: View {
+    @ObservedObject var model: SearchModel
+    let hit: Hit
 
-    private func label(_ name: String, _ value: String) -> some View {
-        HStack(spacing: 4) {
-            Text(name).fontWeight(.semibold)
-            Text(value).foregroundStyle(.primary.opacity(0.75))
+    var body: some View {
+        let list = model.actionList
+        VStack(spacing: 0) {
+            ForEach(Array(list.enumerated()), id: \.element) { i, a in
+                let on = i == model.actionIndex
+                HStack(spacing: 9) {
+                    Image(systemName: a.symbol)
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 16)
+                    Text(a.title(for: hit))
+                        .font(.system(size: 13, weight: on ? .semibold : .regular))
+                        .lineLimit(1)
+                        .fixedSize()
+                    Spacer(minLength: 8)
+                    Text(a.shortcut)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(on ? Color.white.opacity(0.8) : Color.secondary)
+                        .fixedSize()
+                }
+                .foregroundStyle(on ? Color.white : Color.primary)
+                .padding(.horizontal, 10)
+                .frame(height: SearchModel.actionRowHeight)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Color.accentColor : .clear))
+                .contentShape(Rectangle())
+                .onHover { if $0 { model.actionIndex = i } }
+                .onTapGesture { model.runAction(i) }
+            }
         }
+        .padding(6)
+        .menuGlass()
     }
 }
 
@@ -131,17 +166,26 @@ struct ResultsList: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(model.sections) { sec in
-                            Text(Kind.title(sec.kind))
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 12)
-                                .frame(height: SearchModel.headerHeight, alignment: .bottomLeading)
-                            ForEach(sec.items, id: \.index) { item in
-                                ResultRow(hit: item.hit, selected: model.selected == item.index)
-                                    .id(item.index)
-                                    .onTapGesture(count: 2) { model.open(item.index) }
-                                    .simultaneousGesture(TapGesture().onEnded { model.selected = item.index })
+                        // One flat list with ids unique to each search's results, so rows never keep a stale header.
+                        ForEach(model.rows) { row in
+                            switch row {
+                            case .header(let kind, _):
+                                Text(Kind.title(kind))
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .padding(.leading, 12)
+                                    .frame(height: SearchModel.headerHeight, alignment: .bottomLeading)
+                            case .hit(let index, let hit, _):
+                                let on = model.selected == index
+                                ResultRow(hit: hit, selected: on, actionsOpen: on && model.actionsOpen)
+                                    .anchorPreference(key: SelectedRowKey.self, value: .bounds) { on ? $0 : nil }
+                                    .onTapGesture(count: 2) { model.open(index) }
+                                    .simultaneousGesture(TapGesture().onEnded {
+                                        if on && model.actionsOpen { return model.closeActions() }
+                                        model.selected = index
+                                        model.openActions()
+                                    })
                             }
                         }
                     }
@@ -151,7 +195,7 @@ struct ResultsList: View {
                 .scrollIndicators(.automatic)
                 .frame(maxHeight: .infinity)
                 .onChange(of: model.selected) {
-                    if let s = model.selected { proxy.scrollTo(s) }
+                    if let s = model.selected, let id = model.rowID(for: s) { proxy.scrollTo(id) }
                 }
             }
         }
@@ -161,6 +205,10 @@ struct ResultsList: View {
 struct ResultRow: View {
     let hit: Hit
     let selected: Bool
+    var actionsOpen = false
+
+    /// File names and paths keep both ends (the name and extension matter); prose like session titles keeps its start.
+    private var truncation: Text.TruncationMode { hit.kind == "session" ? .tail : .middle }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -170,7 +218,7 @@ struct ResultRow: View {
                     Text(hit.title)
                         .font(.system(size: 13.5, weight: .semibold))
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(truncation)
                     if hit.isExact {
                         Text("exact")
                             .font(.system(size: 9.5, weight: .bold))
@@ -178,6 +226,7 @@ struct ResultRow: View {
                             .padding(.vertical, 1)
                             .background(Capsule().fill(selected ? Color.white.opacity(0.25) : Color.accentColor.opacity(0.16)))
                             .foregroundStyle(selected ? Color.white : Color.accentColor)
+                            .fixedSize()
                     }
                     Spacer(minLength: 0)
                 }
@@ -187,13 +236,19 @@ struct ResultRow: View {
                         .font(.system(size: 11))
                         .foregroundStyle(selected ? Color.white.opacity(0.78) : Color.secondary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(truncation)
                 }
                 if let snip = hit.snippet, !snip.isEmpty {
                     Text(Self.snippet(snip, hit.highlights ?? [], selected: selected))
                         .font(.system(size: 11.5))
                         .lineLimit(1)
                 }
+            }
+            if selected {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(actionsOpen ? 0.95 : 0.6))
+                    .help("Actions: ⌃ or →")
             }
         }
         .padding(.horizontal, 10)
@@ -264,7 +319,7 @@ struct HitIcon: View {
         switch hit.kind {
         case "code": return "chevron.left.forwardslash.chevron.right"
         case "session": return "bubble.left.and.text.bubble.right"
-        default: return "doc.text"
+        default: return hit.isFolder ? "folder" : "doc.text"
         }
     }
 
@@ -303,6 +358,20 @@ private struct VisualEffect: NSViewRepresentable {
 }
 
 extension View {
+    /// The side action list: a smaller glass card floating over the results.
+    @ViewBuilder func menuGlass() -> some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        if #available(macOS 26.0, *) {
+            self.background(shape.fill(.regularMaterial))
+                .glassEffect(.regular, in: shape)
+                .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
+        } else {
+            self.background(shape.fill(.regularMaterial))
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
+        }
+    }
+
     /// Spotlight's look: Liquid Glass on macOS 26, a popover-style blur before that.
     @ViewBuilder func panelGlass() -> some View {
         let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)

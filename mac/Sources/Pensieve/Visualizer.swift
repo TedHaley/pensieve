@@ -11,6 +11,7 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
     private var loaded = false
     var webView: WKWebView? { web }
 
+    /// `fragment` is already encoded (see `fragment(_:)`), e.g. "settings" or "open=code%3A12&q=umap".
     func show(fragment: String? = nil) {
         if window == nil { create() }
         NSApp.setActivationPolicy(.regular)
@@ -59,12 +60,12 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
 
     private func load() {
         let frag = pendingFragment  // kept until the real page loads, so a failed attempt doesn't lose it
-        web?.load(URLRequest(url: Backend.shared.url("", fragment: frag.map(Self.encodeFragment))))
+        web?.load(URLRequest(url: Backend.shared.url("", fragment: frag)))
     }
 
     /// Re-route an already-loaded page: set the hash, or re-fire hashchange if it is already the same.
     private func route(_ fragment: String) {
-        let enc = Self.encodeFragment(fragment)
+        let enc = fragment
         let js = """
         (function(h){ if (location.hash === '#' + h) window.dispatchEvent(new HashChangeEvent('hashchange'));
                       else location.hash = h; })(\(Self.jsString(enc)));
@@ -72,13 +73,16 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
         web?.evaluateJavaScript(js)
     }
 
-    /// "open=file:/a b/c.md" -> "open=file%3A%2Fa%20b%2Fc.md" (the value after '=' is URI-encoded).
-    static func encodeFragment(_ f: String) -> String {
-        guard let eq = f.firstIndex(of: "=") else { return f }
+    /// [("open", "file:/a b/c.md"), ("q", "umap")] -> "open=file%3A%2Fa%20b%2Fc.md&q=umap". Each value is
+    /// URI-encoded on its own; nil or empty values are left out. Returns nil when nothing is left.
+    static func fragment(_ pairs: [(String, String?)]) -> String? {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
-        let value = String(f[f.index(after: eq)...]).addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
-        return String(f[...eq]) + value
+        let parts = pairs.compactMap { key, value -> String? in
+            guard let v = value?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty else { return nil }
+            return "\(key)=\(v.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "&")
     }
 
     static func jsString(_ s: String) -> String {

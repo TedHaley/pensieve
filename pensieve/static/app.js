@@ -391,6 +391,7 @@ function renderLegend() {
     const cb = S.files.colorBy;
     if (cb === 'recency') html = legendRamp('Older', 'Recently modified');
     else if (cb === 'folder') html = [...S.files.folderSlot].map(([k, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(k)}</span>`).join('') + `<span><i class="sw" style="background:${pal().other}"></i>Other</span>`;
+    else if (cb === 'author') html = S.files.authorSlot?.size ? [...S.files.authorSlot].map(([a, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(a)}</span>`).join('') + `<span><i class="sw" style="background:${pal().other}"></i>Other / unknown</span>` : '<span class="muted">No authors found in these files yet</span>';
     else if (cb === 'kind') html = Object.entries(KIND_SLOT).filter(([k]) => S.files.points.some(p => p.kind === k)).map(([k, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${KIND_NAME[k]}</span>`).join('');
     else if (cb === 'topic') html = `<span class="muted">Colors group files with similar content</span>`;
   } else if (S.view === 'code') {
@@ -438,7 +439,7 @@ canvas.addEventListener('dblclick', () => gl.fit(visibleIdx()));
 const visibleIdx = () => { const out = []; gl.states?.forEach((v, i) => { if (v >= 0.75) out.push(i); }); return out.length ? out : null; };
 
 function hoverHtml(p) {
-  if (S.view === 'files') return `<b>${esc(p.name)}</b><div class="m">${esc(p.dir)}</div><div class="m">${KIND_NAME[p.kind] || p.kind} · ${fmtSize(p.size)} · modified ${rel(p.mtime * 1000)}</div>`;
+  if (S.view === 'files') return `<b>${esc(p.name)}</b><div class="m">${esc(p.dir)}</div><div class="m">${KIND_NAME[p.kind] || p.kind} · ${fmtSize(p.size)} · modified ${rel(p.mtime * 1000)}</div>${p.author ? `<div class="m">by ${esc(p.author)}</div>` : ''}`;
   if (S.view === 'code') {
     return `<b>${esc(p.path)}</b><div class="m">lines ${p.start}–${p.end} · ${esc(person(p.author))}${p.ts ? ' · ' + rel(p.ts * 1000) : ''}</div>` +
       (p.sessions.length ? `<p>Touched in ${plural(p.sessions.length, 'session')}</p>` : '');
@@ -454,7 +455,7 @@ function renderToolbar() {
   const tb = $('#toolbar');
   if (S.view === 'files') {
     tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Folders</button>
-      <div class="seg" id="fcolor"><span class="seg-label">Color</span>${[['folder', 'Folder'], ['kind', 'Kind'], ['topic', 'Topic'], ['recency', 'Recency']].map(([k, l]) => `<button data-v="${k}" class="${S.files.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="seg" id="fcolor"><span class="seg-label">Color</span>${[['folder', 'Folder'], ['kind', 'Kind'], ['author', 'Author'], ['topic', 'Topic'], ['recency', 'Recency']].map(([k, l]) => `<button data-v="${k}" class="${S.files.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <span style="flex:1"></span>
       ${S.files.highlight ? `<button class="btn on" data-act="clearfhl">✕ Clear highlight</button>` : ''}
       <button class="btn ${gl.controls.autoRotate ? 'on' : ''}" data-act="rotate" title="Auto-rotate">⟳</button>
@@ -480,6 +481,10 @@ function renderToolbar() {
     $$('#lvl button', tb).forEach(b => b.onclick = () => setLevel(b.dataset.v));
     $$('#mcolor button', tb).forEach(b => b.onclick = () => { S.colorBy = b.dataset.v; store.set('mapColor', S.colorBy); renderToolbar(); recolor(); renderTimeline(); });
   }
+  // the type switch lives under the search field; with the panel collapsed a compact picker stands in here
+  tb.insertAdjacentHTML('afterbegin', `<select class="dtype-sel" aria-label="What to show on the map">${DATA_TYPES.map(([k, l]) => `<option value="${k}" ${S.view === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`);
+  $('.dtype-sel', tb).onchange = e => setView(e.target.value);
+  renderTypeSwitch();
   $$('[data-act]', tb).forEach(b => b.onclick = () => ({
     fit: () => gl.fit(visibleIdx()),
     rotate: () => { gl.controls.autoRotate = !gl.controls.autoRotate; store.set('autorotate', gl.controls.autoRotate); renderToolbar(); },
@@ -999,7 +1004,7 @@ async function openCode(id) {
   openDrawer(`<div class="meta"><span class="badge">Code</span>${esc(c.repo)} · lines ${c.start}–${c.end}</div><h2 style="font:600 14px var(--mono);word-break:break-all">${esc(c.path)}</h2>`,
     `<pre class="code" style="counter-reset:ln ${c.start - 1}">${lines.map(l => `<span>${esc(l) || ' '}</span>`).join('')}</pre>
      <div class="actions"><button class="btn" data-a="open" title="Open in your editor (Settings → editor)">Open in editor</button><button class="btn" data-a="reveal">Reveal in Finder</button><button class="btn" data-a="file">Show whole file</button><button class="btn" data-a="area">Area: ${esc(areaOf(c.path))}</button></div>
-     <div class="h4">Written by</div><div class="list">${Object.entries(c.authors).sort((a, b) => b[1] - a[1]).map(([a, n]) => `<button class="item" data-person="${esc(a)}"><div class="t"><i class="sw" style="background:${codeColorFor('author', a)}"></i><span class="grow">${esc(person(a))}</span><span class="muted">${n} lines</span></div><div class="hbar" style="margin-top:4px"><i style="width:${n / tot * 100}%;background:${codeColorFor('author', a)}"></i></div></button>`).join('')}</div>
+     <div class="h4">Written by</div><p class="muted" style="font-size:11.5px;margin:-2px 0 6px">From git blame: who last changed each line.</p><div class="list">${Object.entries(c.authors).sort((a, b) => b[1] - a[1]).map(([a, n]) => `<button class="item" data-person="${esc(a)}"><div class="t"><i class="sw" style="background:${codeColorFor('author', a)}"></i><span class="grow">${esc(person(a))}</span><span class="muted">${n} lines</span></div><div class="hbar" style="margin-top:4px"><i style="width:${n / tot * 100}%;background:${codeColorFor('author', a)}"></i></div></button>`).join('')}</div>
      ${c.commits.length ? `<div class="h4">Recent commits to this file</div><div class="list">${c.commits.map(x => `<div class="item"><div class="t"><code style="font:11px var(--mono);color:var(--text-3)">${x.sha}</code><span class="grow">${esc(x.subject)}</span></div><div class="s">${esc(x.author)} · ${rel(x.ts * 1000)}</div></div>`).join('')}</div>` : ''}
      ${c.sessions.length ? `<div class="h4">Your sessions that touched this file</div><div class="list">${c.sessions.map(s => `<button class="item" data-sid="${esc(s.id)}"><div class="t">${s.edited ? '<span class="badge">edited</span>' : '<span class="badge">read</span>'}<span class="grow">${esc(s.title)}</span><span class="muted">→</span></div></button>`).join('')}</div>` : ''}`);
   const body = $('#drawer-body');
@@ -1059,6 +1064,8 @@ async function loadFiles() {
   S.files.byId = new Map(S.files.points.map(p => [p.id, p]));
   const c = new Map(); S.files.points.forEach(p => c.set(p.top, (c.get(p.top) || 0) + 1));
   S.files.folderSlot = new Map([...c].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i]));
+  const au = new Map(); S.files.points.forEach(p => p.author && au.set(p.author, (au.get(p.author) || 0) + 1));
+  S.files.authorSlot = new Map([...au].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i]));
   const ts = S.files.points.map(p => p.mtime).filter(Boolean).sort((a, b) => a - b);
   S.files.tRange = [ts[Math.floor(ts.length * 0.05)] || 0, ts[ts.length - 1] || 1];
   S.files.tree = null; S.files.loaded = true; S.files.stale = false;
@@ -1067,6 +1074,7 @@ function fileColor(p) {
   switch (S.files.colorBy) {
     case 'folder': return slotColor(S.files.folderSlot.has(p.top) ? S.files.folderSlot.get(p.top) : -1);
     case 'kind': return slotColor(KIND_SLOT[p.kind] ?? -1);
+    case 'author': return slotColor(p.author && S.files.authorSlot.has(p.author) ? S.files.authorSlot.get(p.author) : -1);
     case 'topic': return slotColor(p.cluster ?? -1);
     case 'recency': { const [a, b] = S.files.tRange; return seqColor(Math.max(0, Math.min(1, (p.mtime - a) / Math.max(1, b - a)))); }
   }
@@ -1132,6 +1140,7 @@ async function openOnMac(id, action) {
   } catch (e) { toast('Could not open it: ' + e.message); }
 }
 const PROSE = new Set(['doc', 'pdf', 'slides', 'other']);
+const AUTHOR_FROM = {pdf: 'from the PDF', office: 'from the document properties', spotlight: 'from Spotlight metadata', owner: 'file owner on this Mac', git: 'from git'};
 async function openFile(path) {
   if (S.view !== 'files') await setView('files');
   const id = 'file:' + path;
@@ -1151,7 +1160,9 @@ async function openFile(path) {
   openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${slotColor(KIND_SLOT[f.kind] ?? -1)}"></i>${esc(KIND_NAME[f.kind] || f.kind)}</span>${f.ext ? `<span class="chip">.${esc(f.ext)}</span>` : ''}</div>
       <h2 style="word-break:break-word">${esc(f.name)}</h2>
       <div class="fmeta"><span style="font-family:var(--mono);word-break:break-all">${esc(f.display)}</span></div>
-      <div class="fmeta"><span>${fmtSize(f.size)}</span><span>modified ${rel(f.mtime * 1000)}</span>${f.n ? `<span>${plural(f.n, 'section')}</span>` : ''}</div>`,
+      <div class="fmeta"><span>${fmtSize(f.size)}</span><span>modified ${rel(f.mtime * 1000)}</span>${f.n ? `<span>${plural(f.n, 'section')}</span>` : ''}</div>
+      ${f.author ? `<div class="fmeta"><span>By <b style="color:var(--text)">${esc(f.author)}</b> <span class="muted">· ${esc(AUTHOR_FROM[f.author_source] || 'from the file')}</span></span></div>` : ''}
+      <div class="fmeta muted" style="font-size:11.5px">${f.author ? 'Files record who authored them; code in git repos shows who wrote each line.' : 'No author recorded for this file. Code in git repos shows who wrote each line.'}</div>`,
     `<div class="actions" style="margin-top:0"><button class="btn" data-a="open">Open</button><button class="btn" data-a="reveal">Reveal in Finder</button><button class="btn" data-a="copy">Copy path</button><button class="btn" data-a="sim">Show similar on map</button></div>
      <div class="h4">Preview</div>${preview}
      ${f.similar?.length ? `<div class="h4">Similar files</div><div class="list">${f.similar.map(x => `<button class="item" data-fpath="${esc(x.path)}"><div class="t"><span class="grow">${esc(x.name)}</span><span class="muted" style="font-size:11px">${Math.round(x.score * 100)}%</span></div><div class="s" style="font-family:var(--mono);font-size:11px">${esc(x.display)}</div></button>`).join('')}</div>` : ''}`);
@@ -1171,13 +1182,15 @@ const SET_GROUPS = [
   ['Language model', ['llm_url', 'llm_model']],
 ];
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
-const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos', 'default_scope']);  // managed in the Sources section
+const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai']);  // managed in the Sources section
 const SRC_ICON = {
   agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
   repos: '<circle cx="6" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.2v7.6M18 10.2c0 4-6 3-11 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   apps: '<rect x="4" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>',
 };
+// 'a/very/long/path/to/thing' -> 'a/very/lo…/to/thing': keeps both the root and the name readable
+const midEllipsis = (t, max) => !t || t.length <= max ? t : t.slice(0, Math.ceil(max * .4)) + '…' + t.slice(-Math.floor(max * .6 - 1));
 const srcCount = (n, unit) => n == null ? '' : `${n.toLocaleString()} ${n === 1 && unit ? unit.replace(/s$/, '') : unit || ''}`;
 const srcState = {cat: null, hints: new Map(), err: null};
 async function loadSources() { try { srcState.cat = await api('/api/sources'); } catch { srcState.cat = srcState.cat || []; } }
@@ -1190,9 +1203,10 @@ function srcHint(id) {
 function srcItem(it, catOn) {
   const off = !it.available;
   const detail = off ? 'Not found on this Mac' : it.detail;
+  const shown = midEllipsis(detail, 64);
   return `<div class="src-item ${it.kind === 'rule' ? 'rule' : ''} ${catOn ? '' : 'muted-all'} ${off ? 'na' : ''}">
     <label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>
-    <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(detail)}</div></div>
+    <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(it.error ? detail : shown)}</div></div>
     <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}</div>
     ${it.removable ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.id.slice(6))}" title="Stop indexing this folder">✕</button>` : '<span></span>'}
   </div>`;
@@ -1399,6 +1413,8 @@ const SET_TABS = [
   ['sources', 'Sources', '#0a84ff', '<path d="M4 6.5C4 5.1 7.6 4 12 4s8 1.1 8 2.5S16.4 9 12 9 4 7.9 4 6.5Z M4 6.5v11C4 18.9 7.6 20 12 20s8-1.1 8-2.5v-11 M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" fill="none" stroke="#fff" stroke-width="1.8"/>'],
   ['scopes', 'Scopes', '#5e5ce6', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="#fff"/>'],
   ['agents', 'Search & Agents', '#30b0c7', '<circle cx="11" cy="11" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
+  ['ai', 'AI & Insights', '#bf5af2', '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9Z" fill="#fff"/><circle cx="18.5" cy="17.5" r="1.6" fill="#fff"/>'],
+  ['appearance', 'Appearance', '#ff9f0a', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><path d="M12 4.5a7.5 7.5 0 0 1 0 15Z" fill="#fff"/>'],
   ['advanced', 'Advanced', '#8e8e93', '<path d="M5 7h8M17 7h2M5 17h2M11 17h8" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="9" cy="17" r="2" fill="none" stroke="#fff" stroke-width="1.8"/>'],
 ];
 S.setTab = store.get('setTab', 'sources');
@@ -1429,6 +1445,12 @@ async function renderSettings() {
       <div class="cmd-l">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
     </div>`;
+  else if (tab === 'ai') { if (!aiState.data) loadAI().then(() => S.setTab === 'ai' && renderSettings()); body = bar('AI & Insights', 'The engine that writes summaries, topic names and insights.') + `
+    <div class="set-card ai-set"><h3>Status</h3>${aiStatusHtml(aiState.data) || '<p class="sc-p">Checking…</p>'}</div>
+    <div class="set-card ai-set" id="aiset"><h3>Engine</h3><p class="sc-p">${esc(NO_AI_WORKS)}</p>${aiChooserHtml(aiState.data)}</div>`; }
+  else if (tab === 'appearance') body = bar('Appearance', 'Matches the Pensieve Mac app.') + `
+    <div class="set-card"><div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes.</div></div>
+      <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>`;
   else body = bar('Advanced', 'Fine-tuning for indexing and the local language model.', true) + groups.filter(([g]) => g !== 'Mac app').map(card).join('') + `
     <div class="set-card" id="set-Index"><h3>Index</h3><div class="set-stats">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
       <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}${st.llm ? ` · model: ${esc(st.llm)}` : ''}</p></div>`;
@@ -1437,6 +1459,8 @@ async function renderSettings() {
     <div class="set-main" id="setmain" data-tab="${tab}">${body}</div></div>`;
   $('#setmain').scrollTop = y;
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
+  $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
+  if ($('#aiset')) bindAIChooser($('#aiset'));
   $('[data-setdone]', el).onclick = () => setView(S.prevView || 'code');
   const D = S.set.draft, again = () => renderSettings();
   $$('[data-sk]', el).forEach(i => i.onchange = () => {
@@ -1492,23 +1516,109 @@ async function route() {
   if (!h) return;
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
-  if (h === 'sources' || h === 'scopes' || h === 'agents' || h === 'advanced') {
+  if (['sources', 'scopes', 'agents', 'appearance', 'advanced', 'ai'].includes(h)) {
     S.setTab = h; store.set('setTab', h);
     return S.view === 'settings' ? renderSettings() : setView('settings');
   }
   const q = new URLSearchParams(h);
-  if (q.get('view')) await setView(VIEW_ALIAS[q.get('view')] || 'code');
+  if (q.get('view')) await setView(q.get('view') === 'data' ? dataType() : VIEW_ALIAS[q.get('view')] || 'code');
   if (q.get('open')) await openItem(q.get('open'));
+  if (q.has('q')) await openPalette(q.get('q'), {focus: !q.get('open')});  // the Mac panel's query, without closing the item it opened
 }
 window.addEventListener('hashchange', route);
 
+/* ============================== AI engine (summaries, topic names, insights) ============================== */
+const aiState = {data: null, timer: null, busy: null, err: null};
+const AI_STATUS = {ready: ['live', 'Ready'], starting: ['busy', 'Starting…'], downloading: ['busy', 'Downloading…'], offline: ['warn', 'Not reachable'], off: ['off', 'Off'], error: ['off', 'Error']};
+async function loadAI() {
+  try { aiState.data = await api('/api/ai'); } catch { aiState.data = aiState.data || null; }
+  const st = aiState.data?.status;
+  clearTimeout(aiState.timer);
+  // poll fast while the engine is coming up, and slowly while an AI view is open (another app or agent may change it)
+  const watching = (S.view === 'settings' && S.setTab === 'ai') || S.view === 'insights' || ($('#aisheet') && !$('#aisheet').hidden);
+  if (st === 'starting' || st === 'downloading' || watching) aiState.timer = setTimeout(async () => {
+    const before = JSON.stringify(aiState.data); await loadAI(); if (JSON.stringify(aiState.data) !== before) refreshAIViews();
+  }, st === 'starting' || st === 'downloading' ? 5000 : 10000);
+  return aiState.data;
+}
+function refreshAIViews() {
+  if (S.view === 'settings' && S.setTab === 'ai') renderSettings();
+  if (S.view === 'insights') renderInsights();
+  const sheet = $('#aisheet'); if (sheet && !sheet.hidden) renderAISheet();
+}
+function aiStatusHtml(d) {
+  if (!d) return '';
+  const [cls, label] = AI_STATUS[d.status] || ['off', d.status];
+  const opt = d.options.find(o => o.id === d.provider);
+  return `<div class="ai-status"><i class="dot ${cls}"></i><b>${esc(label)}</b><span class="muted">${esc(opt ? opt.label : d.provider || 'No engine')}${d.detail ? ' · ' + esc(d.detail) : ''}</span>${d.setting === 'auto' && d.provider && d.provider !== 'none' ? '<span class="badge">picked automatically</span>' : ''}</div>`;
+}
+function aiChooserHtml(d) {
+  if (!d) return '<div class="shimmer" style="height:120px;border-radius:14px"></div>';
+  return `<div class="ai-opts" role="radiogroup" aria-label="AI engine">${d.options.map(o => {
+    const on = d.setting === o.id, busy = aiState.busy === o.id;
+    return `<button class="ai-opt ${on ? 'on' : ''}" data-ai="${esc(o.id)}" role="radio" aria-checked="${on}" ${o.available ? '' : 'disabled'}>
+      <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
+      <p>${esc(o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}
+      ${on ? '<span class="ai-check">✓ Selected</span>' : busy ? '<span class="ai-check">Saving…</span>' : ''}</button>`;
+  }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}`;
+}
+function bindAIChooser(root) {
+  $$('[data-ai]', root).forEach(b => b.onclick = async () => {
+    const id = b.dataset.ai; aiState.busy = id; aiState.err = null; refreshAIViews();
+    try {
+      const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({ai: id})});
+      if (!r.ok) aiState.err = (await r.json().catch(() => ({}))).detail || `Could not switch (${r.status})`;
+      else { try { localStorage.setItem('pensieve.aiAsked', '1'); } catch {} toast(id === 'none' ? 'AI is off' : 'AI engine saved'); if (root.id === 'aisheet') closeAISheet(); }
+    } catch (e) { aiState.err = e.message; }
+    aiState.busy = null; await loadAI(); refreshAIViews(); pollStatus();
+  });
+}
+const NO_AI_WORKS = 'Without AI you still get the maps, search, activity and working rhythm, topics named by keywords, your code footprint and what teammates committed. AI adds summaries, topic names, insights and team summaries.';
+function aiInsightsCard() {
+  const d = aiState.data;
+  if (!d || (d.configured && d.status !== 'off')) return d && d.configured && ['offline', 'error'].includes(d.status) ? `<div class="card ai-setup" style="margin-bottom:12px">${aiStatusHtml(d)}<p class="cap" style="margin:6px 0 0">AI features pause until it's reachable. <a href="#ai">Change the AI engine</a></p></div>` : '';
+  return `<div class="card ai-setup" id="aicard" style="margin-bottom:12px"><h3>Choose how Pensieve writes insights</h3>
+    <p class="cap">${esc(NO_AI_WORKS)}</p>${aiStatusHtml(d)}${aiChooserHtml(d)}</div>`;
+}
+// One-time sheet on first run when no engine has been chosen yet
+function renderAISheet() {
+  let m = $('#aisheet');
+  if (!m) { m = document.createElement('div'); m.id = 'aisheet'; m.className = 'modal'; document.body.append(m); m.addEventListener('mousedown', e => { if (e.target === m) closeAISheet(); }); }
+  m.hidden = false;
+  m.innerHTML = `<div class="palette glass ai-sheet" role="dialog" aria-label="Set up insights"><div class="ai-sheet-b">
+    <div class="ai-sheet-h"><span class="brand"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg></span>
+      <div><h2>Pick an AI engine for insights</h2><p>${esc(NO_AI_WORKS)}</p></div></div>
+    ${aiChooserHtml(aiState.data)}
+    <div class="ai-sheet-f"><span class="muted">You can change this any time in Settings → AI &amp; Insights.</span><button class="btn" data-aiskip>Not now</button></div></div></div>`;
+  bindAIChooser(m);
+  $('[data-aiskip]', m).onclick = closeAISheet;
+}
+function closeAISheet() { const m = $('#aisheet'); if (m) m.hidden = true; try { localStorage.setItem('pensieve.aiAsked', '1'); } catch {} }
+async function maybeAskAI() {
+  let asked = false; try { asked = !!localStorage.getItem('pensieve.aiAsked'); } catch {}
+  const d = await loadAI();
+  if (S.view === 'insights') renderInsights();
+  if (!asked && d && !d.configured) renderAISheet();
+}
+
 /* ============================== views ============================== */
+// Three top-level tabs: Data (code, files and agent sessions, chosen with a type switch), Insights, Settings.
+const DATA_VIEWS = ['code', 'files', 'map'];
+const DATA_TYPES = [['code', 'Code'], ['files', 'Files'], ['map', 'Sessions']];
+const dataType = () => { const t = store.get('dataType', 'code'); return DATA_VIEWS.includes(t) ? t : 'code'; };
+function renderTypeSwitch() {
+  const bar = $('#dtypebar'); if (!bar) return;
+  bar.innerHTML = DATA_TYPES.map(([k, l]) => `<button data-dtype="${k}" role="radio" aria-checked="${S.view === k}" class="${S.view === k ? 'on' : ''}">${l}</button>`).join('');
+  $$('[data-dtype]', bar).forEach(b => b.onclick = () => setView(b.dataset.dtype));
+}
+const syncTabs = v => $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === (DATA_VIEWS.includes(v) ? 'data' : v)));
 async function setView(v, repo) {
   if (S.view === v && !repo) return;
   if (S.view !== 'insights' && S.view !== 'settings') cams[camKey()] = gl.saveCam();
   const prev = S.view;
   S.view = v; store.set('view', v);
-  $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  syncTabs(v);
+  if (DATA_VIEWS.includes(v)) store.set('dataType', v);
   const page = v === 'insights' || v === 'settings';
   if (prev !== 'settings' && prev !== v) S.prevView = prev;
   document.body.dataset.view = v;  // the map stays as the backdrop; CSS shows the right floating panels
@@ -1525,7 +1635,7 @@ async function setView(v, repo) {
   if (v === 'insights') renderInsights();
   if (v === 'settings') renderSettings();
 }
-$$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view));
+$$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'data' ? dataType() : b.dataset.view));
 
 /* ============================== insights ============================== */
 async function loadInsights() {
@@ -1600,13 +1710,15 @@ function renderInsights() {
       <div class="card"><h3>Activity by topic</h3><p class="cap">Sessions per ${actBinLabel(ss)}, stacked by ${S.scope ? 'this scope’s topics' : 'topic'}. Click a bar to filter the map to that period.</p><div class="legend-row" id="actleg"></div><svg id="actchart" class="chart" height="220"></svg></div>
       <div class="card"><h3>When you work</h3><p class="cap">Sessions started by weekday and hour (local time).</p><svg id="heat" class="chart" height="220"></svg></div>
     </div>
-    ${aiSection(ins, running, scopeName)}
+    ${aiInsightsCard()}
+    ${aiState.data && !aiState.data.configured && !ins ? '' : aiSection(ins, running, scopeName)}
     ${codebaseSection(repo)}
     <div class="grid2">
       <div class="card"><h3>Topics${S.scope ? ' in this scope' : ''}</h3><p class="cap">Click a topic to explore it on the map.</p><div id="topicbars"></div></div>
       <div class="card"><h3>Projects</h3><p class="cap">Click a project to filter everything to it.</p><div style="overflow:auto"><table class="tbl" id="projtbl"></table></div></div>
     </div></div>`;
   $('#regen').onclick = regenInsights;
+  if ($('#aicard')) bindAIChooser($('#aicard'));
   drawActivity(ss); drawHeat(ss); drawTopicBars(ss); drawProjTable(ss);
   $$('[data-sid]', el).forEach(b => b.onclick = () => openSession(b.dataset.sid));
   $$('[data-tid]', el).forEach(b => b.onclick = () => toggleTopic(+b.dataset.tid));
@@ -1752,12 +1864,16 @@ function drawProjTable(ss) {
 
 /* ============================== command palette ============================== */
 const pl = {items: [], sel: 0, q: '', seq: 0};
-function openPalette(prefill = '') {
-  $('#palette').hidden = false; const i = $('#palin'); i.value = prefill; i.focus(); palSearch();
+// Search lives at the top of the left panel: a query swaps the filters for results; clearing it brings them back.
+async function openPalette(prefill = null, {focus = true} = {}) {
+  if (S.view === 'settings') await setView(dataType());
+  toggleSide(true);
+  const i = $('#palin');
+  if (prefill != null) i.value = prefill;
+  if (focus) { i.focus(); i.select(); }
+  palSearch();
 }
-const closePalette = () => { $('#palette').hidden = true; };
-$('#searchbtn').onclick = () => openPalette();
-$('#palette').addEventListener('mousedown', e => { if (e.target.id === 'palette') closePalette(); });
+function closePalette() { const i = $('#palin'); if (i.value) { i.value = ''; palSearch(); } i.blur(); }
 const palFind = debounce(async (q, seq) => {
   try {
     const r = await api(`/api/find?limit=18&q=${enc(q)}&scope=${enc(palScope())}`);
@@ -1766,7 +1882,11 @@ const palFind = debounce(async (q, seq) => {
   } catch { if (seq === pl.seq) { pl.found = {results: []}; palRender(); } }
 }, 160);
 function palSearch() {
-  pl.q = $('#palin').value; pl.seq++; pl.found = null; pl.sel = 0; palRender();
+  pl.q = $('#palin').value; pl.seq++; pl.found = null; pl.sel = 0;
+  const on = !!pl.q.trim();
+  document.body.classList.toggle('searching', on); $('#palres').hidden = !on;
+  if (!on) { pl.items = []; $('#palres').innerHTML = ''; return; }
+  palRender();
   const q = pl.q.trim();
   if (q && !q.startsWith('who:') && !q.startsWith('>') && q.replace(/[^\w]/g, '').length >= 2) palFind(q, pl.seq);
 }
@@ -1779,8 +1899,10 @@ function hlSnip(t, hl) {
 }
 const FIND_GROUP = {file: 'Files', code: 'Code', session: 'Agent sessions'};
 const FIND_IC = {file: '▤', code: '⌗', session: '◌'};
+const FOLDER_IC = '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="currentColor" opacity=".85"/></svg>';
 function findItem(r) {
   const ex = r.match === 'exact' || r.match === 'both';
+  if (r.is_dir) return {ic: FOLDER_IC, title: r.title, titleHtml: esc(r.title) + '<span class="ex">folder</span>', subHtml: `<span style="font-size:11.5px">${esc(r.subtitle)}</span>`, rt: 'Reveal', run: () => openOnMac(r.id, 'reveal')};
   return {ic: FIND_IC[r.kind], title: r.title + (r.line && r.kind === 'code' ? `:${r.line}` : ''), titleHtml: esc(r.title) + (r.kind === 'code' && r.line ? `<span class="muted">:${r.line}</span>` : '') + (ex ? '<span class="ex">exact</span>' : ''),
           subHtml: `<span style="font-family:var(--mono);font-size:11px">${esc(r.subtitle)}</span>${r.snippet ? ' — ' + hlSnip(r.snippet, r.highlights) : ''}`, run: () => openItem(r.id)};
 }
@@ -1795,7 +1917,8 @@ function palRender() {
       const rs = pl.found.results || [];
       const sc = pl.found.scope;
       if (sc && sc.name !== 'all') add('Scope', {ic: '◎', title: `Searching in ${sc.name}`, sub: sc.description || '', rt: 'change ▸', run: () => { $('#palscope').focus(); $('#palscope').showPicker?.(); }});
-      for (const k of ['file', 'code', 'session']) rs.filter(r => r.kind === k).slice(0, 6).forEach(r => add(FIND_GROUP[k], findItem(r)));
+      rs.filter(r => r.is_dir).slice(0, 4).forEach(r => add('Folders', findItem(r)));
+      for (const k of ['file', 'code', 'session']) rs.filter(r => r.kind === k && !r.is_dir).slice(0, 6).forEach(r => add(FIND_GROUP[k], findItem(r)));
       if (!rs.length) add('Search', {ic: '∅', title: 'No matching files, code or sessions', sub: pl.found.query?.exact?.length ? 'Exact phrases must appear word for word; try fewer quotes.' : 'Try other words, or "quotes" for exact text.', run: () => {}});
     } else {
       const local = S.sessions.filter(s => (s.title + ' ' + (s.summary || '') + ' ' + s.project + ' ' + (s.tags || '')).toLowerCase().includes(q)).slice(0, 4);
@@ -1810,7 +1933,7 @@ function palRender() {
   } else {
     S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));
   }
-  const cmds = [['Go to Code', '1', () => setView('code')], ['Go to Files', '2', () => setView('files')], ['Go to Sessions', '3', () => setView('map')], ['Go to Insights', '4', () => setView('insights')], ['Open Settings', '', () => setView('settings')],
+  const cmds = [['Show code', '1', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '2', () => setView('insights')], ['Open Settings', '3', () => setView('settings')],
     ['Toggle light / dark', 'T', toggleTheme], ['Clear all filters', '', clearFilters], ['Fit map to view', 'F', () => gl.fit(visibleIdx())], ['Keyboard shortcuts', '?', () => ($('#helpmodal').hidden = false)]];
   cmds.filter(([t]) => !q || t.toLowerCase().includes(q.replace(/^>/, '').trim())).slice(0, raw ? 3 : 7).forEach(([t, k, run]) => add('Commands', {ic: '›', title: t, rt: k, run}));
   pl.items = items; pl.sel = Math.min(pl.sel, items.length - 1);
@@ -1819,7 +1942,11 @@ function palRender() {
   $$('.pal-item', $('#palres')).forEach(el => { el.onmouseenter = () => { pl.sel = +el.dataset.i; $$('.pal-item').forEach(x => x.classList.toggle('sel', x === el)); }; el.onclick = () => palRun(+el.dataset.i); });
 }
 const sessItem = s => ({ic: `<i class="sw" style="background:${slotColor(cl(s))}"></i>`, title: s.title, sub: s.summary || '', rt: `${esc(s.project)} · ${rel(s.t1)}`, run: () => openSession(s.id)});
-function palRun(i) { const it = pl.items[i]; if (!it) return; closePalette(); it.run(); }
+function palRun(i) {  // results stay so you can open the next one; on phones the panel gets out of the way
+  const it = pl.items[i]; if (!it) return;
+  if (innerWidth < 860) toggleSide(false);
+  it.run();
+}
 $('#palin').addEventListener('input', palSearch);
 $('#palscope').addEventListener('change', () => { $('#palscope').dataset.touched = '1'; $('#palin').focus(); palSearch(); });
 $('#palin').addEventListener('keydown', e => {
@@ -1829,22 +1956,34 @@ $('#palin').addEventListener('keydown', e => {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     palRun(pl.sel);
-  } else if (e.key === 'Escape') closePalette();
+  } else if (e.key === 'Escape') { e.stopPropagation(); closePalette(); }
 });
 
 /* ============================== theme, keys, status ============================== */
-function toggleTheme() {
-  const t = theme() === 'dark' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = t; store.set('theme', t);
-  try { localStorage.setItem('pensieve.theme', t); } catch {}
-  gl.setTheme(); recolor(); renderSidebar(); renderTimeline(); syncThemeLabel(); if (S.view === 'insights') renderInsights(); if (S.view === 'settings') renderSettings();
+const APPEARANCES = ['system', 'light', 'dark'];
+let appearance = (() => { try { const t = localStorage.getItem('pensieve.theme'); return APPEARANCES.includes(t) ? t : 'system'; } catch { return 'system'; } })();
+function applyAppearance(mode, persist = false) {
+  if (!APPEARANCES.includes(mode)) mode = 'system';
+  appearance = mode;
+  if (mode === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = mode;
+  try { localStorage.setItem('pensieve.theme', mode); } catch {}
+  gl.setTheme(); recolor(); renderSidebar(); renderTimeline(); syncThemeLabel();
+  if (S.view === 'insights') renderInsights(); if (S.view === 'settings') renderSettings();
+  if (persist) fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({appearance: mode})}).catch(() => {});
 }
-$('#themebtn').onclick = () => { closeMenu(); toggleTheme(); };
-$('#helpbtn').onclick = () => { closeMenu(); $('#helpmodal').hidden = false; };
-/* floating chrome: gear menu, side panel, native window */
-const syncThemeLabel = () => { $('#themebtn').textContent = theme() === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance'; };
+// T flips between light and dark from whatever is showing now
+const toggleTheme = () => applyAppearance(theme() === 'dark' ? 'light' : 'dark', true);
+const syncThemeLabel = () => $$('[data-app]').forEach(b => b.classList.toggle('on', b.dataset.app === appearance));
+$$('#appseg [data-app]').forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
+async function loadAppearance() {
+  try { const r = await api('/api/settings'); if (APPEARANCES.includes(r.settings.appearance) && r.settings.appearance !== appearance) applyAppearance(r.settings.appearance); } catch {}
+}
 function closeMenu() { $('#gearmenu').hidden = true; $('#gearbtn').setAttribute('aria-expanded', 'false'); }
 $('#gearbtn').onclick = e => { e.stopPropagation(); const m = $('#gearmenu'); m.hidden = !m.hidden; $('#gearbtn').setAttribute('aria-expanded', String(!m.hidden)); syncThemeLabel(); };
+document.addEventListener('mouseover', e => {  // full text on hover for anything shortened with an ellipsis
+  const el = e.target.closest?.('.name,.grow,.sub,.s,.tx b,.tx small,.src-d,.src-l,.lbl,.chip,.k,.d,.fmeta span,.pal-group,.seg button,.badge,h2,h3,code');
+  if (el && !el.title && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)) el.title = el.textContent.trim();
+});
 document.addEventListener('pointerdown', e => { if (!$('#gearmenu').hidden && !e.target.closest('#gearmenu,#gearbtn')) closeMenu(); });
 $$('#gearmenu [data-go]').forEach(b => b.onclick = () => {
   closeMenu(); const g = b.dataset.go;
@@ -1863,11 +2002,11 @@ if (window.pensieveNative === true) document.body.classList.add('native');
 $('#helpmodal').addEventListener('click', e => { if (e.target.id === 'helpmodal' || e.target.dataset.close != null) $('#helpmodal').hidden = true; });
 document.addEventListener('keydown', e => {
   const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName);
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#palette').hidden ? openPalette() : closePalette(); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); return; }
   if (e.key === 'Escape') {
-    if (!$('#palette').hidden) return closePalette();
     if (!$('#helpmodal').hidden) return ($('#helpmodal').hidden = true);
     if (!$('#gearmenu').hidden) return closeMenu();
+    if ($('#aisheet') && !$('#aisheet').hidden) return closeAISheet();
     if (S.view === 'settings' && !typing) return setView(S.prevView || 'code');
     if (typing) return document.activeElement.blur();
     if ($('#drawer').classList.contains('open')) return closeDrawer();
@@ -1877,12 +2016,12 @@ document.addEventListener('keydown', e => {
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === '/') { e.preventDefault(); openPalette(); }
-  else if (k === '1') setView('code'); else if (k === '2') setView('files'); else if (k === '3') setView('map'); else if (k === '4') setView('insights');
+  else if (k === '1') setView(dataType()); else if (k === '2') setView('insights'); else if (k === '3') setView('settings');
   else if (k === 'f') gl.fit(visibleIdx());
   else if (k === 't') toggleTheme();
   else if (k === '?') $('#helpmodal').hidden = false;
 });
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { gl.setTheme(); recolor(); renderTimeline(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (appearance !== 'system') return; gl.setTheme(); recolor(); renderTimeline(); renderSidebar(); if (S.view === 'insights') renderInsights(); });
 
 function renderStatus() {
   const st = S.status, pill = $('#statuspill'), label = $('span', pill);
@@ -1947,7 +2086,7 @@ async function handleEvent(m) {
     else if (m.type === 'topics') { await loadSessions(); renderSidebar(); if (S.view === 'map') renderLabels(); if (S.view === 'insights') renderInsights(); pollStatus(); }
     else if (m.type === 'insights') { await loadInsights(); if (S.view === 'insights') renderInsights(); toast('New insights are ready'); pollStatus(); }
     else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); refetchSourcesSoon(); }
-    else if (m.type === 'settings') { loadScopes(); if (S.set && !setDirty().length) { S.set = null; if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
+    else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { S.set = null; if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
     else if (m.type === 'repos') { refetchSourcesSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
@@ -1967,14 +2106,14 @@ async function init() {
   renderStatus();
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
   document.body.dataset.view = S.view;
-  $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === S.view));
+  syncTabs(S.view);
   renderToolbar(); buildMap(); refresh();
   if (!gl.controls.autoRotate || store.get('hinted', false)) $('#hint').classList.add('gone');
   setTimeout(() => $('#hint').classList.add('gone'), 9000);
   connect();
   await loadRepos().catch(() => {});
   const v = store.get('view', 'code');
-  loadScopes();
+  loadScopes(); loadAppearance(); syncThemeLabel(); maybeAskAI();
   if (location.hash.length > 1) await route();
   else if (v !== 'map' && (S.code.repos.length || v !== 'code')) await setView(v);
 }

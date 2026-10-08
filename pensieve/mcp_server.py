@@ -62,7 +62,7 @@ def search(query: str, limit: int = 10, kind: str | None = None) -> dict:
     -word excludes; filters: kind:file|code|session, ext:<extension>, in:<path or repo substring>.
     Returns ranked results with an id to pass to read/open/similar."""
     r = _c()["searcher"].find(query, limit, [kind] if kind else None, scope=_scope())
-    return {"query": r["query"], "scope": r["scope"]["name"], "results": [{k: x[k] for k in ("id", "kind", "title", "subtitle", "path", "line", "snippet", "match", "score")}
+    return {"query": r["query"], "scope": r["scope"]["name"], "results": [{k: x[k] for k in ("id", "kind", "title", "subtitle", "path", "line", "snippet", "match", "score", "is_dir", "author")}
                                              for x in r["results"]]}
 
 

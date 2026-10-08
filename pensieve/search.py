@@ -125,8 +125,9 @@ class Searcher:
                                 "SELECT MIN(c.id) FROM files f JOIN file_chunks c ON c.path=f.path WHERE "
                                 + " AND ".join("instr(lower(f.name), ?)>0" for _ in pq["exact"]) + " GROUP BY f.path LIMIT 200",
                                 [p.lower() for p in pq["exact"]]).fetchall():
-                            if allowed is None or cid in allowed:
-                                hits.setdefault((kind, cid), dict(exact=True, bm25=5.0, sem=None, name=True))
+                            if allowed is None or cid in allowed:  # the name itself matches: rank above text matches
+                                h = hits.setdefault((kind, cid), dict(exact=True, bm25=0, sem=None))
+                                h.update(bm25=h["bm25"] + 50.0, name=True)
             elif qv is not None:
                 idx = self._index(kind)
                 with self.lock:
@@ -163,7 +164,7 @@ class Searcher:
             out.append(dict(id=r["id"], kind=key[0], title=r["title"], subtitle=r["subtitle"], path=r["path"],
                             line=r["line"], snippet=snippet, highlights=hl, score=round(score, 4), ext=r["ext"],
                             match="both" if pq["exact"] and qv is not None else "exact" if pq["exact"] else "semantic",
-                            mtime=r.get("mtime"), key=r.get("key")))
+                            mtime=r.get("mtime"), key=r.get("key"), is_dir=r.get("is_dir", False), author=r.get("author")))
         out.sort(key=lambda x: (-x["score"], -_ts(x["mtime"])))
         best, seen = [], set()
         for x in out:  # best chunk per file / session (code ids are per chunk, so dedupe code by file)
@@ -183,11 +184,13 @@ class Searcher:
             for kind, ids in by.items():
                 ph = ",".join("?" * len(ids))
                 if kind == "file":
-                    q = (f"SELECT c.id, c.text, c.vec, c.start, f.path, f.name, f.ext, f.mtime, f.kind FROM file_chunks c "
+                    q = (f"SELECT c.id, c.text, c.vec, c.start, f.path, f.name, f.ext, f.mtime, f.kind, f.author FROM file_chunks c "
                          f"JOIN files f ON f.path=c.path WHERE c.id IN ({ph})")
-                    for cid, text, vec, start, path, name, ext, mtime, k in self.db.execute(q, ids):
+                    for cid, text, vec, start, path, name, ext, mtime, k, author in self.db.execute(q, ids):
+                        parent = str(Path(path).parent).replace(home, "~", 1)
                         out[(kind, cid)] = dict(id=f"file:{path}", text=text, vec=vec, title=name, ext=ext, path=path,
-                                                subtitle=str(Path(path).parent).replace(home, "~", 1), mtime=mtime,
+                                                subtitle=("Folder in " + parent) if k == "folder" else parent, mtime=mtime,
+                                                is_dir=k == "folder", author=author,
                                                 line=start if start and k in ("code", "doc", "data") else None)
                 elif kind == "code":
                     q = (f"SELECT c.id, c.text, c.vec, c.start, c.path, r.root, r.name, c.last_ts, c.wt, w.branch FROM code_chunks c "

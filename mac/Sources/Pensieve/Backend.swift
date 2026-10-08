@@ -35,6 +35,13 @@ final class Backend: ObservableObject {
     var hotkey: String { (settings["hotkey"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "ctrl+shift" }
     var editor: String { (settings["editor"] as? String ?? "").lowercased() }
 
+    /// "system" | "light" | "dark". The backend setting wins; the last value is remembered locally so the app
+    /// starts in the right appearance before the backend is up (and works with a backend that lacks the key).
+    var appearance: String {
+        if let a = settings["appearance"] as? String, ["system", "light", "dark"].contains(a) { return a }
+        return Prefs.store.string(forKey: "appearance") ?? "system"
+    }
+
     func url(_ path: String, _ query: [URLQueryItem] = [], fragment: String? = nil) -> URL {
         var c = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty {
@@ -186,6 +193,11 @@ final class Backend: ObservableObject {
         }
     }
 
+    /// Tests only (PENSIEVE_DEBUG): show a backend state, e.g. the first-launch setup message.
+    func debugSetState(_ s: State) {
+        if Debug.enabled { state = s }
+    }
+
     // MARK: settings
 
     func loadSettings() async {
@@ -194,6 +206,23 @@ final class Backend: ObservableObject {
               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
         settings = obj["settings"] as? [String: Any] ?? obj  // {"settings": {...}, "defaults": ..., "descriptions": ...}
         onSettingsChange?()
+    }
+
+    /// PUT /api/settings. Returns false if the backend rejected or couldn't take the change.
+    @discardableResult
+    func updateSettings(_ changes: [String: Any]) async -> Bool {
+        var req = URLRequest(url: url("api/settings"))
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: changes)
+        guard let (d, r) = try? await URLSession.shared.data(for: req), (r as? HTTPURLResponse)?.statusCode == 200 else {
+            return false
+        }
+        if let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let s = obj["settings"] as? [String: Any] {
+            settings = s
+            onSettingsChange?()
+        }
+        return true
     }
 
     /// Follow the backend's event stream; a {"type": "settings"} event (e.g. an agent changed settings over MCP)

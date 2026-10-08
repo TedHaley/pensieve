@@ -13,13 +13,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildStatusItem()
 
         let backend = Backend.shared
+        // A debug instance (tests) leaves global hotkeys to the installed app and takes commands privately.
+        let hotkeys = !Debug.enabled
+        if Debug.enabled { Debug.listen { [weak self] in self?.handle($0) } }
         HotKeys.shared.action = { [weak self] in self?.panel.toggle() }
-        HotKeys.shared.configure(backend.hotkey)
-        backend.onSettingsChange = {
-            HotKeys.shared.configure(Backend.shared.hotkey)
+        if hotkeys { HotKeys.shared.configure(backend.hotkey) }
+        applyAppearance()
+        backend.onSettingsChange = { [weak self] in
+            if hotkeys { HotKeys.shared.configure(Backend.shared.hotkey) }
+            self?.applyAppearance()
         }
-        if HotKeys.shared.needsAccessibility && !UserDefaults.standard.bool(forKey: "askedAccessibility") {
-            UserDefaults.standard.set(true, forKey: "askedAccessibility")
+        if hotkeys && HotKeys.shared.needsAccessibility && !Prefs.store.bool(forKey: "askedAccessibility") {
+            Prefs.store.set(true, forKey: "askedAccessibility")
             HotKeys.requestAccessibility(prompt: true)
         }
         backend.start()
@@ -49,13 +54,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "search":
             panel.show(query: q("q"))
         case "visualize", "visualizer", "open":
-            visualizer.show(fragment: q("id").map { "open=\($0)" })
+            visualizer.show(fragment: VisualizerController.fragment([("open", q("id")), ("q", q("q"))]))
         case "settings":
             visualizer.show(fragment: "settings")
         case "snapshot" where Debug.enabled:
             Debug.snapshot(url, panel: panel.panel, web: visualizer.webView)
         case "key" where Debug.enabled:
             Debug.key(url, panel: panel.panel)
+        case "state" where Debug.enabled:
+            if let m = q("installing") { Backend.shared.debugSetState(.installing(m)) }
+            if let m = q("failed") { Backend.shared.debugSetState(.failed(m)) }
+        case "appearance" where Debug.enabled:
+            if let a = q("set") { setAppearance(a) }
         default:
             panel.show()
         }
@@ -66,8 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let b = statusItem.button {
-            b.image = NSImage(systemSymbolName: "sparkle.magnifyingglass", accessibilityDescription: "Pensieve")
-            b.image?.isTemplate = true
+            b.image = Mark.menuBarImage()
         }
         let menu = NSMenu()
         menu.delegate = self
@@ -99,6 +108,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if HotKeys.shared.needsAccessibility {
             menu.addItem(item("Allow the \(HotKeys.display(spec)) Hotkey…", #selector(openAccessibility)))
         }
+        let look = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        let looks = NSMenu(title: "Appearance")
+        for (title, value) in [("System", "system"), ("Light", "light"), ("Dark", "dark")] {
+            let i = item(title, #selector(pickAppearance(_:)))
+            i.representedObject = value
+            i.state = Backend.shared.appearance == value ? .on : .off
+            looks.addItem(i)
+        }
+        look.submenu = looks
+        menu.addItem(look)
         let login = item("Launch at Login", #selector(toggleLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
@@ -116,6 +135,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openVisualizer() { visualizer.show() }
     @objc private func openSettings() { visualizer.show(fragment: "settings") }
     @objc private func reloadVisualizer() { visualizer.reload() }
+
+    @objc private func pickAppearance(_ sender: NSMenuItem) {
+        if let v = sender.representedObject as? String { setAppearance(v) }
+    }
+
+    /// Apply right away, remember locally, and save to the backend (which tells the visualizer and other clients).
+    private func setAppearance(_ value: String) {
+        Prefs.store.set(value, forKey: "appearance")
+        NSApp.appearance = Self.appearance(value)
+        Task { await Backend.shared.updateSettings(["appearance": value]) }
+    }
+
+    private func applyAppearance() {
+        let value = Backend.shared.appearance
+        Prefs.store.set(value, forKey: "appearance")
+        NSApp.appearance = Self.appearance(value)
+    }
+
+    private static func appearance(_ value: String) -> NSAppearance? {
+        switch value {
+        case "light": return NSAppearance(named: .aqua)
+        case "dark": return NSAppearance(named: .darkAqua)
+        default: return nil  // follow the system
+        }
+    }
 
     @objc private func openAccessibility() {
         HotKeys.requestAccessibility(prompt: true)
@@ -150,7 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             i.keyEquivalentModifierMask = mods
             return i
         }
-        sub("Pensieve", [mi("Hide Pensieve", "hide:", "h"), .separator(), mi("Quit Pensieve", "terminate:", "q")])
+        let settings = mi("Settings…", "openSettings", ",")
+        settings.target = NSApp.delegate
+        sub("Pensieve", [settings, .separator(), mi("Hide Pensieve", "hide:", "h"), .separator(),
+                         mi("Quit Pensieve", "terminate:", "q")])
         sub("Edit", [mi("Undo", "undo:", "z"), mi("Redo", "redo:", "z", [.command, .shift]), .separator(),
                      mi("Cut", "cut:", "x"), mi("Copy", "copy:", "c"), mi("Paste", "paste:", "v"),
                      mi("Select All", "selectAll:", "a")])

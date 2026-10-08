@@ -30,6 +30,12 @@ DEFAULTS = {
     "default_scope": "",       # scope for the search panel and visualizer search ("" = everything)
     "hotkey": "ctrl+shift",    # read by the Mac app; tap Control+Shift. Or e.g. "cmd+shift+space"
     "editor": "default",       # how code results open: default | vscode | cursor | zed
+    "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
+    # What writes summaries, topic names and insights: auto (a local server if one is running; the UI asks) |
+    # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model) | claude | codex | none
+    "ai": "auto",
+    "builtin_model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+    "agent_model": "haiku",    # model passed to `claude -p --model` when ai = claude
     "llm_url": "http://localhost:1234/v1",
     "llm_model": "qwen/qwen3.5-9b",
 }
@@ -48,6 +54,10 @@ DESCRIPTIONS = {
     "default_scope": "Scope used by the search panel and visualizer search; empty means everything.",
     "hotkey": "Shortcut for the search panel: 'ctrl+shift' (tap both) or a combo like 'cmd+shift+space'.",
     "editor": "Where code results open: default, vscode, cursor or zed.",
+    "appearance": "System, light or dark. System follows macOS.",
+    "ai": "What writes summaries and insights: builtin, server, claude, codex or none (auto = not chosen yet).",
+    "builtin_model": "The MLX model the built-in engine runs.",
+    "agent_model": "Model for the Claude Code engine (claude -p --model).",
     "llm_url": "OpenAI-compatible endpoint for summaries and insights (LM Studio by default).",
     "llm_model": "Chat model used for summaries and insights.",
 }
@@ -119,6 +129,10 @@ def update(changes: dict) -> dict:
             v = {**cur[k], **v}
         elif not isinstance(v, str):
             raise ValueError(f"{k} must be a string")
+        if k == "appearance" and v not in ("system", "light", "dark"):
+            raise ValueError("appearance must be system, light or dark")
+        if k == "ai" and v not in ("auto", "builtin", "server", "claude", "codex", "none"):
+            raise ValueError("ai must be auto, builtin, server, claude, codex or none")
         if k == "editor" and v not in ("default", "vscode", "cursor", "zed"):
             raise ValueError("editor must be default, vscode, cursor or zed")
         clean[k] = v

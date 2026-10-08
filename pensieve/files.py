@@ -97,16 +97,56 @@ def secret(name: str, patterns) -> bool:
 
 
 def walk(root: Path, exclude: set, exclude_files=()):
-    """Files under root, skipping hidden folders, excluded names, secret-looking files, and git repos (repos.py)."""
+    """(path, is_dir) under root: every folder and file, skipping hidden folders, excluded names, secret-looking
+    files, and git repos (repos.py indexes those)."""
     for d, dirs, files in os.walk(root):
         if d != str(root) and (".git" in dirs or ".git" in files):
             dirs[:] = []
             continue
         dirs[:] = [x for x in dirs if not x.startswith(".") and x not in exclude
                    and not x.endswith((".app", ".photoslibrary", ".bundle", ".framework"))]
+        files = [f for f in files if not f.startswith(".") and not f.startswith("~$") and not secret(f, exclude_files)]
+        yield Path(d), sorted(dirs) + files  # the folder itself, with what it contains
         for f in files:
-            if not f.startswith(".") and not f.startswith("~$") and not secret(f, exclude_files):
-                yield Path(d) / f
+            yield Path(d) / f, None
+
+
+def author_of(p: Path, kind: str):
+    """(author, source) for a document: embedded metadata (PDF, Office), then Spotlight, then the file's owner."""
+    e = p.suffix.lower()
+    try:
+        if e == ".pdf":
+            from pypdf import PdfReader
+            a = (PdfReader(str(p)).metadata or {}).get("/Author")
+            a = " ".join(str(a or "").split())
+            if a:
+                return a, "pdf"
+        elif e in (".docx", ".pptx", ".xlsx"):
+            with zipfile.ZipFile(p) as z:
+                core = z.read("docProps/core.xml").decode("utf8", "replace")
+            for tag in ("dc:creator", "cp:lastModifiedBy"):
+                m = re.search(rf"<{tag}>([^<]+)</{tag}>", core)
+                if m and m.group(1).strip():
+                    return m.group(1).strip(), "office"
+    except Exception:
+        pass
+    if kind in ("doc", "pdf", "slides", "data"):
+        try:
+            import subprocess
+            r = subprocess.run(["mdls", "-raw", "-name", "kMDItemAuthors", str(p)], capture_output=True, text=True, timeout=5)
+            out = r.stdout.strip()
+            names = [] if out in ("", "(null)") else (re.findall(r'"([^"]+)"', out) or
+                                                    [x.strip() for x in out.strip("()").split(",") if x.strip()])
+            if names:
+                return ", ".join(names[:3]), "spotlight"
+        except Exception:
+            pass
+    try:
+        import pwd
+        pw = pwd.getpwuid(p.stat().st_uid)
+        return (pw.pw_gecos.split(",")[0] or pw.pw_name), "owner"
+    except (KeyError, OSError):
+        return None, None
 
 
 class Files:
@@ -116,11 +156,16 @@ class Files:
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS files(
           path TEXT PRIMARY KEY, root TEXT, name TEXT, ext TEXT, kind TEXT, mtime REAL, size INTEGER,
-          n_chunks INTEGER, x REAL, y REAL, z REAL, cluster INTEGER);
+          n_chunks INTEGER, x REAL, y REAL, z REAL, cluster INTEGER, author TEXT, author_source TEXT);
         CREATE TABLE IF NOT EXISTS file_chunks(
           id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, idx INTEGER, start INTEGER, end INTEGER, text TEXT, vec BLOB);
         CREATE INDEX IF NOT EXISTS fc_path ON file_chunks(path);
         """)
+        for col in ("author TEXT", "author_source TEXT"):
+            try:
+                self.db.execute(f"ALTER TABLE files ADD COLUMN {col}")
+            except Exception:
+                pass
         self.index = IdMapIndex.load(str(FILES_INDEX_PATH)) if FILES_INDEX_PATH.exists() else IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
         if reconcile(self.index, self.db, "file_chunks"):
             self.index.sync(str(FILES_INDEX_PATH))
@@ -142,7 +187,21 @@ class Files:
         stale = self.store.meta("files_v") != FILES_VERSION
         seen, touched, name_only = set(), 0, Counter()
         for root in roots:
-            for p in walk(root, exclude, s["exclude_files"]):
+            for p, children in walk(root, exclude, s["exclude_files"]):
+                if children is not None:  # a folder: indexed by its name, place and what's inside it
+                    sp = str(p)
+                    seen.add(sp)
+                    try:
+                        mt = p.stat().st_mtime
+                    except OSError:
+                        continue
+                    if stale or known.get(sp) != (mt, len(children)):
+                        try:
+                            self._index_folder(p, root, mt, children)
+                            touched += 1
+                        except Exception as e:
+                            log(f"skip folder {p}: {e!r}")
+                    continue
                 try:
                     st = p.stat()
                 except OSError:
@@ -169,6 +228,7 @@ class Files:
                         on_progress(touched)
         if stale:
             self.store.meta("files_v", FILES_VERSION)
+        self.backfill_authors()
         gone = [p for p in known if p not in seen]
         for p in gone:
             self._drop(p)
@@ -247,6 +307,32 @@ class Files:
             d = d.parent
         return True
 
+    def _index_folder(self, p: Path, root: Path, mtime, children):
+        rel = p.relative_to(root.parent)
+        text = f"{p.name}\nFolder {rel}\nContains: " + ", ".join(children[:80])
+        vec = embed([text])
+        with self.lock:
+            self._drop(str(p))
+            cur = self.db.execute("INSERT INTO file_chunks(path, idx, start, end, text, vec) VALUES(?,?,?,?,?,?)",
+                                  (str(p), 0, 0, 0, text, vec[0].astype(np.float16).tobytes()))
+            self.index.add_with_ids(vec, np.array([cur.lastrowid], dtype=np.uint64))
+            self.db.execute("INSERT OR REPLACE INTO files(path, root, name, ext, kind, mtime, size, n_chunks) VALUES(?,?,?,?,?,?,?,?)",
+                            (str(p), str(root), p.name, "", "folder", mtime, len(children), 1))
+            self.db.commit()
+
+    def backfill_authors(self, limit=400):
+        """Fill in who wrote documents (a bounded batch per sweep, so the first run doesn't stall indexing)."""
+        with self.lock:
+            todo = self.db.execute("SELECT path, kind FROM files WHERE author_source IS NULL AND kind!='folder' LIMIT ?", (limit,)).fetchall()
+        rows = []
+        for path, kind in todo:
+            a, src = author_of(Path(path), kind)
+            rows.append((a, src or "none", path))
+        if rows:
+            with self.lock:
+                self.db.executemany("UPDATE files SET author=?, author_source=? WHERE path=?", rows)
+                self.db.commit()
+
     def _index_file(self, p: Path, root: Path, st, kind, max_bytes):
         rel = p.relative_to(root.parent) if root.parent != p else p
         head = f"{rel}\n"
@@ -280,7 +366,8 @@ class Files:
     # ---- layout ------------------------------------------------------------
     def centroids(self):
         with self.lock:
-            rows = self.db.execute("SELECT path, vec FROM file_chunks").fetchall()
+            rows = self.db.execute("SELECT c.path, c.vec FROM file_chunks c JOIN files f ON f.path=c.path "
+                                   "WHERE f.kind!='folder'").fetchall()  # folders are searchable, not map points
         by = {}
         for p, v in rows:
             by.setdefault(p, []).append(np.frombuffer(v, np.float16).astype(np.float32))
@@ -289,7 +376,7 @@ class Files:
 
     def needs_layout(self):
         with self.lock:
-            return bool(self.db.execute("SELECT 1 FROM files WHERE x IS NULL LIMIT 1").fetchone())
+            return bool(self.db.execute("SELECT 1 FROM files WHERE x IS NULL AND kind!='folder' LIMIT 1").fetchone())
 
     def reproject(self, force=False):
         """One point per file. Full UMAP when the set grew meaningfully; otherwise new files go next to neighbours."""
@@ -328,8 +415,8 @@ class Files:
     # ---- queries -----------------------------------------------------------
     def points(self):
         with self.lock:
-            rows = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, n_chunks, x, y, z, cluster "
-                                   "FROM files WHERE x IS NOT NULL").fetchall()
+            rows = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, n_chunks, x, y, z, cluster, author, author_source "
+                                   "FROM files WHERE x IS NOT NULL AND kind!='folder'").fetchall()
         home = str(Path.home())
         out = []
         for r in rows:
@@ -337,17 +424,19 @@ class Files:
             rel = os.path.relpath(r[0], root.parent)
             out.append(dict(id=f"file:{r[0]}", path=r[0], rel=rel, folder=os.path.dirname(rel), root=root.name,
                             name=r[2], ext=r[3], kind=r[4], mtime=r[5], size=r[6], n=r[7], p=r[8:11], cluster=r[11],
+                            author=r[12], author_source=r[13] if r[13] != "none" else None,
                             display=r[0].replace(home, "~", 1)))
         return out
 
     def file(self, path):
         with self.lock:
-            r = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, n_chunks FROM files WHERE path=?", (path,)).fetchone()
+            r = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, n_chunks, author, author_source FROM files WHERE path=?", (path,)).fetchone()
             if not r:
                 return None
             chunks = self.db.execute("SELECT idx, start, end, text FROM file_chunks WHERE path=? ORDER BY idx", (path,)).fetchall()
         return dict(id=f"file:{r[0]}", path=r[0], root=r[1], name=r[2], ext=r[3], kind=r[4], mtime=r[5], size=r[6],
-                    n=r[7], display=r[0].replace(str(Path.home()), "~", 1),
+                    n=r[7], display=r[0].replace(str(Path.home()), "~", 1), author=r[8],
+                    author_source=r[9] if r[9] != "none" else None, is_dir=r[4] == "folder",
                     chunks=[dict(idx=c[0], start=c[1], end=c[2], text=c[3]) for c in chunks if c[1]])
 
     def similar(self, path, k=8):

@@ -77,7 +77,7 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 | Category | Items | Default |
 |---|---|---|
 | **AI agent sessions** | Claude Code (`~/.claude/projects`), Codex (`~/.codex/sessions`), Qwen Code (`~/.qwen/projects`) | on |
-| **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Text, Markdown, code, PDF, Word and PowerPoint; other files by name. | on |
+| **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Text, Markdown, code, PDF, Word and PowerPoint; other files by name; folders by name and what they contain. Each document's author comes from its metadata (PDF, Office, Spotlight) or its owner. | on |
 | **Git repositories** | Repos your agents worked in; repos found under your home folder (4 levels deep) and inside your folders; each repo on its own | on |
 | **Apps** | Obsidian vaults; Apple Notes (exported to Markdown in `~/.pensieve`, asks for permission) | Obsidian on, Notes off |
 
@@ -103,13 +103,23 @@ Change them in the visualizer (Settings), from an agent (`update_settings`), or 
 | `exclude` | folder names never descended into (`node_modules`, `Library`, …) |
 | `exclude_files` | filename globs never indexed (secrets) |
 | `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the panel's scope |
+| `appearance` | `system` (or `light`, `dark`) |
+| `ai`, `builtin_model`, `agent_model` | `auto` (not chosen yet), `mlx-community/Qwen3.5-9B-MLX-4bit`, `haiku` |
 | `hotkey` | `ctrl+shift` (or a combo like `cmd+shift+space`) |
 | `editor` | `default`, `vscode`, `cursor` or `zed` |
 | `llm_url`, `llm_model` | `http://localhost:1234/v1`, `qwen/qwen3.5-9b` |
 
-### Optional: a local LLM
+## AI insights (optional)
 
-Summaries, topic names and insights need an LLM. Without one, search, maps and code views still work and the status pill says **LLM offline**. Install [LM Studio](https://lmstudio.ai), download `qwen/qwen3.5-9b` (or any chat model), and start its server on port 1234.
+Search, maps, activity, keyword topics, your footprint in each repo and teammates' commits all work without AI. Summaries, topic names and the written insights need a model, and you choose which one writes them (Pensieve asks on first run; change it in Settings → AI & Insights or with `update_settings {"ai": ...}`):
+
+| Engine | Where it runs | Notes |
+|---|---|---|
+| **Built-in: Qwen 3.5 9B** (`builtin`) | This Mac (MLX) | Apple Silicon, 16 GB memory. Downloads ~5 GB on first use, or reuses LM Studio's MLX copy if you have one. |
+| **LM Studio / local server** (`server`) | This Mac | Any OpenAI-compatible server at `llm_url` running `llm_model`. |
+| **Claude Code** (`claude`) | Anthropic's cloud | Uses your `claude` login; text is sent to Anthropic. No per-chunk summaries, to keep calls low. |
+| **Codex** (`codex`) | OpenAI's cloud | Uses your `codex` login; text is sent to OpenAI. |
+| **Off** (`none`) | | Everything except the AI-written parts. |
 
 ## Command line
 
