@@ -8,6 +8,7 @@
 set -eu
 
 REPO_URL="https://github.com/TedHaley/pensieve"
+REF="${PENSIEVE_REF:-v0.2.0}"  # the released version; PENSIEVE_REF=main for the latest code
 SRC="$HOME/.pensieve/src"
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 
@@ -24,7 +25,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 bold "Installing the Pensieve backend…"
-uv tool install --force --python 3.12 "git+$REPO_URL"
+uv tool install --force --python 3.12 "git+$REPO_URL@$REF"
 uv tool update-shell >/dev/null 2>&1 || true
 BIN="$(command -v pensieve 2>/dev/null || echo "$(uv tool dir --bin)/pensieve")"
 
@@ -32,7 +33,7 @@ APP=""
 if [ "$(uname)" = Darwin ] && [ -z "${PENSIEVE_NO_APP:-}" ] && xcrun --find swift >/dev/null 2>&1; then
   bold "Building the Pensieve app (about a minute)…"
   mkdir -p "$HOME/.pensieve"
-  if [ -d "$SRC/.git" ]; then git -C "$SRC" pull -q --ff-only; else git clone -q --depth 1 "$REPO_URL" "$SRC"; fi
+  rm -rf "$SRC" && git clone -q --depth 1 --branch "$REF" "$REPO_URL" "$SRC"
   if sh "$SRC/mac/build.sh" --install; then
     APP="$HOME/Applications/Pensieve.app"
   else
