@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pensieve</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+<script>try{const t=localStorage.getItem('pensieve.theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <div class="brand"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/><path d="M9 10 15 9 13 15Z" fill="none" stroke="currentColor" stroke-width=".8" opacity=".6"/></svg><span>Pensieve</span></div>
+    <nav id="tabs" role="tablist">
+      <button role="tab" data-view="map" class="on" title="Map (1)">Map</button>
+      <button role="tab" data-view="insights" title="Insights (2)">Insights</button>
+      <button role="tab" data-view="code" title="Code (3)">Code</button>
+    </nav>
+    <button id="searchbtn" class="searchbtn"><svg viewBox="0 0 24 24" width="15" height="15"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Search sessions, topics, code, people…</span><kbd>⌘K</kbd></button>
+    <div class="topright">
+      <button id="statuspill" class="pill"><i class="dot"></i><span>Connecting…</span></button>
+      <button id="themebtn" class="iconbtn" title="Toggle theme"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" fill="currentColor"/></svg></button>
+      <button id="helpbtn" class="iconbtn" title="Keyboard shortcuts (?)">?</button>
+      <button id="chattoggle" class="iconbtn only-narrow" title="Ask Pensieve"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+    </div>
+  </header>
+
+  <aside id="side"></aside>
+
+  <main id="center">
+    <section id="stage">
+      <div id="gl"></div>
+      <div id="toolbar" class="toolbar"></div>
+      <div id="legend" class="legend"></div>
+      <div id="hint" class="hint">Drag to rotate · Scroll to zoom · Click a point to open it</div>
+      <div id="loading" class="loading"><div class="spinner"></div><div id="loadingtext">Loading your map…</div></div>
+      <div id="timeline"><svg id="tl"></svg></div>
+      <aside id="drawer" aria-hidden="true"><div class="drawer-head"><div id="drawer-title"></div><button class="iconbtn" id="drawer-close" title="Close (Esc)">✕</button></div><div id="drawer-body"></div></aside>
+    </section>
+    <section id="insights" hidden></section>
+  </main>
+
+  <aside id="chat">
+    <div class="chat-head">
+      <div><b>Ask Pensieve</b><span id="chatmodel" class="muted"></span></div>
+      <div class="seg sm" id="chatmode"><button data-m="ask" class="on">Sessions</button><button data-m="code">Code</button></div>
+      <button class="iconbtn" id="chatclear" title="New conversation">↺</button>
+    </div>
+    <div id="scope" class="scope"></div>
+    <div id="msgs"></div>
+    <form id="ask">
+      <textarea id="askin" rows="1" placeholder="Ask about your sessions…"></textarea>
+      <button type="submit" id="askbtn" class="primary" title="Send (Enter)"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </form>
+  </aside>
+</div>
+
+<div id="palette" class="modal" hidden><div class="palette"><div class="pal-input"><svg viewBox="0 0 24 24" width="17" height="17"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><input id="palin" placeholder="Search or ask anything…" autocomplete="off"><kbd>esc</kbd></div><div id="palres"></div><div class="pal-foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>⇧↵</kbd> ask Pensieve</span></div></div></div>
+<div id="helpmodal" class="modal" hidden><div class="card help"><h3>Keyboard shortcuts</h3><dl>
+<dt><kbd>⌘K</kbd> or <kbd>/</kbd></dt><dd>Search everything</dd>
+<dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Map · Insights · Code</dd>
+<dt><kbd>F</kbd></dt><dd>Fit map to visible points</dd>
+<dt><kbd>C</kbd></dt><dd>Focus the chat box</dd>
+<dt><kbd>T</kbd></dt><dd>Toggle light / dark</dd>
+<dt><kbd>Esc</kbd></dt><dd>Close panel · clear selection</dd>
+<dt>Drag on the timeline</dt><dd>Filter to a date range (double-click clears)</dd>
+<dt>Click a topic label</dt><dd>Focus that topic</dd>
+</dl><button class="btn" data-close>Got it</button></div></div>
+<div id="tip" role="tooltip"></div>
+<div id="toasts"></div>
+
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
