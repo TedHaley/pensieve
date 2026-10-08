@@ -27,7 +27,33 @@ class Offline(Exception):
 
 
 BUILTIN_PORT = 8766
-_builtin = {"proc": None, "status": "off", "detail": "", "lock": threading.Lock()}
+IDLE_SECONDS = 10 * 60   # unload the built-in model after this long unused (it holds ~6 GB of memory)
+MIN_RAM_GB = 16
+_builtin = {"proc": None, "status": "off", "detail": "", "lock": threading.Lock(), "last_used": 0.0,
+            "download": None, "progress": None}
+
+
+def ram_gb():
+    try:
+        return int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout) / 2**30
+    except (ValueError, OSError):
+        return 0
+
+
+def on_battery() -> bool:
+    if sys.platform != "darwin":
+        return False
+    try:
+        return "Battery Power" in subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def paused() -> str | None:
+    """Why background AI work should wait right now, or None."""
+    if not settings.get("ai_on_battery") and on_battery():
+        return "Paused on battery power"
+    return None
 
 
 def _apple_silicon():
@@ -44,17 +70,19 @@ def _server_up(url, timeout=1.5):
 def options():
     """The engines a user can pick, with whether each is usable on this Mac."""
     s = settings.load()
-    have_mlx = _apple_silicon()
+    have_mlx = _apple_silicon() and ram_gb() >= MIN_RAM_GB
     if have_mlx:
         try:
             import mlx_lm  # noqa: F401
         except ImportError:
             have_mlx = False
+    local = _local_copy(settings.get("builtin_model"))
     return [
         dict(id="builtin", label="Built-in: Qwen 3.5 9B", privacy="local", available=have_mlx,
-             description="Pensieve runs the model itself. Nothing leaves this Mac.",
-             note="Downloads about 5 GB the first time; needs Apple Silicon and 16 GB of memory." if have_mlx
-             else "Needs an Apple Silicon Mac."),
+             description="Pensieve runs the model itself, in the background at low priority. Nothing leaves this Mac.",
+             note=("Uses the copy LM Studio already downloaded." if local else
+                   "Downloads about 6 GB in the background; you can keep working.") if have_mlx
+             else f"Needs an Apple Silicon Mac with {MIN_RAM_GB} GB of memory."),
         dict(id="server", label="LM Studio or another local server", privacy="local", available=_server_up(s["llm_url"]),
              description=f"An OpenAI-compatible server at {s['llm_url']} running {s['llm_model']}.",
              note="Running now." if _server_up(s["llm_url"]) else "Not running: start LM Studio's server (port 1234)."),
@@ -94,13 +122,17 @@ def status() -> dict:
         ok = _server_up(settings.get("llm_url"))
         st, detail = ("ready", f"{settings.get('llm_model')} at {settings.get('llm_url')}") if ok else ("offline", f"No server at {settings.get('llm_url')}")
     elif p == "builtin":
-        st, detail = _builtin["status"], _builtin["detail"] or "Starts on first use."
+        st, detail = _builtin["status"], _builtin["detail"]
         if st == "off":
-            st = "starting" if _builtin["proc"] else "ready"
+            st, detail = ("ready", "Loads when there's work, and unloads after 10 minutes idle.") if _have_weights() \
+                else ("downloading", "Waiting to download…")
     else:
         exe = shutil.which(p) or _find(p)
         st, detail = ("ready", exe) if exe else ("error", f"{p} isn't installed")
-    return dict(setting=a, provider=p, configured=a != "auto", status=st, detail=detail, options=options())
+    why = paused() if p != "none" else None
+    return dict(setting=a, provider=p, configured=a != "auto", status=st, detail=detail, options=options(),
+                enabled=p != "none", paused=why, progress=_builtin["progress"] if p == "builtin" else None,
+                on_battery_setting=settings.get("ai_on_battery"))
 
 
 # ---- builtin: an mlx_lm server we start and stop ------------------------------
@@ -112,35 +144,79 @@ def _local_copy(model: str):
             return d
     return None
 
+def _have_weights():
+    model = settings.get("builtin_model")
+    if _local_copy(model):
+        return True
+    from huggingface_hub import try_to_load_from_cache
+    return isinstance(try_to_load_from_cache(model, "config.json"), str) and \
+        isinstance(try_to_load_from_cache(model, "model.safetensors.index.json"), str)
+
+
+def start_download():
+    """Fetch the built-in model's weights on a background thread, reporting progress. Safe to call repeatedly."""
+    t = _builtin["download"]
+    if (t and t.is_alive()) or _have_weights():
+        return
+    model = settings.get("builtin_model")
+
+    def run():
+        from huggingface_hub import HfApi, snapshot_download
+        from huggingface_hub.constants import HF_HUB_CACHE
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        try:
+            info = HfApi().model_info(model, files_metadata=True)
+            total = sum(x.size or 0 for x in info.siblings) or 1
+            folder = os.path.join(HF_HUB_CACHE, "models--" + model.replace("/", "--"))
+            done = threading.Event()
+
+            def watch():  # progress = bytes on disk under the model's cache folder (blobs + in-flight .incomplete)
+                while not done.wait(2):
+                    n = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(folder) for f in fs
+                            if not os.path.islink(os.path.join(d, f)))
+                    _builtin.update(progress=min(0.99, n / total),
+                                    detail=f"Downloading Qwen 3.5 9B in the background: {n / 1e9:.1f} of {total / 1e9:.1f} GB")
+            threading.Thread(target=watch, daemon=True).start()
+            _builtin.update(status="downloading", progress=0.0, detail="Starting the download…")
+            snapshot_download(model)
+            done.set()
+            _builtin.update(status="off", progress=1.0, detail="")
+        except Exception as e:
+            _builtin.update(status="error", detail=f"Download failed: {e!r}"[:300])
+    _builtin["download"] = threading.Thread(target=run, daemon=True, name="builtin-model-download")
+    _builtin["download"].start()
+
+
+def sweep():
+    """Unload the built-in model when it hasn't been used for IDLE_SECONDS (frees ~6 GB)."""
+    p = _builtin["proc"]
+    if p and p.poll() is None and time.time() - _builtin["last_used"] > IDLE_SECONDS:
+        stop_builtin()
+
+
 def _ensure_builtin():
     url = f"http://127.0.0.1:{BUILTIN_PORT}/v1"
+    _builtin["last_used"] = time.time()
     if _server_up(url):
         _builtin.update(status="ready", detail=settings.get("builtin_model"))
         return url
+    if not _have_weights():  # never block on a 6 GB download: fetch it in the background and try again later
+        start_download()
+        raise Offline(_builtin["detail"] or "Downloading the built-in model")
     with _builtin["lock"]:
         p = _builtin["proc"]
         if p is None or p.poll() is not None:
             model = settings.get("builtin_model")
             from huggingface_hub import try_to_load_from_cache
             local = _local_copy(model)
-            cached = bool(local) or isinstance(try_to_load_from_cache(model, "config.json"), str)
-            _builtin.update(status="starting" if cached else "downloading",
-                            detail=f"Loading {model}…" if cached else f"Downloading {model} (about 5 GB)…")
+            _builtin.update(status="starting", detail="Loading Qwen 3.5 9B…")
             log = open(config.DATA_DIR / "builtin-llm.log", "a")
-            env = {**os.environ}
-            env.pop("HF_HUB_OFFLINE", None)  # the chat model may not be downloaded yet
-            if not cached:  # fetch first, so the server starts with the weights on disk
-                from huggingface_hub import snapshot_download
-                try:
-                    snapshot_download(model)
-                except Exception as e:
-                    _builtin.update(status="error", detail=f"Download failed: {e!r}"[:300])
-                    raise Offline(_builtin["detail"])
-                _builtin.update(status="starting", detail=f"Loading {model}…")
-            _builtin["proc"] = subprocess.Popen(
-                [sys.executable, "-m", "mlx_lm", "server", "--model", local or model, "--host", "127.0.0.1", "--port", str(BUILTIN_PORT)],
-                stdout=log, stderr=log, env=env, start_new_session=True)
-    for _ in range(240):
+            argv = [sys.executable, "-m", "mlx_lm", "server", "--model", local or model, "--host", "127.0.0.1",
+                    "--port", str(BUILTIN_PORT)]
+            if os.path.exists("/usr/sbin/taskpolicy"):  # background QoS: yields to whatever you're doing
+                argv = ["/usr/sbin/taskpolicy", "-b"] + argv
+            _builtin["proc"] = subprocess.Popen(argv, stdout=log, stderr=log, start_new_session=True)
+    for _ in range(600):  # loading at background priority can take a few minutes on a busy Mac
         if _server_up(url):
             _builtin.update(status="ready", detail=settings.get("builtin_model"))
             return url
@@ -155,7 +231,8 @@ def stop_builtin():
     p = _builtin["proc"]
     if p and p.poll() is None:
         p.terminate()
-    _builtin.update(proc=None, status="off", detail="")
+    _builtin.update(proc=None, status="off" if _builtin["status"] != "downloading" else "downloading",
+                    detail="" if _builtin["status"] != "downloading" else _builtin["detail"])
 
 
 # ---- completion ---------------------------------------------------------------

@@ -242,6 +242,10 @@ async def enricher():
     pool = ThreadPoolExecutor(3)
     while True:
         try:
+            llm.sweep()  # unload the built-in model after 10 idle minutes
+            if llm.paused():  # e.g. on battery: background AI work waits
+                await asyncio.sleep(30)
+                continue
             if llm.provider() == "none":  # not chosen yet, or off: nothing to do (and nothing to report as broken)
                 if status.get("llm_offline"):
                     status["llm_offline"] = False
@@ -287,8 +291,11 @@ async def lifespan(app):
     loop = asyncio.get_running_loop()
 
     def changed(keys):  # settings edited from the UI or MCP: re-sweep promptly, tell the Mac app and the UI
-        if "ai" in keys and settings.get("ai") != "builtin":
-            llm.stop_builtin()
+        if "ai" in keys:
+            if settings.get("ai") == "builtin":
+                llm.start_download()  # in the background; the app stays usable
+            else:
+                llm.stop_builtin()
         repos._extra = None  # re-run the repo sweep with the new folders/roots
         watch.force_full()
         loop.call_soon_threadsafe(broadcast, {"type": "settings", "keys": sorted(keys)})
@@ -301,6 +308,8 @@ async def lifespan(app):
     watch = Watch(wake)
     repos.pending = watch.take_changed_repos
     repos.requeue = watch.requeue_repos
+    if settings.get("ai") == "builtin":
+        llm.start_download()
     tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher())]
     async with mcp_server.mcp.session_manager.run():
         yield

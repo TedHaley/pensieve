@@ -1445,9 +1445,7 @@ async function renderSettings() {
       <div class="cmd-l">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
     </div>`;
-  else if (tab === 'ai') { if (!aiState.data) loadAI().then(() => S.setTab === 'ai' && renderSettings()); body = bar('AI & Insights', 'The engine that writes summaries, topic names and insights.') + `
-    <div class="set-card ai-set"><h3>Status</h3>${aiStatusHtml(aiState.data) || '<p class="sc-p">Checking…</p>'}</div>
-    <div class="set-card ai-set" id="aiset"><h3>Engine</h3><p class="sc-p">${esc(NO_AI_WORKS)}</p>${aiChooserHtml(aiState.data)}</div>`; }
+  else if (tab === 'ai') body = bar('AI & Insights', 'Optional: the engine that writes summaries, topic names and insights.') + aiSettingsHtml();
   else if (tab === 'appearance') body = bar('Appearance', 'Matches the Pensieve Mac app.') + `
     <div class="set-card"><div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes.</div></div>
       <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>`;
@@ -1460,7 +1458,7 @@ async function renderSettings() {
   $('#setmain').scrollTop = y;
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
-  if ($('#aiset')) bindAIChooser($('#aiset'));
+  if (tab === 'ai') bindAISettings($('#setmain'));
   $('[data-setdone]', el).onclick = () => setView(S.prevView || 'code');
   const D = S.set.draft, again = () => renderSettings();
   $$('[data-sk]', el).forEach(i => i.onchange = () => {
@@ -1527,78 +1525,111 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
-/* ============================== AI engine (summaries, topic names, insights) ============================== */
+/* ============================== AI engine (optional: summaries, topic names, insights) ============================== */
 const aiState = {data: null, timer: null, busy: null, err: null};
 const AI_STATUS = {ready: ['live', 'Ready'], starting: ['busy', 'Starting…'], downloading: ['busy', 'Downloading…'], offline: ['warn', 'Not reachable'], off: ['off', 'Off'], error: ['off', 'Error']};
+const aiPreparing = d => !!d && ['downloading', 'starting'].includes(d.status);
+// Insights are "on" once an engine is enabled and ready; until then the tab is greyed and shows the setup page
+const insightsOn = () => { const d = aiState.data; return !d || (d.enabled && !aiPreparing(d)); };
 async function loadAI() {
   try { aiState.data = await api('/api/ai'); } catch { aiState.data = aiState.data || null; }
-  const st = aiState.data?.status;
   clearTimeout(aiState.timer);
-  // poll fast while the engine is coming up, and slowly while an AI view is open (another app or agent may change it)
-  const watching = (S.view === 'settings' && S.setTab === 'ai') || S.view === 'insights' || ($('#aisheet') && !$('#aisheet').hidden);
-  if (st === 'starting' || st === 'downloading' || watching) aiState.timer = setTimeout(async () => {
+  const d = aiState.data, prep = aiPreparing(d);
+  const watching = (S.view === 'settings' && S.setTab === 'ai') || S.view === 'insights';
+  if (prep || watching) aiState.timer = setTimeout(async () => {  // fast while preparing; slowly while an AI view is open
     const before = JSON.stringify(aiState.data); await loadAI(); if (JSON.stringify(aiState.data) !== before) refreshAIViews();
-  }, st === 'starting' || st === 'downloading' ? 5000 : 10000);
-  return aiState.data;
+  }, prep ? 3000 : 10000);
+  syncInsightsTab();
+  return d;
+}
+function syncInsightsTab() {
+  const b = $('#tabs [data-view=insights]'); if (!b) return;
+  const d = aiState.data, on = insightsOn(), prep = aiPreparing(d);
+  b.classList.toggle('off', !on);
+  b.title = on ? 'Insights (2)' : prep ? (d.detail || 'Preparing insights…') : 'Insights are off — click to turn them on (2)';
+  const pct = prep && d.progress != null ? Math.round(d.progress * 100) : null;
+  b.innerHTML = `Insights${prep ? `<i class="tab-ring" style="--p:${pct ?? 25}" ${pct == null ? 'data-spin' : ''}></i>` : !on ? '<span class="tab-off">Off</span>' : ''}`;
 }
 function refreshAIViews() {
+  syncInsightsTab();
   if (S.view === 'settings' && S.setTab === 'ai') renderSettings();
   if (S.view === 'insights') renderInsights();
-  const sheet = $('#aisheet'); if (sheet && !sheet.hidden) renderAISheet();
+}
+async function setAI(changes, msg) {
+  aiState.err = null;
+  try {
+    const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(changes)});
+    if (!r.ok) aiState.err = (await r.json().catch(() => ({}))).detail || `Could not save (${r.status})`;
+    else if (msg) toast(msg);
+  } catch (e) { aiState.err = e.message; }
+  aiState.busy = null; await loadAI(); refreshAIViews(); pollStatus();
 }
 function aiStatusHtml(d) {
   if (!d) return '';
   const [cls, label] = AI_STATUS[d.status] || ['off', d.status];
   const opt = d.options.find(o => o.id === d.provider);
-  return `<div class="ai-status"><i class="dot ${cls}"></i><b>${esc(label)}</b><span class="muted">${esc(opt ? opt.label : d.provider || 'No engine')}${d.detail ? ' · ' + esc(d.detail) : ''}</span>${d.setting === 'auto' && d.provider && d.provider !== 'none' ? '<span class="badge">picked automatically</span>' : ''}</div>`;
+  return `<div class="ai-status"><i class="dot ${cls}"></i><b>${esc(label)}</b><span class="muted">${esc(opt && d.provider !== 'none' ? opt.label : 'No engine')}${d.detail ? ' · ' + esc(d.detail) : ''}</span>${d.setting === 'auto' && d.provider && d.provider !== 'none' ? '<span class="badge">picked automatically</span>' : ''}</div>`;
 }
-function aiChooserHtml(d) {
-  if (!d) return '<div class="shimmer" style="height:120px;border-radius:14px"></div>';
-  return `<div class="ai-opts" role="radiogroup" aria-label="AI engine">${d.options.map(o => {
-    const on = d.setting === o.id, busy = aiState.busy === o.id;
-    return `<button class="ai-opt ${on ? 'on' : ''}" data-ai="${esc(o.id)}" role="radio" aria-checked="${on}" ${o.available ? '' : 'disabled'}>
-      <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
-      <p>${esc(o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}
-      ${on ? '<span class="ai-check">✓ Selected</span>' : busy ? '<span class="ai-check">Saving…</span>' : ''}</button>`;
-  }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}`;
+function aiProgressHtml(d) {
+  if (!aiPreparing(d) && !d?.paused) return '';
+  const pct = d.progress != null ? Math.round(d.progress * 100) : null;
+  return `<div class="ai-prog"><div class="ai-prog-t"><span>${esc(d.detail || (d.status === 'starting' ? 'Starting the model…' : 'Downloading…'))}</span>${pct != null ? `<b>${pct}%</b>` : ''}</div>
+    <div class="ai-bar ${pct == null ? 'indet' : ''}"><i style="width:${pct ?? 30}%"></i></div>
+    ${d.paused ? `<p class="ai-paused">⏸ ${esc(d.paused)}${S.set?.orig?.ai_on_battery === false || !S.set ? ' — <a href="#ai">change in Settings</a>' : ''}</p>` : '<p class="ai-paused muted">Keep working; Pensieve carries on in the background.</p>'}</div>`;
 }
-function bindAIChooser(root) {
-  $$('[data-ai]', root).forEach(b => b.onclick = async () => {
-    const id = b.dataset.ai; aiState.busy = id; aiState.err = null; refreshAIViews();
-    try {
-      const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({ai: id})});
-      if (!r.ok) aiState.err = (await r.json().catch(() => ({}))).detail || `Could not switch (${r.status})`;
-      else { try { localStorage.setItem('pensieve.aiAsked', '1'); } catch {} toast(id === 'none' ? 'AI is off' : 'AI engine saved'); if (root.id === 'aisheet') closeAISheet(); }
-    } catch (e) { aiState.err = e.message; }
-    aiState.busy = null; await loadAI(); refreshAIViews(); pollStatus();
+const INSIGHTS_ADD = ['Plain-language summaries of every session and code area', 'Topic names instead of keyword lists', 'Themes, open threads and unexplored directions across your work', 'Short summaries of what each teammate has been shipping'];
+const NO_AI_WORKS = 'Maps, search, activity, keyword topics, your code footprint and team commits all work without it.';
+// The calm setup page shown on the Insights tab while insights are off or getting ready
+function aiOffPage() {
+  const d = aiState.data;
+  if (!d) return '<div class="empty"><div class="spinner" style="margin:auto"></div></div>';
+  const prep = aiPreparing(d), opts = d.options.filter(o => o.id !== 'none');
+  const builtin = opts.find(o => o.id === 'builtin'), others = opts.filter(o => o.id !== 'builtin');
+  return `<div class="ai-off">
+    <div class="ai-off-h"><span class="brand"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg></span>
+      <div><h1>${prep ? 'Getting insights ready' : 'Insights are off'}</h1><p>${esc(NO_AI_WORKS)} Insights add:</p>
+      <ul>${INSIGHTS_ADD.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div></div>
+    ${prep ? `<div class="card ai-rec">${aiProgressHtml(d)}</div>` : ''}
+    ${builtin && !prep ? `<div class="card ai-rec"><div class="ai-rec-h"><div><span class="badge rec">Recommended</span><h3>Run insights in the background on this Mac</h3></div>
+      <button class="btn primary" data-ai="builtin" ${builtin.available ? '' : 'disabled'}>${aiState.busy === 'builtin' ? 'Turning on…' : 'Turn on'}</button></div>
+      <p>Pensieve downloads ${esc(builtin.label.replace(/^Built-in:\s*/, ''))} while you keep working${builtin.note ? ` (${esc(builtin.note.replace(/\.$/, '').replace(/^\w/, c => c.toLowerCase()))})` : ''}, then runs it at low priority. Nothing leaves this Mac.</p>
+      <p class="muted">It loads only when there's work, unloads after 10 idle minutes, and pauses on battery power.</p></div>` : ''}
+    ${!prep ? `<div class="ai-alt"><div class="h4" style="margin-top:4px">Or use</div>${others.map(o => `<div class="ai-alt-row ${o.available ? '' : 'na'}">
+        <div class="tx"><b>${esc(o.label)}</b> <span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span>
+          <div class="muted">${esc(o.privacy === 'cloud' ? o.description.replace(/^.*?\)\.\s*/, '') : o.description)}${o.note ? ' · ' + esc(o.note) : ''}</div></div>
+        <button class="btn" data-ai="${esc(o.id)}" ${o.available ? '' : 'disabled'}>${aiState.busy === o.id ? 'Saving…' : 'Use'}</button></div>`).join('')}</div>` : ''}
+    ${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
+  </div>`;
+}
+function bindAIButtons(root) {
+  $$('[data-ai]', root).forEach(b => b.onclick = () => {
+    const id = b.dataset.ai; aiState.busy = id; refreshAIViews();
+    setAI({ai: id}, id === 'none' ? 'Insights are off' : id === 'builtin' ? 'Turning on insights in the background' : 'AI engine saved');
   });
 }
-const NO_AI_WORKS = 'Without AI you still get the maps, search, activity and working rhythm, topics named by keywords, your code footprint and what teammates committed. AI adds summaries, topic names, insights and team summaries.';
-function aiInsightsCard() {
+// Settings → AI & Insights
+function aiSettingsHtml() {
   const d = aiState.data;
-  if (!d || (d.configured && d.status !== 'off')) return d && d.configured && ['offline', 'error'].includes(d.status) ? `<div class="card ai-setup" style="margin-bottom:12px">${aiStatusHtml(d)}<p class="cap" style="margin:6px 0 0">AI features pause until it's reachable. <a href="#ai">Change the AI engine</a></p></div>` : '';
-  return `<div class="card ai-setup" id="aicard" style="margin-bottom:12px"><h3>Choose how Pensieve writes insights</h3>
-    <p class="cap">${esc(NO_AI_WORKS)}</p>${aiStatusHtml(d)}${aiChooserHtml(d)}</div>`;
+  if (!d) { loadAI().then(() => S.setTab === 'ai' && renderSettings()); return '<div class="set-card"><p class="sc-p">Checking…</p></div>'; }
+  const bat = !!S.set?.orig?.ai_on_battery;
+  return `<div class="set-card ai-set"><h3>Status</h3>${aiStatusHtml(d)}${aiProgressHtml(d)}${d.paused && !aiPreparing(d) ? `<p class="ai-paused">⏸ ${esc(d.paused)}</p>` : ''}</div>
+    <div class="set-card ai-set"><h3>Engine</h3><p class="sc-p">${esc(NO_AI_WORKS)}</p>
+      <div class="ai-opts" role="radiogroup" aria-label="AI engine">${d.options.filter(o => o.id !== 'none').map(o => {
+        const on = d.setting === o.id || (d.setting === 'auto' && d.provider === o.id);
+        return `<button class="ai-opt ${on ? 'on' : ''}" data-ai="${esc(o.id)}" role="radio" aria-checked="${on}" ${o.available ? '' : 'disabled'}>
+          <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
+          <p>${esc(o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}
+          ${on ? `<span class="ai-check">✓ ${d.setting === 'auto' ? 'In use (picked automatically)' : 'Selected'}</span>` : ''}</button>`;
+      }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}</div>
+    <div class="set-card ai-set"><div class="set-row" style="border-top:0"><div><div class="k">Keep working on battery power</div><div class="d">Off by default: background insight work pauses until your Mac is plugged in.</div></div>
+      <div><label class="tog"><input type="checkbox" data-aibat ${bat ? 'checked' : ''}></label></div></div>
+      <div class="set-row"><div><div class="k">Turn off insights</div><div class="d">Stops all AI work. ${esc(NO_AI_WORKS)}</div></div>
+      <div><button class="btn" data-ai="none" ${d.setting === 'none' ? 'disabled' : ''}>${d.setting === 'none' ? 'Insights are off' : 'Turn off'}</button></div></div></div>`;
 }
-// One-time sheet on first run when no engine has been chosen yet
-function renderAISheet() {
-  let m = $('#aisheet');
-  if (!m) { m = document.createElement('div'); m.id = 'aisheet'; m.className = 'modal'; document.body.append(m); m.addEventListener('mousedown', e => { if (e.target === m) closeAISheet(); }); }
-  m.hidden = false;
-  m.innerHTML = `<div class="palette glass ai-sheet" role="dialog" aria-label="Set up insights"><div class="ai-sheet-b">
-    <div class="ai-sheet-h"><span class="brand"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg></span>
-      <div><h2>Pick an AI engine for insights</h2><p>${esc(NO_AI_WORKS)}</p></div></div>
-    ${aiChooserHtml(aiState.data)}
-    <div class="ai-sheet-f"><span class="muted">You can change this any time in Settings → AI &amp; Insights.</span><button class="btn" data-aiskip>Not now</button></div></div></div>`;
-  bindAIChooser(m);
-  $('[data-aiskip]', m).onclick = closeAISheet;
-}
-function closeAISheet() { const m = $('#aisheet'); if (m) m.hidden = true; try { localStorage.setItem('pensieve.aiAsked', '1'); } catch {} }
-async function maybeAskAI() {
-  let asked = false; try { asked = !!localStorage.getItem('pensieve.aiAsked'); } catch {}
-  const d = await loadAI();
-  if (S.view === 'insights') renderInsights();
-  if (!asked && d && !d.configured) renderAISheet();
+function bindAISettings(root) {
+  bindAIButtons(root);
+  const bat = $('[data-aibat]', root);
+  if (bat) bat.onchange = async () => { await setAI({ai_on_battery: bat.checked}, bat.checked ? 'Insights keep working on battery' : 'Insights pause on battery'); S.set = null; renderSettings(); };
 }
 
 /* ============================== views ============================== */
@@ -1632,7 +1663,7 @@ async function setView(v, repo) {
   if (v === 'files') $('#loadingtext').textContent = S.files.points.length ? '' : 'Indexing your files — the map appears once the first batch is laid out…';
   if (!page) { renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]); if (!cams[camKey()]) gl.fit(null, true); }
   renderSidebar(); renderTimeline();
-  if (v === 'insights') renderInsights();
+  if (v === 'insights') { renderInsights(); loadAI().then(refreshAIViews); }
   if (v === 'settings') renderSettings();
 }
 $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'data' ? dataType() : b.dataset.view));
@@ -1676,6 +1707,7 @@ async function loadCodebase() {
 }
 function renderInsights() {
   const el = $('#insights');
+  if (!insightsOn()) { el.innerHTML = aiOffPage(); bindAIButtons(el); return; }
   const ss = filtered(), all = S.sessions;
   if (!all.length) { el.innerHTML = '<div class="empty">No sessions indexed yet.</div>'; return; }
   if (S.insights?.key !== scopeKey()) { loadInsights().then(() => S.view === 'insights' && renderInsights()); }
@@ -1710,15 +1742,14 @@ function renderInsights() {
       <div class="card"><h3>Activity by topic</h3><p class="cap">Sessions per ${actBinLabel(ss)}, stacked by ${S.scope ? 'this scope’s topics' : 'topic'}. Click a bar to filter the map to that period.</p><div class="legend-row" id="actleg"></div><svg id="actchart" class="chart" height="220"></svg></div>
       <div class="card"><h3>When you work</h3><p class="cap">Sessions started by weekday and hour (local time).</p><svg id="heat" class="chart" height="220"></svg></div>
     </div>
-    ${aiInsightsCard()}
-    ${aiState.data && !aiState.data.configured && !ins ? '' : aiSection(ins, running, scopeName)}
+    ${aiState.data && ['offline', 'error'].includes(aiState.data.status) ? `<div class="card ai-setup" style="margin-bottom:12px">${aiStatusHtml(aiState.data)}<p class="cap" style="margin:6px 0 0">Insight work pauses until the engine is reachable. <a href="#ai">Change the AI engine</a></p></div>` : ''}
+    ${aiSection(ins, running, scopeName)}
     ${codebaseSection(repo)}
     <div class="grid2">
       <div class="card"><h3>Topics${S.scope ? ' in this scope' : ''}</h3><p class="cap">Click a topic to explore it on the map.</p><div id="topicbars"></div></div>
       <div class="card"><h3>Projects</h3><p class="cap">Click a project to filter everything to it.</p><div style="overflow:auto"><table class="tbl" id="projtbl"></table></div></div>
     </div></div>`;
   $('#regen').onclick = regenInsights;
-  if ($('#aicard')) bindAIChooser($('#aicard'));
   drawActivity(ss); drawHeat(ss); drawTopicBars(ss); drawProjTable(ss);
   $$('[data-sid]', el).forEach(b => b.onclick = () => openSession(b.dataset.sid));
   $$('[data-tid]', el).forEach(b => b.onclick = () => toggleTopic(+b.dataset.tid));
@@ -1732,7 +1763,7 @@ const actBin = ss => { const span = ss.length ? Math.max(...ss.map(s => s.t1)) -
 const actBinLabel = ss => actBin(ss) === DAY ? 'day' : 'week';
 function aiSection(ins, running, scopeName) {
   const where = scopeName ? `the sessions in ${esc(scopeName)}` : 'all sessions';
-  if (!ins) return `<div class="card" style="margin-bottom:12px"><h3>AI insights</h3><p class="cap">${running ? 'Generating with ' + esc(S.status.llm || 'the local model') + ` from ${where} — this takes about a minute.` : `Not generated for ${where} yet. Click “Generate insights”.`}</p>${running ? '<div class="shimmer" style="height:80px"></div>' : ''}</div>`;
+  if (!ins) return `<div class="card" style="margin-bottom:12px"><h3>AI insights</h3><p class="cap">${running ? 'Generating with ' + esc(S.status.llm || 'the local model') + ` from ${where} — this takes about a minute.` : (S.status.summarized_sessions < S.status.sessions ? 'Writing insights in the background… they fill in as sessions are summarized.' : `Not generated for ${where} yet. Click “Generate insights”.`)}</p>${running ? '<div class="shimmer" style="height:80px"></div>' : ''}</div>`;
   const links = it => `<div class="links">${(it.topics || []).filter(t => topicOf(t)).map(t => `<button class="chip" data-tid="${t}"><i class="sw" style="background:${slotColor(t)}"></i>${esc(topicOf(t).name)}</button>`).join('')}${(it.sessions || []).filter(id => S.byId.has(id)).slice(0, 4).map(id => `<button class="chip" data-sid="${esc(id)}">${esc(S.byId.get(id).title.slice(0, 40))}</button>`).join('')}</div>`;
   const card = (ico, title, cap, items, extra) => `<div class="card ai-card"><h3><span class="ico">${ico}</span>${title}</h3><p class="cap">${cap}</p>${items.map(it => `<div class="ai-item"><b>${esc(it.title)}</b><p>${esc(it.insight)}</p>${extra ? extra(it) : ''}${links(it)}</div>`).join('')}</div>`;
   const unexplored = it => (it.first_step ? `<p class="step">${esc(it.first_step)}</p>` : '') +
@@ -2006,7 +2037,6 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!$('#helpmodal').hidden) return ($('#helpmodal').hidden = true);
     if (!$('#gearmenu').hidden) return closeMenu();
-    if ($('#aisheet') && !$('#aisheet').hidden) return closeAISheet();
     if (S.view === 'settings' && !typing) return setView(S.prevView || 'code');
     if (typing) return document.activeElement.blur();
     if ($('#drawer').classList.contains('open')) return closeDrawer();
@@ -2113,7 +2143,7 @@ async function init() {
   connect();
   await loadRepos().catch(() => {});
   const v = store.get('view', 'code');
-  loadScopes(); loadAppearance(); syncThemeLabel(); maybeAskAI();
+  loadScopes(); loadAppearance(); syncThemeLabel(); loadAI().then(() => S.view === 'insights' && renderInsights());
   if (location.hash.length > 1) await route();
   else if (v !== 'map' && (S.code.repos.length || v !== 'code')) await setView(v);
 }

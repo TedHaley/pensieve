@@ -539,29 +539,44 @@ class Repos:
             "SELECT 1 FROM code_chunks WHERE gx IS NULL LIMIT 1").fetchone()))
 
     def _layout(self, key, where, args, cols, force):
+        """UMAP over the main checkout's code only. Worktree versions of files are near-copies; fitting on them
+        makes each point's neighbours mostly other versions of itself and dissolves the clusters. They are
+        placed next to their nearest main-checkout code instead (usually the same file on the main branch)."""
         cx, cy, cz = cols
+        version = LAYOUT_VERSION + "+mainfit"
         with self.lock:
-            rows = self.db.execute(f"SELECT id, vec, {cx}, {cy}, {cz} FROM code_chunks {where}", args).fetchall()
+            rows = self.db.execute(f"SELECT id, vec, {cx}, {cy}, {cz}, wt FROM code_chunks {where}", args).fetchall()
             fit_n = int(self.store.meta(f"code_fit_n:{key}") or 0)
-            ok = self.store.meta(f"code_layout:{key}") == LAYOUT_VERSION
+            ok = self.store.meta(f"code_layout:{key}") == version
         if len(rows) < 4:
             return False
         X = unit(np.stack([np.frombuffer(r[1], np.float16) for r in rows]).astype(np.float32))
         have = np.array([r[2] is not None for r in rows])
+        main = np.array([not r[5] for r in rows])
+        if main.sum() < 4:  # nothing on the main checkout yet: lay out what there is
+            main[:] = True
         ids = np.array([r[0] for r in rows])
-        if force or not ok or len(rows) - fit_n > max(200, 0.15 * fit_n):
-            P, todo = fit3d(X, n_neighbors=20, min_dist=0.08), ids
+        P = np.array([r[2:5] if r[2] is not None else (0, 0, 0) for r in rows], dtype=np.float32)
+        n_main = int(main.sum())
+        if force or not ok or n_main - fit_n > max(200, 0.15 * fit_n):
+            P[main] = fit3d(X[main], n_neighbors=20, min_dist=0.08)
+            P[~main] = place_new(X[main], P[main], X[~main], k=3, jitter=0.01) if (~main).any() else P[~main]
+            todo = np.ones(len(rows), bool)
             with self.lock:
-                self.store.meta(f"code_fit_n:{key}", len(rows))
-                self.store.meta(f"code_layout:{key}", LAYOUT_VERSION)
+                self.store.meta(f"code_fit_n:{key}", n_main)
+                self.store.meta(f"code_layout:{key}", version)
         elif not have.all():
-            Pk = np.array([r[2:5] for r in rows if r[2] is not None], dtype=np.float32)
-            P, todo = place_new(X[have], Pk, X[~have]), ids[~have]
+            anchor = have & main
+            todo = ~have
+            if anchor.any():
+                P[todo] = place_new(X[anchor], P[anchor], X[todo], k=3, jitter=0.01)
+            else:
+                P[todo] = place_new(X[have], P[have], X[todo])
         else:
             return False
         with self.lock:
             self.db.executemany(f"UPDATE code_chunks SET {cx}=?, {cy}=?, {cz}=? WHERE id=?",
-                                [(*map(float, p), int(i)) for p, i in zip(P, todo)])
+                                [(*map(float, P[i]), int(ids[i])) for i in np.flatnonzero(todo)])
             self.db.commit()
         self._cache.clear()
         return True

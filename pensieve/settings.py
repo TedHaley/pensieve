@@ -35,7 +35,8 @@ DEFAULTS = {
     # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model) | claude | codex | none
     "ai": "auto",
     "builtin_model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-    "agent_model": "haiku",    # model passed to `claude -p --model` when ai = claude
+    "agent_model": "haiku",
+    "ai_on_battery": False,    # run background AI work (summaries, insights) on battery power    # model passed to `claude -p --model` when ai = claude
     "llm_url": "http://localhost:1234/v1",
     "llm_model": "qwen/qwen3.5-9b",
 }
@@ -58,6 +59,7 @@ DESCRIPTIONS = {
     "ai": "What writes summaries and insights: builtin, server, claude, codex or none (auto = not chosen yet).",
     "builtin_model": "The MLX model the built-in engine runs.",
     "agent_model": "Model for the Claude Code engine (claude -p --model).",
+    "ai_on_battery": "Keep writing summaries and insights in the background while on battery power.",
     "llm_url": "OpenAI-compatible endpoint for summaries and insights (LM Studio by default).",
     "llm_model": "Chat model used for summaries and insights.",
 }
