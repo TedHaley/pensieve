@@ -7,11 +7,17 @@ Everything runs on your machine. Transcripts are embedded with `Qwen3-Embedding-
 ## Install
 
 ```bash
+curl -fsSL https://tedhaley.ca/pensieve/install.sh | sh
+```
+
+This installs [uv](https://docs.astral.sh/uv/) if needed, installs Pensieve, and starts it. Or, if you already have uv:
+
+```bash
 uv tool install git+https://github.com/TedHaley/pensieve
 pensieve
 ```
 
-No [uv](https://docs.astral.sh/uv/)? `curl -LsSf https://astral.sh/uv/install.sh | sh`, or use `pipx install git+https://github.com/TedHaley/pensieve`.
+`pipx install git+https://github.com/TedHaley/pensieve` works too. More at [tedhaley.ca/pensieve](https://tedhaley.ca/pensieve).
 To try it without installing: `uvx --from git+https://github.com/TedHaley/pensieve pensieve`.
 
 `pensieve` opens http://localhost:8765. On first run it downloads the embedding model (~1.2 GB), indexes your sessions, then the git repos they ran in. The map fills in live as it goes.
