@@ -192,14 +192,14 @@ class Repos:
     # ---- discovery ---------------------------------------------------------
     def _extra_roots(self):
         """Repos beyond the ones sessions ran in: settings `repos`, repos inside the indexed `folders`, and (with
-        the repos/sweep source) repos found under `sweep_roots`. Folders are searched `sweep_depth` levels deep."""
+        the repos/discover source) repos found under `sweep_roots`. Folders are searched `sweep_depth` levels deep."""
         hit = getattr(self, "_extra", None)
         if hit and hit[0] == settings.load() and time.time() - hit[1] < 600:
             return hit[2]
         s = settings.load()
         ex = set(s["exclude"])
         out = [r for base in settings.paths("repos") for r in find_repos(base, s["sweep_depth"], ex)]
-        swept = [r for base in (settings.paths("folders") + settings.paths("sweep_roots") if settings.enabled("repos/sweep") else [])
+        swept = [r for base in (settings.paths("folders") + settings.paths("sweep_roots") if settings.enabled("repos/discover") else [])
                  for r in find_repos(base, s["sweep_depth"], ex)]
         self.skipped = []
         for r in dict.fromkeys(swept):  # found by the sweep: skip giant repos unless named explicitly or used by sessions
@@ -218,7 +218,7 @@ class Repos:
         if not settings.enabled("repos"):
             return []
         use = Counter()
-        for (p,) in (self.db.execute("SELECT project FROM sessions") if settings.enabled("repos/sessions") else []):
+        for (p,) in (self.db.execute("SELECT project FROM sessions") if settings.enabled("repos/discover") else []):
             r = project_root(p or "")
             if r and Path(r).exists():
                 use[r] += 1
@@ -840,6 +840,73 @@ class Repos:
     def _rows_for_root(self, root, cols):
         with self.lock:
             return self.db.execute(f"SELECT {cols} FROM code_chunks WHERE repo=?", (root,)).fetchall()
+
+    def knowledge_gaps(self, name, inactive_days=180, min_lines=150):
+        """Areas whose knowledge left with their authors: most of the code (by git blame) was written by people who
+        haven't committed for `inactive_days` (measured from the repo's latest commit, so a quiet repo doesn't flag
+        everyone). For each area: how much of it the departed wrote, who they were, who still active knows it best,
+        and how many active people hold a real share of it (bus factor)."""
+        root = self._root(name)
+        if not root or root == ALL:
+            return None
+        with self.lock:
+            rows = self.db.execute("SELECT path, authors FROM code_chunks WHERE repo=? AND wt=''", (root,)).fetchall()
+            last_by_email = dict(self.db.execute("SELECT lower(author), MAX(ts) FROM commits WHERE repo=? GROUP BY lower(author)", (root,)).fetchall())
+            ref = self.db.execute("SELECT MAX(ts) FROM commits WHERE repo=?", (root,)).fetchone()[0] or 0
+        cutoff = ref - inactive_days * 86400
+
+        def who(a):  # "Name <email>" -> (name, email)
+            m = re.match(r"(.*?)\s*<([^>]*)>", a)
+            return (m.group(1).strip(), m.group(2).strip().lower()) if m else (a.strip(), "")
+        # one person can commit under several emails: they're active if any email with their name is
+        emails_by_name = defaultdict(set)
+        area_lines, lines_by = defaultdict(Counter), Counter()
+        for path, au in rows:
+            area = area_of(path)
+            for a, n in json.loads(au or "{}").items():
+                if is_bot(a):
+                    continue
+                nm, em = who(a)
+                emails_by_name[nm.lower()].add(em)
+                area_lines[area][nm] += n
+                lines_by[nm] += n
+        canon = {}
+        for nm in lines_by:
+            canon[nm] = nm
+        last = {nm: max((last_by_email.get(e, 0) for e in emails_by_name[nm.lower()]), default=0) for nm in lines_by}
+        departed = {nm for nm, t in last.items() if t and t < cutoff}
+        unknown = {nm for nm, t in last.items() if not t}  # never seen in the last 5000 commits: long gone
+        gone = departed | unknown
+        people = [dict(name=nm, lines=lines_by[nm], last_active=last[nm] or None, departed=nm in gone)
+                  for nm, _ in lines_by.most_common(40)]
+        gaps = []
+        for area, c in area_lines.items():
+            total = sum(c.values())
+            if total < min_lines or area == "." or area.split("/")[0] in GENERATED_DIRS:
+                continue
+            gone_lines = sum(n for nm, n in c.items() if nm in gone)
+            share = gone_lines / total
+            active = [(nm, n) for nm, n in c.most_common() if nm not in gone]
+            bus = sum(1 for _, n in active if n / total >= 0.10)
+            if share < 0.5 and bus >= 1:
+                continue
+            parent = area.split("/")[0]
+            near = Counter()
+            for a2, c2 in area_lines.items():
+                if a2 != area and a2.split("/")[0] == parent:
+                    for nm, n in c2.items():
+                        if nm not in gone:
+                            near[nm] += n
+            ask = (active[0][0] if active else (near.most_common(1)[0][0] if near else None))
+            gaps.append(dict(area=area, lines=total, departed_share=round(share, 3), bus_factor=bus,
+                             departed=[dict(name=nm, share=round(n / total, 3), last_active=last.get(nm) or None)
+                                       for nm, n in c.most_common() if nm in gone][:4],
+                             active=[dict(name=nm, share=round(n / total, 3)) for nm, n in active[:4]],
+                             ask=ask, ask_reason=("knows the most of what's left" if active else
+                                                  f"most active nearby in {parent}/" if near else None)))
+        gaps.sort(key=lambda g: -(g["lines"] * g["departed_share"]))
+        return dict(repo=name, as_of=ref, inactive_days=inactive_days, people=people, gaps=gaps[:40],
+                    departed=sorted(gone, key=lambda nm: -lines_by[nm])[:20])
 
     def owners(self, name):
         root = self._root(name)

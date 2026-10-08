@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import actions, config, llm, scopes, search as search_mod, settings, sources, summarize
+from .datamap import DataMap
 from .files import Files
 from .watch import Watch
 from .indexer import Store
@@ -20,6 +21,7 @@ from . import mcp_server
 store: Store | None = None
 repos: Repos | None = None
 files: Files | None = None
+datamap: DataMap | None = None
 searcher: search_mod.Searcher | None = None
 subscribers: set[asyncio.Queue] = set()
 status = {"indexing": False, "message": "starting", "layout": False, "insights_running": False, "insights_scope": None}
@@ -97,6 +99,8 @@ async def watcher():
                 broadcast({"type": "updated"})
             if await _run(files.needs_layout) and await _run(files.reproject):
                 broadcast({"type": "files"})
+            if await _run(datamap.needs_layout) and await _run(datamap.reproject):  # the joint Data map
+                broadcast({"type": "data"})
             if status.get("repo_busy"):
                 status.update(message="indexing repos")
             else:
@@ -282,10 +286,11 @@ async def enricher():
 
 @asynccontextmanager
 async def lifespan(app):
-    global store, repos, files, searcher
+    global store, repos, files, searcher, datamap
     store = Store()
     repos = Repos(store)
     files = Files(store)
+    datamap = DataMap(store, repos, files)
     searcher = search_mod.Searcher(store, repos, files)
     actions.bind(store=store, repos=repos, files=files, searcher=searcher, status=status, port=config.PORT)
     loop = asyncio.get_running_loop()
@@ -514,6 +519,14 @@ def repo_owners(name: str):
     return repos.owners(name)
 
 
+@app.get("/api/repo/{name}/gaps")
+def repo_gaps(name: str, inactive_days: int = 180):
+    r = repos.knowledge_gaps(name, inactive_days)
+    if r is None:
+        raise HTTPException(404)
+    return r
+
+
 @app.get("/api/repo/{name}/people")
 def repo_people(name: str):
     return repos.people(name)
@@ -600,6 +613,12 @@ def delete_scope(name: str):
 def resolve_scope(scope: str = "auto", cwd: str | None = None):
     """What an agent would see: e.g. /api/scopes/resolve?scope=auto&cwd=/path/to/repo."""
     return scopes.describe(_scope_param(scope, cwd))
+
+
+@app.get("/api/data/points")
+def data_points():
+    """Everything on one map: documents, code files (main checkout) and agent sessions."""
+    return datamap.points()
 
 
 @app.get("/api/files/points")

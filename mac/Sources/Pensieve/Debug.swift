@@ -6,6 +6,7 @@ import WebKit
 @MainActor
 enum Debug {
     static var enabled: Bool { ProcessInfo.processInfo.environment["PENSIEVE_DEBUG"] != nil }
+    static var lastAlert = ""
 
     /// Debug builds take pensieve:// commands over a distributed notification instead of LaunchServices, so tests
     /// never reach an installed copy of the app (same bundle id and URL scheme).

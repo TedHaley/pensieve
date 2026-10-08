@@ -60,7 +60,7 @@ const AGENT_NAME = {claude: 'Claude Code', qwen: 'Qwen Code', codex: 'Codex'};
 
 /* ============================== state ============================== */
 const S = {
-  view: 'map', level: 'session', colorBy: store.get('mapColor', 'area'), areaSlot: new Map(),
+  view: 'data', level: 'session', colorBy: store.get('mapColor', 'area'), areaSlot: new Map(),
   sessions: [], byId: new Map(), chunks: null, topics: [], topicById: new Map(), projects: [], projectSlot: new Map(),
   f: {projects: new Set(), sources: new Set(), range: null, topic: null},
   highlight: null, pulse: new Set(), selected: null, status: {},
@@ -281,18 +281,19 @@ function sessionColorSlot(s) {
 function itemColor(it) {
   if (S.view === 'code') return codeColor(it);
   if (S.view === 'files') return fileColor(it);
+  if (S.view === 'data') return dataColor(it);
   const s = S.byId.get(it.session) || it;
   if (S.colorBy === 'recency') { const [a, b] = S.tRange; return seqColor(b > a ? (s.t1 - a) / (b - a) : 1); }
   return slotColor(sessionColorSlot(s));
 }
 
 function buildMap() {
-  mapPts = S.view === 'code' ? S.code.points : S.view === 'files' ? S.files.points : S.level === 'chunk' ? (S.chunks || []) : S.sessions;
+  mapPts = S.view === 'data' ? S.data.points : S.view === 'code' ? S.code.points : S.view === 'files' ? S.files.points : S.level === 'chunk' ? (S.chunks || []) : S.sessions;
   const n = mapPts.length, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n), st = new Float32Array(n);
   const c = new THREE.Color();
   mapPts.forEach((p, i) => {
     pos.set(p.p, i * 3); c.set(itemColor(p)); col.set([c.r, c.g, c.b], i * 3);
-    size[i] = S.view === 'code' ? 0.028 : S.view === 'files' ? 0.034 + Math.min(0.03, Math.sqrt(p.n || 1) * 0.004) : S.level === 'chunk' ? 0.03 : 0.045 + Math.min(0.06, Math.sqrt(p.n || 1) * 0.008);
+    size[i] = S.view === 'data' ? (p.type === 'session' ? 0.05 : p.type === 'doc' ? 0.038 : 0.026 + Math.min(0.02, Math.sqrt(p.chunks || 1) * 0.003)) : S.view === 'code' ? 0.028 : S.view === 'files' ? 0.034 + Math.min(0.03, Math.sqrt(p.n || 1) * 0.004) : S.level === 'chunk' ? 0.03 : 0.045 + Math.min(0.06, Math.sqrt(p.n || 1) * 0.008);
   });
   gl.setData(pos, col, size, st);
   selIdx = S.selected ? mapPts.findIndex(p => matchSel(p)) : -1;
@@ -302,9 +303,10 @@ function buildMap() {
   if (n && (firstFit || cams[camKey()] == null)) { gl.fit(null, true); firstFit = false; }
   gl.setRings(-1, selIdx);
 }
-const camKey = () => S.view === 'code' ? 'code:' + S.code.repo : S.view === 'files' ? 'files' : 'map:' + S.level;
+const camKey = () => S.view === 'data' ? 'data' : S.view === 'code' ? 'code:' + S.code.repo : S.view === 'files' ? 'files' : 'map:' + S.level;
 function matchSel(p) {
   const sel = S.selected; if (!sel) return false;
+  if (S.view === 'data') return p.open === sel.open || (sel.kind === 'session' && p.open === 'session:' + sel.id) || (sel.kind === 'file' && p.open === sel.id) || (sel.kind === 'code' && (p.open === 'code:' + sel.id || (sel.path && p.path === sel.path)));
   if (S.view === 'code') return sel.kind === 'code' && p.id === sel.id;
   if (S.view === 'files') return sel.kind === 'file' && p.id === sel.id;
   return sel.kind === 'session' && (S.level === 'chunk' ? (sel.chunk ? p.id === sel.chunk : p.session === sel.id) : p.id === sel.id);
@@ -319,6 +321,11 @@ function recolor() {
 
 function refreshStates() {
   const a = gl.attr('aState'); if (!a) return;
+  if (S.view === 'data') {
+    const hl = S.data.highlight;
+    mapPts.forEach((p, i) => { let v = dataPass(p) ? 1 : 0; if (v && hl) v = hl.has(p.id) ? 2 : 0.5; a.array[i] = v; });
+    a.needsUpdate = true; return;
+  }
   if (S.view === 'files') {
     const hl = S.files.highlight;
     mapPts.forEach((p, i) => { let v = filePass(p) ? 1 : 0; if (v && hl) v = hl.has(p.id) ? 2 : 0.5; a.array[i] = v; });
@@ -352,7 +359,15 @@ function centroid(idx) {
 
 function renderLabels() {
   const items = [];
-  if (S.view === 'files') {
+  if (S.view === 'data') {  // repo and top-folder names at their clusters, biggest first (collisions fade)
+    const by = new Map(), D = S.data;
+    mapPts.forEach((p, i) => { if (!dataPass(p)) return; const k = p.group; if (!by.has(k)) by.set(k, []); by.get(k).push(i); });
+    [...by].sort((a, b) => b[1].length - a[1].length).slice(0, 14).forEach(([k, idx]) => {
+      const repoKey = [...D.repoKeys].find(([, n]) => n === k)?.[0];
+      items.push({n: idx.length, text: k, color: D.colorBy === 'folder' ? slotColor(D.folderSlot.get(mapPts[idx[0]].top) ?? -1) : D.colorBy === 'type' ? slotColor(TYPE_SLOT[mapPts[idx[0]].type]) : 'transparent', pos: centroid(idx),
+        title: repoKey ? `Repository ${k}` : `Folder ~/${k}`, onClick: () => toggleDataFolder(repoKey || mapPts[idx[0]].top, true)});
+    });
+  } else if (S.view === 'files') {
     if (S.files.colorBy === 'folder') for (const [k, slot] of S.files.folderSlot) {
       const idx = []; mapPts.forEach((p, i) => { if (p.top === k) idx.push(i); });
       if (idx.length) items.push({n: idx.length, text: k, color: slotColor(slot), pos: centroid(idx), title: `Files in ${k}`,
@@ -387,7 +402,15 @@ function renderLabels() {
 
 function renderLegend() {
   const L = $('#legend'); let html = '';
-  if (S.view === 'files') {
+  if (S.view === 'data') {
+    const D = S.data, cb = D.colorBy, sw = (c, l) => `<span><i class="sw" style="background:${c}"></i>${esc(l)}</span>`;
+    if (cb === 'type') html = Object.entries(TYPE_SLOT).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
+    else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), '~/' + k)).join('') + sw(pal().other, 'Other');
+    else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + sw(pal().other, 'Other / unknown');
+    else if (cb === 'recency') html = legendRamp('Older', 'Recently changed');
+    else if (cb === 'risk') html = legendRamp('Active authors', 'Mostly inactive authors') + sw(pal().other, 'Not code in this repo');
+    else html = '<span class="muted">Colors group items with similar content</span>';
+  } else if (S.view === 'files') {
     const cb = S.files.colorBy;
     if (cb === 'recency') html = legendRamp('Older', 'Recently modified');
     else if (cb === 'folder') html = [...S.files.folderSlot].map(([k, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(k)}</span>`).join('') + `<span><i class="sw" style="background:${pal().other}"></i>Other</span>`;
@@ -433,12 +456,13 @@ canvas.addEventListener('pointerup', e => {
   const i = gl.pick(e.clientX, e.clientY);
   if (i < 0) return;
   const p = mapPts[i];
-  if (S.view === 'code') openCode(p.id); else if (S.view === 'files') openFile(p.path); else openSession(p.session, S.level === 'chunk' ? p.id : null);
+  if (S.view === 'data') openItem(p.open); else if (S.view === 'code') openCode(p.id); else if (S.view === 'files') openFile(p.path); else openSession(p.session, S.level === 'chunk' ? p.id : null);
 });
 canvas.addEventListener('dblclick', () => gl.fit(visibleIdx()));
 const visibleIdx = () => { const out = []; gl.states?.forEach((v, i) => { if (v >= 0.75) out.push(i); }); return out.length ? out : null; };
 
 function hoverHtml(p) {
+  if (S.view === 'data') return `<b>${esc(p.title)}</b><div class="m"><span class="badge"><i class="sw" style="background:${slotColor(TYPE_SLOT[p.type])}"></i>${TYPE_ONE[p.type]}</span>${p.repo ? esc(p.repo) : ''}</div><div class="m">${esc(p.type === 'session' ? (p.repo ? 'in ' + p.repo : p.display) : p.display.replace(/\/[^/]*$/, ''))}</div><div class="m">${p.author ? `by ${esc(p.author)} · ` : ''}${isNaN(p.t) ? '' : rel(p.t)}</div>${p.summary ? `<p>${esc(p.summary.slice(0, 220))}</p>` : ''}`;
   if (S.view === 'files') return `<b>${esc(p.name)}</b><div class="m">${esc(p.dir)}</div><div class="m">${KIND_NAME[p.kind] || p.kind} · ${fmtSize(p.size)} · modified ${rel(p.mtime * 1000)}</div>${p.author ? `<div class="m">by ${esc(p.author)}</div>` : ''}`;
   if (S.view === 'code') {
     return `<b>${esc(p.path)}</b><div class="m">lines ${p.start}–${p.end} · ${esc(person(p.author))}${p.ts ? ' · ' + rel(p.ts * 1000) : ''}</div>` +
@@ -453,7 +477,20 @@ function hoverHtml(p) {
 /* ============================== toolbar ============================== */
 function renderToolbar() {
   const tb = $('#toolbar');
-  if (S.view === 'files') {
+  if (S.view === 'data') {
+    const D = S.data;
+    const fr = focusedRepo();
+    if (D.colorBy === 'risk' && !fr) D.colorBy = 'type';
+    tb.innerHTML = `<div class="seg" id="dcolor"><span class="seg-label">Color</span>${[['type', 'Type'], ['folder', 'Folder'], ['author', 'Author'], ['recency', 'Recency'], ['topic', 'Topic'], ...(fr ? [['risk', 'Knowledge risk']] : [])].map(([k, l]) => `<button data-v="${k}" class="${D.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      ${D.highlight ? `<button class="btn on" data-act="cleardhl">✕ Clear highlight</button>` : ''}
+      <button class="btn ${gl.controls.autoRotate ? 'on' : ''}" data-act="rotate" title="Auto-rotate">⟳</button>
+      <button class="btn" data-act="fit" title="Fit (F)">Fit</button>`;
+    $$('#dcolor button', tb).forEach(b => b.onclick = async () => {
+      D.colorBy = b.dataset.v; if (D.colorBy !== 'risk') store.set('dataColor', D.colorBy);
+      if (D.colorBy === 'risk') await loadGaps(focusedRepo()?.name);
+      renderToolbar(); recolor();
+    });
+  } else if (S.view === 'files') {
     tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Folders</button>
       <div class="seg" id="fcolor"><span class="seg-label">Color</span>${[['folder', 'Folder'], ['kind', 'Kind'], ['author', 'Author'], ['topic', 'Topic'], ['recency', 'Recency']].map(([k, l]) => `<button data-v="${k}" class="${S.files.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <span style="flex:1"></span>
@@ -482,14 +519,12 @@ function renderToolbar() {
     $$('#mcolor button', tb).forEach(b => b.onclick = () => { S.colorBy = b.dataset.v; store.set('mapColor', S.colorBy); renderToolbar(); recolor(); renderTimeline(); });
   }
   // the type switch lives under the search field; with the panel collapsed a compact picker stands in here
-  tb.insertAdjacentHTML('afterbegin', `<select class="dtype-sel" aria-label="What to show on the map">${DATA_TYPES.map(([k, l]) => `<option value="${k}" ${S.view === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`);
-  $('.dtype-sel', tb).onchange = e => setView(e.target.value);
-  renderTypeSwitch();
   $$('[data-act]', tb).forEach(b => b.onclick = () => ({
     fit: () => gl.fit(visibleIdx()),
     rotate: () => { gl.controls.autoRotate = !gl.controls.autoRotate; store.set('autorotate', gl.controls.autoRotate); renderToolbar(); },
     clearhl: () => { S.highlight = null; refreshStates(); renderToolbar(); },
     clearfhl: () => { S.files.highlight = null; refreshStates(); renderToolbar(); },
+    cleardhl: () => { S.data.highlight = null; refreshStates(); renderToolbar(); },
     side: () => toggleSide(),
     who: () => openPalette('who: '),
     overlaps: showOverlaps,
@@ -511,6 +546,7 @@ function renderSidebar() {
   const side = $('#side');
   if (S.view === 'code') return renderCodeSidebar(side);
   if (S.view === 'files') return renderFilesSidebar(side);
+  if (S.view === 'data') return renderDataSidebar(side);
   if (S.view === 'settings') { side.innerHTML = settingsNav(); bindSettingsNav(side); return; }
   const all = S.sessions, fs = filtered();
   const parts = [];
@@ -594,11 +630,12 @@ function treeCounts(list) {
   return cnt;
 }
 function treeRow(k, label, depth, n, kids, kind, sub = '', open = false) {
-  const selSet = kind === 'proj' ? S.f.projects : kind === 'fdir' ? S.files.folders : S.code.treeSel;
+  const selSet = kind === 'proj' ? S.f.projects : kind === 'fdir' ? S.files.folders : kind === 'ddir' ? S.data.folders : S.code.treeSel;
+  if (kind === 'ddir' && S.data.repoKeys.has(k)) label = `${label}<span class="cbadge" title="Git repository">code</span>`;
   const on = selSet.has(k), part = !on && [...selSet].some(x => x.startsWith(k + '/'));
   return `<div class="trow ${on ? 'on' : part ? 'part' : ''}" style="--d:${depth}">
     ${kids.length ? `<button class="tw ${open ? 'open' : ''}" data-tw="${esc(k)}" title="${open ? 'Collapse' : 'Expand'}">▶</button>` : '<span class="tw"></span>'}
-    <button class="tname" data-${kind}="${esc(k)}" title="${esc(k)}"><span class="check"></span><span class="name ${depth ? 'dir' : ''}">${esc(label)}</span><span class="n">${n.toLocaleString()}</span></button>
+    <button class="tname" data-${kind}="${esc(k)}" title="${esc(k)}"><span class="check"></span><span class="name ${depth ? 'dir' : ''}">${kind === 'ddir' ? label.replace(/^([^<]*)/, m => esc(m)) : esc(label)}</span><span class="n">${n.toLocaleString()}</span></button>
     ${sub ? `<div class="tsub">${sub}</div>` : ''}</div>`;
 }
 // Recursive tree; single-child chains with the same count collapse into one row ("core/pipelines/company").
@@ -665,7 +702,6 @@ async function applyScope(force = false) {
 const toggleSet = (set, v) => set.has(v) ? set.delete(v) : set.add(v);
 function toggleTopic(id) {
   S.f.topic = S.f.topic === id ? null : id;
-  if (S.view === 'insights') setView('map');
   refresh();
   if (S.f.topic != null) setTimeout(() => gl.fit(visibleIdx()), 30);
 }
@@ -769,7 +805,8 @@ function closeDrawer() {
 $('#drawer-close').onclick = closeDrawer;
 
 async function openSession(sid, chunkId = null) {
-  if (S.view !== 'map') await setView('map');
+  if (S.view !== 'data') await setView('data');
+  if (!S.data.types.has('session')) { S.data.types.add('session'); dataChanged(false); }
   S.selected = {kind: 'session', id: sid, chunk: chunkId};
   selIdx = mapPts.findIndex(matchSel); gl.setRings(hoverIdx, selIdx);
   if (selIdx >= 0) gl.focusPoint(selIdx);
@@ -797,13 +834,13 @@ async function openSession(sid, chunkId = null) {
      <div id="turns"></div>`);
   const body = $('#drawer-body');
   $$('[data-sid]', body).forEach(b => b.onclick = () => openSession(b.dataset.sid));
-  $$('[data-proj]', $('#drawer')).forEach(b => b.onclick = () => { S.f.projects = new Set([b.dataset.proj]); refresh(); });
-  $$('[data-dirkey]', $('#drawer')).forEach(b => b.onclick = () => { S.f.projects = new Set([b.dataset.dirkey]); refresh(); setTimeout(() => gl.fit(visibleIdx()), 400); });
-  $$('[data-topic]', $('#drawer')).forEach(b => b.onclick = () => toggleTopic(+b.dataset.topic));
+  $$('[data-proj]', $('#drawer')).forEach(b => b.onclick = () => { const k = repoDirKey(b.dataset.proj, ''); if (k) toggleDataFolder(k, true); else toast('Not a repository in the index'); });
+  $$('[data-dirkey]', $('#drawer')).forEach(b => b.onclick = () => { const [r, ...rest] = b.dataset.dirkey.split('/'); const k = repoDirKey(r, rest.join('/')); if (k) toggleDataFolder(k, true); });
+  $$('[data-topic]', $('#drawer')).forEach(b => b.onclick = () => { const t = +b.dataset.topic; highlightData(p => p.type === 'session' && S.byId.get(p.open.slice(8))?.cluster === t); });
   $$('[data-file]', body).forEach(b => b.onclick = () => gotoCode(b.dataset.repo, b.dataset.file));
   $$('[data-person]', body).forEach(b => b.onclick = () => gotoCode(b.dataset.repo, null, b.dataset.person));
   $('[data-a=resume]', body)?.addEventListener('click', () => { navigator.clipboard?.writeText(resume); toast('Resume command copied'); });
-  $('[data-a=similar]', body).onclick = () => { S.highlight = new Set([sid, ...sim.map(x => x.id)]); refreshStates(); renderToolbar(); gl.fit(visibleIdx()); };
+  $('[data-a=similar]', body).onclick = () => { const ids = new Set([sid, ...sim.map(x => x.id)].map(x => 'session:' + x)); highlightData(p => ids.has(p.open)); };
   renderTurns(s.turns, '', chunkId);
   $('#tfind').oninput = debounce(e => renderTurns(s.turns, $('#tfind').value.trim(), null), 150);
 }
@@ -919,6 +956,7 @@ function renderCodeSidebar(side) {
 }
 const inDir = (path, dir) => dir === '.' ? !path.includes('/') : path.startsWith(dir + '/');
 function focusArea(dir) {
+  if (S.view === 'data') { const k = codeDirToKey(dir); if (k) toggleDataFolder(k, true); showArea(dir); return; }
   if (S.code.focus?.key === dir) { S.code.focus = null; S.code.highlight = null; S.code.treeSel.clear(); }
   else {
     S.code.focus = {type: 'dir', key: dir};
@@ -947,14 +985,18 @@ function showArea(dir) {
   $$('[data-sid]', body).forEach(b => b.onclick = () => openSession(b.dataset.sid));
   $$('[data-file]', body).forEach(b => b.onclick = () => focusFile(b.dataset.file));
   $('[data-a=who]', body).onclick = () => whoKnows(dir.split('/').slice(-2).join(' '));
+  $('[data-a=sessions]', body).onclick = () => S.view === 'data' ? (toggleDataFolder(codeDirToKey(dir), true), setTypes('session')) : null;
+  if (S.view === 'data') return;
   $('[data-a=sessions]', body).onclick = () => { S.f.projects = new Set([S.code.repo === ALL ? dir : `${S.code.repo}/${dir}`]); setView('map').then(() => { refresh(); setTimeout(() => gl.fit(visibleIdx()), 400); }); };
 }
 async function gotoArea(repoName, area) {
+  if (S.view !== 'code') { await setView('data'); await ensureRepo(repoName); const k = repoDirKey(repoName, area); if (k) toggleDataFolder(k, true); showArea(area); return; }
   await setView('code', repoName);
   if (S.code.focus?.key === area) return showArea(area);
   focusArea(area);
 }
 function focusFile(path) {
+  if (S.view === 'data') { const pt = dataPointFor(...codeSplit(path)); if (!pt) return toast('That file is not in the code index.'); highlightData(x => x.id === pt.id); return openItem(pt.open); }
   const idx = S.code.points.map((p, i) => p.path === path ? i : -1).filter(i => i >= 0);
   if (!idx.length) return toast('That file is not in the code index (binary, generated, or too large).');
   S.code.highlight = new Set(idx.map(i => S.code.points[i].id)); S.code.focus = {type: 'dir', key: path};
@@ -968,14 +1010,26 @@ function openPerson(author) {
   if (p) author = p.author;
   S.code.focus = {type: 'person', key: author};
   S.code.highlight = new Set(S.code.points.filter(x => x.author === author).map(x => x.id));
-  refreshStates(); renderSidebar(); setTimeout(() => gl.fit(visibleIdx()), 30);
+  if (S.view === 'data') { const nm = person(author).toLowerCase(), rp = S.code.repo; highlightData(x => x.type === 'code' && (rp === ALL || x.repo === rp) && person(x.author || '').toLowerCase() === nm); renderSidebar(); }
+  else { refreshStates(); renderSidebar(); setTimeout(() => gl.fit(visibleIdx()), 30); }
   const email = (author.match(/<(.*)>/) || [])[1] || '';
   openDrawer(`<div class="meta"><span class="badge">Person</span>${esc(repoLabel(S.code.repo))}</div><h2>${esc(person(author))}</h2><div class="meta">${esc(email)}</div>`,
     p ? `<div class="kpis" style="grid-template-columns:repeat(3,1fr)"><div class="kpi"><div class="l">Share of code</div><div class="v">${(p.share * 100).toFixed(1)}%</div></div><div class="kpi"><div class="l">Files</div><div class="v">${p.files}</div></div><div class="kpi"><div class="l">Last change</div><div class="v" style="font-size:15px">${rel(p.last_active * 1000)}</div></div></div>
      <div class="h4">Main areas</div><div class="list">${p.dirs.map(d => `<button class="item" data-dir="${esc(d)}"><div class="t"><i class="sw" style="background:${codeColorFor('dir', d)}"></i><span class="grow" style="font:12px var(--mono)">${esc(d)}</span><span class="muted">→</span></div></button>`).join('')}</div>
      <div class="actions">${email && !email.includes('noreply') ? `<a class="btn" href="mailto:${esc(email)}">✉ Email</a>` : ''}</div>` : '');
   const body = $('#drawer-body');
+  body.insertAdjacentHTML('afterbegin', '<div id="pgaps"></div>');
   body.insertAdjacentHTML('beforeend', '<div id="precent"><div class="shimmer" style="height:60px;margin-top:14px;border-radius:8px"></div></div>');
+  const gapRepo = S.code.repo === ALL ? (S.code.points.find(x => x.author === author)?.repo) : S.code.repo;
+  loadGaps(gapRepo).then(g => {  // an author with no recent commits here: say since when, and which areas they mainly wrote
+    const box = $('#pgaps'); if (!g || !box || S.code.focus?.key !== author) return;
+    const nm = person(author).toLowerCase(), me = g.people.find(x => x.name.toLowerCase() === nm);
+    if (!me?.departed) return;
+    const areas = g.gaps.filter(x => x.departed[0]?.name.toLowerCase() === nm);
+    box.innerHTML = `<p class="muted inactive-line">${esc(inactiveSince(me.last_active)[0].toUpperCase() + inactiveSince(me.last_active).slice(1))} (no commits in ${esc(gapRepo)} for ${g.inactive_days}+ days before its latest commit; they may have moved teams).</p>
+      ${areas.length ? `<div class="h4" style="margin-top:8px">Main author of</div>${areas.map(x => gapItemHtml(x, gapRepo)).join('')}` : ''}`;
+    bindGapLinks(box);
+  });
   const repo = S.code.repo === ALL ? (S.code.points.find(x => x.author === author)?.repo || S.code.repos.find(r => !r.all)?.name) : S.code.repo;
   api(`/api/team/${enc(repo)}`).then(t => {
     const box = $('#precent'); if (!box || S.code.focus?.key !== author) return;
@@ -999,6 +1053,10 @@ async function openCode(id) {
   selIdx = mapPts.findIndex(matchSel); gl.setRings(hoverIdx, selIdx);
   if (selIdx >= 0) gl.focusPoint(selIdx, 0.6);
   const c = await api('/api/code/' + id);
+  if (S.view === 'data' && selIdx < 0) {  // the map has one point per file: select it by path
+    const root = S.data.repos.find(r => r.name === c.repo)?.root;
+    if (root) { S.selected.path = `${root}/${c.path}`; selIdx = mapPts.findIndex(matchSel); gl.setRings(hoverIdx, selIdx); if (selIdx >= 0) gl.focusPoint(selIdx, 0.6); }
+  }
   const tot = Object.values(c.authors).reduce((a, b) => a + b, 0) || 1;
   const lines = c.text.split('\n');
   openDrawer(`<div class="meta"><span class="badge">Code</span>${esc(c.repo)} · lines ${c.start}–${c.end}</div><h2 style="font:600 14px var(--mono);word-break:break-all">${esc(c.path)}</h2>`,
@@ -1008,16 +1066,28 @@ async function openCode(id) {
      ${c.commits.length ? `<div class="h4">Recent commits to this file</div><div class="list">${c.commits.map(x => `<div class="item"><div class="t"><code style="font:11px var(--mono);color:var(--text-3)">${x.sha}</code><span class="grow">${esc(x.subject)}</span></div><div class="s">${esc(x.author)} · ${rel(x.ts * 1000)}</div></div>`).join('')}</div>` : ''}
      ${c.sessions.length ? `<div class="h4">Your sessions that touched this file</div><div class="list">${c.sessions.map(s => `<button class="item" data-sid="${esc(s.id)}"><div class="t">${s.edited ? '<span class="badge">edited</span>' : '<span class="badge">read</span>'}<span class="grow">${esc(s.title)}</span><span class="muted">→</span></div></button>`).join('')}</div>` : ''}`);
   const body = $('#drawer-body');
-  $$('[data-person]', body).forEach(b => b.onclick = () => openPerson(b.dataset.person));
+  $$('[data-person]', body).forEach(b => b.onclick = async () => { if (S.view === 'data') await ensureRepo(c.repo); openPerson(b.dataset.person); });
   $$('[data-sid]', body).forEach(b => b.onclick = () => openSession(b.dataset.sid));
   $('[data-a=open]', body).onclick = () => openOnMac('code:' + id, 'open');
   $('[data-a=reveal]', body).onclick = () => openOnMac('code:' + id, 'reveal');
   const full = S.code.repo === ALL ? `${c.repo}/${c.path}` : c.path;
-  $('[data-a=file]', body).onclick = () => focusFile(full);
-  $('[data-a=area]', body).onclick = () => focusArea(areaOf(full, S.code.repo === ALL ? 3 : 2));
+  if (S.view === 'data') {
+    const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/')) : '';
+    $('[data-a=file]', body).onclick = () => highlightData(p => p.type === 'code' && p.repo === c.repo && p.path.endsWith('/' + c.path));
+    $('[data-a=area]', body).onclick = async () => { await ensureRepo(c.repo); const k = repoDirKey(c.repo, dir); if (k) toggleDataFolder(k, true); };
+  } else {
+    $('[data-a=file]', body).onclick = () => focusFile(full);
+    $('[data-a=area]', body).onclick = () => focusArea(areaOf(full, S.code.repo === ALL ? 3 : 2));
+  }
 }
 async function gotoCode(repoRoot, path, author) {
   const name = (S.code.repos.find(r => r.root === repoRoot || r.name === repoRoot) || {}).name || repoRoot.split('/').pop();
+  if (S.view !== 'code') {
+    await setView('data'); await ensureRepo(name);
+    if (path) { const pt = S.data.points.find(p => p.type === 'code' && p.repo === name && (p.path === path || p.path.endsWith('/' + path))); if (pt) { highlightData(x => x.id === pt.id); openItem(pt.open); } else toast('That file is not in the code index.'); }
+    if (author) openPerson(author);
+    return;
+  }
   await setView('code', name);
   if (path) {
     const r = S.code.repos.find(x => x.name === name);
@@ -1037,10 +1107,12 @@ async function showOverlaps() {
   $$('[data-dir]', $('#drawer-body')).forEach(a => a.onclick = e => { e.preventDefault(); focusArea(a.dataset.dir); });
 }
 async function whoKnows(q) {
-  await setView('code');
+  if (S.view !== 'data') await setView('data');
+  const fr = focusedRepo(); if (fr) await ensureRepo(fr.name); else if (S.code.repo !== ALL && S.code.repos.some(r => r.name === ALL)) await ensureRepo(ALL);
   openDrawer(`<div class="meta"><span class="badge">Who knows</span>${esc(repoLabel(S.code.repo))}</div><h2>${esc(q)}</h2>`, '<div class="empty"><div class="spinner" style="margin:auto"></div></div>');
   const r = await api(`/api/experts?q=${enc(q)}&repo=${enc(S.code.repo)}`);
-  S.code.highlight = new Set(r.hit_ids); S.code.focus = null; refreshStates(); gl.fit(visibleIdx());
+  S.code.highlight = new Set(r.hit_ids); S.code.focus = null;
+  highlightData(p => p.type === 'code' && r.chunks.some(c => p.repo === c.repo && p.path.endsWith('/' + c.path)));
   openDrawer(`<div class="meta"><span class="badge">Who knows</span>${esc(repoLabel(S.code.repo))}</div><h2>${esc(q)}</h2>`,
     `<p class="muted">Ranked by how much of the most relevant code each person wrote (git blame, weighted by relevance).</p>
      <div class="list">${r.experts.map((e, i) => `<button class="item" data-person="${esc(e.author)}"><div class="t"><b style="width:18px;color:var(--text-3)">${i + 1}</b><span class="grow">${esc(person(e.author))}</span><span class="muted">${Math.round(e.share * 100)}% · ${rel(e.last_active * 1000)}</span></div><div class="hbar" style="margin:4px 0 0 24px"><i style="width:${e.share * 100}%"></i></div><div class="s" style="margin-left:24px">${esc(e.files.slice(0, 3).join(' · '))}</div></button>`).join('') || '<div class="empty">No matching code.</div>'}</div>
@@ -1048,6 +1120,181 @@ async function whoKnows(q) {
   const body = $('#drawer-body');
   $$('[data-person]', body).forEach(b => b.onclick = () => openPerson(b.dataset.person));
   $$('[data-code]', body).forEach(b => b.onclick = () => openCode(+b.dataset.code));
+}
+
+/* ============================== data view: one map of documents, code and agent sessions ============================== */
+const TYPE_SLOT = {doc: 0, code: 1, session: 2};
+const TYPE_NAME = {doc: 'Documents', code: 'Code', session: 'Agent sessions'};
+const TYPE_ONE = {doc: 'Document', code: 'Code', session: 'Agent session'};
+S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type'),
+          treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map()};
+const relHome = p => { const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
+const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
+async function loadData() {
+  let r = {points: [], repos: [], home: ''};
+  try { r = await api('/api/data/points'); } catch {}
+  const D = S.data;
+  D.home = r.home || ''; D.repos = r.repos || [];
+  D.repoKeys = new Map(D.repos.map(x => [relHome(x.root), x.name]));  // '~'-relative folder key -> repo name
+  D.points = r.points.map(p => {
+    const rel = relHome(p.path), dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+    return {...p, rel, dir, top: rel.split('/')[0], group: p.repo || rel.split('/')[0], t: ptTime(p)};
+  });
+  const cnt = (f) => { const m = new Map(); D.points.forEach(p => { const k = f(p); if (k) m.set(k, (m.get(k) || 0) + 1); }); return new Map([...m].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i])); };
+  D.folderSlot = cnt(p => p.top); D.authorSlot = cnt(p => p.author);
+  const ts = D.points.map(p => p.t).filter(x => !isNaN(x)).sort((a, b) => a - b);
+  D.tRange = [ts[Math.floor(ts.length * .05)] || 0, ts[ts.length - 1] || 1];
+  D.tree = null; D.loaded = true; D.stale = false;
+}
+function dataColor(p) {
+  const D = S.data;
+  switch (D.colorBy) {
+    case 'type': return slotColor(TYPE_SLOT[p.type]);
+    case 'folder': return slotColor(D.folderSlot.has(p.top) ? D.folderSlot.get(p.top) : -1);
+    case 'author': return slotColor(p.author && D.authorSlot.has(p.author) ? D.authorSlot.get(p.author) : -1);
+    case 'topic': return slotColor(p.cluster ?? -1);
+    case 'recency': { const [a, b] = D.tRange; return seqColor(isNaN(p.t) ? 0 : Math.max(0, Math.min(1, (p.t - a) / Math.max(1, b - a)))); }
+    case 'risk': { const r = riskOf(p); return r == null ? pal().other : seqColor(r); }
+  }
+  return pal().other;
+}
+function dataPass(p, skip) {
+  const D = S.data;
+  if (skip !== 'types' && !D.types.has(p.type)) return false;
+  if (skip !== 'folders' && D.folders.size && ![...D.folders].some(k => p.rel.startsWith(k + '/'))) return false;
+  return true;
+}
+function dataTree() {
+  const D = S.data;
+  if (D.tree?.n === D.points.length) return D.tree;
+  const children = new Map(), seen = new Set();
+  for (const p of D.points) {
+    let key = '';
+    for (const part of p.dir.split('/').filter(Boolean)) {
+      const k = key ? key + '/' + part : part;
+      if (!seen.has(k)) { seen.add(k); if (key) { if (!children.has(key)) children.set(key, []); children.get(key).push(k); } }
+      key = k;
+    }
+  }
+  return (D.tree = {n: D.points.length, children, roots: [...seen].filter(k => !k.includes('/'))});
+}
+// the repo (name, folder key) that the current folder filter is in, if exactly one
+function focusedRepo() {
+  const D = S.data; if (D.folders.size !== 1) return null;
+  const f = [...D.folders][0];
+  for (const [k, name] of D.repoKeys) if (f === k || f.startsWith(k + '/')) return {name, key: k, root: D.repos.find(r => r.name === name)?.root, sub: f === k ? '' : f.slice(k.length + 1)};
+  return null;
+}
+function renderDataSidebar(side) {
+  const D = S.data, T = dataTree(), all = D.points, vis = all.filter(p => dataPass(p));
+  const cnt = new Map();
+  all.filter(p => dataPass(p, 'folders')).forEach(p => { const parts = p.dir.split('/').filter(Boolean); for (let i = 1; i <= parts.length; i++) { const k = parts.slice(0, i).join('/'); cnt.set(k, (cnt.get(k) || 0) + 1); } });
+  const tc = {}; all.filter(p => dataPass(p, 'types')).forEach(p => tc[p.type] = (tc[p.type] || 0) + 1);
+  const repo = focusedRepo();
+  if (repo && S.code.repo !== repo.name && !D.repoLoading) {  // load the repo's blame data for its extras (people, owners, overlaps)
+    D.repoLoading = repo.name;
+    (S.code.repos.length ? Promise.resolve() : loadRepos()).then(() => loadRepo(repo.name)).then(() => { D.repoLoading = null; $('#loading').classList.add('gone'); if (S.view === 'data') renderSidebar(); }).catch(() => { D.repoLoading = null; });
+  }
+  const people = repo && S.code.repo === repo.name ? S.code.people.slice(0, 6) : null;
+  side.innerHTML = `
+    <div class="sec"><div class="chips type-chips" role="group" aria-label="Types">${Object.keys(TYPE_SLOT).map(t => `<button class="chip ${D.types.has(t) ? 'on' : ''}" data-type="${t}" aria-pressed="${D.types.has(t)}"><i class="sw" style="background:${slotColor(TYPE_SLOT[t])}"></i>${TYPE_NAME[t]}<span class="n">${(tc[t] || 0).toLocaleString()}</span></button>`).join('')}</div>
+      <div class="sec-note" style="margin-top:8px">${vis.length.toLocaleString()} of ${plural(all.length, 'item')}${D.folders.size ? ` in <b>${esc([...D.folders].join(', '))}</b> <button class="linkbtn" data-dclearf>Clear</button>` : ''}</div></div>
+    ${repo ? `<div class="sec repo-x"><div class="sec-h"><span>Repository · ${esc(repo.name)}</span></div>
+      <div class="repo-acts"><button class="btn" data-x="who">Who knows about…</button><button class="btn" data-x="overlaps">Overlaps</button><button class="btn" data-x="team">Team &amp; footprint</button></div>
+      ${(() => { const g = peekGaps(repo.name); if (!g) { loadGaps(repo.name).then(() => S.view === 'data' && renderSidebar()); return '<button class="row gap-row" disabled><span class="name muted">Knowledge gaps…</span></button>'; }
+        const n = g.gaps.length; return `<button class="row gap-row" data-gaps="${esc(repo.name)}"><span class="name">Knowledge gaps</span><span class="n ${n ? 'warn-t' : ''}">${n ? plural(n, 'area') : 'none'}</span><span class="sub">${n ? `Most code in ${esc(g.gaps[0].area)}${n > 1 ? ' and others' : ''} was written by people not active here` : 'Every sizeable area has active authors'}</span></button>`; })()}
+      ${people ? `<div class="rows">${people.map(p => `<button class="row" data-person="${esc(p.author)}"><span class="sw" style="background:${codeColorFor('author', p.author)}"></span><span class="name">${esc(person(p.author))}</span><span class="n">${(p.share * 100).toFixed(p.share < .1 ? 1 : 0)}%</span><span class="sub">${esc(p.dirs.slice(0, 2).join(', '))} · active ${rel(p.last_active * 1000)}</span></button>`).join('')}</div>` : '<div class="shimmer" style="height:60px;border-radius:10px"></div>'}</div>` : ''}
+    <div class="sec"><div class="sec-h"><span>Folders</span></div>
+      <div class="tree">${T.roots.filter(k => cnt.get(k)).sort((a, b) => cnt.get(b) - cnt.get(a)).map(k => treeHtml(k, 0, cnt, 'ddir', T.children, null, D.treeOpen)).join('') || '<div class="empty" style="padding:8px">Nothing indexed yet</div>'}</div></div>`;
+  $$('[data-type]', side).forEach(b => b.onclick = () => { const t = b.dataset.type; if (D.types.has(t) && D.types.size === 1) D.types = new Set(Object.keys(TYPE_SLOT)); else toggleSet(D.types, t); dataChanged(); });
+  bindTree(side, 'ddir', k => toggleDataFolder(k), () => renderSidebar(), D.treeOpen, 'dataTreeOpen');
+  $('[data-dclearf]', side)?.addEventListener('click', () => { D.folders.clear(); dataChanged(); });
+  $$('[data-person]', side).forEach(b => b.onclick = () => openPerson(b.dataset.person));
+  bindGapLinks(side);
+  $$('[data-x]', side).forEach(b => b.onclick = () => ({who: () => openPalette('who: '), overlaps: showOverlaps,
+    team: () => { S.ins.repo = repo.name; S.ins.key = null; setView('insights'); }})[b.dataset.x]());
+}
+function dataChanged(fit = true) {
+  const wasRisk = S.data.colorBy === 'risk';
+  refreshStates(); renderSidebar(); renderToolbar(); if (wasRisk && S.data.colorBy !== 'risk') recolor(); renderLabels(); renderLegend();
+  if (fit && S.view === 'data') setTimeout(() => gl.fit(visibleIdx()), 30);
+}
+function toggleDataFolder(k, only = false) {
+  const D = S.data;
+  if (D.folders.has(k) && !only) D.folders.delete(k);
+  else {
+    if (only) D.folders.clear();
+    [...D.folders].forEach(x => { if (x.startsWith(k + '/') || k.startsWith(x + '/')) D.folders.delete(x); });
+    D.folders.add(k);
+    const parts = k.split('/'); for (let i = 1; i < parts.length; i++) D.treeOpen.add(parts.slice(0, i).join('/'));
+    if (dataTree().children.has(k)) D.treeOpen.add(k);
+    store.set('dataTreeOpen', [...D.treeOpen]);
+  }
+  D.highlight = null;
+  dataChanged();
+}
+// folder key for a repo-relative directory of the repo whose blame data is loaded
+const repoDirKey = (repoName, dir) => { const r = S.data.repos.find(x => x.name === repoName); if (!r) return null; const k = relHome(r.root); return dir && dir !== '.' ? `${k}/${dir}` : k; };
+// code-view dirs/paths are repo-relative, or '<repo>/…' when the joint All-repositories data is loaded
+const codeSplit = x => S.code.repo === ALL ? [x.split('/')[0], x.split('/').slice(1).join('/')] : [S.code.repo, x];
+const codeDirToKey = dir => repoDirKey(...codeSplit(dir));
+const ensureRepo = async name => { if (name && S.code.repo !== name) { if (!S.code.repos.length) await loadRepos(); await loadRepo(name); $('#loading').classList.add('gone'); } };
+const dataPointFor = (repoName, relPath) => S.data.points.find(p => p.type === 'code' && p.repo === repoName && (p.path.endsWith('/' + relPath) || p.path === relPath));
+function highlightData(pred) {
+  S.data.highlight = new Set(S.data.points.filter(pred).map(p => p.id));
+  refreshStates(); renderToolbar();
+  if (S.data.highlight.size) setTimeout(() => gl.fit(visibleIdx()), 30);
+}
+const setTypes = (...t) => { S.data.types = new Set(t); if (S.view === 'data') dataChanged(); };
+
+/* ============================== knowledge gaps: areas whose main authors aren't active in the repo any more ============================== */
+// "Inactive" is a heuristic from git: no commits in this repo for 180+ days before its latest commit. People may have
+// moved teams, so the wording is always "not active here since …", never anything about leaving.
+const gapsCache = new Map();
+const monY = t => t ? new Date(t * 1000).toLocaleDateString(undefined, {month: 'short', year: 'numeric'}) : null;
+const inactiveSince = t => monY(t) ? `not active here since ${monY(t)}` : 'no recent commits here';
+async function loadGaps(repo) {
+  if (!repo || repo === ALL) return null;
+  if (gapsCache.has(repo)) return gapsCache.get(repo);
+  const p = api(`/api/repo/${enc(repo)}/gaps?inactive_days=180`).catch(() => null);
+  gapsCache.set(repo, p);
+  const r = await p; gapsCache.set(repo, r); return r;
+}
+const peekGaps = repo => { const g = gapsCache.get(repo); return g && !(g instanceof Promise) ? g : null; };
+function gapOwnersLine(g) {
+  const latest = Math.max(0, ...g.departed.map(d => d.last_active || 0));
+  return `${Math.round(g.departed_share * 100)}% written by people ${latest ? `not active here since ${monY(latest)}` : 'with no recent commits here'}`;
+}
+const busHtml = g => `<span class="${g.bus_factor <= 1 ? 'warn-t' : 'muted'}">${g.bus_factor === 0 ? 'No active owner' : plural(g.bus_factor, 'active owner')}</span>`;
+function gapItemHtml(g, repo) {
+  return `<div class="gap"><div class="gap-h"><button class="linkbtn mono" data-gap-area="${esc(g.area)}" data-repo="${esc(repo)}" title="Show this area on the map">${esc(g.area)}</button><span class="muted">${g.lines.toLocaleString()} lines</span></div>
+    <div class="gap-bar" title="${Math.round(g.departed_share * 100)}% by inactive authors"><i style="width:${g.departed_share * 100}%"></i></div>
+    <div class="gap-l">${esc(gapOwnersLine(g))} · ${busHtml(g)}</div>
+    ${g.departed.length ? `<div class="gap-l muted">Written by ${g.departed.slice(0, 3).map(d => `<button class="linkbtn subtle" data-gap-person="${esc(d.name)}" data-repo="${esc(repo)}">${esc(d.name)}</button> (${Math.round(d.share * 100)}%${d.last_active ? `, ${esc(monY(d.last_active))}` : ''})`).join(', ')}</div>` : ''}
+    ${g.ask ? `<div class="gap-ask">Ask: <button class="linkbtn" data-gap-person="${esc(g.ask)}" data-repo="${esc(repo)}">${esc(g.ask)}</button> <span class="muted">— ${esc(g.ask_reason || '')}</span></div>` : ''}</div>`;
+}
+async function openGaps(repo) {
+  openDrawer(`<div class="meta"><span class="badge">Knowledge gaps</span>${esc(repo)}</div><h2>Areas whose authors aren't active here</h2>`, '<div class="empty"><div class="spinner" style="margin:auto"></div></div>');
+  const d = await loadGaps(repo);
+  if (!d) return openDrawer(`<div class="meta"><span class="badge">Knowledge gaps</span>${esc(repo)}</div><h2>Knowledge gaps</h2>`, '<p class="muted">Couldn’t load knowledge gaps for this repository.</p>');
+  openDrawer(`<div class="meta"><span class="badge">Knowledge gaps</span>${esc(repo)}</div><h2>${d.gaps.length ? plural(d.gaps.length, 'area') + ' at risk' : 'No knowledge gaps'}</h2>`,
+    `<p class="muted" style="font-size:12px;margin:0 0 10px">Areas where most of the code was written by people with no commits in ${esc(repo)} for ${d.inactive_days}+ days before its latest commit (${esc(monY(d.as_of) || 'recently')}). They may simply have moved teams — the people listed under “Ask” are the best active contacts.</p>
+     ${d.gaps.map(g => gapItemHtml(g, repo)).join('') || '<div class="empty">Every sizeable area has active authors.</div>'}`);
+  bindGapLinks($('#drawer-body'));
+}
+function bindGapLinks(root) {
+  $$('[data-gap-area]', root).forEach(b => b.onclick = () => gotoArea(b.dataset.repo, b.dataset.gapArea));
+  $$('[data-gap-person]', root).forEach(b => b.onclick = async () => { await setView('data'); await ensureRepo(b.dataset.repo); openPerson(b.dataset.gapPerson); });
+  $$('[data-gaps]', root).forEach(b => b.onclick = () => openGaps(b.dataset.gaps));
+}
+// share of a code point's area written by inactive authors (longest matching gap area), for the "Knowledge risk" colouring
+function riskOf(p) {
+  if (p.type !== 'code' || !p.repo) return null;
+  const d = peekGaps(p.repo); if (!d || !p.repo_root) return null;
+  const rel = p.path.slice(p.repo_root.length + 1);
+  let best = null;
+  for (const g of d.gaps) if ((rel.startsWith(g.area + '/') || g.area === '.') && (!best || g.area.length > best.area.length)) best = g;
+  return best ? best.departed_share : 0;
 }
 
 /* ============================== files view ============================== */
@@ -1142,7 +1389,8 @@ async function openOnMac(id, action) {
 const PROSE = new Set(['doc', 'pdf', 'slides', 'other']);
 const AUTHOR_FROM = {pdf: 'from the PDF', office: 'from the document properties', spotlight: 'from Spotlight metadata', owner: 'file owner on this Mac', git: 'from git'};
 async function openFile(path) {
-  if (S.view !== 'files') await setView('files');
+  if (S.view !== 'data') await setView('data');
+  if (!S.data.types.has('doc')) { S.data.types.add('doc'); dataChanged(false); }
   const id = 'file:' + path;
   S.selected = {kind: 'file', id};
   selIdx = mapPts.findIndex(matchSel); gl.setRings(hoverIdx, selIdx);
@@ -1182,7 +1430,7 @@ const SET_GROUPS = [
   ['Language model', ['llm_url', 'llm_model']],
 ];
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
-const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai']);  // managed in the Sources section
+const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'auto_update_check']);  // managed in the Sources section
 const SRC_ICON = {
   agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
@@ -1200,11 +1448,11 @@ function srcHint(id) {
   if (Date.now() - h.t > 20000) { srcState.hints.delete(id); return ''; }
   return `<span class="src-hint">${h.on ? 'indexing…' : 'removing…'}</span>`;
 }
-function srcItem(it, catOn) {
+function srcItem(it, catOn, parentOff = false) {
   const off = !it.available;
   const detail = off ? 'Not found on this Mac' : it.detail;
-  const shown = midEllipsis(detail, 64);
-  return `<div class="src-item ${it.kind === 'rule' ? 'rule' : ''} ${catOn ? '' : 'muted-all'} ${off ? 'na' : ''}">
+  const shown = it.kind === 'rule' ? detail : midEllipsis(detail, 64);
+  return `<div class="src-item ${it.kind === 'rule' ? 'rule' : ''} ${it.parent ? 'child' : ''} ${catOn && !parentOff ? '' : 'muted-all'} ${off ? 'na' : ''}">
     <label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>
     <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(it.error ? detail : shown)}</div></div>
     <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}</div>
@@ -1216,14 +1464,15 @@ function sourcesHtml() {
   if (!cat) return '<div class="set-card"><div class="shimmer" style="height:120px"></div></div>';
   return `<div class="src-head"><h2>Sources</h2><p>What Pensieve indexes. Switching a source off removes its data from the index on the next sweep; switching it back on re-indexes it.</p>${srcState.err ? `<p class="err">${esc(srcState.err)}</p>` : ''}</div>
     <div class="src-grid">${cat.map(c => {
-      const rules = c.items.filter(i => i.kind === 'rule'), rest = c.items.filter(i => i.kind !== 'rule');
+      const rules = c.items.filter(i => i.kind === 'rule' && !i.parent), rest = c.items.filter(i => i.kind !== 'rule' && !i.parent);
+      const kids = id => c.items.filter(i => i.parent === id);
       return `<div class="set-card src-card ${c.enabled ? '' : 'off'}">
         <div class="src-top"><span class="src-ic"><svg viewBox="0 0 24 24" width="18" height="18">${SRC_ICON[c.id] || SRC_ICON.apps}</svg></span>
           <div class="src-tx"><h3>${esc(c.label)}${srcHint(c.id)}</h3><p>${esc(c.description)}</p></div>
           <div class="src-n big">${c.count != null ? srcCount(c.count, c.id === 'agents' ? 'sessions' : c.id === 'apps' ? 'items' : 'files') : ''}</div>
           <label class="tog" title="${c.enabled ? 'Switch off everything in ' + esc(c.label) : 'Switch on'}"><input type="checkbox" data-src-id="${esc(c.id)}" ${c.enabled ? 'checked' : ''}></label></div>
-        ${rules.length ? `<div class="src-rules">${rules.map(i => srcItem(i, c.enabled)).join('')}</div>` : ''}
-        <div class="src-items">${rest.map(i => srcItem(i, c.enabled)).join('') || `<div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div>`}</div>
+        ${rules.length ? `<div class="src-rules">${rules.map(i => srcItem(i, c.enabled) + (kids(i.id).length ? `<div class="src-kids">${kids(i.id).map(k => srcItem(k, c.enabled, !i.enabled)).join('')}</div>` : '')).join('')}</div>` : ''}
+        ${rest.length ? `<div class="src-items">${rest.map(i => srcItem(i, c.enabled)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
         ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="Add a folder, e.g. ~/notes" data-src-add-in><button class="btn" data-src-add>Add folder</button></div><div class="err" data-src-add-err></div>` : ''}
       </div>`;
     }).join('')}</div>`;
@@ -1449,7 +1698,9 @@ async function renderSettings() {
   else if (tab === 'appearance') body = bar('Appearance', 'Matches the Pensieve Mac app.') + `
     <div class="set-card"><div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes.</div></div>
       <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>`;
-  else body = bar('Advanced', 'Fine-tuning for indexing and the local language model.', true) + groups.filter(([g]) => g !== 'Mac app').map(card).join('') + `
+  else body = bar('Advanced', 'Fine-tuning for indexing and the local language model.', true) + `
+    <div class="set-card" id="set-Updates"><h3>Updates</h3><div class="set-row" style="border-top:0"><div><div class="k">Check for updates automatically</div><div class="d">Pensieve checks GitHub once a day and asks before installing.</div></div>
+      <div><label class="tog"><input type="checkbox" data-upd ${S.set.orig.auto_update_check !== false ? 'checked' : ''}></label></div></div></div>` + groups.filter(([g]) => g !== 'Mac app').map(card).join('') + `
     <div class="set-card" id="set-Index"><h3>Index</h3><div class="set-stats">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
       <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}${st.llm ? ` · model: ${esc(st.llm)}` : ''}</p></div>`;
   const prevMain = $('#setmain'), y = prevMain && prevMain.dataset.tab === tab ? prevMain.scrollTop : 0;
@@ -1459,6 +1710,12 @@ async function renderSettings() {
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
   if (tab === 'ai') bindAISettings($('#setmain'));
+  const upd = $('[data-upd]', el);
+  if (upd) upd.onchange = async () => {
+    const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({auto_update_check: upd.checked})});
+    if (r.ok) { if (S.set) S.set.orig.auto_update_check = S.set.draft.auto_update_check = upd.checked; toast(upd.checked ? 'Pensieve will check for updates daily' : 'Automatic update checks are off'); }
+    else { upd.checked = !upd.checked; toast('Could not save: ' + ((await r.json().catch(() => ({}))).detail || r.status)); }
+  };
   $('[data-setdone]', el).onclick = () => setView(S.prevView || 'code');
   const D = S.set.draft, again = () => renderSettings();
   $$('[data-sk]', el).forEach(i => i.onchange = () => {
@@ -1504,7 +1761,8 @@ async function openItem(id) {
     if (!c) return toast('That code is no longer in the index.');
     if (!S.code.repos.length) await loadRepos();
     const inAll = S.code.repo === ALL && S.view === 'code';
-    await setView('code', inAll ? null : c.repo);
+    if (S.view !== 'data') await setView('data');
+    if (!S.data.types.has('code')) { S.data.types.add('code'); dataChanged(false); }
     return openCode(+ref);
   }
   toast('Unknown item: ' + id);
@@ -1519,7 +1777,7 @@ async function route() {
     return S.view === 'settings' ? renderSettings() : setView('settings');
   }
   const q = new URLSearchParams(h);
-  if (q.get('view')) await setView(q.get('view') === 'data' ? dataType() : VIEW_ALIAS[q.get('view')] || 'code');
+  if (q.get('view')) { const vv = q.get('view'); if (LEGACY_TYPE[vv]) { setTypes(LEGACY_TYPE[vv]); await setView('data'); } else await setView(VIEW_ALIAS[vv] || 'data'); }
   if (q.get('open')) await openItem(q.get('open'));
   if (q.has('q')) await openPalette(q.get('q'), {focus: !q.get('open')});  // the Mac panel's query, without closing the item it opened
 }
@@ -1634,22 +1892,18 @@ function bindAISettings(root) {
 
 /* ============================== views ============================== */
 // Three top-level tabs: Data (code, files and agent sessions, chosen with a type switch), Insights, Settings.
-const DATA_VIEWS = ['code', 'files', 'map'];
-const DATA_TYPES = [['code', 'Code'], ['files', 'Files'], ['map', 'Sessions']];
-const dataType = () => { const t = store.get('dataType', 'code'); return DATA_VIEWS.includes(t) ? t : 'code'; };
-function renderTypeSwitch() {
-  const bar = $('#dtypebar'); if (!bar) return;
-  bar.innerHTML = DATA_TYPES.map(([k, l]) => `<button data-dtype="${k}" role="radio" aria-checked="${S.view === k}" class="${S.view === k ? 'on' : ''}">${l}</button>`).join('');
-  $$('[data-dtype]', bar).forEach(b => b.onclick = () => setView(b.dataset.dtype));
-}
-const syncTabs = v => $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === (DATA_VIEWS.includes(v) ? 'data' : v)));
+// Three top-level tabs: Data (one map of documents, code and agent sessions), Insights, Settings.
+// 'code', 'files' and 'map' are legacy per-type views; links to them land on Data filtered to that type.
+const LEGACY_TYPE = {code: 'code', files: 'doc', file: 'doc', docs: 'doc', map: 'session', sessions: 'session', session: 'session'};
+const dataType = () => 'data';
+const syncTabs = v => $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === (['data', 'code', 'files', 'map'].includes(v) ? 'data' : v)));
 async function setView(v, repo) {
+  if (LEGACY_TYPE[v] && v !== 'data') { setTypes(LEGACY_TYPE[v]); v = 'data'; }
   if (S.view === v && !repo) return;
   if (S.view !== 'insights' && S.view !== 'settings') cams[camKey()] = gl.saveCam();
   const prev = S.view;
   S.view = v; store.set('view', v);
   syncTabs(v);
-  if (DATA_VIEWS.includes(v)) store.set('dataType', v);
   const page = v === 'insights' || v === 'settings';
   if (prev !== 'settings' && prev !== v) S.prevView = prev;
   document.body.dataset.view = v;  // the map stays as the backdrop; CSS shows the right floating panels
@@ -1659,6 +1913,7 @@ async function setView(v, repo) {
     if (!S.code.repos.length) await loadRepos();
     if (repo && repo !== S.code.repo || !S.code.points.length) await loadRepo(repo || S.code.repo);
   }
+  if (v === 'data' && (!S.data.loaded || S.data.stale)) { $('#loading').classList.remove('gone'); $('#loadingtext').textContent = 'Loading your map…'; await loadData(); }
   if (v === 'files' && (!S.files.loaded || S.files.stale)) await loadFiles();
   if (v === 'files') $('#loadingtext').textContent = S.files.points.length ? '' : 'Indexing your files — the map appears once the first batch is laid out…';
   if (!page) { renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]); if (!cams[camKey()]) gl.fit(null, true); }
@@ -1699,7 +1954,7 @@ async function loadCodebase() {
   const body = JSON.stringify({session_ids: S.scope ? [...S.scope.sids] : [], scope: scopeKey() || null});
   try {
     const [team, terr] = await Promise.all([api(`/api/team/${enc(repo)}`),
-      api(`/api/territory/${enc(repo)}`, {method: 'POST', headers: {'content-type': 'application/json'}, body})]);
+      api(`/api/territory/${enc(repo)}`, {method: 'POST', headers: {'content-type': 'application/json'}, body}), loadGaps(repo)]);
     if (S.ins.loading !== key) return;
     Object.assign(S.ins, {team, terr, key});
   } catch { S.ins.key = key; S.ins.team = S.ins.terr = null; }
@@ -1757,6 +2012,7 @@ function renderInsights() {
   $$('[data-area]', el).forEach(b => b.onclick = () => gotoArea(b.dataset.repo || repo, b.dataset.area));
   $$('[data-author]', el).forEach(b => b.onclick = e => { e.stopPropagation(); gotoCode(b.dataset.repo || repo, null, b.dataset.author); });
   $$('[data-insrepo]', el).forEach(b => b.onclick = () => { S.ins.repo = b.dataset.insrepo; S.ins.key = null; renderInsights(); });
+  bindGapLinks(el);
   $$('.frow', el).forEach(b => { b.onmousemove = e => tip(b.dataset.tip, e.clientX, e.clientY); b.onmouseleave = () => tip(null); });
 }
 const actBin = ss => { const span = ss.length ? Math.max(...ss.map(s => s.t1)) - Math.min(...ss.map(s => s.t0)) : 0; return span < 45 * DAY ? DAY : 7 * DAY; };
@@ -1824,6 +2080,7 @@ function codebaseSection(repo) {
         <div class="legend-row"><span><i class="sw" style="background:${exploredCol}"></i>Worked in</span><span><i class="sw" style="background:${otherCol}"></i>Not yet</span></div><div class="foot">${footHtml}</div></div>
       <div class="card"><h3>Unexplored territory</h3><p class="cap">Areas you haven’t touched, ranked by how close they are to code and conversations you have — with who to talk to.</p><div class="sugg">${sugg}</div></div>
     </div>` +
+    ((g => g && g.gaps.length ? `<div class="card gaps-card" style="margin-bottom:12px"><div class="gaps-head"><div><h3>Knowledge gaps</h3><p class="cap">Areas mostly written by people with no commits in ${esc(repo)} for ${g.inactive_days}+ days — who to ask instead.</p></div><button class="btn" data-gaps="${esc(repo)}">See all ${g.gaps.length}</button></div>${g.gaps.slice(0, 3).map(x => gapItemHtml(x, repo)).join('')}</div>` : '')(peekGaps(repo))) +
     head('Team activity', `What people have been shipping in ${esc(repo)} over the last ${team?.days || 90} days${team?.summarizing ? ' · summarizing with ' + esc(S.status.llm || 'the local model') + '…' : ''}. Highlighted areas overlap with yours.`) +
     `<div class="team" style="margin-bottom:12px">${ppl.map(card).join('') || '<div class="empty">No commits in this window.</div>'}</div>`;
 }
@@ -1856,7 +2113,7 @@ function drawActivity(ss) {
     tip(`<b>${bin === DAY ? fmtDY(b.t) : 'Week of ' + fmtD(b.t)}</b><div class="m">${plural(b.n, 'session')}</div><table>${[...b.by.entries()].sort((a, c) => c[1] - a[1]).map(([k, n]) => `<tr><td><i class="sw" style="background:${slotColor(k)}"></i> ${esc(topicOf(k)?.name || 'Other')}</td><td>${n}</td></tr>`).join('')}</table>`, e.clientX, e.clientY);
   };
   svg.onmouseleave = () => tip(null);
-  svg.onclick = e => { const i = e.target.dataset?.i; if (i == null) return; const b = bins[+i]; S.f.range = [b.t, b.t + bin - 1]; setView('map').then(refresh); };
+  svg.onclick = e => { const i = e.target.dataset?.i; if (i == null) return; const b = bins[+i]; S.f.range = [b.t, b.t + bin - 1]; refresh(); };
 }
 function drawHeat(ss) {
   const svg = $('#heat'); const W = svg.clientWidth || 400, H = 220, pl = 30, pb = 18;
@@ -1890,7 +2147,7 @@ function drawProjTable(ss) {
       const t = topicOf(+top);
       return `<tr class="click" data-p="${esc(p)}"><td><b>${esc(p)}</b> <span class="muted" style="font-size:11px">${[...r.agents].map(a => AGENT_NAME[a] || a).join(', ')}</span></td><td class="num">${r.n}</td><td class="num">${r.m}</td><td>${t ? `<i class="sw" style="background:${slotColor(t.id)}"></i> ${esc(t.name)}` : ''}</td><td class="muted">${rel(r.last)}</td></tr>`;
     }).join('');
-  $$('#projtbl tr[data-p]').forEach(tr => tr.onclick = () => { S.f.projects = new Set([tr.dataset.p]); setView('map').then(refresh); });
+  $$('#projtbl tr[data-p]').forEach(tr => tr.onclick = () => { S.f.projects = new Set([tr.dataset.p]); refresh(); });
 }
 
 /* ============================== command palette ============================== */
@@ -1956,10 +2213,8 @@ function palRender() {
       local.forEach(s => add('Agent sessions', sessItem(s)));
       add('Search', {ic: '…', title: 'Searching files, code and sessions…', sub: '', run: () => {}});
     }
-    TOPICS().filter(t => (t.name + ' ' + t.keywords).toLowerCase().includes(q)).slice(0, 3).forEach(t => add('Topics', {ic: `<i class="sw" style="background:${slotColor(t.id)}"></i>`, title: t.name, sub: t.description, run: () => { setView('map'); S.f.topic = null; toggleTopic(t.id); }}));
-    [...S.tree.children.values()].flat().filter(k => k.toLowerCase().includes(q)).slice(0, 3).forEach(k => add('Folders', {ic: '▤', title: keyLabel(k), sub: 'Filter sessions to this folder', run: () => { S.f.projects = new Set([k]); setView('map').then(refresh); }}));
-    S.projects.filter(p => p.name.toLowerCase().includes(q)).slice(0, 3).forEach(p => add('Projects', {ic: '▣', title: p.name, sub: `${plural(p.sessions, 'session')} · filter to this project`, run: () => { S.f.projects = new Set([p.name]); setView('map').then(refresh); }}));
-    if (S.code.points.length) S.code.people.filter(p => p.author.toLowerCase().includes(q)).slice(0, 3).forEach(p => add('People', {ic: '👤', title: person(p.author), sub: `${(p.share * 100).toFixed(1)}% of ${repoLabel(S.code.repo)} · ${p.dirs.slice(0, 2).join(', ')}`, run: () => setView('code').then(() => openPerson(p.author))}));
+    { const T = dataTree(), keys = [...T.roots, ...[...T.children.values()].flat()]; keys.filter(k => k.split('/').pop().toLowerCase().includes(q)).sort((x, y) => x.length - y.length).slice(0, 4).forEach(k => add('Folders', {ic: FOLDER_IC, title: k.split('/').pop(), sub: '~/' + k + (S.data.repoKeys.has(k) ? ' · git repository' : ''), run: () => setView('data').then(() => toggleDataFolder(k, true))})); }
+    if (S.code.points.length) S.code.people.filter(p => p.author.toLowerCase().includes(q)).slice(0, 3).forEach(p => add('People', {ic: '👤', title: person(p.author), sub: `${(p.share * 100).toFixed(1)}% of ${repoLabel(S.code.repo)} · ${p.dirs.slice(0, 2).join(', ')}`, run: () => setView('data').then(() => openPerson(p.author))}));
     add('People', {ic: '👤', title: `Who knows about “${raw.replace(/"/g, '')}”?`, sub: 'Find the people behind the most relevant code', run: () => whoKnows(raw.replace(/"/g, ''))});
   } else {
     S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));
@@ -2111,18 +2366,22 @@ function connect() {
 async function handleEvent(m) {
   {
     if (m.type === 'status') { Object.assign(S.status, m); pollStatus(); }
-    else if (m.type === 'updated') { reloadAll(); refetchSourcesSoon(); }
+    else if (m.type === 'updated') { reloadAll(); reloadDataSoon(); refetchSourcesSoon(); }
     else if (m.type === 'summaries') { await loadSessions(); renderSidebar(); pollStatus(); }
     else if (m.type === 'topics') { await loadSessions(); renderSidebar(); if (S.view === 'map') renderLabels(); if (S.view === 'insights') renderInsights(); pollStatus(); }
     else if (m.type === 'insights') { await loadInsights(); if (S.view === 'insights') renderInsights(); toast('New insights are ready'); pollStatus(); }
-    else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); refetchSourcesSoon(); }
+    else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); reloadDataSoon(); refetchSourcesSoon(); }
     else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { S.set = null; if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
-    else if (m.type === 'repos') { refetchSourcesSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
+    else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
   }
 }
+const reloadDataSoon = debounce(async () => {
+  S.data.stale = true; if (S.view !== 'data') return;
+  await loadData(); const c = gl.saveCam(); buildMap(); gl.loadCam(c); renderSidebar();
+}, 2500);
 const reloadFilesSoon = debounce(async () => {
   if (S.view !== 'files') return;
   await loadFiles(); const c = gl.saveCam(); buildMap(); gl.loadCam(c); renderSidebar();
@@ -2131,7 +2390,7 @@ const pollStatus = debounce(async () => { try { Object.assign(S.status, await ap
 
 async function init() {
   try {
-    await Promise.all([loadSessions(), loadInsights(), api('/api/status').then(s => Object.assign(S.status, s))]);
+    await Promise.all([loadSessions(), loadInsights(), loadData(), api('/api/status').then(s => Object.assign(S.status, s))]);
   } catch (e) { $('#loadingtext').textContent = 'Could not reach the Pensieve server.'; return; }
   renderStatus();
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
@@ -2142,9 +2401,9 @@ async function init() {
   setTimeout(() => $('#hint').classList.add('gone'), 9000);
   connect();
   await loadRepos().catch(() => {});
-  const v = store.get('view', 'code');
+  let v = store.get('view', 'data'); if (LEGACY_TYPE[v]) v = 'data';
   loadScopes(); loadAppearance(); syncThemeLabel(); loadAI().then(() => S.view === 'insights' && renderInsights());
   if (location.hash.length > 1) await route();
-  else if (v !== 'map' && (S.code.repos.length || v !== 'code')) await setView(v);
+  else if (v !== S.view) await setView(v);
 }
 init();

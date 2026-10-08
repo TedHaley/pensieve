@@ -35,8 +35,9 @@ DEFAULTS = {
     # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model) | claude | codex | none
     "ai": "auto",
     "builtin_model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-    "agent_model": "haiku",
-    "ai_on_battery": False,    # run background AI work (summaries, insights) on battery power    # model passed to `claude -p --model` when ai = claude
+    "agent_model": "haiku",    # model passed to `claude -p --model` when ai = claude
+    "ai_on_battery": False,    # run background AI work (summaries, insights) on battery power
+    "auto_update_check": True,  # the Mac app checks GitHub Releases daily and offers updates (never installs by itself)
     "llm_url": "http://localhost:1234/v1",
     "llm_model": "qwen/qwen3.5-9b",
 }
@@ -60,6 +61,7 @@ DESCRIPTIONS = {
     "builtin_model": "The MLX model the built-in engine runs.",
     "agent_model": "Model for the Claude Code engine (claude -p --model).",
     "ai_on_battery": "Keep writing summaries and insights in the background while on battery power.",
+    "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
     "llm_url": "OpenAI-compatible endpoint for summaries and insights (LM Studio by default).",
     "llm_model": "Chat model used for summaries and insights.",
 }
@@ -91,6 +93,10 @@ def load() -> dict:
                 except (OSError, json.JSONDecodeError):
                     pass
             _data = {**DEFAULTS, **{k: v for k, v in saved.items() if k in DEFAULTS}}
+            off = _data["disabled"]  # the two repo-discovery rules became one
+            if "repos/sessions" in off or "repos/sweep" in off:
+                _data["disabled"] = [d for d in off if d not in ("repos/sessions", "repos/sweep")] + \
+                    (["repos/discover"] if "repos/sessions" in off and "repos/sweep" in off else [])
         return {**_data, **_overrides()}
 
 

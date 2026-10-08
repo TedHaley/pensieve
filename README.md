@@ -1,10 +1,13 @@
 # Pensieve
 
-Spotlight for your work, made for pairing with AI agents. Press **Control+Shift** anywhere on your Mac to search your documents, git repos, and past AI agent sessions by meaning or by exact words. One click opens a 3D map of it all: your code with git blame and who to ask, your files, and your Claude Code, Codex and Qwen Code sessions.
+Local search across your files, repositories and AI agent sessions, built to give your agents the best context for the job.
 
-Agents get the same index over MCP: they can search, read, find who knows a topic, and configure Pensieve.
+- **Find anything:** press **Control+Shift** anywhere on your Mac and search your documents, folders, code and past agent sessions by meaning or by exact words.
+- **Superpowers for your agents:** agents connect over MCP and get the few most relevant files and passages instead of grepping your disk, which saves time and tokens. Each agent is scoped to what it's working on (by default, the repo it runs in).
+- **Know who to ask:** git blame shows who owns what and who has the most domain knowledge, plus what each teammate has been working on.
+- **Find knowledge gaps:** areas where most of the code was written by people no longer active in the repo, how many active people still know it, and who to ask now.
 
-Everything runs on your machine. Text is embedded with `Qwen3-Embedding-0.6B`, stored in SQLite (with a trigram full-text index for exact matches) plus [turbovec](https://pypi.org/project/turbovec/) vector indexes, and laid out in 3D with UMAP. Optional summaries and insights come from a local model via any OpenAI-compatible server (LM Studio by default).
+Everything runs on your Mac. Text is embedded with `Qwen3-Embedding-0.6B` and stored in SQLite (with a trigram full-text index for exact matches) plus [turbovec](https://pypi.org/project/turbovec/) vector indexes. AI-written summaries and insights are optional (built-in Qwen 3.5 9B, LM Studio, Claude Code or Codex).
 
 ## Install
 
@@ -45,10 +48,8 @@ Code results open at the matching line in your editor if you set `editor` to `vs
 
 | | |
 |---|---|
-| **Code** | Each repo as a 3D map with git blame, or *All repositories* in one joint layout. Browse the folder tree with owners, find *who knows about X*, spot overlapping areas (also across repos), and jump between code and the sessions that touched it. |
-| **Files** | Your documents as a map, colored by folder, type, topic or age. Click for a preview, similar files, Open and Reveal in Finder. |
-| **Sessions** | Every agent session (or conversation moment) as a point, colored by code area, topic, project, agent or recency, with a hierarchical repo/folder filter. |
-| **Insights** | Activity and topics, AI themes and open threads per repo or folder; your footprint in each repo, unexplored areas next to your work and who owns them, and what each teammate shipped in the last 90 days. |
+| **Data** | Documents, code and agent sessions on one 3D map, laid out by meaning. Filter by type (Documents · Code · Agent sessions) or by folder; repos show as folders with a *code* badge. Color by type, folder, author, recency or topic. Inside a repo: git blame per line, owners, *who knows about X*, overlaps, and knowledge gaps. |
+| **Insights** | Activity and topics, AI themes and open threads per repo or folder; your footprint in each repo, unexplored areas next to your work and who owns them, what each teammate shipped in the last 90 days, and knowledge gaps. |
 | **Settings** | Everything below, plus copy-paste commands for connecting agents. |
 
 ## Use it from your agents (MCP)
@@ -68,7 +69,7 @@ claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=paymen
 
 For agents that only speak stdio, the JSON config is `{"mcpServers": {"pensieve": {"command": "pensieve", "args": ["mcp"]}}}`. `pensieve mcp` starts the backend if it isn't running.
 
-Tools: `search`, `read`, `similar`, `who_knows`, `list_repos`, `team`, `unexplored`, `open`, `show_search`, `show_visualizer`, `status`, `current_scope`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`.
+Tools: `search`, `read`, `similar`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `unexplored`, `open`, `show_search`, `show_visualizer`, `status`, `current_scope`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`.
 
 ## What gets indexed
 
@@ -96,7 +97,7 @@ Change them in the visualizer (Settings), from an agent (`update_settings`), or 
 | Setting | Default |
 |---|---|
 | `folders` | `~/Documents`, `~/Desktop`, `~/Downloads` (manage in Sources) |
-| `disabled` | sources switched off, e.g. `agents/codex`, `files/~/Downloads`, `repos/sweep` (manage in Sources) |
+| `disabled` | sources switched off, e.g. `agents/codex`, `files/~/Downloads`, `repos/discover` (manage in Sources) |
 | `sweep_roots`, `sweep_depth` | `~`, 4 |
 | `max_repo_files` | 5000 (swept repos only) |
 | `repos` | extra repos, always indexed |

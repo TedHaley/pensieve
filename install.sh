@@ -8,7 +8,10 @@
 set -eu
 
 REPO_URL="https://github.com/TedHaley/pensieve"
-REF="${PENSIEVE_REF:-v0.2.0}"  # the released version; PENSIEVE_REF=main for the latest code
+# The latest release (PENSIEVE_REF=main for the newest code, or a tag like v0.2.0)
+REF="${PENSIEVE_REF:-$(curl -fsSL https://api.github.com/repos/TedHaley/pensieve/releases/latest 2>/dev/null \
+  | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)}"
+REF="${REF:-main}"
 SRC="$HOME/.pensieve/src"
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 

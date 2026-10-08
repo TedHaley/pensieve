@@ -133,6 +133,18 @@ def unexplored(repo: str) -> dict:
     return {"coverage": r["coverage"], "suggestions": r["suggestions"]}
 
 
+@tool()
+def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
+    """Areas of a repo whose knowledge may have left: most of the code (git blame) was written by people with no
+    commits in `inactive_days`. Each gap lists who wrote it, who still active knows it best (`ask`), and the bus
+    factor (active people holding >=10% of it). Use it to find who to ask, or what needs documenting or an owner."""
+    _check_repo(repo)
+    r = _c()["repos"].knowledge_gaps(repo, inactive_days)
+    if r is None:
+        raise ValueError(f"unknown repo {repo!r}")
+    return r
+
+
 @tool(name="open")
 def open_item(id: str, action: str = "open") -> dict:
     """Open an item on the user's Mac. action: 'open' (default app, or the configured editor at the line for code),
@@ -223,7 +235,7 @@ def list_sources() -> list[dict]:
 @tool()
 def set_source(id: str, enabled: bool) -> dict:
     """Switch a whole category ('agents', 'files', 'repos', 'apps') or one item ('agents/codex', 'files/~/Downloads',
-    'repos/sweep', 'repos/<repo root>', 'apps/apple_notes') on or off. Switching off removes what it indexed."""
+    'repos/discover', 'repos/<repo root>', 'apps/apple_notes') on or off. Switching off removes what it indexed."""
     return {"disabled": sources.set_source(id, enabled, _c()["repos"])["disabled"]}
 
 

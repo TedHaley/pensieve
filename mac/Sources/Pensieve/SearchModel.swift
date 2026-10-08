@@ -70,6 +70,10 @@ final class SearchModel: ObservableObject {
         case .failed(let msg): return msg
         case .up:
             if let error { return error }
+            if showsUpdate, let u = Updater.shared.panelText {  // measured with its buttons
+                let buttons = "Update ⌘U    Later    Skip this version"
+                return !updateButtons ? u : Self.updateButtonsBelow(u) ? u + "\n" + buttons : u + "     " + buttons
+            }
             if trimmed.isEmpty {
                 return "Search by meaning  ·  \"quotes\" for exact words  ·  kind:code  ext:pdf  ·  -word to exclude  ·  ⌃ or → for actions"
             }
@@ -106,7 +110,18 @@ final class SearchModel: ObservableObject {
         return max(26, ceil(h) + 12)
     }
 
+    /// An available update (or its download) takes the empty panel's hint line.
+    var showsUpdate: Bool {
+        Backend.shared.state == .up && error == nil && trimmed.isEmpty && Updater.shared.panelText != nil
+    }
+
+    /// Long update messages (errors) put the buttons on their own line instead of squeezing the text.
+    static func updateButtonsBelow(_ text: String) -> Bool { text.count > 60 }
+
+    var updateButtons: Bool { Updater.shared.available != nil && !Updater.shared.busy }
+
     var statusShowsSpinner: Bool {
+        if showsUpdate && Updater.shared.busy { return true }
         switch Backend.shared.state {
         case .checking, .starting, .installing: return true
         default: return false

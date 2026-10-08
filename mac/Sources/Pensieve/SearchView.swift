@@ -80,26 +80,46 @@ struct SearchView: View {
 struct HintLine: View {
     @ObservedObject var model: SearchModel
     @ObservedObject var backend: Backend
+    @ObservedObject var updater = Updater.shared
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             if model.statusShowsSpinner {
                 ProgressView().controlSize(.mini).padding(.top, 1)
             }
-            Group {
-                if let status = model.statusText {
-                    Text(status)
-                } else {
-                    Text(model.parsedText)
+            if model.showsUpdate, let text = updater.panelText {
+                let below = SearchModel.updateButtonsBelow(text)
+                let layout = below ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(alignment: .top, spacing: 6))
+                layout {
+                    Text(text).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    if model.updateButtons {
+                        HStack(spacing: 12) {
+                            Button("Update ⌘U") { updater.install() }.fontWeight(.semibold)
+                            Button("Later") { updater.later() }
+                            Button("Skip this version") { updater.skip() }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                        .fixedSize()
+                        .padding(.leading, below ? 0 : 6)
+                    }
                 }
+            } else {
+                Group {
+                    if let status = model.statusText {
+                        Text(status)
+                    } else {
+                        Text(model.parsedText)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
             }
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
             Spacer(minLength: 0)
         }
         .font(.system(size: SearchModel.hintFontSize))
         .foregroundStyle(.secondary)
-        .lineLimit(4)
+        .lineLimit(6)
         .padding(.top, 2)
         .padding(.leading, SearchModel.hintInsets.leading)
         .padding(.trailing, SearchModel.hintInsets.trailing)

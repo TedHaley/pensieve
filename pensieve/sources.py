@@ -40,23 +40,24 @@ def catalog(store, repos, files) -> list[dict]:
     s = settings.load()
     skipped = getattr(repos, "skipped", [])
     repo_items = [
-        dict(id="repos/sessions", label="Repos your agents worked in", detail="Found from your agent sessions",
-             available=True, enabled=on("repos/sessions"), kind="rule"),
-        dict(id="repos/sweep", label="Repos found on this Mac",
-             detail=f"Under {', '.join(s['sweep_roots'])}, {s['sweep_depth']} levels deep, and inside your folders; "
-                    f"up to {s['max_repo_files']:,} files each",
-             available=True, enabled=on("repos/sweep"), kind="rule"),
+        dict(id="repos/discover", label="Discover git repositories",
+             detail=f"Repos your agents worked in, and repos under {', '.join(s['sweep_roots'])} and your folders "
+                    f"({s['sweep_depth']} levels deep, up to {s['max_repo_files']:,} files each)",
+             available=True, enabled=on("repos/discover"), kind="rule"),
     ]
     for root, name in repo_rows:
         repo_items.append(dict(id=f"repos/{root}", label=name, detail=_home(root) + (f" · {wts[root]} worktrees" if wts.get(root) else ""),
-                               available=Path(root).is_dir(), enabled=on(f"repos/{root}"), count=per_repo.get(root, 0), unit="files"))
+                               available=Path(root).is_dir(), enabled=on(f"repos/{root}"), count=per_repo.get(root, 0), unit="files",
+                               parent="repos/discover"))
     for sk in skipped:
         repo_items.append(dict(id=f"repos/{sk['root']}", label=Path(sk["root"]).name, detail=f"{_home(sk['root'])} · skipped: "
-                               f"{sk['files']:,} files (switch on to index anyway)", available=True, enabled=False, count=0, unit="files"))
+                               f"{sk['files']:,} files (switch on to index anyway)", available=True, enabled=False, count=0, unit="files",
+                               parent="repos/discover"))
     for d in settings.get("disabled"):  # repos switched off no longer appear in the repos table; keep them listed
-        if d.startswith("repos/") and d not in ("repos/sessions", "repos/sweep") and not any(i["id"] == d for i in repo_items):
+        if d.startswith("repos/") and d not in ("repos/sessions", "repos/sweep", "repos/discover") and not any(i["id"] == d for i in repo_items):
             r = d[6:]
-            repo_items.append(dict(id=d, label=Path(r).name, detail=_home(r), available=Path(r).is_dir(), enabled=False, count=0, unit="files"))
+            repo_items.append(dict(id=d, label=Path(r).name, detail=_home(r), available=Path(r).is_dir(), enabled=False, count=0,
+                                   unit="files", parent="repos/discover"))
 
     app_items = []
     for k, a in apps.APPS.items():

@@ -116,6 +116,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         // the hint line wraps, so backend state changes (setup, errors) can change the panel's height
         Backend.shared.$state.dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.relayout() }.store(in: &watchers)
+        Updater.shared.objectWillChange.receive(on: RunLoop.main)  // the update line can appear, grow, or go
+            .sink { [weak self] _ in Task { @MainActor in self?.relayout() } }.store(in: &watchers)
     }
 
     var isShown: Bool { panel.isVisible }
@@ -257,6 +259,8 @@ final class PanelController: NSObject, NSWindowDelegate {
             hide()
         case kVK_RightArrow where model.selectedHit != nil && caretAtEnd:
             model.openActions()
+        case kVK_ANSI_U where mods == .command && Updater.shared.available != nil:
+            Updater.shared.install()
         case kVK_ANSI_Comma where mods == .command:
             actions.settings()
         case kVK_DownArrow:

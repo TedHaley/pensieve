@@ -1,9 +1,12 @@
 import AppKit
+import Combine
 import ServiceManagement
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
+    private var badge: NSView?
+    private var watchers: Set<AnyCancellable> = []
     private let visualizer = VisualizerController()
     private lazy var panel = PanelController(visualizer: visualizer)
 
@@ -28,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             HotKeys.requestAccessibility(prompt: true)
         }
         backend.start()
+        Updater.shared.start()
+        Updater.shared.$available.receive(on: RunLoop.main)
+            .sink { [weak self] r in self?.badge?.isHidden = r == nil }.store(in: &watchers)
         if ProcessInfo.processInfo.environment["PENSIEVE_SHOW_PANEL"] != nil { panel.show() }
     }
 
@@ -64,6 +70,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "state" where Debug.enabled:
             if let m = q("installing") { Backend.shared.debugSetState(.installing(m)) }
             if let m = q("failed") { Backend.shared.debugSetState(.failed(m)) }
+        case "update" where Debug.enabled:
+            switch q("do") ?? "" {
+            case "check": Task { await Updater.shared.check() }
+            case "install": Updater.shared.install()
+            case "later": Updater.shared.later()
+            case "skip": Updater.shared.skip()
+            default: break
+            }
+        case "menu" where Debug.enabled:  // write the status menu's items to a file
+            let m = NSMenu()
+            menuNeedsUpdate(m)
+            let lines = m.items.map { $0.isSeparatorItem ? "---" : $0.title + ($0.isEnabled ? "" : " (disabled)") }
+            let badgeOn = badge.map { !$0.isHidden } ?? false
+            try? (lines + ["badge: \(badgeOn)"]).joined(separator: "\n").write(toFile: q("path") ?? "/dev/null", atomically: true, encoding: .utf8)
         case "appearance" where Debug.enabled:
             if let a = q("set") { setAppearance(a) }
         default:
@@ -77,6 +97,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let b = statusItem.button {
             b.image = Mark.menuBarImage()
+            // a small dot when an update is available
+            let dot = NSView(frame: NSRect(x: b.bounds.width - 9, y: b.bounds.height - 9, width: 6, height: 6))
+            dot.wantsLayer = true
+            dot.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            dot.layer?.cornerRadius = 3
+            dot.autoresizingMask = [.minXMargin, .minYMargin]
+            dot.isHidden = true
+            b.addSubview(dot)
+            badge = dot
         }
         let menu = NSMenu()
         menu.delegate = self
@@ -89,6 +118,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let tap = HotKeys.parse(spec).key == nil
         let keys = tap ? "tap \(HotKeys.display(spec)) or \(HotKeys.display(HotKeys.fallback))"
                        : HotKeys.display(spec)
+        let up = Updater.shared
+        switch up.phase {
+        case .downloading, .installing:
+            let i = NSMenuItem(title: up.panelText ?? "", action: nil, keyEquivalent: "")
+            i.isEnabled = false
+            menu.addItem(i)
+        case .failed(let msg):  // the full reason is in the panel and the tooltip; menus don't wrap
+            let i = NSMenuItem(title: "Update failed (details in ~/.pensieve/update.log)", action: nil, keyEquivalent: "")
+            i.toolTip = msg
+            i.isEnabled = false
+            menu.addItem(i)
+        default: break
+        }
+        if let r = up.available, !up.busy {
+            menu.addItem(item("Update to Pensieve \(r.version)…", #selector(installUpdate)))
+        }
+        if up.available != nil || up.phase != .idle { menu.addItem(.separator()) }
         menu.addItem(item("Search Pensieve    \(keys)", #selector(showSearch)))
         menu.addItem(item("Open Visualizer", #selector(openVisualizer)))
         menu.addItem(item("Settings…", #selector(openSettings)))
@@ -118,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         look.submenu = looks
         menu.addItem(look)
+        menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
         let login = item("Launch at Login", #selector(toggleLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
@@ -135,6 +182,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openVisualizer() { visualizer.show() }
     @objc private func openSettings() { visualizer.show(fragment: "settings") }
     @objc private func reloadVisualizer() { visualizer.reload() }
+
+    @objc private func installUpdate() { Updater.shared.install() }
+
+    /// Checks now and answers in a small alert: up to date, or the update with Update / Later / Skip.
+    @objc private func checkForUpdates() {
+        Task {
+            let up = Updater.shared
+            let result = await up.check(manual: true)
+            NSApp.activate()
+            let a = NSAlert()
+            switch result {
+            case .failure(let e):
+                a.messageText = "Couldn't check for updates"
+                a.informativeText = e.localizedDescription
+            case .success(nil):
+                a.messageText = "You're up to date"
+                a.informativeText = "Pensieve \(up.currentVersion) is the latest version."
+            case .success(let r?):
+                a.messageText = "Pensieve \(r.version) is available"
+                a.informativeText = "You have \(up.currentVersion). Updating downloads the new version, replaces this app, and restarts it."
+                a.addButton(withTitle: "Update")
+                a.addButton(withTitle: "Later")
+                a.addButton(withTitle: "Skip This Version")
+                if Debug.enabled { Debug.lastAlert = a.messageText }
+                switch a.runModal() {
+                case .alertFirstButtonReturn: up.install()
+                case .alertThirdButtonReturn: up.skip()
+                default: up.later()
+                }
+                return
+            }
+            if Debug.enabled { Debug.lastAlert = a.messageText }
+            a.runModal()
+        }
+    }
 
     @objc private func pickAppearance(_ sender: NSMenuItem) {
         if let v = sender.representedObject as? String { setAppearance(v) }
