@@ -871,12 +871,14 @@ class Repos:
         return [dict(author=a, share=round(s / tot, 3), last_active=last[a],
                      files=[f for f, _ in files[a].most_common(4)]) for a, s in score.most_common(8)]
 
-    def experts(self, q=None, vec=None, repo=None, k=40):
+    def experts(self, q=None, vec=None, repo=None, k=40, allow=None):
+        """`allow`: optional chunk-id allowlist (a scope); `repo` narrows further to one repo."""
         if vec is None:
             vec = embed([q], query=True)
         qv = vec.reshape(1, -1).astype(np.float32)
+        if allow is not None and not len(allow):
+            return dict(chunks=[], experts=[], hit_ids=[])
         with self.lock:  # DB rows are inserted before the index add; hold the lock so we only allow indexed ids
-            allow = None
             if repo and repo != ALL:
                 root = self._root(repo)
                 ids = [r[0] for r in self.db.execute("SELECT id FROM code_chunks WHERE repo=?", (root,))

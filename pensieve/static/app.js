@@ -1153,7 +1153,7 @@ const SET_GROUPS = [
   ['Language model', ['llm_url', 'llm_model']],
 ];
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
-const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos']);  // managed in the Sources section
+const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos', 'default_scope']);  // managed in the Sources section
 const SRC_ICON = {
   agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
@@ -1224,14 +1224,139 @@ function renderSources() {
   $('[data-src-add]', box)?.addEventListener('click', add);
   $('[data-src-add-in]', box)?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
 }
-const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await loadSources(); renderSources(); }, 1200);
-const settingsNav = () => `<div class="sec"><div class="sec-h"><span>Settings</span></div><div class="rows"><button class="row" data-setgo="Sources"><span class="name">Sources</span></button>${SET_GROUPS.map(([g]) => `<button class="row" data-setgo="${esc(g)}"><span class="name">${esc(g)}</span></button>`).join('')}<button class="row" data-setgo="Connect an agent"><span class="name">Connect an agent</span></button><button class="row" data-setgo="Index"><span class="name">Index</span></button></div></div>`;
+const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await Promise.all([loadSources(), loadScopes()]); renderSources(); renderScopes(); }, 1200);
+
+/* ---- scopes: named slices of the index an agent (or the search panel) works within ---- */
+const scState = {data: null, edit: null, filter: '', resolve: null, confirmDel: null, err: null};
+async function loadScopes() { try { scState.data = await api('/api/scopes'); } catch { scState.data = scState.data || {scopes: [], default_scope: ''}; } renderPalScope(); }
+const scopeNames = () => (scState.data?.scopes || []).map(x => x.name);
+function srcLabel(id) {
+  for (const c of srcState.cat || []) {
+    if (c.id === id) return {text: `All ${c.label.toLowerCase()}`, cat: c.id};
+    const it = c.items.find(i => i.id === id);
+    if (it) return {text: it.label, cat: c.id, title: it.detail};
+  }
+  const [cat, ...rest] = id.split('/');
+  return {text: rest.join('/').split('/').filter(Boolean).pop() || id, cat, title: id};
+}
+const CAT_SHORT = {agents: 'agent', files: 'folder', repos: 'repo', apps: 'app'};
+function scopeCounts(x) {
+  const parts = [];
+  if (x.chunks?.code) parts.push(`${x.chunks.code.toLocaleString()} code chunks`);
+  if (x.chunks?.file) parts.push(`${x.chunks.file.toLocaleString()} file chunks`);
+  if (x.sessions) parts.push(plural(x.sessions, 'session'));
+  return parts.join(' · ') || 'Nothing indexed yet';
+}
+const mcpBase = () => `http://127.0.0.1:${location.port || '8765'}/mcp`;
+const httpCmd = name => `claude mcp add --transport http pensieve "${mcpBase()}${name ? '?scope=' + encodeURIComponent(name) : ''}"`;
+const stdioCmd = name => `pensieve mcp${name ? ' --scope ' + name : ''}`;
+function scopeEditor() {
+  const e = scState.edit, q = scState.filter.toLowerCase();
+  const cats = (srcState.cat || []).map(c => {
+    const whole = e.sources.has(c.id);
+    const items = c.items.filter(i => i.kind !== 'rule');
+    const shown = c.id === 'repos' && q ? items.filter(i => (i.label + ' ' + i.detail).toLowerCase().includes(q)) : items;
+    const n = items.filter(i => e.sources.has(i.id)).length;
+    return `<div class="sc-cat"><label class="sc-check head"><input type="checkbox" data-sc-src="${esc(c.id)}" ${whole ? 'checked' : ''}><b>${esc(c.label)}</b><span class="muted">${whole ? 'everything' : n ? `${n} selected` : ''}</span></label>
+      ${c.id === 'repos' && items.length > 6 ? `<input class="set-in sc-filter" placeholder="Filter repositories…" value="${esc(scState.filter)}" data-sc-filter>` : ''}
+      <div class="sc-items ${whole ? 'all' : ''}">${shown.map(i => `<label class="sc-check" title="${esc(i.detail || '')}"><input type="checkbox" data-sc-src="${esc(i.id)}" ${whole || e.sources.has(i.id) ? 'checked' : ''} ${whole ? 'disabled' : ''}>${esc(i.label)}<span class="muted">${i.count != null ? srcCount(i.count, i.unit) : ''}</span></label>`).join('') || '<span class="muted" style="font-size:12px">No matches</span>'}</div></div>`;
+  }).join('');
+  return `<div class="set-card sc-edit"><h3>${e.orig ? `Edit scope “${esc(e.orig)}”` : 'New scope'}</h3>
+    <div class="sc-form"><label>Name<input class="set-in" data-sc-name value="${esc(e.name)}" ${e.orig ? 'disabled' : ''} placeholder="e.g. payments"></label>
+      <label>Description<input class="set-in" data-sc-desc value="${esc(e.description)}" placeholder="What this slice is for"></label></div>
+    <div class="d" style="font-size:12px;color:var(--text-3);margin:10px 0 6px">Sources — agent sessions that ran in a chosen repo come along automatically.</div>
+    <div class="sc-pick">${cats}</div>
+    ${scState.err ? `<div class="err">${esc(scState.err)}</div>` : ''}
+    <div class="sc-actions"><button class="btn" data-sc-cancel>Cancel</button><button class="btn primary" data-sc-save ${e.name.trim() && e.sources.size ? '' : 'disabled'}>Save scope</button></div></div>`;
+}
+function scopesHtml() {
+  const d = scState.data;
+  if (!d) return '<div class="set-card"><div class="shimmer" style="height:90px"></div></div>';
+  const def = d.default_scope || '';
+  const card = x => {
+    const chips = x.sources.map(id => { const l = srcLabel(id); return `<span class="chip sc-chip" title="${esc(l.title || id)}"><span class="muted">${CAT_SHORT[l.cat] || l.cat}</span> ${esc(l.text)}</span>`; }).join('');
+    return `<div class="set-card sc-card"><div class="sc-top"><div><h3>${esc(x.name)}${def === x.name ? ' <span class="badge">default</span>' : ''}</h3>${x.description ? `<p>${esc(x.description)}</p>` : ''}</div>
+      <div class="sc-btns"><button class="btn" data-sc-editbtn="${esc(x.name)}">Edit</button><button class="btn ${scState.confirmDel === x.name ? 'danger' : ''}" data-sc-del="${esc(x.name)}">${scState.confirmDel === x.name ? 'Confirm delete' : 'Delete'}</button></div></div>
+      <div class="set-chips">${chips}</div><div class="sc-n">${scopeCounts(x)}</div>
+      <div class="cmd"><code>${esc(stdioCmd(x.name))}</code><button class="btn" data-copy="${esc(stdioCmd(x.name))}">Copy</button></div>
+      <div class="cmd"><code>${esc(httpCmd(x.name))}</code><button class="btn" data-copy="${esc(httpCmd(x.name))}">Copy</button></div></div>`;
+  };
+  return `<div class="src-head"><h2>Scopes</h2><p>Named slices of the index. An agent connected with a scope only searches inside it; the search panel uses the default below.</p></div>
+    <div class="set-card sc-def"><div class="sc-top"><div><h3>Default for the search panel and visualizer search</h3><p>Plain searches use this unless you pick another scope in the search box.</p></div>
+      <select class="set-in" data-sc-default style="max-width:240px"><option value="" ${def ? '' : 'selected'}>All — everything</option>${scopeNames().map(n => `<option value="${esc(n)}" ${def === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div></div>
+    ${d.scopes.map(card).join('') || '<p class="muted" style="font-size:12.5px">No scopes yet. Create one for a group of repos you work on together.</p>'}
+    ${scState.edit ? scopeEditor() : '<button class="btn" data-sc-new style="margin-bottom:14px">+ New scope</button>'}
+    <div class="set-card"><h3>How agents pick a scope</h3>
+      <p class="sc-p"><code>pensieve mcp</code> (stdio) uses <b>--scope auto</b>: the repo the agent was started in, or the first named scope that includes that repo. Outside a repo it sees everything. Pin one with <code>pensieve mcp --scope &lt;name&gt;</code>.</p>
+      <p class="sc-p">Over HTTP Pensieve can't see the agent's folder, so add <code>?scope=&lt;name&gt;</code> to the URL; without it the agent sees everything.</p>
+      <div class="set-add"><input class="set-in" placeholder="Try auto: a folder an agent might start in, e.g. ~/code/my-repo" data-sc-try-in><button class="btn" data-sc-try>Resolve</button></div>
+      ${scState.resolve ? `<div class="sc-resolve">${scState.resolve.error ? `<span class="err">${esc(scState.resolve.error)}</span>` : `→ <b>${esc(scState.resolve.name)}</b>${scState.resolve.description ? ` <span class="muted">— ${esc(scState.resolve.description)}</span>` : ''}<div class="set-chips" style="margin-top:6px">${(scState.resolve.sources || []).map(id => `<span class="chip sc-chip">${esc(srcLabel(id).text)}</span>`).join('') || '<span class="muted">all sources</span>'}</div>`}</div>` : ''}
+    </div>`;
+}
+function renderScopes() {
+  const box = $('#scopebox'); if (!box) return;
+  box.innerHTML = scopesHtml();
+  const E = scState.edit;
+  $$('[data-copy]', box).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
+  $('[data-sc-default]', box)?.addEventListener('change', async e => {
+    const v = e.target.value;
+    try { await api('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({default_scope: v})}); toast(v ? `Search defaults to “${v}”` : 'Search covers everything'); }
+    catch (err) { toast('Could not set the default: ' + err.message); }
+    await loadScopes(); renderScopes();
+  });
+  $('[data-sc-new]', box)?.addEventListener('click', () => { scState.edit = {name: '', description: '', sources: new Set(), orig: null}; scState.err = null; renderScopes(); $('[data-sc-name]', box)?.focus(); });
+  $$('[data-sc-editbtn]', box).forEach(b => b.onclick = () => { const x = scState.data.scopes.find(s => s.name === b.dataset.scEditbtn); scState.edit = {name: x.name, description: x.description || '', sources: new Set(x.sources), orig: x.name}; scState.err = null; renderScopes(); });
+  $$('[data-sc-del]', box).forEach(b => b.onclick = async () => {
+    const n = b.dataset.scDel;
+    if (scState.confirmDel !== n) { scState.confirmDel = n; renderScopes(); setTimeout(() => { if (scState.confirmDel === n) { scState.confirmDel = null; renderScopes(); } }, 4000); return; }
+    scState.confirmDel = null;
+    try { scState.data = await api('/api/scopes/' + enc(n), {method: 'DELETE'}); toast(`Deleted scope “${n}”`); } catch (e) { toast('Could not delete: ' + e.message); }
+    await loadScopes(); renderScopes();
+  });
+  $('[data-sc-try]', box)?.addEventListener('click', tryResolve);
+  $('[data-sc-try-in]', box)?.addEventListener('keydown', e => { if (e.key === 'Enter') tryResolve(); });
+  if (!E) return;
+  const name = $('[data-sc-name]', box), desc = $('[data-sc-desc]', box), save = $('[data-sc-save]', box);
+  const sync = () => { E.name = name.value; E.description = desc.value; save.disabled = !(E.name.trim() && E.sources.size); };
+  name.oninput = sync; desc.oninput = sync;
+  $$('[data-sc-src]', box).forEach(c => c.onchange = () => {
+    const id = c.dataset.scSrc;
+    if (c.checked) { E.sources.add(id); if (!id.includes('/')) [...E.sources].forEach(x => x.startsWith(id + '/') && E.sources.delete(x)); }
+    else E.sources.delete(id);
+    renderScopes();
+  });
+  const f = $('[data-sc-filter]', box);
+  if (f) f.oninput = debounce(() => { scState.filter = f.value; renderScopes(); const g = $('[data-sc-filter]'); g?.focus(); g?.setSelectionRange(99, 99); }, 120);
+  $('[data-sc-cancel]', box).onclick = () => { scState.edit = null; scState.err = null; renderScopes(); };
+  save.onclick = async () => {
+    const r = await fetch('/api/scopes/' + enc(E.name.trim()), {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...E.sources], description: E.description.trim()})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { scState.err = typeof j.detail === 'string' ? j.detail : 'Could not save the scope'; return renderScopes(); }
+    toast(`Saved scope “${E.name.trim()}”`); scState.edit = null; scState.err = null; scState.filter = '';
+    await loadScopes(); renderScopes();
+  };
+}
+async function tryResolve() {
+  const v = $('[data-sc-try-in]')?.value.trim(); if (!v) return;
+  try { scState.resolve = await api(`/api/scopes/resolve?scope=auto&cwd=${enc(v)}`); } catch (e) { scState.resolve = {error: e.message}; }
+  renderScopes(); const i = $('[data-sc-try-in]'); if (i) i.value = v;
+}
+/* palette scope switcher */
+const palScope = () => $('#palscope')?.value || 'all';
+function renderPalScope() {
+  const sel = $('#palscope'); if (!sel || !scState.data) return;
+  const def = scState.data.default_scope || 'all', cur = sel.dataset.touched ? sel.value : def;
+  sel.innerHTML = `<option value="all">All</option>${scopeNames().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}`;
+  sel.value = [...sel.options].some(o => o.value === cur) ? cur : def;
+  sel.hidden = !scopeNames().length;
+}
+const settingsNav = () => `<div class="sec"><div class="sec-h"><span>Settings</span></div><div class="rows"><button class="row" data-setgo="Sources"><span class="name">Sources</span></button><button class="row" data-setgo="Scopes"><span class="name">Scopes</span></button>${SET_GROUPS.map(([g]) => `<button class="row" data-setgo="${esc(g)}"><span class="name">${esc(g)}</span></button>`).join('')}<button class="row" data-setgo="Connect an agent"><span class="name">Connect an agent</span></button><button class="row" data-setgo="Index"><span class="name">Index</span></button></div></div>`;
 function bindSettingsNav(side) {
   $$('[data-setgo]', side).forEach(b => b.onclick = () => document.getElementById('set-' + b.dataset.setgo.replace(/\W+/g, '-'))?.scrollIntoView({behavior: 'smooth', block: 'start'}));
 }
 async function loadSettings(force = false) {
   if (S.set && !force) return;
-  const [r, st] = await Promise.all([api('/api/settings'), api('/api/status').catch(() => S.status), loadSources()]);
+  const [r, st] = await Promise.all([api('/api/settings'), api('/api/status').catch(() => S.status), loadSources(), loadScopes()]);
   Object.assign(S.status, st);
   S.set = {orig: r.settings, draft: structuredClone(r.settings), defaults: r.defaults, desc: r.descriptions, err: null, errKey: null};
 }
@@ -1265,12 +1390,14 @@ async function renderSettings() {
     <div class="set-bar"><div><h1>Settings</h1><div class="msg ${S.set.err ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : dirty.length ? `${plural(dirty.length, 'unsaved change')}` : 'Changes apply within seconds; agents can change these too over MCP.'}</div></div>
       <div style="display:flex;gap:8px"><button class="btn" id="setreset" ${dirty.length ? '' : 'disabled'}>Discard</button><button class="btn primary" id="setsave" ${dirty.length ? '' : 'disabled'}>Save</button></div></div>
     <div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>
+    <div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>
     <h2 class="set-h2">Advanced</h2>
     ${groups.map(([g, ks]) => `<div class="set-card" id="set-${g.replace(/\W+/g, '-')}"><h3>${esc(g)}</h3>${ks.map(row).join('')}</div>`).join('')}
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
       <p class="muted" style="margin:0 0 6px;font-size:12.5px">Pensieve is an MCP server, so Claude Code, Codex, Cursor and other agents can search your files, code and sessions, find who knows what, and change these settings.</p>
       <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">Claude Code (HTTP)</div>${cmd(`claude mcp add --transport http pensieve ${mcpUrl}`)}
-      <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">Agents that only speak stdio</div>${cmd('pensieve mcp')}
+      <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">Agents that only speak stdio — scoped automatically to the repo the agent starts in</div>${cmd('pensieve mcp')}
+      <p class="muted" style="font-size:12px;margin:6px 0 0">To limit an agent to a named slice, see <a href="#scopes">Scopes</a> for per-scope commands.</p>
       <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
     </div>
     <div class="set-card" id="set-Index"><h3>Index</h3><div class="set-stats">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
@@ -1291,7 +1418,7 @@ async function renderSettings() {
   $$('[data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
   $('#setreset').onclick = () => { S.set.draft = structuredClone(S.set.orig); S.set.err = S.set.errKey = null; again(); };
   $('#setsave').onclick = saveSettings;
-  renderSources();
+  renderSources(); renderScopes();
 }
 async function saveSettings() {
   const ks = setDirty(); if (!ks.length) return;
@@ -1329,10 +1456,10 @@ async function route() {
   if (!h) return;
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
-  if (h === 'sources') {
+  if (h === 'sources' || h === 'scopes') {
     await setView('settings');
-    for (let i = 0; i < 60 && !$('#srcbox'); i++) await new Promise(r => setTimeout(r, 50));  // settings render is async
-    return $('#set-Sources')?.scrollIntoView({block: 'start'});
+    for (let i = 0; i < 60 && !$('#scopebox'); i++) await new Promise(r => setTimeout(r, 50));  // settings render is async
+    return $(h === 'sources' ? '#set-Sources' : '#set-Scopes')?.scrollIntoView({block: 'start'});
   }
   const q = new URLSearchParams(h);
   if (q.get('view')) await setView(VIEW_ALIAS[q.get('view')] || 'code');
@@ -1596,7 +1723,7 @@ $('#searchbtn').onclick = () => openPalette();
 $('#palette').addEventListener('mousedown', e => { if (e.target.id === 'palette') closePalette(); });
 const palFind = debounce(async (q, seq) => {
   try {
-    const r = await api(`/api/find?limit=18&q=${enc(q)}`);
+    const r = await api(`/api/find?limit=18&q=${enc(q)}&scope=${enc(palScope())}`);
     if (seq !== pl.seq) return;
     pl.found = r; palRender();
   } catch { if (seq === pl.seq) { pl.found = {results: []}; palRender(); } }
@@ -1629,6 +1756,8 @@ function palRender() {
   } else if (raw) {
     if (pl.found) {
       const rs = pl.found.results || [];
+      const sc = pl.found.scope;
+      if (sc && sc.name !== 'all') add('Scope', {ic: '◎', title: `Searching in ${sc.name}`, sub: sc.description || '', rt: 'change ▸', run: () => { $('#palscope').focus(); $('#palscope').showPicker?.(); }});
       for (const k of ['file', 'code', 'session']) rs.filter(r => r.kind === k).slice(0, 6).forEach(r => add(FIND_GROUP[k], findItem(r)));
       if (!rs.length) add('Search', {ic: '∅', title: 'No matching files, code or sessions', sub: pl.found.query?.exact?.length ? 'Exact phrases must appear word for word; try fewer quotes.' : 'Try other words, or "quotes" for exact text.', run: () => {}});
     } else {
@@ -1655,6 +1784,7 @@ function palRender() {
 const sessItem = s => ({ic: `<i class="sw" style="background:${slotColor(cl(s))}"></i>`, title: s.title, sub: s.summary || '', rt: `${esc(s.project)} · ${rel(s.t1)}`, run: () => openSession(s.id)});
 function palRun(i) { const it = pl.items[i]; if (!it) return; closePalette(); it.run(); }
 $('#palin').addEventListener('input', palSearch);
+$('#palscope').addEventListener('change', () => { $('#palscope').dataset.touched = '1'; $('#palin').focus(); palSearch(); });
 $('#palin').addEventListener('keydown', e => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault(); pl.sel = (pl.sel + (e.key === 'ArrowDown' ? 1 : -1) + pl.items.length) % pl.items.length;
@@ -1757,7 +1887,7 @@ async function handleEvent(m) {
     else if (m.type === 'topics') { await loadSessions(); renderSidebar(); if (S.view === 'map') renderLabels(); if (S.view === 'insights') renderInsights(); pollStatus(); }
     else if (m.type === 'insights') { await loadInsights(); if (S.view === 'insights') renderInsights(); toast('New insights are ready'); pollStatus(); }
     else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); refetchSourcesSoon(); }
-    else if (m.type === 'settings') { if (S.set && !setDirty().length) { const y = $('#settings').scrollTop; S.set = null; if (S.view === 'settings') renderSettings().then(() => { $('#settings').scrollTop = y; }); } else refetchSourcesSoon(); }
+    else if (m.type === 'settings') { loadScopes(); if (S.set && !setDirty().length) { const y = $('#settings').scrollTop; S.set = null; if (S.view === 'settings') renderSettings().then(() => { $('#settings').scrollTop = y; }); } else refetchSourcesSoon(); }
     else if (m.type === 'repos') { refetchSourcesSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
@@ -1782,6 +1912,7 @@ async function init() {
   connect();
   await loadRepos().catch(() => {});
   const v = store.get('view', 'code');
+  loadScopes();
   if (location.hash.length > 1) await route();
   else if (v !== 'map' && (S.code.repos.length || v !== 'code')) await setView(v);
 }

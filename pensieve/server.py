@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import actions, config, search as search_mod, settings, sources, summarize
+from . import actions, config, scopes, search as search_mod, settings, sources, summarize
 from .files import Files
 from .watch import Watch
 from .indexer import Store
@@ -295,7 +295,7 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan)
-app.router.routes.extend(mcp_server.app.routes)  # MCP at /mcp
+app.router.routes.extend(mcp_server.app_routes)  # MCP at /mcp
 STATIC = Path(__file__).parent / "static"
 NO_CACHE = {"Cache-Control": "no-store"}
 
@@ -516,9 +516,65 @@ def session_code(sid: str):
 
 
 # ---- unified search, files, settings, opening things -------------------------------
+def _scope_param(scope: str | None, cwd: str | None = None):
+    """?scope= on a request; absent -> the default_scope setting. 'all' -> everything."""
+    name = settings.get("default_scope") if scope is None else scope
+    try:
+        return scopes.resolve(name, cwd, repos)
+    except KeyError:
+        raise HTTPException(404, f"unknown scope {name!r}")
+
+
 @app.get("/api/find")
-def find(q: str, limit: int = 20, kinds: str = ""):
-    return searcher.find(q, limit, _csv(kinds) or None)
+def find(q: str, limit: int = 20, kinds: str = "", scope: str | None = None, cwd: str | None = None):
+    return searcher.find(q, limit, _csv(kinds) or None, scope=_scope_param(scope, cwd))
+
+
+def _scope_info(name, sc):
+    s = scopes.resolve(name, None, repos)
+    n = {k: (len(a) if (a := scopes.allowlist(s, k, store, repos, idx)) is not None else None)
+         for k, idx in (("file", files.index), ("code", repos.index), ("session", store.index))}
+    return dict(name=name, description=sc.get("description", ""), sources=sc["sources"], chunks=n,
+                sessions=len(scopes.session_ids(s, store, repos)))
+
+
+@app.get("/api/scopes")
+def list_scopes():
+    return {"scopes": [_scope_info(n, sc) for n, sc in scopes.named().items()],
+            "default_scope": settings.get("default_scope")}
+
+
+class ScopeDef(BaseModel):
+    sources: list[str]
+    description: str = ""
+
+
+@app.put("/api/scopes/{name}")
+def save_scope(name: str, req: ScopeDef):
+    cur = dict(scopes.named())
+    cur[name] = {"sources": req.sources, "description": req.description}
+    try:
+        settings.update({"scopes": cur})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return list_scopes()
+
+
+@app.delete("/api/scopes/{name}")
+def delete_scope(name: str):
+    cur = dict(scopes.named())
+    cur.pop(name, None)
+    changes = {"scopes": cur}
+    if settings.get("default_scope") == name:
+        changes["default_scope"] = ""
+    settings.update(changes)
+    return list_scopes()
+
+
+@app.get("/api/scopes/resolve")
+def resolve_scope(scope: str = "auto", cwd: str | None = None):
+    """What an agent would see: e.g. /api/scopes/resolve?scope=auto&cwd=/path/to/repo."""
+    return scopes.describe(_scope_param(scope, cwd))
 
 
 @app.get("/api/files/points")

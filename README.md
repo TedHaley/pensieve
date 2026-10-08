@@ -53,19 +53,22 @@ Code results open at the matching line in your editor if you set `editor` to `vs
 
 ## Use it from your agents (MCP)
 
-The backend serves MCP at `http://127.0.0.1:8765/mcp`.
+Agents are only as good as the context they're given, so each agent connection works within a **scope**: a slice of the index, such as the repo it's working in.
 
 ```bash
-claude mcp add --transport http pensieve http://127.0.0.1:8765/mcp     # Claude Code
+claude mcp add pensieve -- pensieve mcp          # stdio; scope "auto" = the repo the agent was started in
+claude mcp add pensieve -- pensieve mcp --scope payments
+claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=payments"
 ```
 
-For agents that only speak stdio, use `pensieve mcp` as the command. It starts the backend if it isn't running:
+- **auto** (the default for `pensieve mcp`) uses the agent's working directory: the first named scope that includes that repo, otherwise just that repo with its worktrees and the agent sessions run in it. Outside any repo it means everything. HTTP connections can't see the agent's folder, so name a scope there (no `?scope` = everything).
+- **Named scopes** are lists of sources, e.g. `payments = repos/~/code/billing + repos/~/code/ledger + files/~/Documents/specs`. Create them in Settings → Scopes or with the `save_scope` tool. Everything stays in one index; a scope only filters, so nothing is embedded twice.
+- Every tool respects the scope: search, read, similar, who_knows, list_repos, team, unexplored. An item outside it is refused.
+- The search panel and the visualizer use `default_scope` (empty = everything).
 
-```json
-{"mcpServers": {"pensieve": {"command": "pensieve", "args": ["mcp"]}}}
-```
+For agents that only speak stdio, the JSON config is `{"mcpServers": {"pensieve": {"command": "pensieve", "args": ["mcp"]}}}`. `pensieve mcp` starts the backend if it isn't running.
 
-Tools: `search`, `read`, `similar`, `who_knows`, `list_repos`, `team`, `unexplored`, `open`, `show_search`, `show_visualizer`, `status`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`.
+Tools: `search`, `read`, `similar`, `who_knows`, `list_repos`, `team`, `unexplored`, `open`, `show_search`, `show_visualizer`, `status`, `current_scope`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`.
 
 ## What gets indexed
 
@@ -99,6 +102,7 @@ Change them in the visualizer (Settings), from an agent (`update_settings`), or 
 | `repos` | extra repos, always indexed |
 | `exclude` | folder names never descended into (`node_modules`, `Library`, …) |
 | `exclude_files` | filename globs never indexed (secrets) |
+| `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the panel's scope |
 | `hotkey` | `ctrl+shift` (or a combo like `cmd+shift+space`) |
 | `editor` | `default`, `vscode`, `cursor` or `zed` |
 | `llm_url`, `llm_model` | `http://localhost:1234/v1`, `qwen/qwen3.5-9b` |

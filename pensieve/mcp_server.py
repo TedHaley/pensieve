@@ -6,7 +6,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import actions, settings, sources
+from . import actions, scopes, settings, sources
 
 mcp = MCPServer(
     name="pensieve",
@@ -15,12 +15,30 @@ mcp = MCPServer(
         "Use search first: plain words search by meaning, \"double quotes\" require exact words, -word excludes, and "
         "kind:file|code|session, ext:pdf, in:<folder or repo> filter. Then read(id) for full text. "
         "who_knows finds the people who wrote the code about a topic; use it to suggest who to ask. "
+        "Everything is limited to this connection's scope (see current_scope): e.g. the repo the agent runs in. "
         "Settings (indexed folders, repo sweep, hotkey, editor, LLM) can be read and changed with get_settings/update_settings."),
 )
 
 
 def _c():
     return actions.ctx
+
+
+def _scope():
+    return scopes.from_request()
+
+
+def _check(id):
+    if not scopes.contains(_scope(), id, _c()["store"], _c()["repos"]):
+        raise ValueError(f"{id} is outside this connection's scope ({_scope().name})")
+
+
+def _check_repo(repo):
+    root = _c()["repos"]._root(repo)
+    if root is None:
+        raise ValueError(f"unknown repo {repo!r}")
+    if not scopes.repo_allowed(_scope(), root):
+        raise ValueError(f"repo {repo!r} is outside this connection's scope ({_scope().name})")
 
 
 def tool(name=None):
@@ -43,8 +61,8 @@ def search(query: str, limit: int = 10, kind: str | None = None) -> dict:
     """Search files, code and agent sessions. Plain words match by meaning; "quoted phrases" must appear exactly;
     -word excludes; filters: kind:file|code|session, ext:<extension>, in:<path or repo substring>.
     Returns ranked results with an id to pass to read/open/similar."""
-    r = _c()["searcher"].find(query, limit, [kind] if kind else None)
-    return {"query": r["query"], "results": [{k: x[k] for k in ("id", "kind", "title", "subtitle", "path", "line", "snippet", "match", "score")}
+    r = _c()["searcher"].find(query, limit, [kind] if kind else None, scope=_scope())
+    return {"query": r["query"], "scope": r["scope"]["name"], "results": [{k: x[k] for k in ("id", "kind", "title", "subtitle", "path", "line", "snippet", "match", "score")}
                                              for x in r["results"]]}
 
 
@@ -52,20 +70,24 @@ def search(query: str, limit: int = 10, kind: str | None = None) -> dict:
 def read(id: str, max_chars: int = 12000) -> dict:
     """Full text of a search result: a document, a code chunk (with its owners, recent commits and the agent
     sessions that touched it), or an agent session transcript with its summary."""
+    _check(id)
     return actions.read(id, max_chars)
 
 
 @tool()
 def similar(id: str, limit: int = 8) -> list[dict]:
-    """Items most similar in meaning to a file or session id."""
+    """Items most similar in meaning to a file, code or session id (within this connection's scope)."""
+    _check(id)
     kind, _, ref = id.partition(":")
+    sc, st, rp = _scope(), _c()["store"], _c()["repos"]
     if kind == "file":
-        return _c()["files"].similar(ref, limit)
+        return [x for x in _c()["files"].similar(ref, limit * 3) if scopes.contains(sc, x["id"], st, rp)][:limit]
     if kind == "session":
-        return [dict(s, id=f"session:{s['id']}") for s in _c()["store"].similar(ref, limit)]
+        return [x for x in (dict(s, id=f"session:{s['id']}") for s in st.similar(ref, limit * 3))
+                if scopes.contains(sc, x["id"], st, rp)][:limit]
     if kind == "code":
-        c = _c()["repos"].chunk(int(ref))
-        hits = _c()["searcher"].find(c["text"][:1500], limit + 1, ["code"])["results"] if c else []
+        c = rp.chunk(int(ref))
+        hits = _c()["searcher"].find(c["text"][:1500], limit + 1, ["code"], scope=sc)["results"] if c else []
         return [h for h in hits if h["id"] != id][:limit]
     raise ValueError("id must start with file:, code: or session:")
 
@@ -74,20 +96,25 @@ def similar(id: str, limit: int = 8) -> list[dict]:
 def who_knows(topic: str, repo: str | None = None) -> dict:
     """People who wrote the code most related to a topic (git blame weighted by relevance), with the files involved.
     Use this to suggest who to talk to. Optionally limit to one repo name (see list_repos)."""
-    r = _c()["repos"].experts(q=topic, repo=repo)
+    if repo:
+        _check_repo(repo)
+    sc = _scope()
+    allow = scopes.allowlist(sc, "code", _c()["store"], _c()["repos"], _c()["repos"].index) if sc else None
+    r = _c()["repos"].experts(q=topic, repo=repo, allow=allow)
     return {"people": r["experts"], "code": [dict(id=f"code:{c['id']}", repo=c["repo"], path=c["path"], line=c["start"],
                                                  score=round(c["score"], 3)) for c in r["chunks"]]}
 
 
 @tool()
 def list_repos() -> list[dict]:
-    """Indexed git repos with their size and how many agent sessions ran in each."""
-    return _c()["repos"].list()
+    """Indexed git repos (in this connection's scope) with their size and how many agent sessions ran in each."""
+    return [r for r in _c()["repos"].list() if scopes.repo_allowed(_scope(), r["root"])]
 
 
 @tool()
 def team(repo: str, days: int = 90) -> dict:
     """What each person committed in a repo over the last `days`: commit counts, main areas, recent commit subjects."""
+    _check_repo(repo)
     t = _c()["repos"].team(repo, days)
     if t is None:
         raise ValueError(f"unknown repo {repo!r}")
@@ -99,6 +126,7 @@ def team(repo: str, days: int = 90) -> dict:
 @tool()
 def unexplored(repo: str) -> dict:
     """Areas of a repo next to the user's own work that their agent sessions haven't touched yet, and who owns them."""
+    _check_repo(repo)
     r = _c()["repos"].territory(repo)
     if r is None:
         raise ValueError(f"unknown repo {repo!r}")
@@ -109,6 +137,7 @@ def unexplored(repo: str) -> dict:
 def open_item(id: str, action: str = "open") -> dict:
     """Open an item on the user's Mac. action: 'open' (default app, or the configured editor at the line for code),
     'reveal' (show in Finder) or 'visualize' (show it on the Pensieve map)."""
+    _check(id)
     return actions.open_item(id, action)
 
 
@@ -134,6 +163,39 @@ def status() -> dict:
                 "files": n("SELECT COUNT(*) FROM files"), "repos": n("SELECT COUNT(*) FROM repos"),
                 "code_chunks": n("SELECT COUNT(*) FROM code_chunks"),
                 "sessions": n("SELECT COUNT(*) FROM sessions WHERE n_chunks>0")}
+
+
+@tool()
+def current_scope() -> dict:
+    """The slice of the index this connection works within (set by the agent's MCP config: ?scope=<name>, or 'auto'
+    = the repo the agent was started in). 'all' means everything Pensieve indexes."""
+    return scopes.describe(_scope())
+
+
+@tool()
+def list_scopes() -> dict:
+    """Named scopes: each is a list of source ids (see list_sources) an agent can be limited to."""
+    return {"scopes": scopes.named(), "current": scopes.describe(_scope())["name"]}
+
+
+@tool()
+def save_scope(name: str, sources: list[str], description: str = "") -> dict:
+    """Create or replace a named scope, e.g. save_scope("payments", ["repos/<root>", "files/~/specs"]).
+    Agents connect to it with ?scope=payments (HTTP) or `pensieve mcp --scope payments` (stdio). Agents started
+    inside a repo that a scope includes get that scope automatically."""
+    cur = dict(scopes.named())
+    cur[name] = {"sources": sources, "description": description}
+    return {"scopes": settings.update({"scopes": cur})["scopes"]}
+
+
+@tool()
+def delete_scope(name: str) -> dict:
+    """Remove a named scope."""
+    cur = dict(scopes.named())
+    if name not in cur:
+        raise KeyError(name)
+    cur.pop(name)
+    return {"scopes": settings.update({"scopes": cur})["scopes"]}
 
 
 @tool()
@@ -186,5 +248,33 @@ def reindex() -> dict:
     return {"ok": True}
 
 
-# a Starlette app with one route at /mcp; server.py adds that route to the FastAPI app (no mount, so no /mcp -> /mcp/ redirect)
-app = mcp.streamable_http_app(streamable_http_path="/mcp", json_response=True, stateless_http=True)
+_app = mcp.streamable_http_app(streamable_http_path="/mcp", json_response=True, stateless_http=True)
+_endpoint = _app.routes[0].app if hasattr(_app.routes[0], "app") else _app.routes[0].endpoint
+
+
+class _Scoped:
+    """ASGI app (a class, so Starlette doesn't treat it as a request/response function)."""
+    async def __call__(self, scope, receive, send):
+        await _scoped(scope, receive, send)
+
+
+async def _scoped(scope, receive, send):
+    """Every MCP request runs inside the connection's scope: ?scope=<name>|auto|all (&cwd=<dir> for auto)."""
+    from urllib.parse import parse_qs
+    q = {k: v[0] for k, v in parse_qs(scope.get("query_string", b"").decode()).items()}
+    try:
+        sc = scopes.resolve(q.get("scope", ""), q.get("cwd"), actions.ctx.get("repos"))
+    except KeyError as e:
+        from starlette.responses import JSONResponse
+        await JSONResponse({"error": f"unknown Pensieve scope {e.args[0]!r}"}, status_code=404)(scope, receive, send)
+        return
+    token = scopes.current.set(sc)
+    try:
+        await _endpoint(scope, receive, send)
+    finally:
+        scopes.current.reset(token)
+
+
+# server.py adds this route to the FastAPI app (no mount, so no /mcp -> /mcp/ redirect)
+from starlette.routing import Route  # noqa: E402
+app_routes = [Route("/mcp", endpoint=_Scoped(), methods=["GET", "POST", "DELETE"])]

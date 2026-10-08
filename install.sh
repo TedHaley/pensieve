@@ -48,8 +48,8 @@ if [ -n "$APP" ]; then
   echo "  App:                 $APP  (menu bar; press Control+Shift to search)"
 fi
 echo "  Backend:             $BIN  (visualizer at http://localhost:8765)"
-echo "  Connect an agent:    claude mcp add --transport http pensieve http://127.0.0.1:8765/mcp"
-echo "                       or, for stdio-only agents, the command: pensieve mcp"
+echo "  Connect an agent:    claude mcp add pensieve -- pensieve mcp      (scoped to the repo the agent runs in)"
+echo "                       or over HTTP: claude mcp add --transport http pensieve \"http://127.0.0.1:8765/mcp?scope=<name>\""
 echo "  Optional summaries:  run LM Studio (https://lmstudio.ai) with a chat model, e.g. qwen/qwen3.5-9b, on port 1234"
 echo "  Uninstall:           uv tool uninstall pensieve && rm -rf ~/.pensieve ~/Applications/Pensieve.app"
 echo

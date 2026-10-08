@@ -89,7 +89,9 @@ class Searcher:
     def _index(self, kind):
         return {"file": self.files.index, "code": self.repos.index, "session": self.store.index}[kind]
 
-    def find(self, q: str, limit=20, kinds=None):
+    def find(self, q: str, limit=20, kinds=None, scope=None):
+        """`scope`: a scopes.Scope (None = everything); every corpus is filtered to it."""
+        from . import scopes
         pq = parse(q)
         f = pq["filters"]
         kinds = [k for k in (kinds or CORPORA) if not f.get("kind") or f["kind"] == k]
@@ -101,30 +103,38 @@ class Searcher:
         exact_fts = [p for p in pq["exact"] if len(p) >= 3]
         for kind in kinds:
             table, fts = CORPORA[kind]
+            allow = scopes.allowlist(scope, kind, self.store, self.repos, self._index(kind)) if scope else None
+            if allow is not None and not len(allow):
+                continue
+            allowed = set(allow.tolist()) if allow is not None and pq["exact"] else None
             if pq["exact"]:
                 with self.lock:
                     if exact_fts:
-                        rows = self.db.execute(f"SELECT rowid, bm25({fts}) FROM {fts} WHERE {fts} MATCH ? ORDER BY 2 LIMIT 400",
-                                               (_fts_query(exact_fts),)).fetchall()
+                        rows = self.db.execute(f"SELECT rowid, bm25({fts}) FROM {fts} WHERE {fts} MATCH ? ORDER BY 2 LIMIT ?",
+                                               (_fts_query(exact_fts), 400 if allowed is None else 5000)).fetchall()
                     else:
                         like = " AND ".join("instr(lower(text), ?)>0" for _ in exact_short)
                         rows = self.db.execute(f"SELECT id, 0 FROM {table} WHERE {like} LIMIT 400",
                                                [p.lower() for p in exact_short]).fetchall()
                 for cid, bm in rows:
-                    hits[(kind, cid)] = dict(exact=True, bm25=-bm, sem=None)
+                    if allowed is None or cid in allowed:
+                        hits[(kind, cid)] = dict(exact=True, bm25=-bm, sem=None)
                 if kind == "file":  # file names count as an exact hit too
                     with self.lock:
                         for (cid,) in self.db.execute(
                                 "SELECT MIN(c.id) FROM files f JOIN file_chunks c ON c.path=f.path WHERE "
                                 + " AND ".join("instr(lower(f.name), ?)>0" for _ in pq["exact"]) + " GROUP BY f.path LIMIT 200",
                                 [p.lower() for p in pq["exact"]]).fetchall():
-                            hits.setdefault((kind, cid), dict(exact=True, bm25=5.0, sem=None, name=True))
+                            if allowed is None or cid in allowed:
+                                hits.setdefault((kind, cid), dict(exact=True, bm25=5.0, sem=None, name=True))
             elif qv is not None:
                 idx = self._index(kind)
                 with self.lock:
                     has = self.db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
                     if has:
-                        sc, ids = idx.search(qv[None, :], k=max(60, limit * 4))
+                        k = max(60, limit * 4)
+                        sc, ids = (idx.search(qv[None, :], k=min(k, len(allow)), allowlist=allow) if allow is not None
+                                   else idx.search(qv[None, :], k=k))
                         for s, cid in zip(sc[0], ids[0]):
                             hits[(kind, int(cid))] = dict(exact=False, bm25=0, sem=float(s))
         rows = self._rows(hits)
@@ -153,16 +163,16 @@ class Searcher:
             out.append(dict(id=r["id"], kind=key[0], title=r["title"], subtitle=r["subtitle"], path=r["path"],
                             line=r["line"], snippet=snippet, highlights=hl, score=round(score, 4), ext=r["ext"],
                             match="both" if pq["exact"] and qv is not None else "exact" if pq["exact"] else "semantic",
-                            mtime=r.get("mtime")))
+                            mtime=r.get("mtime"), key=r.get("key")))
         out.sort(key=lambda x: (-x["score"], -_ts(x["mtime"])))
         best, seen = [], set()
         for x in out:  # best chunk per file / session (code ids are per chunk, so dedupe code by file)
-            k = x["path"] if x["kind"] == "code" else x["id"]
+            k = x.pop("key", None) or x["id"]  # code: one result per repo file, across worktrees
             if k in seen:
                 continue
             seen.add(k)
             best.append(x)
-        return dict(query=pq, results=best[:limit])
+        return dict(query=pq, results=best[:limit], scope=scopes.describe(scope))
 
     def _rows(self, hits):
         by = {}
@@ -186,7 +196,7 @@ class Searcher:
                         p = Path(path)
                         where = f"{rname}/{p.parent}".rstrip("/.") if str(p.parent) != "." else rname
                         out[(kind, cid)] = dict(id=f"code:{cid}", text=text, vec=vec, title=p.name, ext=p.suffix.lstrip("."),
-                                                path=str(Path(wt or root) / path), line=start, mtime=ts,
+                                                path=str(Path(wt or root) / path), line=start, mtime=ts, key=f"{root}:{path}",
                                                 subtitle=where + (f" @ {branch or Path(wt).name}" if wt else ""))
                 else:
                     q = (f"SELECT c.id, c.text, c.vec, s.id, s.title, s.source, s.project_name, s.updated FROM chunks c "

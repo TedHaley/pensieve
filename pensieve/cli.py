@@ -23,6 +23,9 @@ def main():
     ap.add_argument("--llm-url", help="OpenAI-compatible endpoint (default http://localhost:1234/v1, LM Studio)")
     ap.add_argument("--llm-model", help="chat model name (default qwen/qwen3.5-9b)")
     ap.add_argument("--no-open", action="store_true", help="don't open the browser")
+    ap.add_argument("--scope", default="auto",
+                    help="mcp only: the slice of the index this agent works within: a scope name, 'all', or 'auto' "
+                         "(default: the repo the agent was started in, or a named scope that includes it)")
     a = ap.parse_args()
     os.environ["PENSIEVE_PORT"] = str(a.port)
     for flag, env in [(a.data, "PENSIEVE_DATA"), (a.llm_url, "PENSIEVE_LLM_URL"), (a.llm_model, "PENSIEVE_LLM_MODEL")]:
@@ -31,7 +34,7 @@ def main():
     if a.repos:
         os.environ["PENSIEVE_REPOS"] = os.pathsep.join(os.path.abspath(os.path.expanduser(p)) for p in a.repos)
     if a.command == "mcp":
-        return stdio_bridge(a.port)
+        return stdio_bridge(a.port, a.scope)
 
     import uvicorn
     from . import config, settings
@@ -50,7 +53,7 @@ def _up(base):
         return False
 
 
-def stdio_bridge(port):
+def stdio_bridge(port, scope="auto"):
     """Relay newline-delimited JSON-RPC between stdin/stdout and the server's streamable HTTP endpoint."""
     import json
     import httpx
@@ -65,13 +68,22 @@ def stdio_bridge(port):
                 break
             time.sleep(0.5)
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    from urllib.parse import urlencode
+    url = f"{base}/mcp?" + urlencode({"scope": scope, "cwd": os.getcwd()})
     with httpx.Client(timeout=None) as c:
         for line in sys.stdin:
             if not line.strip():
                 continue
             try:
-                r = c.post(f"{base}/mcp", content=line, headers=headers)
+                r = c.post(url, content=line, headers=headers)
                 if r.status_code == 202 or not r.content:
+                    continue
+                if r.status_code >= 400:  # e.g. unknown scope
+                    msg = json.loads(line)
+                    if "id" in msg:
+                        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "error": {
+                            "code": -32000, "message": r.json().get("error", r.text) if "json" in r.headers.get("content-type", "") else r.text}}) + "\n")
+                        sys.stdout.flush()
                     continue
                 body = r.text
                 if r.headers.get("content-type", "").startswith("text/event-stream"):

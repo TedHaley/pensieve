@@ -25,6 +25,9 @@ DEFAULTS = {
     # ("agents/codex", "files/~/Downloads", "repos/sweep", "repos/<repo root>", "apps/apple_notes").
     "disabled": ["apps/apple_notes"],
     "max_file_mb": 20,
+    # Named slices of the index for agents: {"payments": {"sources": ["repos/<root>", "files/~/specs"], "description": ""}}
+    "scopes": {},
+    "default_scope": "",       # scope for the search panel and visualizer search ("" = everything)
     "hotkey": "ctrl+shift",    # read by the Mac app; tap Control+Shift. Or e.g. "cmd+shift+space"
     "editor": "default",       # how code results open: default | vscode | cursor | zed
     "llm_url": "http://localhost:1234/v1",
@@ -41,6 +44,8 @@ DESCRIPTIONS = {
     "exclude_files": "File name patterns never indexed (secrets, keys, password exports). Case-insensitive globs.",
     "disabled": "Sources that are switched off (whole categories or single items). Easier to change from Sources.",
     "max_file_mb": "Skip documents larger than this.",
+    "scopes": "Named slices of the index that agents work within (manage in Scopes).",
+    "default_scope": "Scope used by the search panel and visualizer search; empty means everything.",
     "hotkey": "Shortcut for the search panel: 'ctrl+shift' (tap both) or a combo like 'cmd+shift+space'.",
     "editor": "Where code results open: default, vscode, cursor or zed.",
     "llm_url": "OpenAI-compatible endpoint for summaries and insights (LM Studio by default).",
@@ -98,6 +103,16 @@ def update(changes: dict) -> dict:
         elif isinstance(d, list):
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
                 raise ValueError(f"{k} must be a list of strings")
+        elif k == "scopes":
+            if not isinstance(v, dict):
+                raise ValueError("scopes must map names to {sources: [...], description: ''}")
+            for n, sc in v.items():
+                if not n or n in ("all", "auto") or "/" in n:
+                    raise ValueError(f"invalid scope name {n!r} (reserved or contains '/')")
+                if not isinstance(sc, dict) or not isinstance(sc.get("sources"), list) or not sc["sources"]:
+                    raise ValueError(f"scope {n!r} needs a non-empty sources list")
+                if any(not isinstance(x, str) or x.split("/", 1)[0] not in ("agents", "files", "repos", "apps") for x in sc["sources"]):
+                    raise ValueError(f"scope {n!r}: sources are ids like repos/<root>, files/<folder>, agents/claude, apps/obsidian")
         elif isinstance(d, dict):
             if not isinstance(v, dict) or not all(isinstance(x, bool) for x in v.values()):
                 raise ValueError(f"{k} must map names to true/false")
