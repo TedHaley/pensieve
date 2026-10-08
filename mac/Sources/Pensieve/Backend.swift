@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// The Python backend (`pensieve serve`): finds or starts it, reads its settings, and runs searches.
@@ -7,6 +8,7 @@ final class Backend: ObservableObject {
 
     enum State: Equatable {
         case checking, starting, up, missing
+        case installing(String)
         case failed(String)
     }
 
@@ -17,13 +19,15 @@ final class Backend: ObservableObject {
     let base: URL
     /// Set when PENSIEVE_URL points somewhere else (dev, tests): never spawn a backend then, just wait for it.
     private let external: Bool
+    private let port: Int
     private var child: Process?
     private var events: Task<Void, Never>?
 
     private init() {
         let env = ProcessInfo.processInfo.environment
         external = env["PENSIEVE_URL"] != nil || env["PENSIEVE_NO_SPAWN"] != nil
-        var s = env["PENSIEVE_URL"] ?? "http://127.0.0.1:8765"
+        port = Int(env["PENSIEVE_PORT"] ?? "") ?? 8765
+        var s = env["PENSIEVE_URL"] ?? "http://127.0.0.1:\(port)"
         while s.hasSuffix("/") { s.removeLast() }
         base = URL(string: s)!
     }
@@ -51,6 +55,16 @@ final class Backend: ObservableObject {
     func start() {
         Task {
             if await isUp() { return await becameUp() }
+            if !external, let wheel = Self.bundledWheel(), Self.installedVersion() != Self.stamp(wheel) {
+                // first launch (or the app was updated): install the matching backend from inside the app bundle
+                state = .installing(Self.findBinary() == nil
+                    ? "Setting up Pensieve. The first launch downloads about 1 GB; this takes a few minutes."
+                    : "Updating Pensieve…")
+                if let err = await Self.install(wheel) {
+                    state = .failed(err)
+                    return
+                }
+            }
             if !external, let bin = Self.findBinary() {
                 spawn(bin)
             } else {
@@ -88,6 +102,57 @@ final class Backend: ObservableObject {
         return (r as? HTTPURLResponse)?.statusCode == 200
     }
 
+    // MARK: bundled installer (the DMG build puts uv and the backend wheel in Contents/Resources/backend)
+
+    static var bundleBackend: URL? { Bundle.main.resourceURL?.appendingPathComponent("backend") }
+
+    static func bundledWheel() -> URL? {
+        guard let dir = bundleBackend,
+              let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }
+        return items.first { $0.pathExtension == "whl" }
+    }
+
+    static var versionFile: String { "\(NSHomeDirectory())/.pensieve/backend-version" }
+
+    /// Identifies the bundled backend build: file name plus content hash, so a rebuilt app reinstalls.
+    static func stamp(_ wheel: URL) -> String {
+        let digest = (try? Data(contentsOf: wheel)).map { SHA256.hash(data: $0).prefix(8).map { String(format: "%02x", $0) }.joined() } ?? ""
+        return "\(wheel.lastPathComponent) \(digest)"
+    }
+
+    static func installedVersion() -> String? {
+        guard findBinary() != nil else { return nil }
+        return (try? String(contentsOfFile: versionFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// `uv tool install` the bundled wheel (Python 3.12 and dependencies come from the internet). nil on success.
+    static func install(_ wheel: URL) async -> String? {
+        guard let uv = bundleBackend?.appendingPathComponent("uv"), FileManager.default.isExecutableFile(atPath: uv.path) else {
+            return "The app is missing its installer. Reinstall Pensieve from the DMG."
+        }
+        let home = NSHomeDirectory()
+        try? FileManager.default.createDirectory(atPath: "\(home)/.pensieve", withIntermediateDirectories: true)
+        let log = "\(home)/.pensieve/install.log"
+        FileManager.default.createFile(atPath: log, contents: nil)
+        let status: Int32 = await Task.detached {
+            let p = Process()
+            p.executableURL = uv
+            p.arguments = ["tool", "install", "--force", "--python", "3.12", wheel.path]
+            var env = ProcessInfo.processInfo.environment
+            env["UV_TOOL_BIN_DIR"] = "\(home)/.local/bin"
+            p.environment = env
+            if let h = FileHandle(forWritingAtPath: log) { p.standardOutput = h; p.standardError = h }
+            do { try p.run() } catch { return -1 }
+            p.waitUntilExit()
+            return p.terminationStatus
+        }.value
+        guard status == 0, FileManager.default.isExecutableFile(atPath: "\(home)/.local/bin/pensieve") else {
+            return "Setup failed (see ~/.pensieve/install.log). Check your internet connection and reopen Pensieve."
+        }
+        try? stamp(wheel).write(toFile: versionFile, atomically: true, encoding: .utf8)
+        return nil
+    }
+
     static func findBinary() -> String? {
         let home = NSHomeDirectory()
         let candidates = [ProcessInfo.processInfo.environment["PENSIEVE_BIN"], "\(home)/.local/bin/pensieve",
@@ -99,7 +164,7 @@ final class Backend: ObservableObject {
         let home = NSHomeDirectory()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bin)
-        p.arguments = ["serve", "--no-open"]
+        p.arguments = ["serve", "--no-open", "--port", String(port)]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
         p.environment = env

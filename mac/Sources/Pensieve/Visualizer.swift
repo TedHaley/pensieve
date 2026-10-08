@@ -35,6 +35,7 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
         config.userContentController.addUserScript(WKUserScript(
             source: "window.pensieveNative = true;", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let web = WKWebView(frame: .zero, configuration: config)
+        web.underPageBackgroundColor = .clear
         web.navigationDelegate = self
         web.uiDelegate = self
         web.isInspectable = true
@@ -45,6 +46,7 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
                          backing: .buffered, defer: false)
         w.title = "Pensieve"
         w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden  // the page's own glass top bar sits under the traffic lights
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 720, height: 480)
         w.contentView = web

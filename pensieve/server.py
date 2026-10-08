@@ -72,6 +72,8 @@ async def watcher():
     while True:
         try:
             d = watch.take()
+            if sorted(str(p) for p in files.roots()) != sorted(watch.folders):  # a folder appeared or went away
+                d["full_files"] = True
             n = await _run(lambda: store.sync_files(
                 on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
             if n:

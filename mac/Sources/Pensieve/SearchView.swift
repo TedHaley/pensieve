@@ -72,6 +72,11 @@ struct HintLine: View {
                 ProgressView().controlSize(.mini)
                 Text("Starting Pensieve…")
             }
+        case .installing(let msg):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(msg)
+            }
         case .missing:
             Text("Pensieve isn't installed. In Terminal: curl -fsSL https://tedhaley.ca/pensieve/install.sh | sh")
                 .textSelection(.enabled)

@@ -191,7 +191,26 @@ class Scene3D {
       el.title = it.title || '';
       el.addEventListener('pointerdown', e => e.stopPropagation());
       el.addEventListener('click', e => { e.stopPropagation(); it.onClick?.(); });
-      const o = new CSS2DObject(el); o.position.set(...it.pos); this.scene.add(o); this.labelObjs.push(o);
+      const o = new CSS2DObject(el); o.position.set(...it.pos); o.userData.prio = (it.dim ? 0 : 1e9) + (it.n || 0);
+      this.scene.add(o); this.labelObjs.push(o);
+    }
+    this.labelObjs.sort((a, b) => b.userData.prio - a.userData.prio);  // biggest (and undimmed) clusters claim space first
+  }
+  // Greedy screen-space collision avoidance: walk labels in priority order and fade out any that would overlap one
+  // already placed. Sizes are measured once per label; positions come from projecting their 3D anchors.
+  declutter() {
+    const W = this.el.clientWidth, H = this.el.clientHeight, pad = 4, placed = [], v = new THREE.Vector3();
+    if (!W || !this.labelObjs.length) return;
+    for (const o of this.labelObjs) {
+      const el = o.element;
+      if (el.style.display === 'none') continue;  // behind the camera (CSS2DRenderer hides it)
+      if (!o.userData.w) { o.userData.w = el.offsetWidth; o.userData.h = el.offsetHeight; if (!o.userData.w) continue; }
+      v.copy(o.position).project(this.camera);
+      const x = (v.x * .5 + .5) * W, y = (-v.y * .5 + .5) * H, hw = o.userData.w / 2 + pad, hh = o.userData.h / 2 + pad;
+      const r = [x - hw, y - hh, x + hw, y + hh];
+      const hit = placed.some(p => r[0] < p[2] && r[2] > p[0] && r[1] < p[3] && r[3] > p[1]);
+      if (!hit) placed.push(r);
+      if (el.classList.contains('occl') !== hit) el.classList.toggle('occl', hit);
     }
   }
   fit(indices, instant = false) {
@@ -223,6 +242,7 @@ class Scene3D {
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
+    if ((this.frame = (this.frame || 0) + 1) % 3 === 0 && !document.body.matches('[data-view=insights],[data-view=settings]')) this.declutter();
   }
   saveCam() { return {p: this.camera.position.clone(), t: this.controls.target.clone()}; }
   loadCam(c) { if (c) { this.camera.position.copy(c.p); this.controls.target.copy(c.t); } }
@@ -335,14 +355,14 @@ function renderLabels() {
   if (S.view === 'files') {
     if (S.files.colorBy === 'folder') for (const [k, slot] of S.files.folderSlot) {
       const idx = []; mapPts.forEach((p, i) => { if (p.top === k) idx.push(i); });
-      if (idx.length) items.push({text: k, color: slotColor(slot), pos: centroid(idx), title: `Files in ${k}`,
+      if (idx.length) items.push({n: idx.length, text: k, color: slotColor(slot), pos: centroid(idx), title: `Files in ${k}`,
         dim: S.files.folders.size && ![...S.files.folders].some(f => k === f || k.startsWith(f + '/') || f.startsWith(k + '/')), onClick: () => toggleFolder(k)});
     }
   } else if (S.view === 'code') {
     const by = new Map();
     mapPts.forEach((p, i) => { const k = p.area; if (!by.has(k)) by.set(k, []); by.get(k).push(i); });
     [...by.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 10).forEach(([k, idx]) => {
-      items.push({text: k, color: S.code.colorBy === 'dir' ? codeColorFor('dir', k) : 'transparent', pos: centroid(idx),
+      items.push({n: idx.length, text: k, color: S.code.colorBy === 'dir' ? codeColorFor('dir', k) : 'transparent', pos: centroid(idx),
                   dim: S.code.focus && !(S.code.focus.type === 'dir' && S.code.focus.key === k), onClick: () => focusArea(k)});
     });
   } else if (S.colorBy === 'area') {
@@ -350,7 +370,7 @@ function renderLabels() {
       const idx = []; mapPts.forEach((p, i) => { const s = S.byId.get(p.session); if (s && s.area === a) idx.push(i); });
       if (!idx.length) continue;
       const k = a;
-      items.push({text: keyLabel(a), color: slotColor(slot), pos: centroid(idx), title: `Sessions that mostly worked in ${a}`,
+      items.push({n: idx.length, text: keyLabel(a), color: slotColor(slot), pos: centroid(idx), title: `Sessions that mostly worked in ${a}`,
                   dim: !filtered().some(s => s.area === a), onClick: () => toggleProj(k)});
     }
   } else if (S.level === 'session' || S.level === 'chunk') {
@@ -358,7 +378,7 @@ function renderLabels() {
       const idx = []; mapPts.forEach((p, i) => { const s = S.byId.get(p.session); if (s && cl(s) === t.id) idx.push(i); });
       if (!idx.length) continue;
       const vis = filtered().some(s => cl(s) === t.id);
-      items.push({text: t.name, color: slotColor(t.id), pos: centroid(idx), title: t.description,
+      items.push({n: idx.length, text: t.name, color: slotColor(t.id), pos: centroid(idx), title: t.description,
                   dim: !vis || (S.f.topic != null && S.f.topic !== t.id), onClick: () => toggleTopic(t.id)});
     }
   }
@@ -393,7 +413,7 @@ let downAt = null, moveRaf = 0;
 canvas.addEventListener('pointerdown', e => {
   downAt = [e.clientX, e.clientY];
   if (gl.controls.autoRotate) { gl.controls.autoRotate = false; }
-  $('#hint').classList.add('gone');
+  $('#hint').classList.add('gone'); store.set('hinted', true);
 });
 canvas.addEventListener('pointermove', e => {
   if (moveRaf) return;
@@ -465,7 +485,7 @@ function renderToolbar() {
     rotate: () => { gl.controls.autoRotate = !gl.controls.autoRotate; store.set('autorotate', gl.controls.autoRotate); renderToolbar(); },
     clearhl: () => { S.highlight = null; refreshStates(); renderToolbar(); },
     clearfhl: () => { S.files.highlight = null; refreshStates(); renderToolbar(); },
-    side: () => $('#side').classList.toggle('open'),
+    side: () => toggleSide(),
     who: () => openPalette('who: '),
     overlaps: showOverlaps,
   })[b.dataset.act]());
@@ -658,12 +678,10 @@ function previewTopic(id) {
 const tl = {bins: [], x0: 0, x1: 1, drag: null};
 function renderTimeline() {
   const svg = $('#tl');
-  const W = svg.clientWidth || 600, H = svg.clientHeight || 70, padB = 16, padT = 4;
   const code = S.view !== 'map';
   $('#timeline').style.display = code ? 'none' : '';
-  $('#gl').style.bottom = code ? '0' : '';
-  $('#drawer').style.bottom = code ? '0' : '';
   if (code || !S.sessions.length) { svg.innerHTML = ''; return; }
+  const W = svg.clientWidth || 600, H = svg.clientHeight || 60, padB = 16, padT = 4;  // measure after it is shown
   const ss = filtered('range');
   const [a, b] = S.tRange, span = Math.max(DAY, b - a);
   const bin = span < 50 * DAY ? DAY : span < 400 * DAY ? 7 * DAY : 30 * DAY;
@@ -1376,34 +1394,51 @@ function setField(k) {
   if (k === 'editor') return `<select class="set-in" data-sk="${k}" style="max-width:200px">${[['default', 'Default app'], ['vscode', 'VS Code'], ['cursor', 'Cursor'], ['zed', 'Zed']].map(([o, l]) => `<option value="${o}" ${v === o ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   return `<input class="set-in" data-sk="${k}" value="${esc(v)}">`;
 }
+// Settings is a System-Settings-style sheet: a list on the left, one section at a time on the right.
+const SET_TABS = [
+  ['sources', 'Sources', '#0a84ff', '<path d="M4 6.5C4 5.1 7.6 4 12 4s8 1.1 8 2.5S16.4 9 12 9 4 7.9 4 6.5Z M4 6.5v11C4 18.9 7.6 20 12 20s8-1.1 8-2.5v-11 M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" fill="none" stroke="#fff" stroke-width="1.8"/>'],
+  ['scopes', 'Scopes', '#5e5ce6', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="#fff"/>'],
+  ['agents', 'Search & Agents', '#30b0c7', '<circle cx="11" cy="11" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
+  ['advanced', 'Advanced', '#8e8e93', '<path d="M5 7h8M17 7h2M5 17h2M11 17h8" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="9" cy="17" r="2" fill="none" stroke="#fff" stroke-width="1.8"/>'],
+];
+S.setTab = store.get('setTab', 'sources');
+function setTab(t) { S.setTab = t; store.set('setTab', t); if (S.view === 'settings') renderSettings(); }
 async function renderSettings() {
   const el = $('#settings');
   if (!S.set) { el.innerHTML = '<div class="empty"><div class="spinner" style="margin:auto"></div></div>'; try { await loadSettings(); } catch { el.innerHTML = '<div class="empty">Could not load settings.</div>'; return; } }
   const st = S.status, dirty = setDirty(), port = location.port || '8765', mcpUrl = `http://127.0.0.1:${port}/mcp`;
+  const tab = SET_TABS.some(t => t[0] === S.setTab) ? S.setTab : 'sources';
   const known = new Set([...SET_GROUPS.flatMap(g => g[1]), ...SET_HIDDEN]);
   const groups = [...SET_GROUPS.map(([g, ks]) => [g, ks.filter(k => k in S.set.draft)]), ['Other', Object.keys(S.set.draft).filter(k => !known.has(k))]].filter(g => g[1].length);
-  const row = k => `<div class="set-row ${dirty.includes(k) ? 'changed' : ''}"><div><div class="k">${esc(k)}</div><div class="d">${esc(S.set.desc[k] || '')}</div></div>
+  const row = k => `<div class="set-row ${dirty.includes(k) ? 'changed' : ''}"><div><div class="k">${esc(SET_LABEL[k] || k)}</div><div class="d">${esc(S.set.desc[k] || '')}</div></div>
     <div>${setField(k)}${S.set.errKey === k ? `<div class="err">${esc(S.set.err)}</div>` : ''}</div></div>`;
   const cmd = (c, label) => `<div class="cmd"><code>${esc(c)}</code><button class="btn" data-copy="${esc(c)}">${label || 'Copy'}</button></div>`;
   const kpi = (l, v) => `<div class="kpi"><div class="l">${l}</div><div class="v">${(v || 0).toLocaleString()}</div></div>`;
-  el.innerHTML = `<div class="set-wrap">
-    <div class="set-bar"><div><h1>Settings</h1><div class="msg ${S.set.err ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : dirty.length ? `${plural(dirty.length, 'unsaved change')}` : 'Changes apply within seconds; agents can change these too over MCP.'}</div></div>
-      <div style="display:flex;gap:8px"><button class="btn" id="setreset" ${dirty.length ? '' : 'disabled'}>Discard</button><button class="btn primary" id="setsave" ${dirty.length ? '' : 'disabled'}>Save</button></div></div>
-    <div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>
-    <div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>
-    <h2 class="set-h2">Advanced</h2>
-    ${groups.map(([g, ks]) => `<div class="set-card" id="set-${g.replace(/\W+/g, '-')}"><h3>${esc(g)}</h3>${ks.map(row).join('')}</div>`).join('')}
+  const card = ([g, ks]) => `<div class="set-card" id="set-${g.replace(/\W+/g, '-')}"><h3>${esc(g)}</h3>${ks.map(row).join('')}</div>`;
+  const form = ks => groups.filter(([g]) => ks.includes(g));
+  const bar = (title, sub, withSave) => `<div class="set-bar"><div><h1>${esc(title)}</h1><div class="msg ${S.set.err ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : withSave && dirty.length ? plural(dirty.length, 'unsaved change') : esc(sub)}</div></div>
+      ${withSave ? `<div class="bar-btns"><button class="btn" id="setreset" ${dirty.length ? '' : 'disabled'}>Discard</button><button class="btn primary" id="setsave" ${dirty.length ? '' : 'disabled'}>Save</button></div>` : ''}</div>`;
+  let body = '';
+  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes. Switching a source off removes its data on the next sweep.') + `<div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
+  else if (tab === 'scopes') body = bar('Scopes', 'Named slices of the index that agents and search work within.') + `<div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>`;
+  else if (tab === 'agents') body = bar('Search & Agents', 'How you and your agents reach Pensieve.', true) + form(['Mac app']).map(card).join('') + `
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
-      <p class="muted" style="margin:0 0 6px;font-size:12.5px">Pensieve is an MCP server, so Claude Code, Codex, Cursor and other agents can search your files, code and sessions, find who knows what, and change these settings.</p>
-      <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">Claude Code (HTTP)</div>${cmd(`claude mcp add --transport http pensieve ${mcpUrl}`)}
-      <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">Agents that only speak stdio — scoped automatically to the repo the agent starts in</div>${cmd('pensieve mcp')}
-      <p class="muted" style="font-size:12px;margin:6px 0 0">To limit an agent to a named slice, see <a href="#scopes">Scopes</a> for per-scope commands.</p>
-      <div class="d" style="font-size:12px;color:var(--text-3);margin-top:8px">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
-    </div>
+      <p class="sc-p">Pensieve is an MCP server: Claude Code, Codex, Cursor and other agents can search your files, code and sessions, find who knows what, and change these settings.</p>
+      <div class="cmd-l">Claude Code (HTTP)</div>${cmd(`claude mcp add --transport http pensieve ${mcpUrl}`)}
+      <div class="cmd-l">Agents that only speak stdio — scoped automatically to the repo the agent starts in</div>${cmd('pensieve mcp')}
+      <div class="cmd-l">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
+      <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
+    </div>`;
+  else body = bar('Advanced', 'Fine-tuning for indexing and the local language model.', true) + groups.filter(([g]) => g !== 'Mac app').map(card).join('') + `
     <div class="set-card" id="set-Index"><h3>Index</h3><div class="set-stats">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
-      <p class="muted" style="font-size:12px;margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}</p></div>
-  </div>`;
-  const D = S.set.draft, again = () => { const y = el.scrollTop; renderSettings().then(() => { el.scrollTop = y; }); };
+      <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}${st.llm ? ` · model: ${esc(st.llm)}` : ''}</p></div>`;
+  const prevMain = $('#setmain'), y = prevMain && prevMain.dataset.tab === tab ? prevMain.scrollTop : 0;
+  el.innerHTML = `<div class="set-sheet"><nav class="set-nav">${SET_TABS.map(([id, l, c, ic]) => `<button class="${id === tab ? 'on' : ''}" data-settab="${id}"><span class="set-ic" style="background:${c}"><svg viewBox="0 0 24 24" width="14" height="14">${ic}</svg></span>${esc(l)}</button>`).join('')}<span class="grow"></span><button class="btn set-done" data-setdone title="Close (Esc)">Done</button></nav>
+    <div class="set-main" id="setmain" data-tab="${tab}">${body}</div></div>`;
+  $('#setmain').scrollTop = y;
+  $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
+  $('[data-setdone]', el).onclick = () => setView(S.prevView || 'code');
+  const D = S.set.draft, again = () => renderSettings();
   $$('[data-sk]', el).forEach(i => i.onchange = () => {
     const k = i.dataset.sk, d = S.set.defaults[k];
     D[k] = typeof d === 'boolean' ? i.checked : typeof d === 'number' ? (i.value === '' ? i.value : Number(i.value)) : i.value;
@@ -1415,11 +1450,12 @@ async function renderSettings() {
   const addTo = k => { const i = $(`[data-ladd-in="${k}"]`, el), v = i.value.trim(); if (v && !D[k].includes(v)) { D[k] = [...D[k], v]; again(); } };
   $$('[data-ladd]', el).forEach(b => b.onclick = () => addTo(b.dataset.ladd));
   $$('[data-ladd-in]', el).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); addTo(i.dataset.laddIn); } });
-  $$('[data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
-  $('#setreset').onclick = () => { S.set.draft = structuredClone(S.set.orig); S.set.err = S.set.errKey = null; again(); };
-  $('#setsave').onclick = saveSettings;
+  $$('#setmain > .set-card [data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
+  $('#setreset')?.addEventListener('click', () => { S.set.draft = structuredClone(S.set.orig); S.set.err = S.set.errKey = null; again(); });
+  $('#setsave')?.addEventListener('click', saveSettings);
   renderSources(); renderScopes();
 }
+const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Largest swept repo (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model'};
 async function saveSettings() {
   const ks = setDirty(); if (!ks.length) return;
   const body = Object.fromEntries(ks.map(k => [k, S.set.draft[k]]));
@@ -1456,10 +1492,9 @@ async function route() {
   if (!h) return;
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
-  if (h === 'sources' || h === 'scopes') {
-    await setView('settings');
-    for (let i = 0; i < 60 && !$('#scopebox'); i++) await new Promise(r => setTimeout(r, 50));  // settings render is async
-    return $(h === 'sources' ? '#set-Sources' : '#set-Scopes')?.scrollIntoView({block: 'start'});
+  if (h === 'sources' || h === 'scopes' || h === 'agents' || h === 'advanced') {
+    S.setTab = h; store.set('setTab', h);
+    return S.view === 'settings' ? renderSettings() : setView('settings');
   }
   const q = new URLSearchParams(h);
   if (q.get('view')) await setView(VIEW_ALIAS[q.get('view')] || 'code');
@@ -1475,7 +1510,9 @@ async function setView(v, repo) {
   S.view = v; store.set('view', v);
   $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
   const page = v === 'insights' || v === 'settings';
-  $('#stage').hidden = page; $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings';
+  if (prev !== 'settings' && prev !== v) S.prevView = prev;
+  document.body.dataset.view = v;  // the map stays as the backdrop; CSS shows the right floating panels
+  $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
   if (v === 'code') {
     if (!S.code.repos.length) await loadRepos();
@@ -1800,10 +1837,29 @@ function toggleTheme() {
   const t = theme() === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = t; store.set('theme', t);
   try { localStorage.setItem('pensieve.theme', t); } catch {}
-  gl.setTheme(); recolor(); renderSidebar(); renderTimeline(); if (S.view === 'insights') renderInsights(); if (S.view === 'settings') renderSettings();
+  gl.setTheme(); recolor(); renderSidebar(); renderTimeline(); syncThemeLabel(); if (S.view === 'insights') renderInsights(); if (S.view === 'settings') renderSettings();
 }
-$('#themebtn').onclick = toggleTheme;
-$('#helpbtn').onclick = () => ($('#helpmodal').hidden = false);
+$('#themebtn').onclick = () => { closeMenu(); toggleTheme(); };
+$('#helpbtn').onclick = () => { closeMenu(); $('#helpmodal').hidden = false; };
+/* floating chrome: gear menu, side panel, native window */
+const syncThemeLabel = () => { $('#themebtn').textContent = theme() === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance'; };
+function closeMenu() { $('#gearmenu').hidden = true; $('#gearbtn').setAttribute('aria-expanded', 'false'); }
+$('#gearbtn').onclick = e => { e.stopPropagation(); const m = $('#gearmenu'); m.hidden = !m.hidden; $('#gearbtn').setAttribute('aria-expanded', String(!m.hidden)); syncThemeLabel(); };
+document.addEventListener('pointerdown', e => { if (!$('#gearmenu').hidden && !e.target.closest('#gearmenu,#gearbtn')) closeMenu(); });
+$$('#gearmenu [data-go]').forEach(b => b.onclick = () => {
+  closeMenu(); const g = b.dataset.go;
+  if (g !== 'settings') { S.setTab = g; store.set('setTab', g); }
+  S.view === 'settings' ? renderSettings() : setView('settings');
+});
+function toggleSide(open) {
+  const on = open ?? !document.body.classList.contains('side-open');
+  document.body.classList.toggle('side-open', on); store.set('sideOpen', on);
+  setTimeout(() => { if (S.view === 'map') renderTimeline(); }, 260);
+}
+$('#sidetoggle').onclick = () => toggleSide();
+addEventListener('resize', debounce(() => { if (S.view === 'map') renderTimeline(); }, 200));
+toggleSide(innerWidth >= 900 ? store.get('sideOpen', true) : false);
+if (window.pensieveNative === true) document.body.classList.add('native');
 $('#helpmodal').addEventListener('click', e => { if (e.target.id === 'helpmodal' || e.target.dataset.close != null) $('#helpmodal').hidden = true; });
 document.addEventListener('keydown', e => {
   const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName);
@@ -1811,6 +1867,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!$('#palette').hidden) return closePalette();
     if (!$('#helpmodal').hidden) return ($('#helpmodal').hidden = true);
+    if (!$('#gearmenu').hidden) return closeMenu();
+    if (S.view === 'settings' && !typing) return setView(S.prevView || 'code');
     if (typing) return document.activeElement.blur();
     if ($('#drawer').classList.contains('open')) return closeDrawer();
     if (S.highlight || S.code.highlight || S.files.highlight) { S.highlight = null; S.code.highlight = null; S.files.highlight = null; S.code.focus = null; refreshStates(); renderToolbar(); renderSidebar(); return; }
@@ -1828,15 +1886,17 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { gl
 
 function renderStatus() {
   const st = S.status, pill = $('#statuspill'), label = $('span', pill);
-  const busy = st.layout || st.insights_running || st.summarized_sessions < st.sessions || st.topics_named < st.topics;
-  pill.className = 'pill ' + (st.message?.startsWith('error') ? '' : busy ? 'busy' : 'live');
+  const busy = st.layout || st.insights_running || st.indexing || st.summarized_sessions < st.sessions || st.topics_named < st.topics;
+  const state = st.message?.startsWith('error') ? 'off' : st.llm_offline ? 'warn' : busy ? 'busy' : 'live';
+  pill.className = 'menu-status ' + state; $('#gearbtn').dataset.state = state;
   if (st.llm_offline) {
-    pill.className = 'pill'; label.textContent = 'LLM offline';
+    label.textContent = 'Language model offline';
     pill.title = `No language model at ${st.llm_url || 'the LLM URL'}. Start LM Studio (or set llm_url in Settings) for summaries, topic names and insights. Search, maps, files and code views still work.`;
     return;
   }
   label.textContent = st.layout ? 'Laying out map…' : st.summarized_sessions < st.sessions ? `Summarizing ${st.summarized_sessions}/${st.sessions}` :
     st.topics_named < st.topics ? 'Naming topics…' : st.insights_running ? 'Generating insights…' : st.indexing && st.message && st.message !== 'idle' ? st.message[0].toUpperCase() + st.message.slice(1) + '…' : `Live · ${plural(st.files || 0, 'file')} · ${plural(st.sessions || 0, 'session')}`;
+  $('#gearbtn').title = label.textContent;
   pill.title = `${(st.files || 0).toLocaleString()} files · ${(st.repos || 0)} repos · ${(st.sessions || 0)} sessions · ${(st.chunks || 0).toLocaleString()} moments · ${(st.code_chunks || 0).toLocaleString()} code chunks\nSummaries: ${st.summarized_sessions}/${st.sessions} sessions, ${st.summarized_chunks?.toLocaleString()} moments\nModels: ${st.llm} + ${st.embed}`;
 }
 $('#statuspill').onclick = () => toast(S.status.llm_offline ? $('#statuspill').title : $('#statuspill').title.split('\n')[0]);
@@ -1877,7 +1937,7 @@ async function reloadAll(pulse = true) {
 function connect() {
   const es = new EventSource('/api/events');
   es.onmessage = e => handleEvent(JSON.parse(e.data)).catch(() => {});  // server restarts are transient
-  es.onerror = () => { $('#statuspill').className = 'pill'; $('span', $('#statuspill')).textContent = 'Reconnecting…'; };
+  es.onerror = () => { $('#statuspill').className = 'menu-status off'; $('#gearbtn').dataset.state = 'off'; $('span', $('#statuspill')).textContent = 'Reconnecting…'; };
 }
 async function handleEvent(m) {
   {
@@ -1887,7 +1947,7 @@ async function handleEvent(m) {
     else if (m.type === 'topics') { await loadSessions(); renderSidebar(); if (S.view === 'map') renderLabels(); if (S.view === 'insights') renderInsights(); pollStatus(); }
     else if (m.type === 'insights') { await loadInsights(); if (S.view === 'insights') renderInsights(); toast('New insights are ready'); pollStatus(); }
     else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); refetchSourcesSoon(); }
-    else if (m.type === 'settings') { loadScopes(); if (S.set && !setDirty().length) { const y = $('#settings').scrollTop; S.set = null; if (S.view === 'settings') renderSettings().then(() => { $('#settings').scrollTop = y; }); } else refetchSourcesSoon(); }
+    else if (m.type === 'settings') { loadScopes(); if (S.set && !setDirty().length) { S.set = null; if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
     else if (m.type === 'repos') { refetchSourcesSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
@@ -1906,8 +1966,10 @@ async function init() {
   } catch (e) { $('#loadingtext').textContent = 'Could not reach the Pensieve server.'; return; }
   renderStatus();
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
+  document.body.dataset.view = S.view;
+  $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === S.view));
   renderToolbar(); buildMap(); refresh();
-  if (!gl.controls.autoRotate) $('#hint').classList.add('gone');
+  if (!gl.controls.autoRotate || store.get('hinted', false)) $('#hint').classList.add('gone');
   setTimeout(() => $('#hint').classList.add('gone'), 9000);
   connect();
   await loadRepos().catch(() => {});

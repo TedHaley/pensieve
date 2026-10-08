@@ -90,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .up: status = "Backend running"
         case .checking, .starting: status = "Backend starting…"
         case .missing: status = "Backend not installed"
+        case .installing: status = "Setting up the backend…"
         case .failed: status = "Backend stopped (see ~/.pensieve/server.log)"
         }
         let s = NSMenuItem(title: status, action: nil, keyEquivalent: "")
