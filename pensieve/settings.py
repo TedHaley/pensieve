@@ -25,6 +25,7 @@ DEFAULTS = {
     # ("agents/codex", "files/~/Downloads", "repos/sweep", "repos/<repo root>", "apps/apple_notes").
     "disabled": ["apps/apple_notes"],
     "max_file_mb": 20,
+    "skip_temp_sessions": True,  # agent sessions that ran in a temp folder (e.g. Pensieve's own AI calls) aren't indexed
     # Named slices of the index for agents: {"payments": {"sources": ["repos/<root>", "files/~/specs"], "description": ""}}
     "scopes": {},
     "default_scope": "",       # scope for the search panel and visualizer search ("" = everything)
@@ -53,6 +54,7 @@ DESCRIPTIONS = {
     "exclude_files": "File name patterns never indexed (secrets, keys, password exports). Case-insensitive globs.",
     "disabled": "Sources that are switched off (whole categories or single items). Easier to change from Sources.",
     "max_file_mb": "Skip documents larger than this.",
+    "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
     "default_scope": "Scope used by the search panel and visualizer search; empty means everything.",
     "hotkey": "Shortcut for the search panel: 'ctrl+shift' (tap both) or a combo like 'cmd+shift+space'.",

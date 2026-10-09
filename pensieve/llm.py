@@ -22,6 +22,9 @@ import httpx
 from . import config, settings
 
 
+OWN_PREFIX = "pensieve-ai-"
+
+
 class Offline(Exception):
     """The chosen engine isn't available right now (not running, not chosen, still downloading)."""
 
@@ -296,7 +299,9 @@ def _openai(url, model, msgs, max_tokens, temperature, schema, structured=True, 
 def _cli(argv_fn, prompt, system, timeout=600):
     """Run an agent CLI once, non-interactively, with no tools, and return its final text."""
     full = (system + "\n\n" if system else "") + prompt
-    with tempfile.TemporaryDirectory() as tmp:  # an empty working dir: the agent has nothing to read or edit
+    # an empty working dir: the agent has nothing to read or edit; the prefix lets the indexer skip the session the
+    # CLI records for this call (it isn't the user's work)
+    with tempfile.TemporaryDirectory(prefix=OWN_PREFIX) as tmp:
         argv, out_file = argv_fn(full, tmp)
         r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=tmp, stdin=subprocess.DEVNULL)
         if r.returncode != 0:

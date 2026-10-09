@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config, parsers, settings
-from .layout import cluster, fit3d, place_new, unit
+from .layout import cluster, fit3d, nearest, place_new, unit
 from .projects import project_name
 
 LAYOUT_VERSION = "umap-v1"
@@ -76,11 +76,21 @@ def reconcile(index, db, table):
     return len(ids)
 
 
+
+_TEMP = re.compile(r"^(/private)?/(tmp|var/folders)/")
+
+
+def in_temp(path: str) -> bool:
+    """A system temp folder, when skip_temp_sessions is on: sessions that ran there are throwaway (Pensieve's own AI
+    calls through the Claude Code CLI, scripts, tests), not the user's work."""
+    return bool(path) and bool(_TEMP.match(path)) and settings.get("skip_temp_sessions")
+
 class Store:
     def __init__(self):
         from turbovec import IdMapIndex
         self.lock = threading.RLock()
         self._indexed_at = {}
+        self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions(
@@ -115,7 +125,7 @@ class Store:
     def sync_files(self, log=lambda m: print(m, flush=True), on_progress=None) -> int:
         """Index new/changed transcript files. Returns number of sessions touched."""
         import time
-        touched = self._purge_disabled(log)
+        touched = self._purge_disabled(log) + self._purge_own(log)
         with self.lock:
             known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
         for source, path in parsers.discover():
@@ -127,8 +137,12 @@ class Store:
             if str(path) in known and time.time() - self._indexed_at.get(str(path), 0) < ACTIVE_SECONDS:
                 continue
             self._indexed_at[str(path)] = time.time()
+            if self._ignored.get(str(path)) == (st.st_mtime, st.st_size):
+                continue
             try:
-                self._index_session(source, path, st)
+                if not self._index_session(source, path, st):
+                    self._ignored[str(path)] = (st.st_mtime, st.st_size)
+                    continue
                 touched += 1
                 log(f"indexed {source}:{path.stem[:8]}")
                 if on_progress and touched % 8 == 0:
@@ -148,18 +162,37 @@ class Store:
             off = [s for (s,) in self.db.execute("SELECT DISTINCT source FROM sessions") if not settings.enabled(f"agents/{s}")]
             n = 0
             for src in off:
-                for (cid,) in self.db.execute("SELECT c.id FROM chunks c JOIN sessions s ON s.id=c.session_id WHERE s.source=?", (src,)).fetchall():
+                n += self._delete_sessions([sid for (sid,) in self.db.execute("SELECT id FROM sessions WHERE source=?", (src,))])
+                log(f"removed {src} sessions (source switched off)")
+        return n
+
+    def _purge_own(self, log):
+        """Drop sessions that ran in temp folders (e.g. Pensieve's own AI calls through the Claude Code CLI)."""
+        with self.lock:
+            own = [sid for sid, proj in self.db.execute(
+                "SELECT id, project FROM sessions WHERE project LIKE '/tmp/%' OR project LIKE '/private/%' "
+                "OR project LIKE '/var/folders/%'") if in_temp(proj)]
+            n = self._delete_sessions(own)
+        if n:
+            log(f"removed {n} sessions that ran in temp folders")
+        return n
+
+    def _delete_sessions(self, sids):
+        with self.lock:
+            for i in range(0, len(sids), 500):
+                part = sids[i:i + 500]
+                q = ",".join("?" * len(part))
+                for (cid,) in self.db.execute(f"SELECT id FROM chunks WHERE session_id IN ({q})", part).fetchall():
                     try:
                         self.index.remove(cid)
                     except Exception:
                         pass
-                self.db.execute("DELETE FROM chunks WHERE session_id IN (SELECT id FROM sessions WHERE source=?)", (src,))
-                self.db.execute("DELETE FROM session_files WHERE session_id IN (SELECT id FROM sessions WHERE source=?)", (src,))
-                n += self.db.execute("DELETE FROM sessions WHERE source=?", (src,)).rowcount
-                log(f"removed {src} sessions (source switched off)")
-            if n:
+                self.db.execute(f"DELETE FROM chunks WHERE session_id IN ({q})", part)
+                self.db.execute(f"DELETE FROM session_files WHERE session_id IN ({q})", part)
+                self.db.execute(f"DELETE FROM sessions WHERE id IN ({q})", part)
+            if sids:
                 self.db.commit()
-        return n
+        return len(sids)
 
     def save_session_files(self, sid, touched: dict):
         with self.lock:
@@ -169,7 +202,10 @@ class Store:
             self.db.commit()
 
     def _index_session(self, source, path: Path, st):
+        """Index one transcript; returns False for one that ran in a temp folder (not the user's work)."""
         s = parsers.parse(source, path)
+        if in_temp(s.project):
+            return False
         self.save_session_files(s.id, s.touched)
         chunks = chunk_session(s.turns)
         hashes = [hashlib.sha1(c.encode()).hexdigest() for c in chunks]
@@ -202,6 +238,7 @@ class Store:
             if new or stale:
                 self.db.execute("UPDATE sessions SET summary=NULL, tags=NULL WHERE id=?", (s.id,))
             self.db.commit()
+        return True
 
     # ---- projection + topics -------------------------------------------
     def meta(self, key, value=None):
@@ -259,7 +296,7 @@ class Store:
                 known = [i for i, s in enumerate(sessions) if s in placed]
                 Pk = np.array([placed[sessions[i]][:3] for i in known], dtype=np.float32)
                 Pn = place_new(C[known], Pk, C[missing], k=3, jitter=0.05)
-                nearest = (C[missing] @ C[known].T).argmax(1)
+                nearest = nearest(C[missing], C[known])
                 for j, i in enumerate(missing):
                     cl = placed[sessions[known[nearest[j]]]][3]
                     self.db.execute("UPDATE sessions SET x=?, y=?, z=?, cluster=? WHERE id=?",

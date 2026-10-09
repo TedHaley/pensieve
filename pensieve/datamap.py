@@ -9,17 +9,19 @@ when an AI engine is on, a written name and description later (`data_topics`, re
 import hashlib
 import json
 import math
+import os
 import re
+import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
 
 from .indexer import LAYOUT_VERSION
-from .layout import cluster, fit3d, place_new, unit
+from .layout import cluster, fit3d, nearest, place_new, unit
 
 VERSION = LAYOUT_VERSION + "+data1"
-TOPIC_VERSION = "t3"
+TOPIC_VERSION = "t4"
 # words that say where or what kind of file something is, not what it is about
 STOP = set("""desktop documents downloads library pycharmprojects users home applications application support agent agents
 sessions session src lib libs py js ts tsx jsx md txt json yaml yml toml cfg ini lock html css csv pdf docx xlsx pptx png jpg
@@ -39,6 +41,9 @@ class DataMap:
                             "keywords TEXT, reps TEXT)")
             self.db.commit()
         self._cache = (None, None)
+        self._ctimes = {}  # repo root -> (HEAD, {path: last commit time})
+        self._vec, self._vec_at = (None, None, None), 0.0  # (fingerprint, ids, centroids), when built
+        self._scoped = {}  # (fingerprint, folders) -> scoped topics
 
     # ---- items + vectors -------------------------------------------------------
     def _vectors(self):
@@ -115,7 +120,7 @@ class DataMap:
             Kk = [idx[i] for i in known]
             Pk = np.array([placed[i][:3] for i in known], dtype=np.float32)
             Pn = place_new(C[Kk], Pk, C[[idx[i] for i in new]], k=3, jitter=0.03)
-            near = (C[[idx[i] for i in new]] @ C[Kk].T).argmax(1)
+            near = nearest(C[[idx[i] for i in new]], C[Kk])
             rows = [(i, *map(float, p), placed[known[j]][3]) for i, p, j in zip(new, Pn, near)]
         with self.lock:
             self.db.executemany("INSERT OR REPLACE INTO data_points VALUES(?,?,?,?,?)", rows)
@@ -165,6 +170,8 @@ class DataMap:
         from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
         ids = sorted(docs_by)
         docs = [" ".join(docs_by[c]) for c in ids]
+        import warnings
+        warnings.filterwarnings("ignore", message="Your stop_words may be inconsistent")
         try:
             vec = TfidfVectorizer(stop_words=list(STOP | ENGLISH_STOP_WORDS | set(extra_stop)),
                                   sublinear_tf=True, max_df=0.6 if len(ids) > 3 else 1.0, max_features=8000,
@@ -179,8 +186,85 @@ class DataMap:
         with self.lock:
             rows = self.db.execute("SELECT id, sig, name, description, keywords, reps FROM data_topics ORDER BY id").fetchall()
         return [dict(id=c, sig=sig, named=bool(name), keywords=kw or "", reps=json.loads(reps or "[]"),
-                     name=name or " · ".join(w.strip().title() for w in (kw or "").split(",")[:2] if w.strip()) or f"Topic {c + 1}",
+                     name=name or self._kw_name(kw or "", c),
                      description=desc or "") for c, sig, name, desc, kw, reps in rows]
+
+    def _cached_vectors(self):
+        """All item centroids, refreshed at most every two minutes (building them reads every chunk vector)."""
+        import time
+        fp = self.fingerprint()
+        if self._vec[0] != fp and (self._vec[0] is None or time.time() - self._vec_at > 120):
+            self._vec = (fp, *self._vectors())
+            self._vec_at = time.time()
+        return self._vec[1], self._vec[2]
+
+    @staticmethod
+    def _kw_name(kw, c):
+        """Two distinctive words, skipping one that's a variant of the other ("Component · Components")."""
+        words = []
+        for w in (x.strip() for x in kw.split(",")):
+            if w and not any(w.startswith(v[:5]) or v.startswith(w[:5]) for v in words):
+                words.append(w)
+        return " · ".join(w.title() for w in words[:2]) or f"Topic {c + 1}"
+
+    def scoped_topics(self, folders):
+        """Topics among just the items under `folders` (absolute paths): what the map is about once it's filtered
+        to a repo or folder. Kept while the folder's items change by less than a tenth (new ones join the nearest
+        topic), so names stay put while indexing carries on. Keyword names at once; AI names are cached by
+        membership (meta 'dscope:<sig>')."""
+        ids, C = self._cached_vectors()
+        pos = {i: k for k, i in enumerate(ids)}
+        path = {p["id"]: p.get("path") or "" for p in self.points()["points"]}
+        pre = [f.rstrip("/") + "/" for f in folders]
+        sub = [i for i in ids if any(path.get(i, "").startswith(f) for f in pre)]
+        key = tuple(sorted(folders))
+        hit = self._scoped.get(key)
+        if hit and abs(len(sub) - hit["n"]) <= max(5, 0.1 * hit["n"]):
+            out = hit["out"]
+            new = [i for i in sub if i not in out["of"]]
+            if new and hit["cents"] is not None:  # newcomers join their nearest topic
+                near = (C[[pos[i] for i in new]] @ hit["cents"].T).argmax(1)
+                out["of"].update({i: int(hit["tids"][j]) for i, j in zip(new, near)})
+            return self._fill_names(out)
+        out, cents, tids = dict(topics=[], of={}), None, []
+        if len(sub) >= 10:
+            X = C[[pos[i] for i in sub]]
+            k = max(2, min(8, round(math.sqrt(len(sub)) / 4)))
+            lab = cluster(X, kmin=k, kmax=k)
+            by = defaultdict(list)
+            for j, c in enumerate(lab):
+                by[int(c)].append(j)
+            pts = self.points()["points"]
+            texts = {p["id"]: self._text(p) for p in pts}
+            exts = {(p.get("ext") or "").lower() for p in pts} - {""}
+            kw = self._keywords({c: [texts.get(sub[j], "") for j in js] for c, js in by.items()}, exts)
+            rows = []
+            for c, js in sorted(by.items()):
+                cen = X[js].mean(0)
+                rows.append(cen)
+                tids.append(c)
+                reps = [sub[js[j]] for j in np.argsort(-(X[js] @ cen))[:24]]
+                sig = hashlib.sha1(("|".join(sorted(sub[j] for j in js)) + TOPIC_VERSION).encode()).hexdigest()[:16]
+                out["topics"].append(dict(id=c, sig=sig, key=f"dscope:{sig}", keywords=kw.get(c, ""), reps=reps,
+                                          name=self._kw_name(kw.get(c, ""), c), description="", named=False))
+            out["of"] = {sub[j]: int(c) for j, c in enumerate(lab)}
+            cents = unit(np.stack(rows))
+        if len(self._scoped) > 32:
+            self._scoped.clear()
+        self._scoped[key] = dict(out=out, n=len(sub), cents=cents, tids=tids)
+        return self._fill_names(out)
+
+    def _fill_names(self, out):
+        for t in out["topics"]:
+            if not t["named"] and (v := self.store.meta(t["key"])):
+                d = json.loads(v)
+                t.update(name=d["name"], description=d["description"], named=True)
+        return out
+
+    def set_scoped_name(self, topic, name, description):
+        with self.lock:
+            self.store.meta(topic["key"], json.dumps(dict(name=name.strip()[:48], description=description.strip())))
+            self.db.commit()
 
     def pending_topics(self):
         return [t for t in self.topics() if not t["named"]]
@@ -190,6 +274,33 @@ class DataMap:
             self.db.execute("UPDATE data_topics SET name=?, description=? WHERE id=? AND sig=?",
                             (name.strip()[:48], description.strip(), topic["id"], topic["sig"]))
             self.db.commit()
+
+    def _commit_times(self, root):
+        """path -> time of the last commit that touched it, from one `git log` (cached until HEAD moves)."""
+        try:
+            head = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            head = ""
+        if not head:
+            return {}
+        if self._ctimes.get(root, (None,))[0] == head:
+            return self._ctimes[root][1]
+        out = {}
+        try:
+            log = subprocess.run(["git", "-C", root, "log", "--format=%x1e%ct", "--name-only", "--no-renames"],
+                                 capture_output=True, text=True, timeout=120, errors="replace").stdout
+        except (OSError, subprocess.SubprocessError):
+            log = ""
+        for rec in log.split("\x1e"):  # newest first, so the first time a path appears is its last commit
+            lines = rec.strip().split("\n")
+            if not lines or not lines[0].isdigit():
+                continue
+            t = int(lines[0])
+            for f in lines[1:]:
+                if f and f not in out:
+                    out[f] = t
+        self._ctimes[root] = (head, out)
+        return out
 
     # ---- points ---------------------------------------------------------------
     def points(self, fresh=False):
@@ -213,10 +324,20 @@ class DataMap:
                 out.append(dict(id=k, type="doc", open=k, title=name, path=path, display=path.replace(home, "~", 1),
                                 ext=ext, kind=kind, mtime=mtime, size=size, author=author,
                                 author_source=None if src == "none" else src, p=pos[k][:3], cluster=pos[k][3]))
+        ctimes = {}
         for repo, path, first_id, ts, n, authors in code:
             k = f"code:{repo}:{path}"
             if k not in pos:
                 continue
+            if repo not in ctimes:
+                ctimes[repo] = self._commit_times(repo)
+            # when it was last committed; never committed (new, or a repo without commits): the file's own time
+            when = ctimes[repo].get(path)
+            if when is None:
+                try:
+                    when = os.stat(f"{repo}/{path}").st_mtime
+                except OSError:
+                    when = ts
             blame = Counter()
             for a in (authors or "").split("\x1f"):
                 for who, lines in json.loads(a or "{}").items():
@@ -224,7 +345,7 @@ class DataMap:
             full = f"{repo}/{path}"
             out.append(dict(id=k, type="code", open=f"code:{first_id}", title=Path(path).name, path=full,
                             display=full.replace(home, "~", 1), repo=repo_names.get(repo, Path(repo).name), repo_root=repo,
-                            ext=Path(path).suffix.lstrip("."), mtime=ts, chunks=n,
+                            ext=Path(path).suffix.lstrip("."), mtime=when, committed=path in ctimes[repo], chunks=n,
                             author=blame.most_common(1)[0][0] if blame else None, author_source="git",
                             p=pos[k][:3], cluster=pos[k][3]))
         scope = self.repos.session_scope()

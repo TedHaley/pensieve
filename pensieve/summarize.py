@@ -116,7 +116,10 @@ def name_data_topic(datamap, topic):
                      + (f": {p['summary'][:200]}" if p.get("summary") else ""))
     body = f"Keywords: {topic['keywords']}\n\nMost central items:\n" + "\n".join(lines)
     d = llm.complete(body, DATA_TOPIC_SYS, max_tokens=200, temperature=0.3, schema=TOPIC_SCHEMA)
-    datamap.set_topic_name(topic, d["name"], d["description"])
+    if topic.get("key"):  # a topic within a filtered view
+        datamap.set_scoped_name(topic, d["name"], d["description"])
+    else:
+        datamap.set_topic_name(topic, d["name"], d["description"])
 
 
 def insight_key(scope=None):

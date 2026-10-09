@@ -13,7 +13,7 @@ import numpy as np
 
 from . import apps, config, settings
 from .indexer import LAYOUT_VERSION, embed, reconcile
-from .layout import cluster, fit3d, place_new, unit
+from .layout import cluster, fit3d, nearest, place_new, unit
 
 FILES_INDEX_PATH = config.DATA_DIR / "files.tv"
 TEXT_EXT = {".txt", ".md", ".markdown", ".rst", ".org", ".tex", ".csv", ".tsv", ".json", ".yaml", ".yml", ".toml",
@@ -404,7 +404,7 @@ class Files:
         known = [i for i, p in enumerate(paths) if p in placed]
         Pk = np.array([placed[paths[i]][:3] for i in known], dtype=np.float32)
         Pn = place_new(C[known], Pk, C[missing], k=3, jitter=0.04)
-        near = (C[missing] @ C[known].T).argmax(1)
+        near = nearest(C[missing], C[known])
         with self.lock:
             for j, i in enumerate(missing):
                 self.db.execute("UPDATE files SET x=?, y=?, z=?, cluster=? WHERE path=?",

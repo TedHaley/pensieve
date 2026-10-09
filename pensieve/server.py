@@ -631,9 +631,37 @@ def data_points():
 
 
 @app.get("/api/data/topics")
-def data_topics():
-    """Topics on the Data map: clusters of items about the same thing, with keyword or AI-written names."""
-    return {"topics": datamap.topics(), "ai": llm.provider() != "none", "ai_paused": llm.paused()}
+async def data_topics(folders: str = ""):
+    """Topics on the Data map: clusters of items about the same thing, with keyword or AI-written names. With
+    `folders` ('|'-separated, relative to home), topics among just the items in those folders, plus which topic
+    each item is in; their AI names are written in the background and announced with a 'data_topics' event."""
+    loop = asyncio.get_running_loop()
+    ai = await loop.run_in_executor(None, llm.provider)
+    paused = await loop.run_in_executor(None, llm.paused)
+    if not folders:
+        return {"topics": await loop.run_in_executor(None, datamap.topics), "ai": ai != "none", "ai_paused": paused}
+    home = str(Path.home())
+    abs_ = [f if f.startswith("/") else f"{home}/{f}" for f in folders.split("|") if f]
+    r = await loop.run_in_executor(None, datamap.scoped_topics, abs_)
+    todo = [t for t in r["topics"] if not t["named"]]
+    if todo and ai != "none" and not paused:
+        asyncio.create_task(name_data_scoped(todo))
+    return {**r, "ai": ai != "none", "ai_paused": paused}
+
+
+async def name_data_scoped(topics):
+    loop = asyncio.get_running_loop()
+    todo = [t for t in topics if t["key"] not in inflight and t["sig"] not in failed_topics]
+    if not todo:
+        return
+    inflight.update(t["key"] for t in todo)
+    try:
+        res = await asyncio.gather(*[loop.run_in_executor(None, summarize.name_data_topic, datamap, t) for t in todo],
+                                   return_exceptions=True)
+        failed_topics.update(t["sig"] for t, r in zip(todo, res) if isinstance(r, Exception))
+        broadcast({"type": "data_topics"})
+    finally:
+        inflight.difference_update(t["key"] for t in todo)
 
 
 @app.get("/api/files/points")

@@ -27,12 +27,23 @@ def place_new(X_known, P_known, X_new, k=4, jitter=0.03):
     """Position new vectors at the similarity-weighted mean of their k nearest placed neighbours."""
     if len(X_known) == 0:
         return np.zeros((len(X_new), 3))
-    S = X_new @ X_known.T
     k = min(k, len(X_known))
-    idx = np.argpartition(-S, k - 1, axis=1)[:, :k]
-    w = np.take_along_axis(S, idx, axis=1).clip(1e-3)
-    P = (P_known[idx] * w[..., None]).sum(1) / w.sum(1, keepdims=True)
+    # in batches: the full new x known similarity matrix runs to tens of GB on big code maps
+    step = max(1, 50_000_000 // len(X_known))
+    P = np.empty((len(X_new), 3), dtype=np.float64)
+    for s in range(0, len(X_new), step):
+        S = X_new[s:s + step] @ X_known.T
+        idx = np.argpartition(S, -k, axis=1)[:, -k:]
+        w = np.take_along_axis(S, idx, axis=1).clip(1e-3)
+        P[s:s + step] = (P_known[idx] * w[..., None]).sum(1) / w.sum(1, keepdims=True)
     return P + np.random.default_rng(0).normal(0, jitter, P.shape)
+
+
+def nearest(X_new, X_known):
+    """Index of each new vector's most similar known vector, in batches like place_new."""
+    step = max(1, 50_000_000 // max(1, len(X_known)))
+    return np.concatenate([(X_new[s:s + step] @ X_known.T).argmax(1) for s in range(0, len(X_new), step)]) \
+        if len(X_new) else np.zeros(0, int)
 
 
 def cluster(X: np.ndarray, kmin=4, kmax=8):
@@ -42,6 +53,12 @@ def cluster(X: np.ndarray, kmin=4, kmax=8):
     n = len(X)
     if n < kmin * 2:
         return np.zeros(n, int)
+    if kmin == kmax:  # nothing to choose between: skip the (quadratic) silhouette scoring
+        best = KMeans(n_clusters=kmin, n_init=8, random_state=0).fit_predict(X)
+        order = np.argsort(-np.bincount(best))
+        remap = np.empty_like(order)
+        remap[order] = np.arange(len(order))
+        return remap[best]
     best, best_s = None, -1
     for k in range(kmin, min(kmax, n // 3) + 1):
         lab = KMeans(n_clusters=k, n_init=8, random_state=0).fit_predict(X)

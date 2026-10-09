@@ -874,3 +874,9 @@ body[data-view=insights] .mapbtn,body[data-view=settings] .mapbtn{display:none}
 .ai-srv-st.ok{color:var(--good)}
 .ai-srv-st.bad{color:var(--critical)}
 .ai-srv-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+
+.lg-h{font-weight:600;color:var(--text-2);margin-right:2px}
+
+/* People in the Data sidebar: checkbox, color, name, count; their repo details underneath */
+.row.prow{grid-template-columns:auto auto 1fr auto}
+.row.prow .sub{grid-column:3/-1}
