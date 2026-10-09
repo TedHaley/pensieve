@@ -1,6 +1,6 @@
 [project]
 name = "pensieve"
-version = "0.3.0"
+version = "0.4.0"
 description = "Spotlight-style semantic and exact search over your documents, git repos and AI agent sessions, with a 3D map and an MCP server for agents."
 readme = "README.md"
 license = "MIT"
