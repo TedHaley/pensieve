@@ -12,7 +12,7 @@ import numpy as np
 
 from . import config, settings
 from .files import secret
-from .indexer import LAYOUT_VERSION, embed, reconcile
+from .indexer import CODE_QUERY, LAYOUT_VERSION, embed, reconcile
 from .layout import fit3d, place_new, unit
 from .projects import project_root
 
@@ -956,7 +956,7 @@ class Repos:
     def experts(self, q=None, vec=None, repo=None, k=40, allow=None):
         """`allow`: optional chunk-id allowlist (a scope); `repo` narrows further to one repo."""
         if vec is None:
-            vec = embed([q], query=True)
+            vec = embed([q], query=CODE_QUERY)
         qv = vec.reshape(1, -1).astype(np.float32)
         if allow is not None and not len(allow):
             return dict(chunks=[], experts=[], hit_ids=[])

@@ -42,7 +42,13 @@ def main():
     print(f"Pensieve → {url}  (MCP: {url}/mcp)\n  data: {config.DATA_DIR}\n  llm:  {settings.get('llm_model')} @ {settings.get('llm_url')}", flush=True)
     if not a.no_open:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
-    uvicorn.run("pensieve.server:app", host="127.0.0.1", port=a.port, log_level="warning")
+    # open streams (the app's live-update connection) would otherwise hold a graceful shutdown open indefinitely
+    uvicorn.run("pensieve.server:app", host="127.0.0.1", port=a.port, log_level="warning", timeout_graceful_shutdown=2)
+    # Python would otherwise wait at exit for indexing/layout threads, which can run for minutes and keep writing
+    # after the server is gone; SQLite rolls back whatever they had in flight.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 def _up(base):

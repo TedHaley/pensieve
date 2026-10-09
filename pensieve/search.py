@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .indexer import embed
+from .indexer import CODE_QUERY, embed
 
 CORPORA = {  # kind -> (chunk table, fts table)
     "file": ("file_chunks", "fts_files"),
@@ -20,10 +20,20 @@ CORPORA = {  # kind -> (chunk table, fts table)
     "session": ("chunks", "fts_sessions"),
 }
 FTS_VERSION = "trigram-v1"
+WORDS_VERSION = "words-v1"
+WORDS_FTS = "fts_code_words"  # code split into words (camelCase and snake_case too), for keyword ranking
 _TOKEN = re.compile(r'(-?)"([^"]*)"?|(\S+)')
 _FILTER = re.compile(r"^(kind|ext|in):(.+)$", re.I)
 _KINDS = {"file": "file", "files": "file", "doc": "file", "docs": "file", "code": "code", "repo": "code",
           "session": "session", "sessions": "session", "chat": "session", "agent": "session"}
+
+
+def code_words(text):
+    """Lowercase words of code text with identifiers split: 'fetchUserID_list' -> 'fetch user id list'."""
+    out = []
+    for w in re.findall(r"[A-Za-z][A-Za-z0-9]*", text or ""):
+        out += [p.lower() for p in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", w) if len(p) > 1]
+    return " ".join(out)
 
 
 def parse(q: str) -> dict:
@@ -61,9 +71,30 @@ def ensure_fts(db, lock, meta, log=print):
               INSERT INTO {fts}({fts}, rowid, text) VALUES('delete', old.id, old.text);
               INSERT INTO {fts}(rowid, text) VALUES (new.id, new.text); END;
             """)
+        db.executescript(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS {WORDS_FTS} USING fts5(words, content='', contentless_delete=1);
+        CREATE TRIGGER IF NOT EXISTS {WORDS_FTS}_ai AFTER INSERT ON code_chunks BEGIN
+          INSERT INTO {WORDS_FTS}(rowid, words) VALUES (new.id, code_words(new.path || ' ' || new.text)); END;
+        CREATE TRIGGER IF NOT EXISTS {WORDS_FTS}_ad AFTER DELETE ON code_chunks BEGIN
+          DELETE FROM {WORDS_FTS} WHERE rowid=old.id; END;
+        CREATE TRIGGER IF NOT EXISTS {WORDS_FTS}_au AFTER UPDATE OF text ON code_chunks BEGIN
+          DELETE FROM {WORDS_FTS} WHERE rowid=old.id;
+          INSERT INTO {WORDS_FTS}(rowid, words) VALUES (new.id, code_words(new.path || ' ' || new.text)); END;
+        """)
         db.commit()
-        if meta("fts") == FTS_VERSION:
-            return False
+        fresh, words_fresh = meta("fts") == FTS_VERSION, meta("fts_words") == WORDS_VERSION
+    if fresh and words_fresh:
+        return False
+    if not words_fresh:
+        t = time.time()
+        with lock:
+            db.execute(f"DELETE FROM {WORDS_FTS}")
+            db.execute(f"INSERT INTO {WORDS_FTS}(rowid, words) SELECT id, code_words(path || ' ' || text) FROM code_chunks")
+            meta("fts_words", WORDS_VERSION)
+            db.commit()
+        log(f"full-text index {WORDS_FTS}: {time.time() - t:.1f}s")
+    if fresh:
+        return True
     for table, fts in CORPORA.values():
         t = time.time()
         with lock:
@@ -74,6 +105,22 @@ def ensure_fts(db, lock, meta, log=print):
     with lock:
         db.commit()
     return True
+
+
+_TESTY = re.compile(r"(^|/)(tests?|__tests__|spec|specs|__mocks__|mocks?|fixtures?|stories|e2e)/|"
+                    r"([._-](test|spec|stories|mock)s?\.[a-z]+$)|(^|/)test_[^/]+$|/docs?/schema/")
+_SYMBOL = re.compile(r"^\s*(?:export\s+)?(?:async\s+)?(?:def|class|function|module|interface|type|struct|fn|func|"
+                     r"const|let|CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|FUNCTION))\s+([A-Za-z_][\w.]*)", re.M | re.I)
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def code_names(q):
+    """Words in a query that look like code names (snake_case, camelCase, CONSTANT_CASE, name2), or the whole query
+    when it is one word."""
+    ws = _NAME.findall(q)
+    if len(ws) == 1 and ws[0] == q.strip():
+        return ws
+    return [w for w in ws if "_" in w.strip("_") or re.search(r"[a-z][A-Z]|[A-Z]{2,}[a-z]|[a-z]\d|^[A-Z][a-z]+[A-Z]", w)]
 
 
 def _fts_query(phrases):
@@ -98,6 +145,7 @@ class Searcher:
         if f.get("ext"):
             kinds = [k for k in kinds if k != "session"]
         qv = embed([pq["semantic"]], query=True)[0] if pq["semantic"] else None
+        code_ranked = {}  # (kind, chunk id) -> file-level score from _code
         hits = {}  # (kind, chunk id) -> score dict
         exact_short = [p for p in pq["exact"] if len(p) < 3]  # trigram needs 3+ chars: checked by substring instead
         exact_fts = [p for p in pq["exact"] if len(p) >= 3]
@@ -128,6 +176,10 @@ class Searcher:
                             if allowed is None or cid in allowed:  # the name itself matches: rank above text matches
                                 h = hits.setdefault((kind, cid), dict(exact=True, bm25=0, sem=None))
                                 h.update(bm25=h["bm25"] + 50.0, name=True)
+            elif qv is not None and kind == "code":
+                for cid, sc in self._code(pq["semantic"], allow).items():
+                    hits[(kind, cid)] = dict(exact=False, bm25=0, sem=sc)
+                    code_ranked[(kind, cid)] = sc
             elif qv is not None:
                 idx = self._index(kind)
                 with self.lock:
@@ -156,7 +208,9 @@ class Searcher:
                 continue
             if f.get("in") and f["in"] not in f"{r['path'] or ''} {r['subtitle']}".lower():
                 continue
-            if h["sem"] is not None:
+            if key in code_ranked:
+                score = code_ranked[key]
+            elif h["sem"] is not None:
                 score = h["sem"] + (0.05 if any(w in r["title"].lower() for w in words) else 0)
             else:
                 score = h["bm25"]
@@ -174,6 +228,97 @@ class Searcher:
             seen.add(k)
             best.append(x)
         return dict(query=pq, results=best[:limit], scope=scopes.describe(scope))
+
+    def _code(self, q, allow, k=400):
+        """Code search tuned on bench/ (agent-style queries: descriptions, names, error strings, mixes of these).
+
+        Candidates: the top-k chunks by meaning and by keywords (identifier-aware), plus chunks containing the
+        whole query or a code name from it. Each file is scored by its best chunk:
+            z(meaning) + 0.2 z(keywords) - 0.5 [test/spec/schema file]
+            + 3 [contains the whole query] + log(1 + times) + [same case]       (not for a bare name)
+            + 2 [contains a code name from the query] / log2(1 + files that do)
+            + 2 [defines that name, and at most 3 files do]
+        returned on the cosine scale (best chunk similarity + sigma * the rest) so it merges with other corpora.
+        Returns {chunk id: score} with the best chunk of each file."""
+        allowed = set(allow.tolist()) if allow is not None else None
+        ok = (lambda c: c in allowed) if allowed is not None else (lambda c: True)
+        qv = embed([q], query=CODE_QUERY)[0]
+        cand = set()
+        idx = self.repos.index
+        with self.lock:
+            if not self.db.execute("SELECT 1 FROM code_chunks LIMIT 1").fetchone():
+                return {}
+            sc, ids = (idx.search(qv[None, :], k=min(k, len(allow)), allowlist=allow) if allow is not None
+                       else idx.search(qv[None, :], k=k))
+            cand.update(int(c) for c in ids[0])
+            kw = {}
+            terms = sorted(set(code_words(q).split()))
+            if terms:
+                fq = " OR ".join(f'"{t}"' for t in terms)
+                for cid, bm in self.db.execute(f"SELECT rowid, bm25({WORDS_FTS}) FROM {WORDS_FTS} WHERE {WORDS_FTS} "
+                                               f"MATCH ? ORDER BY 2 LIMIT ?", (fq, k if allowed is None else 20000)):
+                    if ok(cid) and len(kw) < k:
+                        kw[cid] = -bm
+            cand.update(kw)
+            ql = q.strip()
+            phrase = set()
+            if len(ql) >= 8:
+                phrase = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
+                                                        (_fts_query([ql]), 500 if allowed is None else 5000)) if ok(c)}
+            names = code_names(ql)
+            by_name = {}
+            for n in names:
+                if len(n) < 3:
+                    continue
+                by_name[n] = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
+                                                            (_fts_query([n]), 500 if allowed is None else 5000)) if ok(c)}
+                cand |= by_name[n]
+            cand |= phrase
+            if not cand:
+                return {}
+            rows = {}
+            cl = list(cand)
+            for i in range(0, len(cl), 900):
+                part = cl[i:i + 900]
+                for cid, text, vec, path, repo in self.db.execute(
+                        f"SELECT id, text, vec, path, repo FROM code_chunks WHERE id IN ({','.join('?' * len(part))})", part):
+                    rows[cid] = (text, vec, f"{repo}:{path}", path)
+        files, best, sem, kwf = {}, {}, {}, {}
+        for cid, (text, vec, fkey, path) in rows.items():
+            s_ = float(np.frombuffer(vec, np.float16).astype(np.float32) @ qv)
+            files.setdefault(fkey, path)
+            if s_ > sem.get(fkey, -9):
+                sem[fkey], best[fkey] = s_, cid
+            kwf[fkey] = max(kwf.get(fkey, 0.0), kw.get(cid, 0.0))
+        keys = list(files)
+        S = np.array([sem[f] for f in keys], np.float32)
+        K = np.array([kwf[f] for f in keys], np.float32)
+        z = lambda x: (x - x.mean()) / (x.std() + 1e-9)
+        extra = 0.2 * z(K) - 0.5 * np.array([bool(_TESTY.search(files[f])) for f in keys], np.float32)
+        pos = {f: i for i, f in enumerate(keys)}
+        if phrase:
+            hit, cnt, cased = np.zeros(len(keys)), np.zeros(len(keys)), np.zeros(len(keys))
+            for c in phrase:
+                if c in rows:
+                    j = pos[rows[c][2]]
+                    hit[j] = 1
+                    cnt[j] += rows[c][0].lower().count(ql.lower())
+                    cased[j] = max(cased[j], float(ql in rows[c][0]))
+            extra += 3 * hit + ((np.log1p(cnt) + cased) if names != [ql] else 0)
+        for n, cids in by_name.items():
+            rx = re.compile(r"(?<![\w])" + re.escape(n) + r"(?![\w])")
+            has, defs = np.zeros(len(keys)), set()
+            for c in cids:
+                if c in rows and rx.search(rows[c][0]):
+                    has[pos[rows[c][2]]] = 1
+                    if any(m.group(1).split(".")[-1] == n for m in _SYMBOL.finditer(rows[c][0])):
+                        defs.add(pos[rows[c][2]])
+            if has.any():
+                extra += 2 * has / np.log2(1 + has.sum())
+            if 0 < len(defs) <= 3:
+                extra[list(defs)] += 2
+        total = S + S.std() * extra  # the tuned z-score order, kept on the cosine scale
+        return {best[f]: float(total[i]) for i, f in enumerate(keys)}
 
     def _rows(self, hits):
         by = {}

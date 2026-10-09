@@ -12,8 +12,11 @@ mcp = MCPServer(
     name="pensieve",
     instructions=(
         "Pensieve indexes this Mac's documents, git repos (with blame and history) and past AI agent sessions. "
-        "Use search first: plain words search by meaning, \"double quotes\" require exact words, -word excludes, and "
-        "kind:file|code|session, ext:pdf, in:<folder or repo> filter. Then read(id) for full text. "
+        "To find code, call search before Grep/Glob: one call ranks the repo by meaning, keywords and exact names "
+        "together, so a description ('where do we retry failed webhooks'), a name (fetchCompanies) or an error "
+        "message all work, and the right file is usually first. Then Read that file. "
+        "Plain words search by meaning, \"double quotes\" require exact words, -word excludes, and "
+        "kind:file|code|session, ext:pdf, in:<folder or repo> filter. read(id) gives full text. "
         "who_knows finds the people who wrote the code about a topic; use it to suggest who to ask. "
         "Everything is limited to this connection's scope (see current_scope): e.g. the repo the agent runs in. "
         "Settings (indexed folders, repo sweep, hotkey, editor, LLM) can be read and changed with get_settings/update_settings."),
@@ -58,9 +61,11 @@ def tool(name=None):
 
 @tool()
 def search(query: str, limit: int = 10, kind: str | None = None) -> dict:
-    """Search files, code and agent sessions. Plain words match by meaning; "quoted phrases" must appear exactly;
-    -word excludes; filters: kind:file|code|session, ext:<extension>, in:<path or repo substring>.
-    Returns ranked results with an id to pass to read/open/similar."""
+    """Find code, files or past agent sessions in one call. Use it before Grep/Glob to locate code: describe what
+    the code does, or give a function/class name or an error string, or mix them ("fetchCompanies retry on 429");
+    meaning, keywords and exact names are ranked together and the right file is usually the first result.
+    "quoted phrases" must appear exactly; -word excludes; filters: kind:file|code|session, ext:<extension>,
+    in:<path or repo substring>. Returns ranked results (path, line, snippet) with an id for read/similar."""
     r = _c()["searcher"].find(query, limit, [kind] if kind else None, scope=_scope())
     return {"query": r["query"], "scope": r["scope"]["name"], "results": [{k: x[k] for k in ("id", "kind", "title", "subtitle", "path", "line", "snippet", "match", "score", "is_dir", "author")}
                                              for x in r["results"]]}

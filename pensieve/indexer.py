@@ -30,10 +30,14 @@ def embedder():
     return _embedder
 
 
+CODE_QUERY = "Instruct: Given a description of what some code does, retrieve the source code that implements it\nQuery:"
+
+
 def embed(texts, query=False) -> np.ndarray:
+    """`query`: True for the model's general search instruction, or an instruction string (e.g. CODE_QUERY)."""
+    kw = {"prompt": query} if isinstance(query, str) else {"prompt_name": "query" if query else None}
     with _embed_lock:
-        v = embedder().encode(texts, batch_size=16, normalize_embeddings=True,
-                              prompt_name="query" if query else None, show_progress_bar=False)
+        v = embedder().encode(texts, batch_size=16, normalize_embeddings=True, show_progress_bar=False, **kw)
     return np.asarray(v, dtype=np.float32)
 
 
@@ -92,6 +96,8 @@ class Store:
         self._indexed_at = {}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
+        from .search import code_words
+        self.db.create_function("code_words", 1, code_words, deterministic=True)  # used by the code keyword index
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions(
           id TEXT PRIMARY KEY, source TEXT, project TEXT, title TEXT, path TEXT,
@@ -296,9 +302,9 @@ class Store:
                 known = [i for i, s in enumerate(sessions) if s in placed]
                 Pk = np.array([placed[sessions[i]][:3] for i in known], dtype=np.float32)
                 Pn = place_new(C[known], Pk, C[missing], k=3, jitter=0.05)
-                nearest = nearest(C[missing], C[known])
+                near = nearest(C[missing], C[known])
                 for j, i in enumerate(missing):
-                    cl = placed[sessions[known[nearest[j]]]][3]
+                    cl = placed[sessions[known[near[j]]]][3]
                     self.db.execute("UPDATE sessions SET x=?, y=?, z=?, cluster=? WHERE id=?",
                                     (*map(float, Pn[j]), cl, sessions[i]))
             self.db.commit()
