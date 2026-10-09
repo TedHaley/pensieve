@@ -1,5 +1,6 @@
 """MCP server: lets any agent search, read, and configure Pensieve. Served at http://127.0.0.1:<port>/mcp
 (streamable HTTP); `pensieve mcp` bridges stdio to it for agents that only speak stdio."""
+import contextvars
 import functools
 from typing import Any
 
@@ -8,7 +9,20 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from . import actions, scopes, settings, sources
 
-mcp = MCPServer(
+# Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
+# default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
+AGENT_TOOLS = {"search", "read", "similar", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
+               "current_scope", "open"}
+tool_profile = contextvars.ContextVar("tool_profile", default="agent")
+
+
+class _Server(MCPServer):
+    async def list_tools(self):
+        tools = await super().list_tools()
+        return tools if tool_profile.get() == "all" else [t for t in tools if t.name in AGENT_TOOLS]
+
+
+mcp = _Server(
     name="pensieve",
     instructions=(
         "Pensieve indexes this Mac's documents, git repos (with blame and history) and past AI agent sessions. "
@@ -19,7 +33,7 @@ mcp = MCPServer(
         "kind:file|code|session, ext:pdf, in:<folder or repo> filter. read(id) gives full text. "
         "who_knows finds the people who wrote the code about a topic; use it to suggest who to ask. "
         "Everything is limited to this connection's scope (see current_scope): e.g. the repo the agent runs in. "
-        "Settings (indexed folders, repo sweep, hotkey, editor, LLM) can be read and changed with get_settings/update_settings."),
+        "Connections opened with ?tools=all can also read and change Pensieve's settings, folders and scopes."),
 )
 
 
@@ -286,9 +300,11 @@ async def _scoped(scope, receive, send):
         await JSONResponse({"error": f"unknown Pensieve scope {e.args[0]!r}"}, status_code=404)(scope, receive, send)
         return
     token = scopes.current.set(sc)
+    ptoken = tool_profile.set("all" if q.get("tools") == "all" else "agent")
     try:
         await _endpoint(scope, receive, send)
     finally:
+        tool_profile.reset(ptoken)
         scopes.current.reset(token)
 
 

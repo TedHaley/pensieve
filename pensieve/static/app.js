@@ -1892,6 +1892,35 @@ const SET_TABS = [
   ['advanced', 'Advanced', '#8e8e93', '<path d="M5 7h8M17 7h2M5 17h2M11 17h8" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="9" cy="17" r="2" fill="none" stroke="#fff" stroke-width="1.8"/>'],
 ];
 S.setTab = store.get('setTab', 'sources');
+// Agent add-ons: an instructions block for CLAUDE.md / AGENTS.md and optional Claude Code skills (pensieve/integrations)
+const IG_STATE = {on: 'Installed', stale: 'Update available', off: '', theirs: 'A folder with this name exists (not Pensieve’s)'};
+async function loadIntegrations() {
+  const box = $('#igbox');
+  if (!box) return;
+  let st;
+  try { st = await (await fetch('/api/integrations')).json(); } catch { box.innerHTML = '<p class="sc-p">Could not load add-ons.</p>'; return; }
+  const tog = (kind, id, state, dis) => `<label class="tog"><input type="checkbox" data-ig="${kind}:${id}" ${state === 'on' || state === 'stale' ? 'checked' : ''} ${dis ? 'disabled' : ''}></label>`;
+  const row = (k, d, kind, id, state, dis) => `<div class="set-row"><div><div class="k">${k}</div><div class="d">${d}${IG_STATE[state] ? ` · <b>${esc(IG_STATE[state])}</b>` : ''}</div></div><div>${state === 'stale' ? `<button class="btn" data-igup="${kind}:${id}">Update</button> ` : ''}${tog(kind, id, state, dis)}</div></div>`;
+  box.innerHTML = `<p class="sc-p">Agents grep by habit. These tell them to search with Pensieve first, which on our benchmark solved more lookups with about 40% fewer tool calls. Nothing changes until you switch one on; switching it off removes exactly what was added.</p>
+    <div class="cmd-l">Instructions block: “search before you grep”</div>
+    ${st.instructions.map(t => row(esc(t.label), `Adds a marked section to <code>${esc(t.path)}</code>`, 'ins', t.id, t.state)).join('')}
+    <div class="cmd-l" style="margin-top:10px">Claude Code skills (in <code>~/.claude/skills</code>)</div>
+    ${st.skills.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'skill', k.id, k.state, k.state === 'theirs')).join('')}
+    <div class="cmd-l" style="margin-top:10px">Other agents (Cursor, Windsurf, …): paste into the agent’s rules</div>
+    <div class="cmd ig-text"><code>${esc(st.text)}</code><button class="btn" data-copy="${esc(st.text)}">Copy</button></div>
+    <p class="sc-p" style="margin-top:6px">From a terminal: <code>pensieve integrate recommended</code></p>`;
+  const set = async (key, on) => {
+    const [kind, id] = key.split(':');
+    const r = await fetch('/api/integrations/' + encodeURIComponent(id), {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({on})});
+    if (!r.ok) toast('Could not change: ' + ((await r.json().catch(() => ({}))).detail || r.status));
+    else toast(on ? (kind === 'ins' ? 'Instructions added' : 'Skill installed') : (kind === 'ins' ? 'Instructions removed' : 'Skill removed'));
+    loadIntegrations();
+  };
+  $$('[data-ig]', box).forEach(i => i.onchange = () => set(i.dataset.ig, i.checked));
+  $$('[data-igup]', box).forEach(b => b.onclick = () => set(b.dataset.igup, true));
+  $$('[data-copy]', box).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
+}
+
 function setTab(t) { S.setTab = t; store.set('setTab', t); if (S.view === 'settings') renderSettings(); }
 async function renderSettings() {
   const el = $('#settings');
@@ -1914,12 +1943,13 @@ async function renderSettings() {
   else if (tab === 'scopes') body = bar('Scopes', 'Named slices of the index that agents and search work within.') + `<div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>`;
   else if (tab === 'agents') body = bar('Search & Agents', 'How you and your agents reach Pensieve.', true) + form(['Mac app']).map(card).join('') + `
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
-      <p class="sc-p">Pensieve is an MCP server: Claude Code, Codex, Cursor and other agents can search your files, code and sessions, find who knows what, and change these settings.</p>
+      <p class="sc-p">Pensieve is an MCP server: Claude Code, Codex, Cursor and other agents can search your files, code and sessions and find who knows what. Agents get the 10 search and people tools by default; add <code>?tools=all</code> (HTTP) or <code>--all-tools</code> (stdio) to let one change these settings too.</p>
       <div class="cmd-l">Claude Code (HTTP)</div>${cmd(`claude mcp add --transport http pensieve ${mcpUrl}`)}
       <div class="cmd-l">Agents that only speak stdio — scoped automatically to the repo the agent starts in</div>${cmd('pensieve mcp')}
       <div class="cmd-l">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
-    </div>`;
+    </div>
+    <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
   else if (tab === 'ai') body = bar('AI & Insights', 'Optional: the engine that writes summaries, topic names and insights.') + aiSettingsHtml();
   else if (tab === 'appearance') body = bar('Appearance', 'Matches the Pensieve Mac app.') + `
     <div class="set-card"><div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes.</div></div>
@@ -1936,6 +1966,7 @@ async function renderSettings() {
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
   if (tab === 'ai') bindAISettings($('#setmain'));
+  if (tab === 'agents') loadIntegrations();
   const upd = $('[data-upd]', el);
   if (upd) upd.onchange = async () => {
     const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({auto_update_check: upd.checked})});

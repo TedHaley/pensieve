@@ -13,6 +13,7 @@ Arms (each a `claude -p` run in the repo, sessions not saved so they never reach
   grep      Read, Grep, Glob only
   pensieve  the same plus Pensieve's search/read/similar MCP tools, scoped to the repo
   nudged    like pensieve, plus one system-prompt line saying to search by meaning with Pensieve first
+  guided    like pensieve, plus the CLAUDE.md instructions block from pensieve/integrations/instructions.md
   only      Pensieve's MCP tools plus Read (no Grep/Glob)
 """
 import argparse
@@ -196,6 +197,7 @@ ANSWER = """
 Search efficiently. When you are confident, end your reply with a single line:
 ANSWER: <path of the file, relative to the repository root>"""
 MIX = ["query", "ident", "desc", "literal", "mixed"]
+GUIDE = (Path(__file__).parent.parent / "pensieve" / "integrations" / "instructions.md").read_text()
 
 
 def styled(tasks):
@@ -214,9 +216,11 @@ def arm_config(arm, root):
     mcp = {"pensieve": {"type": "http", "url": f"{API}/mcp?" + urllib.parse.urlencode(dict(scope="auto", cwd=root))}}
     if arm == "grep":
         return dict(tools="Read,Grep,Glob", allowed="Read,Grep,Glob", mcp=None)
-    if arm in ("pensieve", "nudged"):
+    if arm in ("pensieve", "nudged", "guided"):
+        # guided: the instructions block users can add to CLAUDE.md (pensieve/integrations/instructions.md)
+        system = NUDGE if arm == "nudged" else GUIDE if arm == "guided" else None
         return dict(tools="Read,Grep,Glob", allowed=",".join(["Read", "Grep", "Glob", *PENSIEVE_TOOLS]), mcp=mcp,
-                    system=NUDGE if arm == "nudged" else None)
+                    system=system)
     if arm == "only":
         return dict(tools="Read", allowed=",".join(["Read", *PENSIEVE_TOOLS]), mcp=mcp)
     raise SystemExit(f"unknown arm {arm}")
@@ -273,7 +277,7 @@ def report(a):
     root = str(Path(a.repo).expanduser().resolve())
     name = f"runs-{a.model}.jsonl" if a.tasks == "tasks.jsonl" else f"runs-{a.model}-{a.label}.jsonl"
     runs = [json.loads(l) for l in (out_dir(root) / name).read_text().splitlines()]
-    arms = sorted({r["arm"] for r in runs}, key=["grep", "pensieve", "nudged", "only"].index)
+    arms = sorted({r["arm"] for r in runs}, key=["grep", "pensieve", "nudged", "guided", "only"].index)
     med = lambda xs: sorted(xs)[len(xs) // 2] if xs else 0
     print(f"{Path(root).name}, {a.model}, {len({r['task'] for r in runs})} tasks\n")
     print(f"{'arm':<9}{'found':>8}{'cost/task':>11}{'med tokens':>12}{'med calls':>11}{'med secs':>10}  tools used")

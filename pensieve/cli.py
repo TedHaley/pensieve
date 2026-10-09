@@ -2,6 +2,8 @@
 
     pensieve [serve]   run the indexer + visualizer + MCP server (http://127.0.0.1:8765, MCP at /mcp)
     pensieve mcp       MCP over stdio for agents that don't speak HTTP; starts the server if it isn't running
+    pensieve integrate [all | recommended | claude codex pensieve-search ...] [--remove]
+                       agent add-ons: an instructions block for CLAUDE.md / AGENTS.md and Claude Code skills
 
 Options are turned into env vars before anything reads config."""
 import argparse
@@ -15,7 +17,11 @@ import webbrowser
 
 def main():
     ap = argparse.ArgumentParser(prog="pensieve", description="Semantic search and a 3D map over your files, git repos and AI agent sessions.")
-    ap.add_argument("command", nargs="?", choices=["serve", "mcp"], default="serve")
+    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate"], default="serve")
+    ap.add_argument("items", nargs="*", help="integrate only: what to install (no items: show what's available)")
+    ap.add_argument("--remove", action="store_true", help="integrate only: remove the named add-ons")
+    ap.add_argument("--all-tools", action="store_true",
+                    help="mcp only: also expose the tools that change Pensieve's settings, folders and scopes")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PENSIEVE_PORT", 8765)))
     ap.add_argument("--data", help="where the index lives (default ~/.pensieve)")
     ap.add_argument("--repos", nargs="+", metavar="PATH",
@@ -34,7 +40,9 @@ def main():
     if a.repos:
         os.environ["PENSIEVE_REPOS"] = os.pathsep.join(os.path.abspath(os.path.expanduser(p)) for p in a.repos)
     if a.command == "mcp":
-        return stdio_bridge(a.port, a.scope)
+        return stdio_bridge(a.port, a.scope, a.all_tools)
+    if a.command == "integrate":
+        return integrate(a.items, a.remove)
 
     import uvicorn
     from . import config, settings
@@ -51,6 +59,32 @@ def main():
     os._exit(0)
 
 
+def integrate(items, remove=False):
+    from . import integrations as ig
+    st = ig.status()
+    if not items:
+        print("Instructions block (tells the agent to search with Pensieve before grepping):")
+        for t in st["instructions"]:
+            print(f"  {t['id']:<20} {t['state']:<6} {t['path']}")
+        print("Claude Code skills:")
+        for k in st["skills"]:
+            print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
+        print("\npensieve integrate recommended        # Claude Code instructions + pensieve-search")
+        print("pensieve integrate <id>... [--remove]")
+        return
+    targets = {t["id"] for t in st["instructions"]}
+    if items == ["all"]:
+        items = [*targets, *ig.SKILLS]
+    elif items == ["recommended"]:
+        items = ["claude", *(n for n, v in ig.SKILLS.items() if v[2])]
+    for it in items:
+        try:
+            state = ig.set_instructions(it, not remove) if it in targets else ig.set_skill(it, not remove)
+            print(f"{it}: {state}")
+        except (ValueError, KeyError) as e:
+            print(f"{it}: {e}", file=sys.stderr)
+
+
 def _up(base):
     import httpx
     try:
@@ -59,7 +93,7 @@ def _up(base):
         return False
 
 
-def stdio_bridge(port, scope="auto"):
+def stdio_bridge(port, scope="auto", all_tools=False):
     """Relay newline-delimited JSON-RPC between stdin/stdout and the server's streamable HTTP endpoint."""
     import json
     import httpx
@@ -75,7 +109,7 @@ def stdio_bridge(port, scope="auto"):
             time.sleep(0.5)
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
     from urllib.parse import urlencode
-    url = f"{base}/mcp?" + urlencode({"scope": scope, "cwd": os.getcwd()})
+    url = f"{base}/mcp?" + urlencode({"scope": scope, "cwd": os.getcwd(), **({"tools": "all"} if all_tools else {})})
     with httpx.Client(timeout=None) as c:
         for line in sys.stdin:
             if not line.strip():

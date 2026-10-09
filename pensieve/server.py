@@ -746,6 +746,29 @@ def remove_folder(path: str):
     return sources.catalog(store, repos, files)
 
 
+@app.get("/api/integrations")
+def get_integrations():
+    from . import integrations
+    return integrations.status()
+
+
+class IntegrationReq(BaseModel):
+    on: bool
+
+
+@app.put("/api/integrations/{item}")
+def put_integration(item: str, req: IntegrationReq):
+    from . import integrations
+    try:
+        if item in integrations.TARGETS:
+            integrations.set_instructions(item, req.on)
+        else:
+            integrations.set_skill(item, req.on)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return integrations.status()
+
+
 @app.get("/api/settings")
 def get_settings():
     return {"settings": settings.public(settings.load()), "defaults": settings.DEFAULTS, "descriptions": settings.DESCRIPTIONS}

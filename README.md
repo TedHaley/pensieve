@@ -69,7 +69,44 @@ claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=paymen
 
 For agents that only speak stdio, the JSON config is `{"mcpServers": {"pensieve": {"command": "pensieve", "args": ["mcp"]}}}`. `pensieve mcp` starts the backend if it isn't running.
 
-Tools: `search`, `read`, `similar`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `unexplored`, `open`, `show_search`, `show_visualizer`, `status`, `current_scope`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`.
+Tools: `search`, `read`, `similar`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `unexplored`, `open`, `current_scope`. Tool descriptions are sent to the agent on every turn, so these ten are all an agent sees by default. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`.
+
+### Get the most out of it: agent add-ons
+
+Agents grep by habit, even with Pensieve connected. Optional add-ons fix that (Settings → Search & Agents → Agent add-ons, or the command line):
+
+```bash
+pensieve integrate                    # what's available and what's installed
+pensieve integrate recommended        # the instructions block in ~/.claude/CLAUDE.md + the pensieve-search skill
+pensieve integrate codex              # the same block in ~/.codex/AGENTS.md
+pensieve integrate pensieve-teammates pensieve-plan
+pensieve integrate claude --remove    # removes exactly what was added
+```
+
+- **Instructions block** ([`instructions.md`](pensieve/integrations/instructions.md)): a short "search before you grep" section, kept between `<!-- pensieve:start -->` markers. Paste it into any other agent's rules (Cursor, Windsurf, …).
+- **`pensieve-search` skill** (recommended): query styles, when to fall back to grep, finding similar code before writing new code, recalling past sessions.
+- **`pensieve-teammates`**: suggests who knows an area from git blame and drafts the question for you. It never messages anyone.
+- **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.
+
+### Does it help? The benchmark
+
+[`bench/`](bench) measures it with Claude Code itself. Tasks are generated from your indexed code (a chunk is described in plain words, or by a name it defines, an error string from it, or a mix), and Claude Sonnet runs headless with and without Pensieve; the answer is the file. On 72 held-out tasks across four repos (483 to 33k files):
+
+| | Grep, Glob, Read | With Pensieve + instructions block |
+|---|---|---|
+| Tasks solved | 62 / 72 | **66 / 72** |
+| Tool calls per lookup | 3.6 | **2.1** |
+| Cost per lookup, all repos | $0.080 | **$0.075** |
+| Cost per lookup, 33k-file monorepo | $0.105 | **$0.083** |
+
+Pensieve's search alone puts the right file first for 96% of error strings, 92% of identifiers and 67% of descriptions (a single grep: 92%, 54%, 0%). In repos under ~1,800 files the tool descriptions cost more than the searches they save (a few percent per lookup). Run it on your repos:
+
+```bash
+uv run python bench/agent_search.py gen --repo ~/code/myrepo -n 40 --tasks tasks-v2.jsonl
+uv run python bench/exact_tasks.py                      # adds name / error-string / mixed queries
+uv run python bench/agent_search.py find --repo all --tasks tasks-v2.jsonl --styles query,desc,mixed,ident,literal
+uv run python bench/agent_search.py run --repo ~/code/myrepo --tasks tasks-v2.jsonl --arms grep,guided
+```
 
 ## What gets indexed
 
@@ -92,7 +129,7 @@ Everything Pensieve stores lives in `~/.pensieve`. Delete that folder to start o
 
 ## Settings
 
-Change them in the visualizer (Settings), from an agent (`update_settings`), or in `~/.pensieve/settings.json`.
+Change them in the visualizer (Settings), from an agent connected with `--all-tools` (`update_settings`), or in `~/.pensieve/settings.json`.
 
 | Setting | Default |
 |---|---|
@@ -127,7 +164,8 @@ Search, maps, activity, keyword topics, your footprint in each repo and teammate
 ```bash
 pensieve                 # backend + visualizer in the browser (http://localhost:8765)
 pensieve --no-open       # backend only (what the Mac app runs)
-pensieve mcp             # MCP over stdio
+pensieve mcp             # MCP over stdio (--all-tools to include the settings tools)
+pensieve integrate       # agent add-ons: instructions block and skills
 ```
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
