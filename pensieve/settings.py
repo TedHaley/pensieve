@@ -38,6 +38,7 @@ DEFAULTS = {
     "builtin_model": "mlx-community/Qwen3.5-9B-MLX-4bit",
     "agent_model": "haiku",    # model passed to `claude -p --model` when ai = claude
     "ai_on_battery": False,    # run background AI work (summaries, insights) on battery power
+    "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "auto_update_check": True,  # the Mac app checks GitHub Releases daily and offers updates (never installs by itself)
     "llm_url": "http://localhost:1234/v1",
     "llm_model": "qwen/qwen3.5-9b",
@@ -64,6 +65,7 @@ DESCRIPTIONS = {
     "builtin_model": "The MLX model the built-in engine runs.",
     "agent_model": "Model for the Claude Code engine (claude -p --model).",
     "ai_on_battery": "Keep writing summaries and insights in the background while on battery power.",
+    "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
     "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
     "llm_url": "OpenAI-compatible endpoint, local (LM Studio, Ollama) or hosted, for summaries and insights.",
     "llm_model": "Chat model used for summaries and insights.",

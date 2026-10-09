@@ -1,4 +1,5 @@
 """Background LLM enrichment: session + chunk summaries, topic names, and corpus-level insights."""
+import hashlib
 import json
 import re
 import time
@@ -126,18 +127,48 @@ def insight_key(scope=None):
     return f"insights:{scope}" if scope else "insights"
 
 
-def generate_insights(store, scope=None, sids=None, topics=None, codebase=""):
-    """Corpus-level insights. With `scope`, only sessions in `sids` are read, `topics` are that scope's topics, and the
-    result is cached under its own key. `codebase` is grounding text (unexplored areas, team activity)."""
-    topics = topics if topics is not None else store.topics()
-    member = {s: t["id"] for t in topics for s in t["sessions"]}
+def insight_rows(store, sids=None):
+    """The sessions insights are written from: the newest 120 with a summary (within `sids`)."""
     with store.lock:
         rows = store.db.execute(
             "SELECT id, title, summary, project_name, cluster, substr(started,1,10) FROM sessions "
             "WHERE n_chunks>0 AND summary IS NOT NULL ORDER BY updated DESC").fetchall()
     if sids is not None:
         rows = [r for r in rows if r[0] in sids]
-    rows = rows[:120]
+    return rows[:120]
+
+
+def topic_sig(topics):
+    """Which sessions sit together, not what the topics are called (names arrive later and shouldn't count)."""
+    groups = sorted(sorted(t["sessions"]) for t in topics)
+    return hashlib.sha1(json.dumps(groups).encode()).hexdigest()[:16]
+
+
+INSIGHT_MIN_AGE = 6 * 3600  # never rewrite more often than this, however much changes
+
+
+def insights_stale(store, d, sids=None, topics=None):
+    """Out of date: the topics were re-clustered, or a fifth (at least 5) of the sessions they were written from
+    are new or gone, and they're older than INSIGHT_MIN_AGE. Insights from before this was recorded count as
+    out of date."""
+    if not d or time.time() - d.get("generated", 0) < INSIGHT_MIN_AGE:
+        return False
+    basis = d.get("basis")
+    if not basis:
+        return True
+    now = {r[0] for r in insight_rows(store, sids)}
+    old = set(basis["sessions"])
+    if topics is not None and basis.get("topics") != topic_sig(topics):
+        return True
+    return len(now ^ old) >= max(5, 0.2 * len(now | old))
+
+
+def generate_insights(store, scope=None, sids=None, topics=None, codebase=""):
+    """Corpus-level insights. With `scope`, only sessions in `sids` are read, `topics` are that scope's topics, and the
+    result is cached under its own key. `codebase` is grounding text (unexplored areas, team activity)."""
+    topics = topics if topics is not None else store.topics()
+    member = {s: t["id"] for t in topics for s in t["sessions"]}
+    rows = insight_rows(store, sids)
     sid = {f"S{i + 1}": r[0] for i, r in enumerate(rows)}
     lines = ["TOPICS:"] + [f"T{t['id'] + 1} {t['name']} ({len(t['sessions'])} sessions): {t['description']}" for t in topics]
     lines += ["", "SESSIONS (newest first):"] + [
@@ -175,6 +206,7 @@ def generate_insights(store, scope=None, sids=None, topics=None, codebase=""):
     d["generated"] = time.time()
     d["scope"] = scope
     d["n_sessions"] = len(rows)
+    d["basis"] = dict(sessions=[r[0] for r in rows], topics=topic_sig(topics))  # to tell when they're out of date
     with store.lock:
         store.meta(insight_key(scope), json.dumps(d))
         store.db.commit()

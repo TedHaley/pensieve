@@ -193,6 +193,14 @@ def _team_key(team):
     return f"team:{team['root']}:{team['days']}:{team['head']}"
 
 
+def _insights_due():
+    """The main insights: written once at first, then rewritten when out of date (if that's switched on)."""
+    raw = store.meta("insights")
+    if raw is None:
+        return True
+    return bool(settings.get("insights_auto")) and summarize.insights_stale(store, json.loads(raw), None, store.topics())
+
+
 async def run_insights(scope=None, sids=None):
     if status["insights_running"]:
         return
@@ -275,7 +283,7 @@ async def enricher():
             elif topics:
                 await asyncio.gather(*[loop.run_in_executor(pool, summarize.name_topic, store, t) for t in topics[:3]])
                 broadcast({"type": "topics"})
-            elif store.meta("insights") is None and not status["insights_running"] and store.topics():
+            elif not status["insights_running"] and store.topics() and await _run(_insights_due):
                 await run_insights()
             elif chunks:
                 await asyncio.gather(*[loop.run_in_executor(pool, summarize.summarize_chunk, store, c, t) for c, t in chunks[:3]])
@@ -465,6 +473,21 @@ async def refresh_insights(req: ScopeReq | None = None):
     scope = req.scope if req else None
     asyncio.create_task(run_insights(scope, req.session_ids if req and scope else None))
     return {"running": True}
+
+
+class StaleReq(BaseModel):
+    scope: str
+    session_ids: list[str]
+
+
+@app.post("/api/insights/stale")
+def insights_stale(req: StaleReq):
+    """Whether a scope's insights are out of date for the sessions it has now (the page then refreshes them)."""
+    raw = store.meta(summarize.insight_key(req.scope))
+    if not raw or not settings.get("insights_auto"):
+        return {"stale": False}
+    sids = set(req.session_ids)
+    return {"stale": summarize.insights_stale(store, json.loads(raw), sids, store.scoped_topics(sids))}
 
 
 @app.get("/api/team/{name}")

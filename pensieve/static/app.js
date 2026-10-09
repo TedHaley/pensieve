@@ -1786,7 +1786,7 @@ const SET_GROUPS = [
   ['Mac app', ['hotkey', 'editor']],
 ];
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
-const SET_HIDDEN = new Set(['repos', 'disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'auto_update_check', 'llm_url', 'llm_model', 'llm_key', 'llm_key_set']);  // managed in their own sections
+const SET_HIDDEN = new Set(['repos', 'disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'insights_auto', 'auto_update_check', 'llm_url', 'llm_model', 'llm_key', 'llm_key_set']);  // managed in their own sections
 const SRC_ICON = {
   agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
@@ -2337,6 +2337,8 @@ function aiSettingsHtml() {
       }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}</div>
     <div class="set-card ai-set"><div class="set-row" style="border-top:0"><div><div class="k">Keep working on battery power</div><div class="d">Off by default: background insight work pauses until your Mac is plugged in.</div></div>
       <div><label class="tog"><input type="checkbox" data-aibat ${bat ? 'checked' : ''}></label></div></div>
+    <div class="set-row"><div><div class="k">Refresh insights automatically</div><div class="d">When the sessions or topics behind them have changed a lot, insights are rewritten in the background, at most every 6 hours.</div></div>
+      <div><label class="tog"><input type="checkbox" data-aiauto ${S.set?.orig?.insights_auto !== false ? 'checked' : ''}></label></div></div>
       <div class="set-row"><div><div class="k">Turn off insights</div><div class="d">Stops all AI work. ${esc(NO_AI_WORKS)}</div></div>
       <div><button class="btn" data-ai="none" ${d.setting === 'none' ? 'disabled' : ''}>${d.setting === 'none' ? 'Insights are off' : 'Turn off'}</button></div></div></div>`;
 }
@@ -2395,6 +2397,8 @@ function bindAISettings(root) {
   bindAIButtons(root);
   bindAIServer(root);
   const bat = $('[data-aibat]', root);
+  const auto = $('[data-aiauto]', root);
+  if (auto) auto.onchange = async () => { await setAI({insights_auto: auto.checked}, auto.checked ? 'Insights refresh when they’re out of date' : 'Insights refresh only when you ask'); await loadSettings(true); renderSettings(); };
   if (bat) bat.onchange = async () => { await setAI({ai_on_battery: bat.checked}, bat.checked ? 'Insights keep working on battery' : 'Insights pause on battery'); await loadSettings(true); renderSettings(); };
 }
 
@@ -2457,6 +2461,13 @@ async function loadInsights() {
   // first visit to a scope with no insights yet: generate them once, in the background
   const st = S.insights;
   if (key && !st.data && !st.running && !S.insAuto.has(key) && S.scope?.sids?.size >= 3) { S.insAuto.add(key); regenInsights(); }
+  // a scope's insights that are out of date for its sessions now: refresh them once (the server checks age and the setting)
+  else if (key && st.data && !st.running && !S.insAuto.has(key)) {
+    S.insAuto.add(key);
+    const r = await api('/api/insights/stale', {method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({scope: key, session_ids: S.sessions.filter(matchProj).map(s => s.id)})}).catch(() => null);
+    if (r?.stale && scopeKey() === key) regenInsights();
+  }
 }
 async function regenInsights() {
   const key = scopeKey();
