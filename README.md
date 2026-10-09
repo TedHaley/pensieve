@@ -36,9 +36,16 @@ Press **Control+Shift** (tap both, release) to open it, or **Control+Shift+Space
 | `"rate limit"` | items containing those exact words (case-insensitive) |
 | `"rate limit" retries` | contains the phrase, ranked by the meaning of the rest |
 | `-draft` / `-"old notes"` | excludes a word or phrase |
-| `kind:code` `kind:file` `kind:session` | one kind only |
+| `kind:file` | documents and code (`kind:doc` documents only, `kind:code` code only) |
+| `kind:session` | agent sessions only |
+| `kind:folder person build` | folders whose path and contents match, e.g. `core/pipelines/person/build`; a repo is a folder too |
+| `kind:repo` | repositories (on its own: all of them) |
+| `kind:person spark jobs` | people who wrote the code about it; a plain search for a name also lists the person first |
+| `by:parth terraform` | only what that person wrote (code by git blame, documents by author) |
 | `ext:pdf` | one file type |
 | `in:anastomo` | path or repo contains this |
+
+A plain search also puts a folder first when its path names every word (`person build`). Under an empty field, **Options** lists all of these.
 
 **Return** opens · **⌘Return** reveals in Finder · **⌥Return** shows it on the map · **⌘C** copies the path · **⌘O** opens the visualizer · **Esc** closes.
 

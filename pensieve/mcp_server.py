@@ -71,9 +71,10 @@ def tool(name=None):
 @tool()
 def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     """Find code (or docs, past agent sessions) in one call; use before Grep/Glob. Query by what it does, a name, an
-    error string, or a mix ("fetchCompanies retry on 429"). "quotes" = exact, -word excludes, kind:code|file|session,
-    ext:py, in:<path>. One line per hit, best first: path:line  snippet  [id for read/similar]."""
-    r = _c()["searcher"].find(query, limit, [kind] if kind else None, scope=_scope())
+    error string, or a mix ("fetchCompanies retry on 429"). "quotes" = exact, -word excludes, ext:py, in:<path>,
+    by:<person>, kind:file|code|doc|session|folder|repo|person (folder: "person build" -> that directory; person: who
+    wrote the code about it). One line per hit, best first: path:line  snippet  [id for read/similar]."""
+    r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=_scope())
     return _lines(r["results"]) or "No matches."
 
 

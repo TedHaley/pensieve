@@ -104,6 +104,35 @@ struct HintLine: View {
                         .padding(.leading, below ? 0 : 6)
                     }
                 }
+            } else if model.showsGuidance {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(SearchModel.guidance)
+                        Button { model.optionsOpen.toggle() } label: {
+                            HStack(spacing: 3) {
+                                Text("Options")
+                                Image(systemName: model.optionsOpen ? "chevron.up" : "chevron.down")
+                                    .font(.system(size: 9, weight: .semibold))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                        .help(model.optionsOpen ? "Hide search options" : "Show search options")
+                    }
+                    if model.optionsOpen {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(SearchModel.options, id: \.0) { key, what in
+                                HStack(spacing: 0) {
+                                    Text(key).font(.system(size: SearchModel.hintFontSize, design: .monospaced))
+                                        .foregroundStyle(.primary.opacity(0.8))
+                                        .frame(width: 215, alignment: .leading)
+                                    Text(what)
+                                }
+                                .frame(height: SearchModel.optionRowHeight, alignment: .leading)
+                            }
+                        }
+                    }
+                }
             } else {
                 Group {
                     if let status = model.statusText {
@@ -119,7 +148,7 @@ struct HintLine: View {
         }
         .font(.system(size: SearchModel.hintFontSize))
         .foregroundStyle(.secondary)
-        .lineLimit(6)
+        .lineLimit(model.showsGuidance ? nil : 6)
         .padding(.top, 2)
         .padding(.leading, SearchModel.hintInsets.leading)
         .padding(.trailing, SearchModel.hintInsets.trailing)
@@ -339,6 +368,8 @@ struct HitIcon: View {
         switch hit.kind {
         case "code": return "chevron.left.forwardslash.chevron.right"
         case "session": return "bubble.left.and.text.bubble.right"
+        case "person": return "person.crop.circle"
+        case "repo": return "shippingbox"
         default: return hit.isFolder ? "folder" : "doc.text"
         }
     }
@@ -347,6 +378,8 @@ struct HitIcon: View {
         switch hit.kind {
         case "code": return .teal
         case "session": return .purple
+        case "person": return .pink
+        case "repo": return .orange
         default: return .blue
         }
     }

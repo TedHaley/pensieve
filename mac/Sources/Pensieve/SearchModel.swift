@@ -36,6 +36,10 @@ final class SearchModel: ObservableObject {
         didSet { if selected != oldValue { actionIndex = 0 } }
     }
     @Published private(set) var actionsOpen = false
+    /// The search options under an empty field, folded away behind a chevron (remembered).
+    @Published var optionsOpen = Prefs.store.bool(forKey: "searchOptionsOpen") {
+        didSet { Prefs.store.set(optionsOpen, forKey: "searchOptionsOpen"); onLayout?() }
+    }
     @Published var actionIndex = 0
 
     var onLayout: (() -> Void)?
@@ -75,12 +79,26 @@ final class SearchModel: ObservableObject {
                 let buttons = "Update ⌘U    Later    Skip this version"
                 return !updateButtons ? u : Self.updateButtonsBelow(u) ? u + "\n" + buttons : u + "     " + buttons
             }
-            if trimmed.isEmpty {
-                return "Search by meaning  ·  \"quotes\" for exact words  ·  kind:code  ext:pdf  ·  -word to exclude  ·  ⌃ or → for actions"
-            }
+            if trimmed.isEmpty { return Self.guidance }
             return nil
         }
     }
+
+    static let guidance = "Search files, code, folders, people and agent sessions"
+    static let options: [(String, String)] = [
+        ("plain words", "by meaning"),
+        ("\"quotes\"", "exact words"),
+        ("-word", "leave out"),
+        ("kind:file  code  doc  session", "only that kind (file = documents and code)"),
+        ("kind:folder  repo  person", "folders and repos by name, people who know it"),
+        ("by:name", "what someone wrote"),
+        ("in:folder  ext:pdf", "inside a path · a file type"),
+        ("⌃  or  →", "actions on the selected result"),
+    ]
+    static let optionRowHeight: CGFloat = 18
+
+    /// The plain guidance line (an empty field with nothing else to report), which has the options chevron.
+    var showsGuidance: Bool { statusText == Self.guidance }
 
     /// The parsed query as one line of text: `Exact "x"  Meaning y  Without z  kind:code`.
     var parsedText: AttributedString {
@@ -108,7 +126,8 @@ final class SearchModel: ObservableObject {
         let font = NSFont.systemFont(ofSize: Self.hintFontSize, weight: .semibold)  // bold is the wider case
         let h = (text as NSString).boundingRect(with: NSSize(width: width, height: 200),
                                                 options: [.usesLineFragmentOrigin], attributes: [.font: font]).height
-        return max(26, ceil(h) + 12)
+        let options = showsGuidance && optionsOpen ? CGFloat(Self.options.count) * Self.optionRowHeight + 6 : 0
+        return max(26, ceil(h) + 12) + options
     }
 
     /// An available update (or its download) takes the empty panel's hint line.

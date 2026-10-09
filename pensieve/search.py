@@ -6,13 +6,16 @@
     -draft  -"old notes"          -> exclude
     kind:code  ext:pdf  in:anastomo   -> filters (kind is file, code or session; in matches the path or project)
 """
+import json
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
 
 from .indexer import CODE_QUERY, embed
+from .layout import unit
 
 CORPORA = {  # kind -> (chunk table, fts table)
     "file": ("file_chunks", "fts_files"),
@@ -23,9 +26,15 @@ FTS_VERSION = "trigram-v1"
 WORDS_VERSION = "words-v1"
 WORDS_FTS = "fts_code_words"  # code split into words (camelCase and snake_case too), for keyword ranking
 _TOKEN = re.compile(r'(-?)"([^"]*)"?|(\S+)')
-_FILTER = re.compile(r"^(kind|ext|in):(.+)$", re.I)
-_KINDS = {"file": "file", "files": "file", "doc": "file", "docs": "file", "code": "code", "repo": "code",
-          "session": "session", "sessions": "session", "chat": "session", "agent": "session"}
+_FILTER = re.compile(r"^(kind|ext|in|by):(.+)$", re.I)
+_KINDS = {"file": "file", "files": "file", "doc": "doc", "docs": "doc", "document": "doc", "documents": "doc",
+          "code": "code", "session": "session", "sessions": "session", "chat": "session", "agent": "session",
+          "folder": "folder", "folders": "folder", "dir": "folder", "dirs": "folder", "directory": "folder",
+          "repo": "repo", "repos": "repo", "repository": "repo", "person": "person", "people": "person",
+          "who": "person", "author": "person"}
+# which chunk corpora each kind: searches (file = documents and code); folder/repo/person are results of their own
+_KIND_CORPORA = {"file": ["file", "code"], "doc": ["file"], "code": ["code"], "session": ["session"],
+                 "folder": [], "repo": [], "person": []}
 
 
 def code_words(text):
@@ -137,13 +146,19 @@ class Searcher:
         return {"file": self.files.index, "code": self.repos.index, "session": self.store.index}[kind]
 
     def find(self, q: str, limit=20, kinds=None, scope=None):
-        """`scope`: a scopes.Scope (None = everything); every corpus is filtered to it."""
+        """`scope`: a scopes.Scope (None = everything); every corpus is filtered to it. `kinds`: chunk corpora
+        (file = documents, code, session). In the query, kind:file|doc|code|session|folder|repo|person picks what
+        comes back (file = documents and code; a repo is a folder too) and by:<name> keeps what that person wrote."""
         from . import scopes
         pq = parse(q)
         f = pq["filters"]
-        kinds = [k for k in (kinds or CORPORA) if not f.get("kind") or f["kind"] == k]
+        kf = f.get("kind")
+        kinds = [k for k in (kinds or CORPORA) if not kf or k in _KIND_CORPORA.get(kf, [kf])]
         if f.get("ext"):
             kinds = [k for k in kinds if k != "session"]
+        by = f.get("by")
+        if by:  # what that person wrote: code by blame, documents by author, sessions by agent
+            kinds = [k for k in kinds if k != "session" or any(by in a for a in ("claude", "codex", "qwen"))]
         qv = embed([pq["semantic"]], query=True)[0] if pq["semantic"] else None
         code_ranked = {}  # (kind, chunk id) -> file-level score from _code
         hits = {}  # (kind, chunk id) -> score dict
@@ -177,6 +192,10 @@ class Searcher:
                                 h = hits.setdefault((kind, cid), dict(exact=True, bm25=0, sem=None))
                                 h.update(bm25=h["bm25"] + 50.0, name=True)
             elif qv is not None and kind == "code":
+                if by:
+                    allow = self._by_allow(by, allow)
+                    if not len(allow):
+                        continue
                 for cid, sc in self._code(pq["semantic"], allow).items():
                     hits[(kind, cid)] = dict(exact=False, bm25=0, sem=sc)
                     code_ranked[(kind, cid)] = sc
@@ -208,6 +227,8 @@ class Searcher:
                 continue
             if f.get("in") and f["in"] not in f"{r['path'] or ''} {r['subtitle']}".lower():
                 continue
+            if by and not self._by_ok(by, key[0], r):
+                continue
             if key in code_ranked:
                 score = code_ranked[key]
             elif h["sem"] is not None:
@@ -227,6 +248,18 @@ class Searcher:
                 continue
             seen.add(k)
             best.append(x)
+        extra = []
+        if not pq["semantic"] and kf == "repo":  # kind:repo alone: every repo, biggest first
+            extra += self._folders("", scope, repos_only=True, limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
+        if pq["semantic"] and kf in (None, "folder", "repo"):
+            extra += self._folders(pq["semantic"], scope, repos_only=kf == "repo", strong_only=kf is None,
+                                   limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
+        if pq["semantic"] and kf in (None, "person") and not by:
+            extra += self._people(pq["semantic"], scope, named_only=kf is None, limit=8)
+        if kf in ("folder", "repo", "person"):
+            best = extra
+        elif extra:  # a folder or person the query names outright goes first
+            best = extra + [x for x in best if x["id"] not in {e["id"] for e in extra}]
         return dict(query=pq, results=best[:limit], scope=scopes.describe(scope))
 
     def _code(self, q, allow, k=400):
@@ -319,6 +352,168 @@ class Searcher:
                 extra[list(defs)] += 2
         total = S + S.std() * extra  # the tuned z-score order, kept on the cosine scale
         return {best[f]: float(total[i]) for i, f in enumerate(keys)}
+
+    # ---- folders, repos, people ----
+    def _folder_index(self):
+        """Every folder of the indexed repos (main checkouts) and document folders: path words, files, and the mean
+        vector of what's in it. Rebuilt when the index changes."""
+        with self.lock:
+            fp = self.db.execute("SELECT (SELECT COUNT(*) FROM code_chunks WHERE wt=''), (SELECT MAX(id) FROM code_chunks), "
+                                 "(SELECT COUNT(*) FROM file_chunks)").fetchone()
+        if getattr(self, "_fidx", None) and self._fidx["fp"] == fp:
+            return self._fidx
+        home = str(Path.home())
+        with self.lock:
+            names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
+            code = self.db.execute("SELECT id, repo, path, vec, authors FROM code_chunks WHERE wt=''").fetchall()
+            docs = self.db.execute("SELECT c.id, f.path, c.vec, f.author, f.root FROM file_chunks c JOIN files f ON f.path=c.path "
+                                   "WHERE f.kind!='folder'").fetchall()
+        dirs, ids, vecs = {}, [], []
+        def add(key, **kw):
+            d = dirs.get(key)
+            if d is None:
+                d = dirs[key] = dict(kw, idx=[], files=Counter())
+            return d
+        for i, (cid, repo, path, vec, _) in enumerate(code):
+            ids.append(("code", cid)); vecs.append(vec)
+            parts = path.split("/")[:-1]
+            for depth in range(len(parts) + 1):
+                rel = "/".join(parts[:depth])
+                d = add(f"{repo}/{rel}".rstrip("/"), repo=repo, name=names.get(repo, Path(repo).name), rel=rel, root=not rel)
+                d["idx"].append(i); d["files"][path.rsplit("/", 1)[-1]] += 1
+        for j, (cid, path, vec, _, root) in enumerate(docs):
+            ids.append(("file", cid)); vecs.append(vec)
+            parent = str(Path(path).parent)
+            base = str(Path(root).expanduser()) if root else home
+            if not parent.startswith(base):
+                continue
+            parts = parent[len(base):].strip("/").split("/") if parent != base else []
+            for depth in range(1, len(parts) + 1):
+                rel = "/".join(parts[:depth])
+                d = add(f"{base}/{rel}", repo=None, name=Path(base).name, rel=rel, root=False, base=base)
+                d["idx"].append(len(code) + j); d["files"][Path(path).name] += 1
+        V = unit(np.stack([np.frombuffer(v, np.float16) for v in vecs]).astype(np.float32)) if vecs else np.zeros((0, 1))
+        keys = [k for k, d in dirs.items() if len(d["files"]) >= 1]
+        C = unit(np.stack([V[dirs[k]["idx"]].mean(0) for k in keys])) if keys else np.zeros((0, 1))
+        for k in keys:  # words of the path, by segment (repo name first)
+            d = dirs[k]
+            d["segs"] = [set(code_words(x).split()) for x in [d["name"], *(d["rel"].split("/") if d["rel"] else [])]]
+        people = Counter()
+        for c in code:
+            for who, n in json.loads(c[4] or "{}").items():
+                people[who.split(" <")[0]] += n
+        self._fidx = dict(fp=fp, keys=keys, dirs=dirs, C=C, ids=ids, people=people,
+                          authors={("code", c[0]): (c[4] or "").lower() for c in code},
+                          doc_author={("file", c[0]): (c[3] or "").lower() for c in docs})
+        return self._fidx
+
+    @staticmethod
+    def _path_match(words, segs):
+        """How well the query's words name this folder: the share of words found in its path (a word may be a prefix
+        of a path word, 'pipeline' ~ 'pipelines'), more when they sit at the end, less for each level below them."""
+        if not words:
+            return 0.0, 0.0
+        last, found = -1, 0
+        for w in words:
+            at = [i for i, seg in enumerate(segs) if any(x == w or (len(w) >= 4 and x.startswith(w)) for x in seg)]
+            if at:
+                found += 1; last = max(last, at[-1])
+        cover = found / len(words)
+        if not found:
+            return 0.0, 0.0
+        below = len(segs) - 1 - last
+        return cover, cover + (0.15 if below == 0 else 0) - 0.08 * below
+
+    def _folders(self, q, scope, repos_only=False, strong_only=False, limit=20, by=None, ext=None, within=None):
+        """Folder (and repo) results: path words and what the folder holds both count. strong_only: only folders
+        whose path names every word of the query (shown above files in a plain search)."""
+        ix = self._folder_index()
+        if not ix["keys"]:
+            return []
+        words = sorted(set(code_words(q).split()))
+        qv = None if q.strip() else np.zeros(ix["C"].shape[1], np.float32)  # no words: rank by size
+        home = str(Path.home())
+        by_ok = None
+        if by:
+            by_ok = {i for i, k in enumerate(ix["ids"]) if by in (ix["authors"].get(k) or ix["doc_author"].get(k) or "").lower()}
+        out = []
+        for j, key in enumerate(ix["keys"]):
+            d = ix["dirs"][key]
+            if repos_only and not d["root"]:
+                continue
+            if scope is not None:
+                if d["repo"] and scope.repos is not None and d["repo"] not in scope.repos:
+                    continue
+                if not d["repo"] and scope.folders is not None and not any(key.startswith(str(Path(x).expanduser())) for x in scope.folders):
+                    continue
+            if within and within not in key.lower():
+                continue
+            if ext and not any(n.lower().endswith("." + ext) for n in d["files"]):
+                continue
+            if by_ok is not None and not any(i in by_ok for i in d["idx"]):
+                continue
+            cover, path = self._path_match(words, d["segs"])
+            if strong_only and (cover < 1 or path < 1):
+                continue
+            if qv is None:  # embedded only once some folder is in the running
+                qv = embed([q], query=CODE_QUERY)[0]
+            score = path + 0.8 * float(ix["C"][j] @ qv) + (0 if q.strip() else len(d["files"]) / 1e6)
+            out.append((score, key, d, cover))
+        out.sort(key=lambda x: -x[0])
+        res = []
+        for score, key, d, cover in out[:(2 if strong_only else limit)]:
+            files = d["files"]
+            where = (d["name"] + ("/" + d["rel"].rsplit("/", 1)[0] if "/" in d["rel"] else "")) if d["repo"] else \
+                str(Path(key).parent).replace(home, "~", 1)
+            title = d["name"] if d["root"] else d["rel"].rsplit("/", 1)[-1]
+            res.append(dict(id=f"folder:{key}", kind="repo" if d["root"] else "folder", title=title,
+                            subtitle=("Repository · " if d["root"] else f"Folder in {where} · ") +
+                            f"{len(files):,} file{'' if len(files) == 1 else 's'}",
+                            path=key, line=None, is_dir=True, ext="", mtime=None, author=None, highlights=[],
+                            snippet="Mostly " + ", ".join(n for n, _ in files.most_common(4)),
+                            score=round(1.0 + 0.1 * score if strong_only else score, 4), match="folder"))
+        return res
+
+    def _by_allow(self, by, allow):
+        """Code chunk ids that `by` (a name, any part, case-insensitive) has blamed lines in, within `allow`."""
+        with self.lock:
+            ids = np.array([r[0] for r in self.db.execute("SELECT id FROM code_chunks WHERE lower(authors) LIKE ?",
+                                                         (f"%{by}%",))], dtype=np.uint64)
+        return ids if allow is None else np.intersect1d(ids, allow)
+
+    def _by_ok(self, by, kind, r):
+        if kind == "session":
+            return by in (r.get("subtitle") or "").lower()
+        if kind == "file":
+            return by in (r.get("author") or "").lower()
+        return by in self._folder_index()["authors"].get(("code", int(r["id"].split(":")[1])), "")
+
+    def _people(self, q, scope, named_only=False, limit=8):
+        """People for a query: someone it names outright, or (kind:person) whoever wrote most of the matching code."""
+        from . import scopes
+        names = self._folder_index()["people"]
+        ql = q.strip().lower()
+        named = [w for w in names if len(ql) >= 3 and (w.lower() == ql or w.lower().startswith(ql + " ")
+                                                         or ql in w.lower().split())]
+        out = []
+        if named:
+            for w in sorted(named, key=lambda w: -names[w])[:3]:
+                out.append(dict(id=f"person:{w}", kind="person", title=w, subtitle=f"Person · {names[w]:,} lines written",
+                                path=None, line=None, is_dir=False, ext="", mtime=None, author=w, highlights=[],
+                                snippet="Open to see what they know about", score=1.5, match="person"))
+            return out
+        if named_only:
+            return []
+        allow = scopes.allowlist(scope, "code", self.store, self.repos, self.repos.index) if scope else None
+        top = sorted(self._code(q, allow).items(), key=lambda x: -x[1])[:40]
+        for e in self.repos._experts_from([(cid, sc) for cid, sc in top])[:limit]:
+            w = e["author"].split(" <")[0]
+            out.append(dict(id=f"person:{w}", kind="person", title=w,
+                            subtitle=f"Person · wrote {round(e['share'] * 100)}% of the code about this",
+                            path=None, line=None, is_dir=False, ext="", mtime=e["last_active"], author=w, highlights=[],
+                            snippet="Main files: " + ", ".join(Path(x).name for x in e["files"][:3]),
+                            score=round(e["share"], 4), match="person"))
+        return out
 
     def _rows(self, hits):
         by = {}

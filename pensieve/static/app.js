@@ -2201,6 +2201,16 @@ async function openItem(id) {
   const i = id.indexOf(':'), kind = id.slice(0, i), ref = id.slice(i + 1);
   if (kind === 'file') return openFile(ref);
   if (kind === 'session') return openSession(ref);
+  if (kind === 'folder') {  // filter the map to it (a repo is its top folder)
+    if (S.view !== 'data') await setView('data');
+    const k = relHome(ref);
+    if (!dataTree().roots.includes(k.split('/')[0])) return openOnMac(id, 'reveal');  // nothing of it on the map
+    return toggleDataFolder(k, true);
+  }
+  if (kind === 'person') {
+    if (S.view !== 'data') await setView('data');
+    return openPersonPanel(whoOf(ref));
+  }
   if (kind === 'code') {
     const c = await api('/api/code/' + enc(ref)).catch(() => null);
     if (!c) return toast('That code is no longer in the index.');
@@ -2707,7 +2717,9 @@ const FIND_IC = {file: '▤', code: '⌗', session: '◌'};
 const FOLDER_IC = '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="currentColor" opacity=".85"/></svg>';
 function findItem(r) {
   const ex = r.match === 'exact' || r.match === 'both';
-  if (r.is_dir) return {ic: FOLDER_IC, title: r.title, titleHtml: esc(r.title) + '<span class="ex">folder</span>', subHtml: `<span style="font-size:11.5px">${esc(r.subtitle)}</span>`, rt: 'Reveal', run: () => openOnMac(r.id, 'reveal')};
+  if (r.kind === 'person') return {ic: '👤', title: r.title, titleHtml: esc(r.title), subHtml: `<span style="font-size:11.5px">${esc(r.subtitle)}</span>${r.snippet ? ' — ' + esc(r.snippet) : ''}`, rt: 'Open', run: () => openItem(r.id)};
+  if (r.is_dir) return {ic: FOLDER_IC, title: r.title, titleHtml: esc(r.title) + `<span class="ex">${r.kind === 'repo' ? 'repo' : 'folder'}</span>`, subHtml: `<span style="font-size:11.5px">${esc(r.subtitle)}</span>${r.snippet ? ' — ' + esc(r.snippet) : ''}`,
+    rt: r.id.startsWith('folder:') ? 'Show on map' : 'Reveal', run: () => r.id.startsWith('folder:') ? openItem(r.id) : openOnMac(r.id, 'reveal')};
   return {ic: FIND_IC[r.kind], title: r.title + (r.line && r.kind === 'code' ? `:${r.line}` : ''), titleHtml: esc(r.title) + (r.kind === 'code' && r.line ? `<span class="muted">:${r.line}</span>` : '') + (ex ? '<span class="ex">exact</span>' : ''),
           subHtml: `<span style="font-family:var(--mono);font-size:11px">${esc(r.subtitle)}</span>${r.snippet ? ' — ' + hlSnip(r.snippet, r.highlights) : ''}`, run: () => openItem(r.id)};
 }
@@ -2722,6 +2734,7 @@ function palRender() {
       const rs = pl.found.results || [];
       const sc = pl.found.scope;
       if (sc && sc.name !== 'all') add('Scope', {ic: '◎', title: `Searching in ${sc.name}`, sub: sc.description || '', rt: 'change ▸', run: () => { $('#palscope').focus(); $('#palscope').showPicker?.(); }});
+      rs.filter(r => r.kind === 'person').slice(0, 4).forEach(r => add('People', findItem(r)));
       rs.filter(r => r.is_dir).slice(0, 4).forEach(r => add('Folders', findItem(r)));
       for (const k of ['file', 'code', 'session']) rs.filter(r => r.kind === k && !r.is_dir).slice(0, 6).forEach(r => add(FIND_GROUP[k], findItem(r)));
       if (!rs.length) add('Search', {ic: '∅', title: 'No matching files, code or sessions', sub: pl.found.query?.exact?.length ? 'Exact phrases must appear word for word; try fewer quotes.' : 'Try other words, or "quotes" for exact text.', run: () => {}});
@@ -2731,7 +2744,6 @@ function palRender() {
       add('Search', {ic: '…', title: 'Searching files, code and sessions…', sub: '', run: () => {}});
     }
     { const T = dataTree(), keys = [...T.roots, ...[...T.children.values()].flat()]; keys.filter(k => k.split('/').pop().toLowerCase().includes(q)).sort((x, y) => x.length - y.length).slice(0, 4).forEach(k => add('Folders', {ic: FOLDER_IC, title: k.split('/').pop(), sub: '~/' + k + (S.data.repoKeys.has(k) ? ' · git repository' : ''), run: () => setView('data').then(() => toggleDataFolder(k, true))})); }
-    if (S.code.points.length) S.code.people.filter(p => p.author.toLowerCase().includes(q)).slice(0, 3).forEach(p => add('People', {ic: '👤', title: person(p.author), sub: `${(p.share * 100).toFixed(1)}% of ${repoLabel(S.code.repo)} · ${p.dirs.slice(0, 2).join(', ')}`, run: () => setView('data').then(() => openPerson(p.author))}));
     add('People', {ic: '👤', title: `Who knows about “${raw.replace(/"/g, '')}”?`, sub: 'Find the people behind the most relevant code', run: () => whoKnows(raw.replace(/"/g, ''))});
   } else {
     S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));

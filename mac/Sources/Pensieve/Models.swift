@@ -14,7 +14,7 @@ struct ParsedQuery: Decodable, Equatable {
 
 struct Hit: Decodable, Identifiable, Equatable {
     let id: String
-    let kind: String  // file | code | session
+    let kind: String  // file | code | session | folder | repo | person
     let title: String
     let subtitle: String?
     let path: String?
@@ -43,18 +43,18 @@ enum ResultAction: String, Identifiable {
     var id: String { rawValue }
 
     static func list(for hit: Hit) -> [ResultAction] {
-        if hit.kind == "session" { return [.open] }  // opening a session already shows it on the map
+        if hit.kind == "session" || hit.kind == "person" { return [.open] }  // both open on the map
         if hit.path == nil { return [.open, .map] }
         var out: [ResultAction] = [.open]
         if hit.pathExists { out.append(.reveal) }
-        if !hit.isFolder { out.append(.map) }
+        if !hit.isFolder || hit.id.hasPrefix("folder:") { out.append(.map) }  // a folder result filters the map
         out.append(.copy)
         return out
     }
 
     func title(for hit: Hit) -> String {
         switch self {
-        case .open: return hit.kind == "session" ? "Open on map" : hit.isFolder ? "Open in Finder" : "Open"
+        case .open: return hit.kind == "session" || hit.kind == "person" ? "Open on map" : hit.isFolder ? "Open in Finder" : "Open"
         case .reveal: return "Show in Finder"
         case .map: return "Show on map"
         case .copy: return "Copy path"
@@ -93,6 +93,9 @@ enum Kind {
         case "file": return "Files"
         case "code": return "Code"
         case "session": return "Agent sessions"
+        case "folder": return "Folders"
+        case "repo": return "Repositories"
+        case "person": return "People"
         default: return kind.capitalized
         }
     }
@@ -102,7 +105,7 @@ enum Kind {
 /// results arrive. Mirrors Google: "quotes" = exact, -word = exclude, key:value = filter, the rest = meaning.
 enum QueryParse {
     private static let quoted = try! NSRegularExpression(pattern: "(-?)\"([^\"]*)\"?")
-    private static let filterKeys: Set<String> = ["kind", "ext", "type", "in", "repo"]
+    private static let filterKeys: Set<String> = ["kind", "ext", "type", "in", "repo", "by"]
 
     static func parse(_ q: String) -> ParsedQuery {
         let ns = q as NSString

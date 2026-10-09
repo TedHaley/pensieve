@@ -172,7 +172,7 @@ def allowlist(scope: Scope, kind: str, store, repos, index) -> np.ndarray | None
 
 
 def contains(scope: Scope, item_id: str, store, repos) -> bool:
-    """Is a search-result id ('file:..', 'code:..', 'session:..') inside the scope?"""
+    """Is a search-result id ('file:..', 'code:..', 'session:..', 'folder:..', 'person:..') inside the scope?"""
     if scope is None:
         return True
     kind, _, ref = item_id.partition(":")
@@ -186,6 +186,11 @@ def contains(scope: Scope, item_id: str, store, repos) -> bool:
         return bool(r) and r[0] in scope.repos
     if kind == "session":
         return ref in session_ids(scope, store, repos)
+    if kind == "folder":
+        in_repo = scope.repos is None or any(ref == r or ref.startswith(r + "/") for r in scope.repos)
+        return in_repo or scope.folders is None or _under(ref, scope.folders)
+    if kind == "person":
+        return True
     return False
 
 
