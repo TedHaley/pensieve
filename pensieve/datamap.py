@@ -44,6 +44,7 @@ class DataMap:
         self._ctimes = {}  # repo root -> (HEAD, {path: last commit time})
         self._vec, self._vec_at = (None, None, None), 0.0  # (fingerprint, ids, centroids), when built
         self._scoped = {}  # (fingerprint, folders) -> scoped topics
+        self._views = {}  # hash of the item ids on screen -> their topics
 
     # ---- items + vectors -------------------------------------------------------
     def _vectors(self):
@@ -207,25 +208,8 @@ class DataMap:
                 words.append(w)
         return " · ".join(w.title() for w in words[:2]) or f"Topic {c + 1}"
 
-    def scoped_topics(self, folders):
-        """Topics among just the items under `folders` (absolute paths): what the map is about once it's filtered
-        to a repo or folder. Kept while the folder's items change by less than a tenth (new ones join the nearest
-        topic), so names stay put while indexing carries on. Keyword names at once; AI names are cached by
-        membership (meta 'dscope:<sig>')."""
-        ids, C = self._cached_vectors()
-        pos = {i: k for k, i in enumerate(ids)}
-        path = {p["id"]: p.get("path") or "" for p in self.points()["points"]}
-        pre = [f.rstrip("/") + "/" for f in folders]
-        sub = [i for i in ids if any(path.get(i, "").startswith(f) for f in pre)]
-        key = tuple(sorted(folders))
-        hit = self._scoped.get(key)
-        if hit and abs(len(sub) - hit["n"]) <= max(5, 0.1 * hit["n"]):
-            out = hit["out"]
-            new = [i for i in sub if i not in out["of"]]
-            if new and hit["cents"] is not None:  # newcomers join their nearest topic
-                near = (C[[pos[i] for i in new]] @ hit["cents"].T).argmax(1)
-                out["of"].update({i: int(hit["tids"][j]) for i, j in zip(new, near)})
-            return self._fill_names(out)
+    def _cluster_items(self, sub, ids, C, pos):
+        """Topics among the items `sub` (ids): k-means on their vectors, keyword names, AI names cached by membership."""
         out, cents, tids = dict(topics=[], of={}), None, []
         if len(sub) >= 10:
             X = C[[pos[i] for i in sub]]
@@ -249,6 +233,51 @@ class DataMap:
                                           name=self._kw_name(kw.get(c, ""), c), description="", named=False))
             out["of"] = {sub[j]: int(c) for j, c in enumerate(lab)}
             cents = unit(np.stack(rows))
+        return out, cents, tids
+
+    def view_topics(self, rev, idx):
+        """Topics among exactly what the map shows: items given by their index in points()['points'] (the list
+        named `rev`), so zooming in or filtering re-finds topics among what's left. Returns topics plus
+        {index: topic id}. Raises ValueError when `rev` is stale (the page should reload its points)."""
+        res = self.points()
+        if rev != res["rev"]:
+            raise ValueError("stale points")
+        pts = res["points"]
+        ids, C = self._cached_vectors()
+        pos = {i: k for k, i in enumerate(ids)}
+        idx = sorted({i for i in idx if 0 <= i < len(pts) and pts[i]["id"] in pos})
+        sub = [pts[i]["id"] for i in idx]
+        key = hashlib.sha1("|".join(sub).encode()).hexdigest()
+        hit = self._views.get(key)
+        if hit is None:
+            hit = self._cluster_items(sub, ids, C, pos)[0] if len(sub) >= 10 else dict(topics=[], of={})
+            if len(self._views) > 64:
+                self._views.pop(next(iter(self._views)))
+            self._views[key] = hit
+        at = {pts[i]["id"]: i for i in idx}
+        out = self._fill_names(hit)
+        return dict(topics=out["topics"], of={at[k]: v for k, v in out["of"].items() if k in at}, n=len(sub))
+
+    def scoped_topics(self, folders):
+        """Topics among just the items under `folders` (absolute paths): what the map is about once it's filtered
+        to a repo or folder. Kept while the folder's items change by less than a tenth (new ones join the nearest
+        topic), so names stay put while indexing carries on. Keyword names at once; AI names are cached by
+        membership (meta 'dscope:<sig>')."""
+        ids, C = self._cached_vectors()
+        pos = {i: k for k, i in enumerate(ids)}
+        path = {p["id"]: p.get("path") or "" for p in self.points()["points"]}
+        pre = [f.rstrip("/") + "/" for f in folders]
+        sub = [i for i in ids if any(path.get(i, "").startswith(f) for f in pre)]
+        key = tuple(sorted(folders))
+        hit = self._scoped.get(key)
+        if hit and abs(len(sub) - hit["n"]) <= max(5, 0.1 * hit["n"]):
+            out = hit["out"]
+            new = [i for i in sub if i not in out["of"]]
+            if new and hit["cents"] is not None:  # newcomers join their nearest topic
+                near = (C[[pos[i] for i in new]] @ hit["cents"].T).argmax(1)
+                out["of"].update({i: int(hit["tids"][j]) for i, j in zip(new, near)})
+            return self._fill_names(out)
+        out, cents, tids = self._cluster_items(sub, ids, C, pos)
         if len(self._scoped) > 32:
             self._scoped.clear()
         self._scoped[key] = dict(out=out, n=len(sub), cents=cents, tids=tids)
@@ -360,6 +389,7 @@ class DataMap:
                             display=(cwd or "").replace(home, "~", 1), repo=sc.get("project") if sc.get("root") else None,
                             repo_root=sc.get("root"), mtime=upd, chunks=n, summary=summary, author=AGENT.get(src, src),
                             author_source="agent", p=pos[k][:3], cluster=pos[k][3]))
-        res = dict(points=out, repos=[dict(root=r, name=nm) for r, nm in repo_names.items()], home=home)
+        rev = hashlib.sha1(json.dumps(fp).encode()).hexdigest()[:12]  # names this list for index-based requests
+        res = dict(points=out, repos=[dict(root=r, name=nm) for r, nm in repo_names.items()], home=home, rev=rev)
         self._cache = (fp, res)
         return res

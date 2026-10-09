@@ -6,7 +6,7 @@ import WebKit
 @MainActor
 final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private var window: NSWindow?
-    private var web: WKWebView?
+    private var web: DragWebView?
     private var pendingFragment: String?
     private var loaded = false
     var webView: WKWebView? { web }
@@ -35,7 +35,8 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
         config.applicationNameForUserAgent = "PensieveMac/2"  // 2: handles pensieve://check-updates
         config.userContentController.addUserScript(WKUserScript(
             source: "window.pensieveNative = true;", injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        let web = WKWebView(frame: .zero, configuration: config)
+        config.userContentController.add(DragHandler(), name: "pensieveWindow")
+        let web = DragWebView(frame: .zero, configuration: config)
         web.underPageBackgroundColor = .clear
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -138,5 +139,37 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let u = action.request.url { NSWorkspace.shared.open(u) }
         return nil
+    }
+}
+
+
+/// The page fills the window (title bar included), so it decides what is "background": a mouse-down on the empty top
+/// bar or the invisible strips at the window's edges posts {drag:true}, and the window is dragged from that mouse-down,
+/// as if it were a title bar; a double-click there zooms, like a title bar. (WKWebView hands mouse events to an inner
+/// view, so the mouse-down is caught by an app-wide monitor rather than an override.)
+final class DragWebView: WKWebView {}
+
+@MainActor
+final class DragHandler: NSObject, WKScriptMessageHandler {
+    private var lastDown: NSEvent?
+    private var monitor: Any?
+
+    override init() {
+        super.init()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] e in
+            nonisolated(unsafe) let e = e
+            MainActor.assumeIsolated { self?.lastDown = e }
+            return e
+        }
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let web = message.webView, let window = web.window, let body = message.body as? [String: Any] else { return }
+        guard body["drag"] as? Bool == true, let down = lastDown, down.window === window else { return }
+        if down.clickCount == 2 {
+            window.performZoom(nil)  // double-click on a title bar
+        } else if NSEvent.pressedMouseButtons & 1 != 0 {
+            window.performDrag(with: down)
+        }
     }
 }

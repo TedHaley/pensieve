@@ -1,4 +1,5 @@
 import asyncio
+from collections import Counter
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -378,16 +379,21 @@ def projects():
     scope = repos.session_scope()
     by = {}
     with store.lock:
-        rows = store.db.execute("SELECT id, n_chunks, updated FROM sessions WHERE n_chunks>0").fetchall()
-    for sid, n, upd in rows:
+        rows = store.db.execute("SELECT id, n_chunks, updated, project FROM sessions WHERE n_chunks>0").fetchall()
+    home = str(Path.home())
+    for sid, n, upd, cwd in rows:
         v = scope.get(sid)
         if not v:
             continue
         e = by.setdefault(v["project"], dict(name=v["project"], sessions=0, chunks=0, last="", repo=bool(v["root"]),
-                                              root=v["root"], folders=set()))
+                                              root=v["root"], folders=set(), where=Counter()))
         e["sessions"] += 1; e["chunks"] += n; e["last"] = max(e["last"], upd or "")
         e["folders"].add(v["folder"])
-    return [dict(e, folders=sorted(e["folders"])) for e in sorted(by.values(), key=lambda e: -e["sessions"])]
+        if cwd:
+            e["where"][cwd.replace(home, "~", 1)] += 1
+    # `path`: where most of a project's sessions ran (a folder that isn't an indexed repo shows where it is)
+    return [{**{k: v for k, v in e.items() if k != "where"}, "folders": sorted(e["folders"]), "path":e["where"].most_common(1)[0][0] if e["where"] else None}
+            for e in sorted(by.values(), key=lambda e: -e["sessions"])]
 
 
 @app.get("/api/points")
@@ -646,6 +652,31 @@ async def data_topics(folders: str = ""):
     todo = [t for t in r["topics"] if not t["named"]]
     if todo and ai != "none" and not paused:
         asyncio.create_task(name_data_scoped(todo))
+    return {**r, "ai": ai != "none", "ai_paused": paused}
+
+
+class ViewTopicsReq(BaseModel):
+    rev: str
+    idx: list[int]
+    name: bool = False  # also write AI names for the bigger topics (the page asks once the view has settled)
+
+
+@app.post("/api/data/view_topics")
+async def view_topics(req: ViewTopicsReq):
+    """Topics among exactly the items on screen (indexes into /api/data/points, list `rev`): zooming in or filtering
+    re-clusters what's left. 409 when the page's points are out of date."""
+    loop = asyncio.get_running_loop()
+    try:
+        r = await loop.run_in_executor(None, datamap.view_topics, req.rev, req.idx)
+    except ValueError:
+        raise HTTPException(409, "points changed; reload them")
+    ai = await loop.run_in_executor(None, llm.provider)
+    paused = await loop.run_in_executor(None, llm.paused)
+    if req.name and ai != "none" and not paused:
+        size = Counter(r["of"].values())
+        todo = [t for t in r["topics"] if not t["named"] and size[t["id"]] >= 25]
+        if todo:
+            asyncio.create_task(name_data_scoped(todo))
     return {**r, "ai": ai != "none", "ai_paused": paused}
 
 

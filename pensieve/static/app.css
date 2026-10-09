@@ -883,3 +883,17 @@ body[data-view=insights] .mapbtn,body[data-view=settings] .mapbtn{display:none}
 .ig-rec{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:500;background:var(--accent-soft);color:var(--accent);vertical-align:1px}
 .cmd.ig-text code{white-space:pre-wrap;max-height:140px;overflow:auto;display:block;font-size:11.5px;line-height:1.45}
 .set-card.danger h3{color:var(--critical)}
+.prow-w{display:flex;align-items:stretch;gap:2px}
+.prow-w .row{flex:1;min-width:0}
+.parrow{flex:none;width:26px;border:0;border-radius:8px;background:transparent;color:var(--text-3);display:grid;place-items:center;cursor:pointer}
+.parrow:hover,.prow-w.open .parrow{background:var(--accent-soft);color:var(--accent)}
+#drawer .lead{font-size:14px;line-height:1.45;margin:2px 0 10px}
+#drawer .item.kn{cursor:default}
+#drawer .item.kn .bar{height:4px;border-radius:2px;background:var(--line);margin:6px 0 2px;overflow:hidden}
+#drawer .item.kn .bar i{display:block;height:100%;border-radius:2px}
+.dragedge{position:fixed;z-index:60}
+.dragedge.t{top:0;left:0;right:0;height:10px}
+.dragedge.b{bottom:0;left:0;right:0;height:6px}
+.dragedge.l{top:0;bottom:0;left:0;width:6px}
+.dragedge.r{top:0;bottom:0;right:0;width:6px}
+body.native #top{pointer-events:auto}  /* the whole top bar drags the window, like a title bar */

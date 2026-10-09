@@ -370,15 +370,21 @@ function pinFolderLabel(items) {
 }
 function renderLabels() {
   const items = [];
-  if (S.view === 'data' && S.data.colorBy !== 'folder') {  // topics: what things are about, wherever they live
-    const D = S.data, by = new Map();
+  if (S.view === 'data' && S.data.colorBy !== 'folder') {  // topics: what what's on screen is about, wherever it lives
+    const D = S.data, by = new Map(), basis = D.view?.basis;
     pinFolderLabel(items);
-    mapPts.forEach((p, i) => { const c = dataTopicOf(p); if (dataPass(p) && c != null) { if (!by.has(c)) by.set(c, []); by.get(c).push(i); } });
+    if (D.sel?.kind === 'topic') {  // the topic you zoomed into keeps a label, so clicking it again steps back out
+      const idx = []; mapPts.forEach((p, i) => { if (D.sel.members.has(p.id) && dataPass(p)) idx.push(i); });
+      if (idx.length) items.push({n: idx.length, text: D.sel.name, sel: true, pos: dataAnchor(idx), color: D.colorBy === 'topic' ? slotColor(D.sel.slot) : 'transparent',
+        title: `${plural(idx.length, 'item')} · click to step back out`, onClick: () => deselectLabel()});
+    }
+    mapPts.forEach((p, i) => { const c = dataTopicOf(p); if (dataInView(p) && c != null && (!basis || basis.has(i))) { if (!by.has(c)) by.set(c, []); by.get(c).push(i); } });
     [...by].filter(([, idx]) => idx.length >= 3).forEach(([id, idx]) => {
-      const t = dataTopics().get(id), sel = D.sel?.kind === 'topic' && D.sel.key === id;
-      items.push({n: idx.length, text: t?.name || `Topic ${id + 1}`, pos: dataAnchor(idx), sel, dim: D.sel?.kind === 'topic' && !sel,
-        color: D.colorBy === 'topic' ? slotColor(id) : 'transparent',
-        title: `${t?.description || (t?.keywords ? 'About: ' + t.keywords : '')}\n${plural(idx.length, 'item')} · click to zoom in${sel ? ' · click again to zoom back out' : ''}`,
+      const t = dataTopics().get(id);
+      if (D.sel?.kind === 'topic' && t?.name === D.sel.name && by.size === 1) return;  // the same topic again: the pinned label says it
+      items.push({n: idx.length, text: t?.name || `Topic ${id + 1}`, pos: dataAnchor(idx),
+        color: D.colorBy === 'topic' ? slotColor(topicSlot(id)) : 'transparent',
+        title: `${t?.description || (t?.keywords ? 'About: ' + t.keywords : '')}\n${plural(idx.length, 'item')} · click to zoom in`,
         onClick: () => selectLabel('topic', id)});
     });
   } else if (S.view === 'data') {
@@ -440,7 +446,7 @@ function renderLegend() {
     else if (cb === 'recency') { const [a, b] = D.tRange; html = legendRamp(`Oldest · ${esc(monY(a / 1000) || '?')}`, `Newest · ${esc(monY(b / 1000) || '?')}`, 'Last changed (code: last commit)'); }
     else if (cb === 'risk') html = legendRamp('Authors still active here', 'Authors no longer active', 'Knowledge risk') + sw(pal().other, 'Not code in this repo');
     else if (dataTopics().size) { const n = new Map(); ctx.forEach(p => { const c = dataTopicOf(p); if (c != null) n.set(c, (n.get(c) || 0) + 1); });
-      html = [...n].sort((a, b) => b[1] - a[1]).map(([id]) => sw(slotColor(id), dataTopics().get(id)?.name || `Topic ${id + 1}`)).join(''); }
+      html = [...n].sort((a, b) => b[1] - a[1]).map(([id]) => sw(slotColor(topicSlot(id)), dataTopics().get(id)?.name || `Topic ${id + 1}`)).join(''); }
     else html = '<span class="muted">Colors group items with similar content</span>';
   } else if (S.view === 'files') {
     const cb = S.files.colorBy;
@@ -547,7 +553,7 @@ function renderToolbar() {
     fit: () => gl.fit(visibleIdx()),
     clearhl: () => { S.highlight = null; refreshStates(); renderToolbar(); },
     clearfhl: () => { S.files.highlight = null; refreshStates(); renderToolbar(); },
-    cleardhl: () => { S.data.highlight = null; S.data.sel = null; refreshStates(); renderToolbar(); renderLabels(); },
+    cleardhl: () => { S.data.highlight = null; clearSel(); refreshStates(); renderToolbar(); renderLabels(); },
     side: () => toggleSide(),
     who: () => openPalette('who: '),
     overlaps: showOverlaps,
@@ -607,7 +613,7 @@ function renderSidebar() {
     tree = hits.map(k => treeRow(k, keyLabel(k), 0, cnt.get(k), [], 'proj')).join('') || '<div class="empty" style="padding:8px">No matching folders</div>';
   } else {
     tree = repos.map(p => treeHtml(p.name, 0, cnt)).join('');
-    if (folders.length) tree += `<div class="sec-note" style="margin:10px 4px 4px">Other folders</div>` + folders.map(p => treeRow(p.name, p.name, 0, cnt.get(p.name) || 0, [], 'proj')).join('');
+    if (folders.length) tree += `<div class="sec-note" style="margin:10px 4px 4px" title="These come from your agent sessions, not from the folders Pensieve indexes">Other places your agents ran · not indexed repos</div>` + folders.map(p => treeRow(p.name, p.name, 0, cnt.get(p.name) || 0, [], 'proj', esc(p.path || ''))).join('');
   }
   parts.push(`<div class="sec"><div class="sec-h"><span>Projects</span>${S.f.projects.size ? '<button data-clearproj>Clear</button>' : ''}</div>
     <div class="sec-note">Expand a repo to filter by folder — sessions count when they ran in or touched files under it.</div>
@@ -1154,7 +1160,7 @@ const TYPE_NAME = {doc: 'Documents', code: 'Code', session: 'Agent sessions'};
 const TYPE_ONE = {doc: 'Document', code: 'Code', session: 'Agent session'};
 S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type'),
           treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map(),
-          topics: new Map(), topicsAI: false, sel: null, search: null, ctx: null, scope: null, scopeKey: '', authors: new Set(), drawerPerson: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
+          topics: new Map(), topicsAI: false, sel: null, selStack: [], search: null, ctx: null, view: null, rev: '', authors: new Set(), drawerPerson: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
 const relHome = p => { const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
 const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
 // A repo, or a folder two levels under home (~/Documents/medrec): "Desktop" alone would color nearly everything the same.
@@ -1210,32 +1216,104 @@ function canonAuthors(points) {
 async function loadDataTopics() {
   const r = await api('/api/data/topics').catch(() => null);
   S.data.topics = new Map((r?.topics || []).map(t => [t.id, t])); S.data.topicsAI = !!r?.ai; S.data.topicsPaused = r?.ai_paused || null;
-  await loadScopedTopics(true);
+  if (S.data.view) refreshViewNames();
 }
-// With a folder filter, topics are re-found among just those items (so a repo's labels are about that repo).
-const dataTopicOf = p => S.data.scope ? S.data.scope.of.get(p.id) : p.cluster;
-const dataTopics = () => S.data.scope ? S.data.scope.topics : S.data.topics;
-async function loadScopedTopics(force = false) {
-  const D = S.data, key = [...D.folders].sort().join('|');
-  if (!key) { if (D.scope || D.scopeKey) { D.scope = null; D.scopeKey = ''; if (S.view === 'data') recolor(); } return; }
-  if (!force && D.scopeKey === key) return;
-  D.scopeKey = key;
-  const r = await api(`/api/data/topics?folders=${enc(key)}`).catch(() => null);
-  if (D.scopeKey !== key) return;  // the filter changed while this was loading
-  D.scope = r && r.topics.length ? {topics: new Map(r.topics.map(t => [t.id, t])), of: new Map(Object.entries(r.of))} : null;
-  if (D.sel?.kind === 'topic') D.sel = null;
-  if (S.view === 'data') { recolor(); if (D.drawerTopic != null && D.scope) openTopic(D.drawerTopic); }
+// Topics follow what's on screen: the items that pass the filters and sit inside the camera's view are re-clustered on
+// the server, so zooming into an area (or into a topic) brings out its finer topics, and a filter re-finds topics among
+// what's left (the whole map too: until the first answer, the map-wide topics stand in). A new topic keeps the
+// color of the old one it mostly came from; items outside the view take the topic of the nearest one on screen.
+const dataTopicOf = p => { const v = S.data.view; return v ? v.of.get(p.i) : p.cluster; };
+const dataTopics = () => S.data.view ? S.data.view.topics : S.data.topics;
+const topicSlot = id => id == null ? -1 : S.data.view ? (S.data.view.slot.get(id) ?? -1) : id;
+const jaccard = (a, b) => { if (!a.size && !b.size) return 1; let n = 0; for (const x of a) if (b.has(x)) n++; return n / (a.size + b.size - n); };
+const VT = {prev: new Set(), still: 0, seq: 0, busy: false};
+function onScreen() {
+  const D = S.data, cam = gl.camera, v = new THREE.Vector3(), out = new Set();
+  cam.updateMatrixWorld();
+  D.points.forEach((p, i) => {
+    if (!dataInView(p)) return;
+    v.set(p.p[0], p.p[1], p.p[2]).project(cam);
+    if (v.z < 1 && v.x > -1 && v.x < 1 && v.y > -1 && v.y < 1) out.add(i);
+  });
+  return out;
 }
+function viewTopicsTick() {
+  const D = S.data;
+  if (S.view !== 'data' || !D.loaded || document.hidden || VT.busy) return;
+  const cur = onScreen(), now = performance.now();
+  if (jaccard(cur, VT.prev) < 0.95) { VT.prev = cur; VT.still = now; return; }  // still moving: wait for it to settle
+  if (cur.size < 10) return;  // too few to cluster: keep the topics you zoomed in from
+  if (D.view && jaccard(cur, D.view.basis) >= 0.8) {
+    if (!D.view.nameAsked && now - VT.still > 6000) { D.view.nameAsked = true; fetchViewTopics([...D.view.basis], true); }  // settled: ask for written names
+    return;
+  }
+  fetchViewTopics([...cur].sort((a, b) => a - b), false);
+}
+async function fetchViewTopics(idx, name) {
+  const D = S.data, seq = ++VT.seq;
+  VT.busy = !name;
+  let r;
+  try {
+    const res = await fetch('/api/data/view_topics', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({rev: D.rev, idx, name})});
+    if (res.status === 409) { VT.busy = false; reloadDataSoon(); return; }
+    if (!res.ok) throw new Error(res.status);
+    r = await res.json();
+  } catch { VT.busy = false; return; }
+  VT.busy = false;
+  if (seq !== VT.seq || !r.topics.length) return;  // a newer request went out, or too few items to cluster
+  const of = new Map(Object.entries(r.of).map(([i, t]) => [+i, t])), topics = new Map(r.topics.map(t => [t.id, t]));
+  if (name && D.view) {  // same clustering, now with names coming: keep colors
+    D.view.topics = topics; D.view.nameAsked = true; renderLabels(); renderLegend(); return;
+  }
+  // colors carry over: each new topic takes the slot most of its items had, biggest overlaps first
+  const pairs = new Map();
+  of.forEach((t, i) => { const old = topicSlot(dataTopicOf(D.points[i])); if (old >= 0) { const k = t + ':' + old; pairs.set(k, (pairs.get(k) || 0) + 1); } });
+  const slot = new Map(), used = new Set();
+  [...pairs].sort((a, b) => b[1] - a[1]).forEach(([k]) => { const [t, o] = k.split(':').map(Number); if (!slot.has(t) && !used.has(o)) { slot.set(t, o); used.add(o); } });
+  const size = new Map(); of.forEach(t => size.set(t, (size.get(t) || 0) + 1));
+  [...topics.keys()].sort((a, b) => (size.get(b) || 0) - (size.get(a) || 0)).forEach(t => { if (!slot.has(t)) { let o = 0; while (used.has(o)) o++; slot.set(t, o); used.add(o); } });
+  // filtered items off screen join the topic whose on-screen items are nearest in the map
+  const cen = new Map(); of.forEach((t, i) => { const c = cen.get(t) || [0, 0, 0, 0], q = D.points[i].p; c[0] += q[0]; c[1] += q[1]; c[2] += q[2]; c[3]++; cen.set(t, c); });
+  const cs = [...cen].map(([t, c]) => [t, c[0] / c[3], c[1] / c[3], c[2] / c[3]]);
+  D.points.forEach((p, i) => {
+    if (of.has(i) || !dataPass(p)) return;
+    let best = null, bd = Infinity; for (const [t, x, y, z] of cs) { const d = (p.p[0] - x) ** 2 + (p.p[1] - y) ** 2 + (p.p[2] - z) ** 2; if (d < bd) { bd = d; best = t; } }
+    if (best != null) of.set(i, best);
+  });
+  D.view = {topics, of, slot, basis: new Set(idx), nameAsked: name};
+  VT.prev = new Set(idx);
+  afterTopicsChange();
+}
+function afterTopicsChange() {
+  if (S.view !== 'data') return;
+  recolor(); renderLabels(); renderLegend();
+  if (S.data.drawerPerson) openPersonPanel(S.data.drawerPerson, {keep: true});
+}
+// written names arrive in the background: show them, and update a zoomed-into topic that has one now
+async function refreshViewNames() {
+  const D = S.data; if (!D.view) return;
+  const r = await fetch('/api/data/view_topics', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({rev: D.rev, idx: [...D.view.basis], name: false})}).then(x => x.ok ? x.json() : null).catch(() => null);
+  if (!r || !D.view) return;
+  const bySig = new Map(r.topics.map(t => [t.sig, t]));
+  D.view.topics = new Map(r.topics.map(t => [t.id, t]));
+  D.selStack.forEach(e => { const t = e.topic && bySig.get(e.topic.sig); if (t?.named) { e.topic = t; e.name = t.name; } });
+  renderLabels(); renderLegend();
+  if (D.drawerTopic && D.drawerTopic === D.sel) openTopic(D.sel);
+}
+setInterval(viewTopicsTick, 700);
+const loadScopedTopics = () => {};  // topics now follow the view (viewTopicsTick)
 async function loadData() {
   let r = {points: [], repos: [], home: ''};
   try { r = await api('/api/data/points'); } catch {}
   await loadDataTopics();
   const D = S.data;
-  D.home = r.home || ''; D.repos = r.repos || [];
+  D.home = r.home || ''; D.repos = r.repos || []; D.rev = r.rev || ''; D.view = null;
   D.repoKeys = new Map(D.repos.map(x => [relHome(x.root), x.name]));  // '~'-relative folder key -> repo name
   D.points = r.points.map(p => {
     const rel = relHome(p.path), dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
     return {...p, rel, dir, top: rel.split('/')[0], group: p.repo || rel.split('/')[0], t: ptTime(p)};
+  });
+  D.points.forEach((p, i) => { p.i = i;
   });
   const cnt = (f) => { const m = new Map(); D.points.forEach(p => { const k = f(p); if (k) m.set(k, (m.get(k) || 0) + 1); }); return new Map([...m].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i])); };
   const who = canonAuthors(D.points); D.whoMap = who;
@@ -1251,7 +1329,7 @@ function dataColor(p) {
     case 'type': return slotColor(TYPE_SLOT[p.type]);
     case 'folder': return slotColor(D.folderSlot.has(p.place) ? D.folderSlot.get(p.place) : -1);
     case 'author': return slotColor(p.who && D.authorSlot.has(p.who) ? D.authorSlot.get(p.who) : -1);
-    case 'topic': return slotColor(dataTopicOf(p) ?? -1);
+    case 'topic': return slotColor(topicSlot(dataTopicOf(p)));
     case 'recency': { const [a, b] = D.tRange; return seqColor(isNaN(p.t) ? 0 : Math.max(0, Math.min(1, (p.t - a) / Math.max(1, b - a)))); }
     case 'risk': { const r = riskOf(p); return r == null ? pal().other : seqColor(r); }
   }
@@ -1321,32 +1399,43 @@ function dataAnchor(idx) {
   sample.forEach(i => { let n = 0; for (const j of sample) if (d2(P(i), P(j)) < r2) n++; if (n > bestN) { bestN = n; best = i; } });
   return centroid(idx.filter(j => d2(P(best), P(j)) < r2));
 }
-// Clicking a map label zooms into it (a topic is highlighted and explained, a folder is filtered to); clicking the
-// same label again zooms back out to where you were, with the folder filter you had.
+// Clicking a map label zooms into it: a topic is highlighted, explained, and broken into its own finer topics; a
+// folder is filtered to. Each click goes one level deeper; clicking the label you're in steps back out one level.
+const clearSel = () => { S.data.selStack = []; S.data.sel = null; };
+let selSeq = 0;
 function selectLabel(kind, key) {
   const D = S.data;
   if (D.sel?.kind === kind && D.sel.key === key) return deselectLabel();
-  const back = D.sel ? {cam: D.sel.cam, folders: D.sel.folders} : {cam: gl.saveCam(), folders: new Set(D.folders)};
-  if (kind === 'folder') toggleDataFolder(key, true);  // filters, fits, and clears any earlier selection
-  D.sel = {kind, key, ...back};
-  if (kind === 'topic') {
-    D.highlight = new Set(D.points.filter(p => dataTopicOf(p) === key && dataPass(p)).map(p => p.id));
+  const entry = {kind, key, cam: gl.saveCam(), folders: new Set(D.folders), highlight: D.highlight};
+  if (kind === 'folder') {
+    const stack = D.selStack;
+    toggleDataFolder(key, true);  // filters and fits (and clears the selection, restored here)
+    D.selStack = [...stack, entry]; D.sel = entry;
+  } else {
+    const t = dataTopics().get(key) || {name: `Topic ${key + 1}`, keywords: '', description: '', reps: []};
+    const members = new Set(D.points.filter(p => dataTopicOf(p) === key && dataInView(p)).map(p => p.id));
+    Object.assign(entry, {key: 't' + (++selSeq), topic: t, name: t.name, slot: topicSlot(key), members});
+    D.selStack.push(entry); D.sel = entry;
+    D.highlight = members;
     refreshStates(); renderToolbar(); setTimeout(() => gl.fit(visibleIdx()), 30);
-    openTopic(key);
+    openTopic(entry);
   }
   renderLabels();
 }
 function deselectLabel() {
-  const D = S.data, s = D.sel; if (!s) return;
-  D.sel = null; D.highlight = null;
-  if (s.kind === 'folder') { D.folders = new Set(s.folders); dataChanged(false); } else { refreshStates(); renderToolbar(); renderLabels(); }
-  if (D.drawerTopic != null) closeDrawer();
+  const D = S.data, s = D.selStack.pop(); if (!s) return;
+  D.sel = D.selStack.at(-1) || null;
+  D.highlight = s.highlight;
+  const sameFolders = s.folders.size === D.folders.size && [...s.folders].every(f => D.folders.has(f));
+  if (!sameFolders) { const stack = D.selStack, sel = D.sel; D.folders = new Set(s.folders); dataChanged(false); D.selStack = stack; D.sel = sel; D.highlight = s.highlight; refreshStates(); renderLabels(); }
+  else { refreshStates(); renderToolbar(); renderLabels(); }
+  if (D.drawerTopic) { if (D.sel?.kind === 'topic') openTopic(D.sel); else closeDrawer(); }
   const dir = s.cam.p.clone().sub(s.cam.t), dist = dir.length();
   gl.flyTo(s.cam.t.clone(), dist, dir.normalize());
 }
-function openTopic(id) {
-  const D = S.data, t = dataTopics().get(id) || {name: `Topic ${id + 1}`, keywords: '', description: '', reps: []};
-  const mem = D.points.filter(p => dataTopicOf(p) === id && dataPass(p)), byId = new Map(mem.map(p => [p.id, p]));
+function openTopic(entry) {
+  const D = S.data, t = entry.topic, slot = entry.slot;
+  const mem = D.points.filter(p => entry.members.has(p.id)), byId = new Map(mem.map(p => [p.id, p]));
   const tc = {}; mem.forEach(p => tc[p.type] = (tc[p.type] || 0) + 1);
   const where = new Map();  // repo, else the folder two levels under home
   mem.forEach(p => { const r = repoOfKey(p.dir), k = r ? r.key : p.dir.split('/').slice(0, 2).join('/'); where.set(k, (where.get(k) || 0) + 1); });
@@ -1356,7 +1445,7 @@ function openTopic(id) {
   const central = t.reps.map(i => byId.get(i)).filter(Boolean).slice(0, 6);
   const recent = [...mem].filter(p => !isNaN(p.t)).sort((a, b) => b.t - a.t).filter(p => !central.includes(p)).slice(0, 5);
   const itemRow = p => `<button class="item" data-open="${esc(p.open)}"><div class="t"><i class="sw" style="background:${slotColor(TYPE_SLOT[p.type])}"></i><span class="grow">${esc(p.title)}</span>${isNaN(p.t) ? '' : `<span class="muted">${rel(p.t)}</span>`}</div><div class="s">${esc(p.type === 'session' ? (p.repo ? 'in ' + p.repo : p.display) : p.display.replace(/\/[^/]*$/, ''))}</div></button>`;
-  openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${slotColor(id)}"></i>Topic</span>${plural(mem.length, 'item')}</div><h2>${esc(t.name)}</h2>`,
+  openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${slotColor(slot)}"></i>Topic</span>${plural(mem.length, 'item')}${D.selStack.filter(e => e.kind === 'topic').length > 1 ? ` · inside ${esc(D.selStack.filter(e => e.kind === 'topic').slice(0, -1).map(e => e.name).join(' › '))}` : ''}</div><h2>${esc(t.name)}</h2>`,
     `${t.description ? `<p>${esc(t.description)}</p>` : `<p class="muted">${D.topicsAI ? (D.topicsPaused ? `Named from its most distinctive words for now. A written name and description come when background AI resumes (${esc(D.topicsPaused.toLowerCase())}).` : 'A written description is on its way; named from its most distinctive words for now.') : 'Named from its most distinctive words. Choose an AI engine in Settings for written names and descriptions.'}</p>`}
      <div class="kpis" style="grid-template-columns:repeat(3,1fr)">${Object.keys(TYPE_SLOT).map(k => `<div class="kpi"><div class="l">${TYPE_NAME[k]}</div><div class="v">${(tc[k] || 0).toLocaleString()}</div></div>`).join('')}</div>
      ${ts.length ? `<p class="muted" style="font-size:12px;margin:8px 0 0">Last changed ${rel(ts[0])}${ts.length > 1 ? ` · oldest ${rel(ts[ts.length - 1])}` : ''}</p>` : ''}
@@ -1365,8 +1454,9 @@ function openTopic(id) {
      ${authors.size ? `<div class="h4">Who wrote it</div><div class="chips">${[...authors].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([a, n]) => `<span class="chip">${esc(person(a))}<span class="n">${n}</span></span>`).join('')}</div>` : ''}
      ${central.length ? `<div class="h4">Most typical</div><div class="list">${central.map(itemRow).join('')}</div>` : ''}
      ${recent.length ? `<div class="h4">Recently changed</div><div class="list">${recent.map(itemRow).join('')}</div>` : ''}
+     <p class="muted" style="font-size:12px;margin:12px 0 0">The map now shows the finer topics inside this one; click a label to go deeper.</p>
      <div class="actions"><button class="btn" data-zoomout>Zoom back out</button></div>`);
-  D.drawerTopic = id;
+  D.drawerTopic = entry;
   const body = $('#drawer-body');
   $$('[data-open]', body).forEach(b => b.onclick = () => openItem(b.dataset.open));
   $$('[data-place]', body).forEach(b => b.onclick = () => selectLabel('folder', b.dataset.place));
@@ -1384,62 +1474,103 @@ function renderDataSidebar(side) {
   const cnt = new Map();
   all.filter(p => dataPass(p, 'folders')).forEach(p => { const parts = p.dir.split('/').filter(Boolean); for (let i = 1; i <= parts.length; i++) { const k = parts.slice(0, i).join('/'); cnt.set(k, (cnt.get(k) || 0) + 1); } });
   const tc = {}; all.filter(p => dataPass(p, 'types')).forEach(p => tc[p.type] = (tc[p.type] || 0) + 1);
-  const repo = focusedRepo();
-  if (repo && S.code.repo !== repo.name && !D.repoLoading) {  // load the repo's blame data for its extras (people, owners, overlaps)
-    D.repoLoading = repo.name;
-    (S.code.repos.length ? Promise.resolve() : loadRepos()).then(() => loadRepo(repo.name)).then(() => { D.repoLoading = null; $('#loading').classList.add('gone'); if (S.view === 'data') renderSidebar(); }).catch(() => { D.repoLoading = null; });
-  }
   const people = dataPeople();
   side.innerHTML = `
     <div class="sec"><div class="chips type-chips" role="group" aria-label="Types">${Object.keys(TYPE_SLOT).map(t => `<button class="chip ${D.types.has(t) ? 'on' : ''}" data-type="${t}" aria-pressed="${D.types.has(t)}"><i class="sw" style="background:${slotColor(TYPE_SLOT[t])}"></i>${TYPE_NAME[t]}<span class="n">${(tc[t] || 0).toLocaleString()}</span></button>`).join('')}</div>
       <div class="sec-note" style="margin-top:8px">${vis.length.toLocaleString()} of ${plural(all.length, 'item')}${D.folders.size ? ` in <b>${esc([...D.folders].join(', '))}</b> <button class="linkbtn" data-dclearf>Clear</button>` : ''}</div></div>
     <div class="sec"><div class="sec-h"><span>People</span>${D.authors.size ? `<button class="linkbtn" data-dclearp>Clear</button>` : ''}</div>
-      ${people.length ? `<div class="rows">${people.map(x => `<button class="row prow ${D.authors.has(x.who) ? 'on' : ''}" data-who="${esc(x.who)}" aria-pressed="${D.authors.has(x.who)}" title="${D.authors.has(x.who) ? 'Click again to stop filtering by ' + esc(x.who) : 'Show only work by ' + esc(x.who) + ' (pick several to compare)'}"><span class="check"></span><span class="sw" style="background:${slotColor(D.authorSlot.get(x.who) ?? -1)}"></span><span class="name">${esc(x.who)}</span><span class="n">${x.n.toLocaleString()}</span>${x.sub ? `<span class="sub">${esc(x.sub)}</span>` : ''}</button>`).join('')}</div>` : '<div class="sec-note">No authors known for what is shown.</div>'}</div>
-    ${repo ? `<div class="sec repo-x"><div class="sec-h"><span>Repository · ${esc(repo.name)}</span></div>
-      <div class="repo-acts"><button class="btn" data-x="who">Who knows about…</button><button class="btn" data-x="overlaps">Overlaps</button><button class="btn" data-x="team">Team &amp; footprint</button></div>
-      ${(() => { const g = peekGaps(repo.name); if (!g) { loadGaps(repo.name).then(() => S.view === 'data' && renderSidebar()); return '<button class="row gap-row" disabled><span class="name muted">Knowledge gaps…</span></button>'; }
-        const n = g.gaps.length; return `<button class="row gap-row" data-gaps="${esc(repo.name)}"><span class="name">Knowledge gaps</span><span class="n ${n ? 'warn-t' : ''}">${n ? plural(n, 'area') : 'none'}</span><span class="sub">${n ? `Most code in ${esc(g.gaps[0].area)}${n > 1 ? ' and others' : ''} was written by people not active here` : 'Every sizeable area has active authors'}</span></button>`; })()}
-</div>` : ''}
+      ${people.length ? `<div class="rows">${people.map(x => `<div class="prow-w ${D.drawerPerson === x.who ? 'open' : ''}"><button class="row prow ${D.authors.has(x.who) ? 'on' : ''}" data-who="${esc(x.who)}" aria-pressed="${D.authors.has(x.who)}" title="${D.authors.has(x.who) ? 'Click again to stop filtering by ' + esc(x.who) : 'Show only work by ' + esc(x.who) + ' (pick several to compare)'}"><span class="check"></span><span class="sw" style="background:${slotColor(D.authorSlot.get(x.who) ?? -1)}"></span><span class="name">${esc(x.who)}</span><span class="n">${x.n.toLocaleString()}</span></button><button class="parrow" data-pwho="${esc(x.who)}" title="What ${esc(x.who)} knows about, in what's shown" aria-label="About ${esc(x.who)}"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>` : '<div class="sec-note">No authors known for what is shown.</div>'}</div>
     <div class="sec"><div class="sec-h"><span>Folders</span></div>
       <div class="tree">${T.roots.filter(k => cnt.get(k)).sort((a, b) => cnt.get(b) - cnt.get(a)).map(k => treeHtml(k, 0, cnt, 'ddir', T.children, null, D.treeOpen)).join('') || '<div class="empty" style="padding:8px">Nothing indexed yet</div>'}</div></div>`;
   $$('[data-type]', side).forEach(b => b.onclick = () => { const t = b.dataset.type; if (D.types.has(t) && D.types.size === 1) D.types = new Set(Object.keys(TYPE_SLOT)); else toggleSet(D.types, t); dataChanged(); });
   bindTree(side, 'ddir', k => toggleDataFolder(k), () => renderSidebar(), D.treeOpen, 'dataTreeOpen');
   $('[data-dclearf]', side)?.addEventListener('click', () => { D.folders.clear(); dataChanged(); });
   $$('[data-who]', side).forEach(b => b.onclick = () => toggleAuthor(b.dataset.who));
+  $$('[data-pwho]', side).forEach(b => b.onclick = () => {
+    if (D.drawerPerson === b.dataset.pwho) { closeDrawer(); renderSidebar(); } else openPersonPanel(b.dataset.pwho);
+  });
   $('[data-dclearp]', side)?.addEventListener('click', () => { D.authors.clear(); if (D.drawerPerson) closeDrawer(); dataChanged(); });
-  bindGapLinks(side);
-  $$('[data-x]', side).forEach(b => b.onclick = () => ({who: () => openPalette('who: '), overlaps: showOverlaps,
-    team: () => { S.ins.repo = repo.name; S.ins.key = null; setView('insights'); }})[b.dataset.x]());
 }
-// People in view (ignoring the author filter itself, so more can be added), selected ones always listed. With one
-// repo's blame data loaded, each also shows their share of that repo, main areas and last activity.
+// People in view (ignoring the author filter itself, so more can be added), selected ones always listed.
 function dataPeople(max = 8) {
   const D = S.data, n = new Map();
   D.points.forEach(p => { if (p.who && dataPass(p, 'authors')) n.set(p.who, (n.get(p.who) || 0) + 1); });
-  const blame = new Map(S.code.people.map(x => [whoOf(x.author), x]));
-  const fr = focusedRepo(), withBlame = fr && S.code.repo === fr.name;
   const top = [...n].sort((a, b) => b[1] - a[1]).slice(0, max).map(([w]) => w);
-  return [...new Set([...D.authors, ...top])].map(w => {
-    const b = withBlame ? blame.get(w) : null;
-    return {who: w, n: n.get(w) || 0, sub: b ? `${(b.share * 100).toFixed(b.share < .1 ? 1 : 0)}% of ${fr.name} · ${b.dirs.slice(0, 2).join(', ')} · active ${rel(b.last_active * 1000)}` : ''};
-  });
+  return [...new Set([...D.authors, ...top])].map(w => ({who: w, n: n.get(w) || 0}));
 }
 const whoOf = author => S.data.whoMap?.get(person(author)) || S.data.whoMap?.get(author) || person(author);
+// What one person knows about, within whatever the map is filtered to (types, folders, search; any repos): the topics
+// and places where they wrote the biggest share, who they work alongside, and what they changed recently. Code repos
+// add their last 90 days of commits and, with an AI engine, a written summary of their focus.
+function openPersonPanel(who, {keep = false} = {}) {
+  const D = S.data;
+  const ctx = D.points.filter(p => dataPass(p, 'authors') && (!D.search || D.search.has(p.id)));
+  const mine = ctx.filter(p => p.who === who);
+  const group = (items, key) => { const m = new Map(); items.forEach(p => { const k = key(p); if (k != null) m.set(k, (m.get(k) || 0) + 1); }); return m; };
+  const allT = group(ctx, dataTopicOf), myT = group(mine, dataTopicOf);
+  const topics = [...myT].map(([t, n]) => ({t, n, of: allT.get(t), share: n / allT.get(t)})).filter(x => x.n >= 2)
+    .sort((a, b) => b.n * b.share - a.n * a.share).slice(0, 4);
+  const allP = group(ctx, p => p.place), myP = group(mine, p => p.place);
+  const places = [...myP].map(([k, n]) => ({k, n, of: allP.get(k), share: n / allP.get(k)})).sort((a, b) => b.n - a.n).slice(0, 5);
+  const areaOf = p => { const r = repoOfKey(p.dir); const sub = r ? p.dir.slice(r.key.length + 1) : p.dir.split('/').slice(2).join('/'); return sub.split('/').slice(0, 2).join('/') || null; };
+  const areas = place => [...group(mine.filter(p => p.place === place), areaOf)].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([a]) => a);
+  const near = new Map(); places.forEach(({k}) => ctx.forEach(p => { if (p.place === k && p.who && p.who !== who) near.set(p.who, (near.get(p.who) || 0) + 1); }));
+  const peers = [...near].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const tc = group(mine, p => p.type), ts = mine.map(p => p.t).filter(x => !isNaN(x)).sort((a, b) => b - a);
+  const recent = [...mine].filter(p => !isNaN(p.t)).sort((a, b) => b.t - a.t).slice(0, 6);
+  const tname = id => dataTopics().get(id)?.name || `Topic ${id + 1}`;
+  const knows = [...topics.slice(0, 2).map(x => tname(x.t)), ...places.slice(0, 1).map(x => placeName(x.k))];
+  const scopeNote = [D.folders.size ? [...D.folders].map(placeName).join(', ') : 'everything indexed', D.types.size < 3 ? [...D.types].map(t => TYPE_NAME[t].toLowerCase()).join(' and ') : '', D.search ? 'search results' : ''].filter(Boolean).join(' · ');
+  const pct = x => `${Math.round(x * 100)}%`;
+  const itemRow = p => `<button class="item" data-open="${esc(p.open)}"><div class="t"><i class="sw" style="background:${slotColor(TYPE_SLOT[p.type])}"></i><span class="grow">${esc(p.title)}</span><span class="muted">${rel(p.t)}</span></div><div class="s">${esc(p.display.replace(/\/[^/]*$/, ''))}</div></button>`;
+  openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${slotColor(D.authorSlot.get(who) ?? -1)}"></i>Person</span>in ${esc(scopeNote)}</div><h2>${esc(who)}</h2>`,
+    !mine.length ? `<p class="muted">Nothing by ${esc(who)} in what the map shows now. Widen the filter to see their work.</p>` : `
+     ${knows.length ? `<p class="lead">Knows most about <b>${knows.map(esc).join('</b>, <b>')}</b>.</p>` : ''}
+     <div class="kpis" style="grid-template-columns:repeat(3,1fr)"><div class="kpi"><div class="l">Items</div><div class="v">${mine.length.toLocaleString()}</div></div>
+       <div class="kpi"><div class="l">Share of what's shown</div><div class="v">${pct(mine.length / Math.max(1, ctx.length))}</div></div>
+       <div class="kpi"><div class="l">Last change</div><div class="v" style="font-size:15px">${ts.length ? rel(ts[0]) : '–'}</div></div></div>
+     <p class="muted" style="font-size:12px;margin:8px 0 0">${Object.keys(TYPE_SLOT).filter(t => tc.get(t)).map(t => plural(tc.get(t), {doc: 'document', code: 'code file', session: 'agent session'}[t])).join(' · ')}${ts.length > 1 ? ` · since ${rel(ts[ts.length - 1])}` : ''}</p>
+     ${topics.length ? `<div class="h4">Most knowledgeable about</div><div class="list">${topics.map(x => `<div class="item kn"><div class="t"><i class="sw" style="background:${slotColor(topicSlot(x.t))}"></i><span class="grow">${esc(tname(x.t))}</span><span class="muted">${pct(x.share)} of it</span></div><div class="bar"><i style="width:${x.share * 100}%;background:${slotColor(topicSlot(x.t))}"></i></div><div class="s">${x.n} of the ${x.of} items on this topic</div></div>`).join('')}</div>` : ''}
+     <div class="h4">Where</div><div class="list">${places.map(x => `<button class="item" data-pplace="${esc(x.k)}"><div class="t"><span class="grow">${esc(placeName(x.k))}${repoOfKey(x.k) ? '<span class="cbadge">code</span>' : ''}</span><span class="muted">${pct(x.share)} · ${x.n}</span></div>${areas(x.k).length ? `<div class="s">${areas(x.k).map(esc).join(' · ')}</div>` : ''}</button>`).join('')}</div>
+     ${peers.length ? `<div class="h4">Works alongside</div><div class="chips">${peers.map(([w, n]) => `<button class="chip" data-ppeer="${esc(w)}" title="Open ${esc(w)}"><i class="sw" style="background:${slotColor(D.authorSlot.get(w) ?? -1)}"></i>${esc(w)}<span class="n">${n}</span></button>`).join('')}</div>` : ''}
+     <div id="pteam"></div>
+     ${recent.length ? `<div class="h4">Recently changed</div><div class="list">${recent.map(itemRow).join('')}</div>` : ''}
+     <div class="actions"><button class="btn" data-pfilter>${D.authors.has(who) && D.authors.size === 1 ? 'Show everyone' : 'Show only their work'}</button></div>`);
+  D.drawerPerson = who;
+  if (!keep) renderSidebar(); else $$('.prow-w').forEach(r => r.classList.toggle('open', r.querySelector('[data-pwho]')?.dataset.pwho === who));
+  const body = $('#drawer-body');
+  $$('[data-open]', body).forEach(b => b.onclick = () => openItem(b.dataset.open));
+  $$('[data-pplace]', body).forEach(b => b.onclick = () => selectLabel('folder', b.dataset.pplace));
+  $$('[data-ppeer]', body).forEach(b => b.onclick = () => openPersonPanel(b.dataset.ppeer));
+  $('[data-pfilter]', body)?.addEventListener('click', () => { if (D.authors.has(who) && D.authors.size === 1) D.authors.clear(); else D.authors = new Set([who]); clearSel(); D.highlight = null; dataChanged(); });
+  // commits in the code repos they work in (team data is per repo; the busiest two)
+  const repos = [...new Set(places.map(x => repoOfKey(x.k)?.name).filter(Boolean))].slice(0, 2);
+  if (!repos.length || !mine.some(p => p.type === 'code')) return;
+  Promise.all(repos.map(r => api(`/api/team/${enc(r)}`).then(t => ({r, t})).catch(() => null))).then(rs => {
+    const box = $('#pteam'); if (!box || D.drawerPerson !== who) return;
+    const cards = rs.filter(Boolean).map(({r, t}) => {
+      const me = t.people.find(x => whoOf(x.name) === who || whoOf(x.email) === who);
+      if (!me) return `<div class="pcard" style="padding:10px 12px;margin-bottom:8px"><div class="top"><b>${esc(r)}</b><span class="st">no commits in the last ${t.days} days</span></div></div>`;
+      const sm = t.summaries?.[me.email], wmax = Math.max(1, ...me.weeks);
+      return `<div class="pcard" style="padding:10px 12px;margin-bottom:8px">
+        <div class="top"><b>${esc(r)}</b><span class="st">${plural(me.commits, 'commit')} · +${kfmt(me.added)} −${kfmt(me.deleted)}</span></div>
+        <div class="spark" title="Commits per week (oldest → newest)">${me.weeks.map(w => `<i class="${w ? '' : 'z'}" style="height:${w ? Math.max(12, w / wmax * 100) : 8}%"></i>`).join('')}</div>
+        ${sm ? `<div class="focus">${esc(sm.focus)}</div><p class="sum">${esc(sm.summary)}</p>` : t.summarizing ? '<p class="muted" style="font-size:12px;margin:0">Summarizing what they’ve worked on…</p>' : ''}
+        <div class="areas">${me.areas.slice(0, 4).map(a => `<span class="chip">${esc(a.area)}</span>`).join('')}</div></div>`;
+    });
+    if (cards.length) box.innerHTML = `<div class="h4">Commits · last ${rs.find(Boolean)?.t.days || 90} days</div>${cards.join('')}`;
+  });
+}
 // Clicking a person filters the map to their work (several can be picked); clicking them again removes them.
-// Adding someone with one repo selected also opens what they've worked on there.
+// The arrow beside a name opens what they know about within whatever the map is filtered to (openPersonPanel).
 function toggleAuthor(who) {
   const D = S.data;
-  if (D.authors.has(who)) { D.authors.delete(who); if (D.drawerPerson === who) closeDrawer(); }
-  else {
-    D.authors.add(who);
-    const fr = focusedRepo(), b = fr && S.code.repo === fr.name && S.code.people.find(x => whoOf(x.author) === who);
-    if (b) { openPerson(b.author, {quiet: true}); D.drawerPerson = who; }
-  }
-  D.sel = null; D.highlight = null;
+  if (D.authors.has(who)) D.authors.delete(who); else D.authors.add(who);
+  clearSel(); D.highlight = null;
   dataChanged();
 }
 function dataChanged(fit = true) {
-  loadScopedTopics();
+  if (S.data.drawerPerson) openPersonPanel(S.data.drawerPerson, {keep: true});
   const wasRisk = S.data.colorBy === 'risk';
   refreshStates(); renderSidebar(); renderToolbar(); if (wasRisk && S.data.colorBy !== 'risk') recolor(); renderLabels(); renderLegend();
   if (fit && S.view === 'data') setTimeout(() => gl.fit(visibleIdx()), 30);
@@ -1455,7 +1586,7 @@ function toggleDataFolder(k, only = false) {
     if (dataTree().children.has(k)) D.treeOpen.add(k);
     store.set('dataTreeOpen', [...D.treeOpen]);
   }
-  D.highlight = null; D.sel = null;
+  D.highlight = null; clearSel();
   dataChanged();
 }
 // folder key for a repo-relative directory of the repo whose blame data is loaded
@@ -1466,7 +1597,7 @@ const codeDirToKey = dir => repoDirKey(...codeSplit(dir));
 const ensureRepo = async name => { if (name && S.code.repo !== name) { if (!S.code.repos.length) await loadRepos(); await loadRepo(name); $('#loading').classList.add('gone'); } };
 const dataPointFor = (repoName, relPath) => S.data.points.find(p => p.type === 'code' && p.repo === repoName && (p.path.endsWith('/' + relPath) || p.path === relPath));
 function highlightData(pred) {
-  S.data.sel = null;
+  clearSel();
   S.data.highlight = new Set(S.data.points.filter(pred).map(p => p.id));
   refreshStates(); renderToolbar();
   if (S.data.highlight.size) setTimeout(() => gl.fit(visibleIdx()), 30);
@@ -2279,7 +2410,7 @@ function dataFollowInsights() {
   if (k === (S.ins.ctx ?? k)) return;  // unchanged on the Insights side
   const [name, ...rest] = k.split('/'), key = k && !k.includes('|') ? repoDirKey(name, rest.join('/')) : null;
   if (k && !key) return;  // several projects, or one that isn't a repo on the map: leave the map as it is
-  S.data.folders = new Set(key ? [key] : []); S.data.sel = null; S.data.highlight = null;
+  S.data.folders = new Set(key ? [key] : []); clearSel(); S.data.highlight = null;
   loadScopedTopics();
 }
 async function setView(v, repo) {
@@ -2675,7 +2806,15 @@ function toggleSide(open) {
 $('#sidetoggle').onclick = () => toggleSide();
 addEventListener('resize', debounce(() => { if (S.view === 'map') renderTimeline(); }, 200));
 toggleSide(innerWidth >= 900 ? store.get('sideOpen', true) : false);
-if (window.pensieveNative === true) document.body.classList.add('native');
+if (window.pensieveNative === true) {
+  document.body.classList.add('native');
+  // the window can be dragged by the empty top bar and by invisible strips at its edges (the app does the dragging)
+  document.body.insertAdjacentHTML('beforeend', '<div class="dragedge t" data-drag></div><div class="dragedge l" data-drag></div><div class="dragedge r" data-drag></div><div class="dragedge b" data-drag></div>');
+  $('#top').setAttribute('data-drag', '');
+  const dragSpot = e => e.target.closest('[data-drag]') && !e.target.closest('button,a,input,select,textarea,label,nav,[role=menu],.menu,.glass');
+  const win = msg => window.webkit?.messageHandlers?.pensieveWindow?.postMessage(msg);
+  document.addEventListener('mousedown', e => { if (e.button === 0 && dragSpot(e)) win({drag: true}); }, true);
+}
 $('#helpmodal').addEventListener('click', e => { if (e.target.id === 'helpmodal' || e.target.dataset.close != null) $('#helpmodal').hidden = true; });
 document.addEventListener('keydown', e => {
   const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName);
@@ -2764,7 +2903,7 @@ async function handleEvent(m) {
     else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { await loadSettings(true); if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
-    else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') { renderLabels(); if (S.data.drawerTopic != null) openTopic(S.data.drawerTopic); } }
+    else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
   }
