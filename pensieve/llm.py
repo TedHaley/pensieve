@@ -1,7 +1,7 @@
 """Where summaries, topic names and insights get written. One setting, `ai`, picks the engine:
 
     builtin  Qwen 3.5 9B run by Pensieve itself with MLX (Apple Silicon; ~5 GB download on first use)
-    server   any OpenAI-compatible server (LM Studio by default) at llm_url / llm_model
+    server   any OpenAI-compatible server, local (LM Studio, Ollama…) or hosted, at llm_url / llm_model (+ llm_key)
     claude   the Claude Code CLI (`claude -p`): uses your Claude account; text leaves this Mac
     codex    the Codex CLI (`codex exec`): uses your OpenAI account; text leaves this Mac
     none     no AI: maps, search, activity, keyword topics and team commits still work
@@ -60,11 +60,38 @@ def _apple_silicon():
     return sys.platform == "darwin" and platform.machine() == "arm64"
 
 
-def _server_up(url, timeout=1.5):
+def _auth(key=None):
+    key = settings.get("llm_key") if key is None else key
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
+def _server_up(url, timeout=1.5, key=None):
     try:
-        return httpx.get(f"{url}/models", timeout=timeout).status_code == 200
+        return httpx.get(f"{url.rstrip('/')}/models", timeout=timeout, headers=_auth(key)).status_code == 200
     except httpx.HTTPError:
         return False
+
+
+def is_local(url) -> bool:
+    from urllib.parse import urlparse
+    return (urlparse(url).hostname or "") in ("localhost", "127.0.0.1", "::1") or (urlparse(url).hostname or "").endswith(".local")
+
+
+def server_models(url, key=None, timeout=4):
+    """Check an OpenAI-compatible server and list its models: {ok, models, error}."""
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/models", timeout=timeout, headers=_auth(key))
+    except httpx.HTTPError as e:
+        return dict(ok=False, models=[], error=f"Can't reach {url} ({type(e).__name__})")
+    if r.status_code in (401, 403):
+        return dict(ok=False, models=[], error="The server needs a valid API key")
+    if r.status_code != 200:
+        return dict(ok=False, models=[], error=f"{url}/models answered {r.status_code}")
+    try:
+        ids = [m["id"] for m in r.json().get("data", []) if isinstance(m, dict) and m.get("id")]
+    except (ValueError, AttributeError):
+        return dict(ok=False, models=[], error="That isn't an OpenAI-compatible server (no model list)")
+    return dict(ok=True, models=sorted(ids), error=None)
 
 
 def options():
@@ -83,9 +110,11 @@ def options():
              note=("Uses the copy LM Studio already downloaded." if local else
                    "Downloads about 6 GB in the background; you can keep working.") if have_mlx
              else f"Needs an Apple Silicon Mac with {MIN_RAM_GB} GB of memory."),
-        dict(id="server", label="LM Studio or another local server", privacy="local", available=_server_up(s["llm_url"]),
-             description=f"An OpenAI-compatible server at {s['llm_url']} running {s['llm_model']}.",
-             note="Running now." if _server_up(s["llm_url"]) else "Not running: start LM Studio's server (port 1234)."),
+        dict(id="server", label="Local or hosted server", privacy="local" if is_local(s["llm_url"]) else "cloud", available=True,
+             url=s["llm_url"], model=s["llm_model"], key_set=bool(s["llm_key"]), up=(up := _server_up(s["llm_url"])),
+             description="Any OpenAI-compatible server: LM Studio or Ollama on this Mac, or a hosted API. "
+                         + ("Nothing leaves this Mac." if is_local(s["llm_url"]) else "Session and code text is sent to that server."),
+             note=f"Connected to {s['llm_url']}." if up else f"Can't reach {s['llm_url']} right now."),
         dict(id="claude", label="Claude Code", privacy="cloud", available=bool(shutil.which("claude") or _find("claude")),
              description="Uses your Claude Code login (claude -p). Session and code text is sent to Anthropic.",
              note="Installed." if (shutil.which("claude") or _find("claude")) else "Claude Code isn't installed."),
@@ -120,7 +149,7 @@ def status() -> dict:
         st, detail = "off", ("Not set up yet." if a == "auto" else "AI is off.")
     elif p == "server":
         ok = _server_up(settings.get("llm_url"))
-        st, detail = ("ready", f"{settings.get('llm_model')} at {settings.get('llm_url')}") if ok else ("offline", f"No server at {settings.get('llm_url')}")
+        st, detail = ("ready", f"{settings.get('llm_model')} at {settings.get('llm_url')}") if ok else ("offline", f"Can't reach {settings.get('llm_url')}")
     elif p == "builtin":
         st, detail = _builtin["status"], _builtin["detail"]
         if st == "off":
@@ -251,13 +280,13 @@ def _strip_think(t):
     return t.strip()
 
 
-def _openai(url, model, msgs, max_tokens, temperature, schema, structured=True):
+def _openai(url, model, msgs, max_tokens, temperature, schema, structured=True, headers=None):
     body = {"model": model, "messages": msgs, "max_tokens": max_tokens, "temperature": temperature,
             "reasoning_effort": "none", "chat_template_kwargs": {"enable_thinking": False}}
     if schema and structured:
         body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "strict": True, "schema": schema}}
     try:
-        r = httpx.post(f"{url}/chat/completions", timeout=600, json=body)
+        r = httpx.post(f"{url.rstrip('/')}/chat/completions", timeout=600, json=body, headers=headers or {})
     except httpx.ConnectError as e:
         raise Offline(f"No model server at {url}") from e
     r.raise_for_status()
@@ -308,5 +337,6 @@ def complete(prompt: str, system: str = "", max_tokens: int = 200, temperature: 
     else:
         url, model, structured = settings.get("llm_url"), settings.get("llm_model"), True
     content = prompt + (_schema_hint(schema) if schema and not structured else "")
-    t = _openai(url, model, msgs + [{"role": "user", "content": content}], max_tokens, temperature, schema, structured)
+    t = _openai(url, model, msgs + [{"role": "user", "content": content}], max_tokens, temperature, schema, structured,
+                headers=_auth() if p == "server" else None)
     return _json_from(t) if schema else t

@@ -720,15 +720,23 @@ def remove_folder(path: str):
 
 @app.get("/api/settings")
 def get_settings():
-    return {"settings": settings.load(), "defaults": settings.DEFAULTS, "descriptions": settings.DESCRIPTIONS}
+    return {"settings": settings.public(settings.load()), "defaults": settings.DEFAULTS, "descriptions": settings.DESCRIPTIONS}
 
 
 @app.put("/api/settings")
 def put_settings(changes: dict):
     try:
-        return {"settings": settings.update(changes)}
+        return {"settings": settings.public(settings.update(changes))}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/ai/models")
+def ai_models(url: str, key: str = ""):
+    """Test an OpenAI-compatible server and list its models. The saved key is only used for the saved URL."""
+    if not key and url.rstrip("/") == settings.get("llm_url").rstrip("/"):
+        key = settings.get("llm_key")
+    return llm.server_models(url, key)
 
 
 def main():

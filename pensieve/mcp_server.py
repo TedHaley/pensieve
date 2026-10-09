@@ -213,14 +213,14 @@ def delete_scope(name: str) -> dict:
 @tool()
 def get_settings() -> dict:
     """Current settings with a description of each."""
-    return {"settings": settings.load(), "descriptions": settings.DESCRIPTIONS}
+    return {"settings": settings.public(settings.load()), "descriptions": settings.DESCRIPTIONS}
 
 
 @tool()
 def update_settings(changes: dict[str, Any]) -> dict:
     """Change settings, e.g. {"hotkey": "cmd+shift+space"}, {"editor": "cursor"}, {"max_repo_files": 20000},
     {"exclude_files": [...]}. To switch what gets indexed on or off, use set_source. Takes effect within seconds."""
-    return {"settings": settings.update(changes)}
+    return {"settings": settings.public(settings.update(changes))}
 
 
 @tool()

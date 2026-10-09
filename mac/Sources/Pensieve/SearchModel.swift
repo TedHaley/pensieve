@@ -44,6 +44,7 @@ final class SearchModel: ObservableObject {
 
     // Fixed metrics, so the panel can be sized without measuring SwiftUI.
     static let width: CGFloat = 680
+    static let cornerRadius: CGFloat = 26  // the glass shape, and the window clip that keeps its shadow rounded
     static let barHeight: CGFloat = 60
     static let rowHeight: CGFloat = 56
     static let headerHeight: CGFloat = 26

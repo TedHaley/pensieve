@@ -322,9 +322,11 @@ function recolor() {
 function refreshStates() {
   const a = gl.attr('aState'); if (!a) return;
   if (S.view === 'data') {
-    const hl = S.data.highlight;
-    mapPts.forEach((p, i) => { let v = dataPass(p) ? 1 : 0; if (v && hl) v = hl.has(p.id) ? 2 : 0.5; a.array[i] = v; });
-    a.needsUpdate = true; return;
+    const {highlight: hl, search: sr} = S.data;
+    mapPts.forEach((p, i) => { let v = dataPass(p) ? 1 : 0; if (v && (hl || sr)) v = (!hl || hl.has(p.id)) && (!sr || sr.has(p.id)) ? 2 : 0.5; a.array[i] = v; });
+    a.needsUpdate = true;
+    if (dataContextSlots()) recolor(); else renderLegend();  // colors and legend follow what's in view
+    return;
   }
   if (S.view === 'files') {
     const hl = S.files.highlight;
@@ -430,13 +432,15 @@ function renderLabels() {
 function renderLegend() {
   const L = $('#legend'); let html = '';
   if (S.view === 'data') {
-    const D = S.data, cb = D.colorBy, sw = (c, l) => `<span><i class="sw" style="background:${c}"></i>${esc(l)}</span>`;
-    if (cb === 'type') html = Object.entries(TYPE_SLOT).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
-    else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), placeName(k))).join('') + sw(pal().other, 'Other');
-    else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + sw(pal().other, 'Others, bots and agents');
+    const D = S.data, cb = D.colorBy, sw = (c, l) => `<span><i class="sw" style="background:${c}"></i>${esc(l)}</span>`, ctx = D.ctx || D.points;
+    const rest = (slots, key) => ctx.some(p => !slots.has(key(p)));
+    if (cb === 'type') html = Object.entries(TYPE_SLOT).filter(([t]) => ctx.some(p => p.type === t)).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
+    else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), placeName(k))).join('') + (rest(D.folderSlot, p => p.place) ? sw(pal().other, 'Other') : '');
+    else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + (rest(D.authorSlot, p => p.who) ? sw(pal().other, 'Others, bots and agents') : '');
     else if (cb === 'recency') html = legendRamp('Older', 'Recently changed');
     else if (cb === 'risk') html = legendRamp('Active authors', 'Mostly inactive authors') + sw(pal().other, 'Not code in this repo');
-    else if (D.topics.size) html = [...D.topics.values()].filter(t => t.id < 8).map(t => sw(slotColor(t.id), t.name)).join('') + (D.topics.size > 8 ? sw(pal().other, 'Other topics') : '');
+    else if (D.topics.size) { const n = new Map(); ctx.forEach(p => p.cluster != null && n.set(p.cluster, (n.get(p.cluster) || 0) + 1));
+      html = [...n].sort((a, b) => b[1] - a[1]).map(([id]) => sw(slotColor(id), D.topics.get(id)?.name || `Topic ${id + 1}`)).join(''); }
     else html = '<span class="muted">Colors group items with similar content</span>';
   } else if (S.view === 'files') {
     const cb = S.files.colorBy;
@@ -464,7 +468,7 @@ const canvas = gl.renderer.domElement;
 let downAt = null, moveRaf = 0;
 canvas.addEventListener('pointerdown', e => {
   downAt = [e.clientX, e.clientY];
-  if (gl.controls.autoRotate) { gl.controls.autoRotate = false; }
+  if (gl.controls.autoRotate) { gl.controls.autoRotate = false; syncRotateBtn(); }
   $('#hint').classList.add('gone'); store.set('hinted', true);
 });
 canvas.addEventListener('pointermove', e => {
@@ -510,9 +514,7 @@ function renderToolbar() {
     const fr = focusedRepo();
     if (D.colorBy === 'risk' && !fr) D.colorBy = 'type';
     tb.innerHTML = `<div class="seg" id="dcolor"><span class="seg-label">Color</span>${[['type', 'Type'], ['folder', 'Folder'], ['author', 'Author'], ['recency', 'Recency'], ['topic', 'Topic'], ...(fr ? [['risk', 'Knowledge risk']] : [])].map(([k, l]) => `<button data-v="${k}" class="${D.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-      ${D.highlight ? `<button class="btn on" data-act="cleardhl">✕ Clear highlight</button>` : ''}
-      <button class="btn ${gl.controls.autoRotate ? 'on' : ''}" data-act="rotate" title="Auto-rotate">⟳</button>
-      <button class="btn" data-act="fit" title="Fit (F)">Fit</button>`;
+      ${D.highlight ? `<button class="btn on" data-act="cleardhl">✕ Clear highlight</button>` : ''}`;
     $$('#dcolor button', tb).forEach(b => b.onclick = async () => {
       D.colorBy = b.dataset.v; if (D.colorBy !== 'risk') store.set('dataColor', D.colorBy);
       if (D.colorBy === 'risk') await loadGaps(focusedRepo()?.name);
@@ -522,34 +524,27 @@ function renderToolbar() {
     tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Folders</button>
       <div class="seg" id="fcolor"><span class="seg-label">Color</span>${[['folder', 'Folder'], ['kind', 'Kind'], ['author', 'Author'], ['topic', 'Topic'], ['recency', 'Recency']].map(([k, l]) => `<button data-v="${k}" class="${S.files.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <span style="flex:1"></span>
-      ${S.files.highlight ? `<button class="btn on" data-act="clearfhl">✕ Clear highlight</button>` : ''}
-      <button class="btn ${gl.controls.autoRotate ? 'on' : ''}" data-act="rotate" title="Auto-rotate">⟳</button>
-      <button class="btn" data-act="fit" title="Fit (F)">Fit</button>`;
+      ${S.files.highlight ? `<button class="btn on" data-act="clearfhl">✕ Clear highlight</button>` : ''}`;
     $$('#fcolor button', tb).forEach(b => b.onclick = () => { S.files.colorBy = b.dataset.v; store.set('filesColor', S.files.colorBy); renderToolbar(); recolor(); });
   } else if (S.view === 'code') {
     tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Panel</button>
       <div class="seg" id="ccolor"><span class="seg-label">Color</span>${[...(S.code.repo === ALL ? [['repo', 'Repo']] : []), ['dir', 'Area'], ['author', 'Author'], ['recency', 'Recency'], ['linked', 'My sessions']].map(([k, l]) => `<button data-v="${k}" class="${S.code.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <button class="btn" data-act="who">Who knows about…</button>
       <button class="btn" data-act="overlaps">Overlaps</button>
-      <span style="flex:1"></span>
-      <button class="btn ${gl.controls.autoRotate ? 'on' : ''}" data-act="rotate" title="Auto-rotate">⟳</button>
-      <button class="btn" data-act="fit" title="Fit (F)">Fit</button>`;
+      <span style="flex:1"></span>`;
     $$('#ccolor button', tb).forEach(b => b.onclick = () => { S.code.colorBy = b.dataset.v; renderToolbar(); recolor(); });
   } else {
     tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Filters</button>
       <div class="seg" id="lvl"><button data-v="session" class="${S.level === 'session' ? 'on' : ''}" title="One point per session">Sessions</button><button data-v="chunk" class="${S.level === 'chunk' ? 'on' : ''}" title="One point per conversation moment">Moments</button></div>
       <div class="seg" id="mcolor"><span class="seg-label">Color</span>${[['area', 'Code area'], ['topic', 'Topic'], ['project', 'Project'], ['agent', 'Agent'], ['recency', 'Recency']].map(([k, l]) => `<button data-v="${k}" class="${S.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <span style="flex:1"></span>
-      ${S.highlight ? `<button class="btn on" data-act="clearhl">✕ Clear highlight (${S.highlight.size})</button>` : ''}
-      <button class="btn ${gl.controls.autoRotate ? 'on' : ''}" data-act="rotate" title="Auto-rotate">⟳</button>
-      <button class="btn" data-act="fit" title="Fit (F)">Fit</button>`;
+      ${S.highlight ? `<button class="btn on" data-act="clearhl">✕ Clear highlight (${S.highlight.size})</button>` : ''}`;
     $$('#lvl button', tb).forEach(b => b.onclick = () => setLevel(b.dataset.v));
     $$('#mcolor button', tb).forEach(b => b.onclick = () => { S.colorBy = b.dataset.v; store.set('mapColor', S.colorBy); renderToolbar(); recolor(); renderTimeline(); });
   }
   // the type switch lives under the search field; with the panel collapsed a compact picker stands in here
   $$('[data-act]', tb).forEach(b => b.onclick = () => ({
     fit: () => gl.fit(visibleIdx()),
-    rotate: () => { gl.controls.autoRotate = !gl.controls.autoRotate; store.set('autorotate', gl.controls.autoRotate); renderToolbar(); },
     clearhl: () => { S.highlight = null; refreshStates(); renderToolbar(); },
     clearfhl: () => { S.files.highlight = null; refreshStates(); renderToolbar(); },
     cleardhl: () => { S.data.highlight = null; S.data.sel = null; refreshStates(); renderToolbar(); renderLabels(); },
@@ -1158,10 +1153,32 @@ const TYPE_NAME = {doc: 'Documents', code: 'Code', session: 'Agent sessions'};
 const TYPE_ONE = {doc: 'Document', code: 'Code', session: 'Agent session'};
 S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type'),
           treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map(),
-          topics: new Map(), topicsAI: false, sel: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
+          topics: new Map(), topicsAI: false, sel: null, search: null, ctx: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
 const relHome = p => { const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
 const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
 // A repo, or a folder two levels under home (~/Documents/medrec): "Desktop" alone would color nearly everything the same.
+// What's in view on the Data map: the type and folder filters, then any highlight (a topic, a person…) and search
+// results. Folder and author colors go to the biggest groups in view, so a repo shows its own people and areas.
+const dataInView = p => dataPass(p) && (!S.data.highlight || S.data.highlight.has(p.id)) && (!S.data.search || S.data.search.has(p.id));
+function dataContextSlots() {
+  const D = S.data, inView = D.points.filter(dataInView), ctx = inView.length ? inView : D.points.filter(p => dataPass(p));
+  const top = f => { const m = new Map(); ctx.forEach(p => { const k = f(p); if (k) m.set(k, (m.get(k) || 0) + 1); }); return new Map([...m].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i])); };
+  const fs = top(p => p.place), as = top(p => p.who), same = (a, b) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
+  const changed = !same(fs, D.folderSlot) || !same(as, D.authorSlot);
+  D.ctx = ctx; D.folderSlot = fs; D.authorSlot = as;
+  return changed;
+}
+// search results light up on the map (the rest dims), and narrow the legend
+function setDataSearch(results) {
+  const D = S.data;
+  if (!results) { if (!D.search) return; D.search = null; }
+  else {
+    const byPath = new Map(D.points.filter(p => p.type !== 'session').map(p => [p.path, p.id])), ids = new Set();
+    results.forEach(r => { if (r.is_dir) return; const id = r.kind === 'session' ? r.id : byPath.get(r.path); if (id && (r.kind !== 'session' || D.points.some(p => p.id === id))) ids.add(id); });
+    D.search = ids.size ? ids : null;
+  }
+  if (S.view === 'data') { refreshStates(); renderLabels(); }
+}
 const placeOf = dir => { const r = repoOfKey(dir); return r ? r.key : dir.split('/').slice(0, 2).join('/'); };
 const placeName = k => { const r = repoOfKey(k); return r && r.key === k ? r.name : '~/' + k; };
 // One color per person: git and document metadata spell the same person several ways ("Ted", "TedHaley", "Ted Haley",
@@ -1586,10 +1603,9 @@ const SET_GROUPS = [
   ['What gets indexed', ['exclude', 'exclude_files', 'max_file_mb']],
   ['Git repositories', ['sweep_roots', 'sweep_depth', 'max_repo_files', 'repos']],
   ['Mac app', ['hotkey', 'editor']],
-  ['Language model', ['llm_url', 'llm_model']],
 ];
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
-const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'auto_update_check']);  // managed in the Sources section
+const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'auto_update_check', 'llm_url', 'llm_model', 'llm_key', 'llm_key_set']);  // managed in their own sections
 const SRC_ICON = {
   agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
@@ -1829,6 +1845,7 @@ S.setTab = store.get('setTab', 'sources');
 function setTab(t) { S.setTab = t; store.set('setTab', t); if (S.view === 'settings') renderSettings(); }
 async function renderSettings() {
   const el = $('#settings');
+  const was = $('#setmain'), keep = was ? {tab: was.dataset.tab, y: was.scrollTop} : null;  // before anything replaces it
   if (!S.set) { el.innerHTML = '<div class="empty"><div class="spinner" style="margin:auto"></div></div>'; try { await loadSettings(); } catch { el.innerHTML = '<div class="empty">Could not load settings.</div>'; return; } }
   const st = S.status, dirty = setDirty(), port = location.port || '8765', mcpUrl = `http://127.0.0.1:${port}/mcp`;
   const tab = SET_TABS.some(t => t[0] === S.setTab) ? S.setTab : 'sources';
@@ -1862,7 +1879,7 @@ async function renderSettings() {
       <div><label class="tog"><input type="checkbox" data-upd ${S.set.orig.auto_update_check !== false ? 'checked' : ''}></label></div></div></div>` + groups.filter(([g]) => g !== 'Mac app').map(card).join('') + `
     <div class="set-card" id="set-Index"><h3>Index</h3><div class="set-stats">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
       <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}${st.llm ? ` · model: ${esc(st.llm)}` : ''}</p></div>`;
-  const prevMain = $('#setmain'), y = prevMain && prevMain.dataset.tab === tab ? prevMain.scrollTop : 0;
+  const prevMain = $('#setmain'), y = prevMain && prevMain.dataset.tab === tab ? prevMain.scrollTop : keep?.tab === tab ? keep.y : 0;
   el.innerHTML = `<div class="set-sheet"><nav class="set-nav">${SET_TABS.map(([id, l, c, ic]) => `<button class="${id === tab ? 'on' : ''}" data-settab="${id}"><span class="set-ic" style="background:${c}"><svg viewBox="0 0 24 24" width="14" height="14">${ic}</svg></span>${esc(l)}</button>`).join('')}<span class="grow"></span><button class="btn set-done" data-setdone title="Close (Esc)">Done</button></nav>
     <div class="set-main" id="setmain" data-tab="${tab}">${body}</div></div>`;
   $('#setmain').scrollTop = y;
@@ -1969,7 +1986,7 @@ function syncInsightsTab() {
 }
 function refreshAIViews() {
   syncInsightsTab();
-  if (S.view === 'settings' && S.setTab === 'ai') renderSettings();
+  if (S.view === 'settings' && S.setTab === 'ai' && !document.activeElement?.dataset?.aif) renderSettings();
   if (S.view === 'insights') renderInsights();
 }
 async function setAI(changes, msg) {
@@ -2014,7 +2031,7 @@ function aiOffPage() {
     ${!prep ? `<div class="ai-alt"><div class="h4" style="margin-top:4px">Or use</div>${others.map(o => `<div class="ai-alt-row ${o.available ? '' : 'na'}">
         <div class="tx"><b>${esc(o.label)}</b> <span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span>
           <div class="muted">${esc(o.privacy === 'cloud' ? o.description.replace(/^.*?\)\.\s*/, '') : o.description)}${o.note ? ' · ' + esc(o.note) : ''}</div></div>
-        <button class="btn" data-ai="${esc(o.id)}" ${o.available ? '' : 'disabled'}>${aiState.busy === o.id ? 'Saving…' : 'Use'}</button></div>`).join('')}</div>` : ''}
+        ${o.id === 'server' ? '<a class="btn" href="#ai">Set up</a>' : `<button class="btn" data-ai="${esc(o.id)}" ${o.available ? '' : 'disabled'}>${aiState.busy === o.id ? 'Saving…' : 'Use'}</button>`}</div>`).join('')}</div>` : ''}
     ${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
   </div>`;
 }
@@ -2033,6 +2050,7 @@ function aiSettingsHtml() {
     <div class="set-card ai-set"><h3>Engine</h3><p class="sc-p">${esc(NO_AI_WORKS)}</p>
       <div class="ai-opts" role="radiogroup" aria-label="AI engine">${d.options.filter(o => o.id !== 'none').map(o => {
         const on = d.setting === o.id || (d.setting === 'auto' && d.provider === o.id);
+        if (o.id === 'server') return aiServerCard(o, on, d.setting === 'auto');
         return `<button class="ai-opt ${on ? 'on' : ''}" data-ai="${esc(o.id)}" role="radio" aria-checked="${on}" ${o.available ? '' : 'disabled'}>
           <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
           <p>${esc(o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}
@@ -2043,10 +2061,62 @@ function aiSettingsHtml() {
       <div class="set-row"><div><div class="k">Turn off insights</div><div class="d">Stops all AI work. ${esc(NO_AI_WORKS)}</div></div>
       <div><button class="btn" data-ai="none" ${d.setting === 'none' ? 'disabled' : ''}>${d.setting === 'none' ? 'Insights are off' : 'Turn off'}</button></div></div></div>`;
 }
+// The local-or-hosted server option: URL, model and an optional API key, with a connection test that lists models.
+const isLocalUrl = u => { try { const h = new URL(u).hostname; return ['localhost', '127.0.0.1', '[::1]'].includes(h) || h.endsWith('.local'); } catch { return true; } };
+function aiServerStatus(o) {
+  const f = aiState.form, t = f?.test;
+  if (t === 'busy') return ['', 'Checking…'];
+  if (t) return t.ok ? ['ok', `Connected · ${plural(t.models.length, 'model')}`] : ['bad', t.error];
+  return o.up ? ['ok', `Connected to ${o.url}`] : ['bad', `Can't reach ${o.url}`];
+}
+function aiServerCard(o, on, auto) {
+  const f = aiState.form || (aiState.form = {url: o.url, model: o.model, key: '', test: null}), local = isLocalUrl(f.url);
+  const [cls, msg] = aiServerStatus(o);
+  return `<div class="ai-opt ai-srv ${on ? 'on' : ''}" role="radio" aria-checked="${on}">
+    <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${local ? 'local' : 'cloud'}" data-aipriv>${local ? 'Local' : 'Hosted'}</span></div>
+    <p>Any OpenAI-compatible server: LM Studio or Ollama on this Mac, or a hosted API.</p>
+    <label class="ai-f"><span>Server URL</span><input class="set-in" data-aif="url" value="${esc(f.url)}" placeholder="http://localhost:1234/v1" spellcheck="false" autocomplete="off"></label>
+    <label class="ai-f"><span>Model</span><input class="set-in" data-aif="model" list="aimodels" value="${esc(f.model)}" placeholder="e.g. qwen/qwen3.5-9b" spellcheck="false" autocomplete="off">
+      <datalist id="aimodels">${(f.test?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist></label>
+    <label class="ai-f"><span>API key <span class="muted">· hosted servers only</span></span><input class="set-in" type="password" data-aif="key" value="${esc(f.key)}" placeholder="${o.key_set ? 'Saved · leave empty to keep it' : 'Not needed for LM Studio or Ollama'}" autocomplete="off"></label>
+    <div class="ai-srv-st ${cls}" data-aist>${esc(msg)}</div>
+    <div class="ai-srv-btns"><button class="btn" data-aitest>Test connection</button><button class="btn primary" data-aisave>${aiState.busy === 'server' ? 'Saving…' : on && !auto ? 'Save' : 'Use this server'}</button></div>
+    ${on ? `<span class="ai-check">✓ ${auto ? 'In use (picked automatically)' : 'Selected'}</span>` : ''}</div>`;
+}
+function bindAIServer(root) {
+  const card = $('.ai-srv', root); if (!card) return;
+  const f = aiState.form, inp = k => $(`[data-aif=${k}]`, card);
+  const paint = () => {  // update in place: re-rendering would lose the cursor in the field being typed in
+    const o = aiState.data.options.find(x => x.id === 'server'), [cls, msg] = aiServerStatus(o), st = $('[data-aist]', card);
+    st.className = 'ai-srv-st ' + cls; st.textContent = msg;
+    $('#aimodels', card).innerHTML = (f.test?.models || []).map(m => `<option value="${esc(m)}">`).join('');
+    const local = isLocalUrl(f.url), pv = $('[data-aipriv]', card); pv.className = 'priv ' + (local ? 'local' : 'cloud'); pv.textContent = local ? 'Local' : 'Hosted';
+  };
+  const test = async () => {
+    if (!f.url.trim()) return;
+    f.test = 'busy'; paint();
+    const r = await api(`/api/ai/models?url=${enc(f.url.trim())}&key=${enc(f.key)}`).catch(e => ({ok: false, models: [], error: e.message}));
+    f.test = r;
+    if (r.ok && r.models.length && !r.models.includes(f.model.trim())) {  // suggest a chat model when the current one isn't served
+      const pick = r.models.find(m => !/embed/i.test(m)); if (pick && !f.model.trim()) { f.model = pick; inp('model').value = pick; }
+    }
+    paint();
+  };
+  ['url', 'model', 'key'].forEach(k => inp(k).oninput = () => { f[k] = inp(k).value; if (k !== 'model') { f.test = null; paint(); } });
+  inp('url').onchange = test; inp('key').onchange = test;
+  $('[data-aitest]', card).onclick = test;
+  $('[data-aisave]', card).onclick = () => {
+    const url = f.url.trim().replace(/\/+$/, ''), model = f.model.trim();
+    if (!url || !model) { aiState.err = 'Enter the server URL and a model name.'; refreshAIViews(); return; }
+    const ch = {ai: 'server', llm_url: url, llm_model: model}; if (f.key) ch.llm_key = f.key;
+    aiState.busy = 'server'; aiState.form = null; setAI(ch, 'AI server saved');
+  };
+}
 function bindAISettings(root) {
   bindAIButtons(root);
+  bindAIServer(root);
   const bat = $('[data-aibat]', root);
-  if (bat) bat.onchange = async () => { await setAI({ai_on_battery: bat.checked}, bat.checked ? 'Insights keep working on battery' : 'Insights pause on battery'); S.set = null; renderSettings(); };
+  if (bat) bat.onchange = async () => { await setAI({ai_on_battery: bat.checked}, bat.checked ? 'Insights keep working on battery' : 'Insights pause on battery'); await loadSettings(true); renderSettings(); };
 }
 
 /* ============================== views ============================== */
@@ -2323,16 +2393,16 @@ async function openPalette(prefill = null, {focus = true} = {}) {
 function closePalette() { const i = $('#palin'); if (i.value) { i.value = ''; palSearch(); } i.blur(); }
 const palFind = debounce(async (q, seq) => {
   try {
-    const r = await api(`/api/find?limit=18&q=${enc(q)}&scope=${enc(palScope())}`);
+    const r = await api(`/api/find?limit=40&q=${enc(q)}&scope=${enc(palScope())}`);
     if (seq !== pl.seq) return;
-    pl.found = r; palRender();
+    pl.found = r; palRender(); setDataSearch(r.results || []);
   } catch { if (seq === pl.seq) { pl.found = {results: []}; palRender(); } }
 }, 160);
 function palSearch() {
   pl.q = $('#palin').value; pl.seq++; pl.found = null; pl.sel = 0;
   const on = !!pl.q.trim();
   document.body.classList.toggle('searching', on); $('#palres').hidden = !on;
-  if (!on) { pl.items = []; $('#palres').innerHTML = ''; return; }
+  if (!on) { pl.items = []; $('#palres').innerHTML = ''; setDataSearch(null); return; }
   palRender();
   const q = pl.q.trim();
   if (q && !q.startsWith('who:') && !q.startsWith('>') && q.replace(/[^\w]/g, '').length >= 2) palFind(q, pl.seq);
@@ -2423,6 +2493,11 @@ $$('#appseg [data-app]').forEach(b => b.onclick = () => applyAppearance(b.datase
 async function loadAppearance() {
   try { const r = await api('/api/settings'); if (APPEARANCES.includes(r.settings.appearance) && r.settings.appearance !== appearance) applyAppearance(r.settings.appearance); } catch {}
 }
+// Fit and auto-rotate sit beside the ••• menu, on every map view
+const syncRotateBtn = () => { const b = $('#rotbtn'); b.classList.toggle('on', gl.controls.autoRotate); b.setAttribute('aria-pressed', String(gl.controls.autoRotate)); };
+$('#fitbtn').onclick = () => gl.fit(visibleIdx());
+$('#rotbtn').onclick = () => { gl.controls.autoRotate = !gl.controls.autoRotate; store.set('autorotate', gl.controls.autoRotate); syncRotateBtn(); };
+syncRotateBtn();
 function closeMenu() { $('#gearmenu').hidden = true; $('#gearbtn').setAttribute('aria-expanded', 'false'); }
 $('#gearbtn').onclick = e => { e.stopPropagation(); const m = $('#gearmenu'); m.hidden = !m.hidden; $('#gearbtn').setAttribute('aria-expanded', String(!m.hidden)); syncThemeLabel(); };
 document.addEventListener('mouseover', e => {  // full text on hover for anything shortened with an ellipsis
@@ -2474,7 +2549,7 @@ function renderStatus() {
   pill.className = 'menu-status ' + state; $('#gearbtn').dataset.state = state;
   if (st.llm_offline) {
     label.textContent = 'Language model offline';
-    pill.title = `No language model at ${st.llm_url || 'the LLM URL'}. Start LM Studio (or set llm_url in Settings) for summaries, topic names and insights. Search, maps, files and code views still work.`;
+    pill.title = `No language model at ${st.llm_url || 'the LLM URL'}. Start that server, or pick another in Settings → AI & Insights, for summaries, topic names and insights. Search, maps, files and code views still work.`;
     return;
   }
   label.textContent = st.layout ? 'Laying out map…' : st.summarized_sessions < st.sessions ? `Summarizing ${st.summarized_sessions}/${st.sessions}` :
@@ -2512,7 +2587,6 @@ async function reloadAll(pulse = true) {
   if (pulse && changed.length) {
     changed.forEach(id => S.pulse.add(id));
     setTimeout(() => { changed.forEach(id => S.pulse.delete(id)); if (S.view === 'map') refreshStates(); }, 6000);
-    toast(changed.length === 1 ? `Updated: ${S.byId.get(changed[0])?.title.slice(0, 50)}` : `${changed.length} sessions updated`);
   }
   if (S.view === 'map') { const c = gl.saveCam(); buildMap(); gl.loadCam(c); }
   refresh();
@@ -2530,7 +2604,7 @@ async function handleEvent(m) {
     else if (m.type === 'topics') { await loadSessions(); renderSidebar(); if (S.view === 'map') renderLabels(); if (S.view === 'insights') renderInsights(); pollStatus(); }
     else if (m.type === 'insights') { await loadInsights(); if (S.view === 'insights') renderInsights(); toast('New insights are ready'); pollStatus(); }
     else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); reloadDataSoon(); refetchSourcesSoon(); }
-    else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { S.set = null; if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
+    else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { await loadSettings(true); if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') { renderLabels(); if (S.data.drawerTopic != null) openTopic(S.data.drawerTopic); } }

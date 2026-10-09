@@ -394,7 +394,7 @@ extension View {
 
     /// Spotlight's look: Liquid Glass on macOS 26, a popover-style blur before that.
     @ViewBuilder func panelGlass() -> some View {
-        let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: SearchModel.cornerRadius, style: .continuous)
         if #available(macOS 26.0, *) {
             self.glassEffect(.regular, in: shape)
         } else {

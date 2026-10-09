@@ -111,6 +111,12 @@ final class PanelController: NSObject, NSWindowDelegate {
         model.onLayout = { [weak self] in self?.relayout() }
         let host = NSHostingView(rootView: SearchView(model: model))
         host.sizingOptions = []
+        // clip to the glass's rounded shape: the window shadow is drawn from what's opaque, and the square
+        // corners otherwise showed as a rectangular outline around the panel
+        host.wantsLayer = true
+        host.layer?.cornerRadius = SearchModel.cornerRadius
+        host.layer?.cornerCurve = .continuous
+        host.layer?.masksToBounds = true
         panel.contentView = host
         panel.delegate = self
         // the hint line wraps, so backend state changes (setup, errors) can change the panel's height
@@ -156,6 +162,13 @@ final class PanelController: NSObject, NSWindowDelegate {
         let h = model.panelHeight
         panel.setFrame(NSRect(x: vf.midX - SearchModel.width / 2, y: top - h, width: SearchModel.width, height: h),
                        display: true)
+        refreshShadow()
+    }
+
+    /// The shadow follows the content's shape, so recompute it once the new size has been drawn.
+    private func refreshShadow() {
+        panel.invalidateShadow()
+        DispatchQueue.main.async { [weak self] in self?.panel.invalidateShadow() }
     }
 
     /// Grow or shrink downward as results change; the search bar never moves.
@@ -165,7 +178,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         let f = panel.frame
         guard abs(f.height - h) > 0.5 else { return }
         panel.setFrame(NSRect(x: f.minX, y: top - h, width: f.width, height: h), display: true)
-        panel.invalidateShadow()
+        refreshShadow()
     }
 
     /// Control tapped alone (pressed and released with nothing else) toggles the action list. Only a clean

@@ -861,3 +861,16 @@ body:has(.modal:not([hidden])) #gl .labels,body:has(.menu:not([hidden])) #gl .la
 .gaps-card .gaps-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
 .inactive-line{font-size:12px;margin:0 0 6px}
 .linkbtn.subtle{color:inherit;text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:2px}
+
+/* map buttons beside the ••• menu: only where there's a map */
+body[data-view=insights] .mapbtn,body[data-view=settings] .mapbtn{display:none}
+.iconbtn.mapbtn.on{color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+/* Settings → AI: the local-or-hosted server form */
+.ai-srv{cursor:default;text-align:left;grid-column:1/-1}
+.ai-srv .ai-f{display:block;margin-top:10px}
+.ai-srv .ai-f>span{display:block;font-size:12px;font-weight:500;color:var(--text-2);margin-bottom:4px}
+.ai-srv .ai-f .set-in{width:100%;box-sizing:border-box}
+.ai-srv-st{font-size:12px;margin-top:10px;color:var(--text-3)}
+.ai-srv-st.ok{color:var(--good)}
+.ai-srv-st.bad{color:var(--critical)}
+.ai-srv-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}

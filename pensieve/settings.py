@@ -32,7 +32,7 @@ DEFAULTS = {
     "editor": "default",       # how code results open: default | vscode | cursor | zed
     "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
     # What writes summaries, topic names and insights: auto (a local server if one is running; the UI asks) |
-    # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model) | claude | codex | none
+    # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model/llm_key: local or hosted) | claude | codex | none
     "ai": "auto",
     "builtin_model": "mlx-community/Qwen3.5-9B-MLX-4bit",
     "agent_model": "haiku",    # model passed to `claude -p --model` when ai = claude
@@ -40,6 +40,7 @@ DEFAULTS = {
     "auto_update_check": True,  # the Mac app checks GitHub Releases daily and offers updates (never installs by itself)
     "llm_url": "http://localhost:1234/v1",
     "llm_model": "qwen/qwen3.5-9b",
+    "llm_key": "",             # API key for a hosted server; sent only to llm_url, never shown back in full
 }
 
 DESCRIPTIONS = {
@@ -62,8 +63,9 @@ DESCRIPTIONS = {
     "agent_model": "Model for the Claude Code engine (claude -p --model).",
     "ai_on_battery": "Keep writing summaries and insights in the background while on battery power.",
     "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
-    "llm_url": "OpenAI-compatible endpoint for summaries and insights (LM Studio by default).",
+    "llm_url": "OpenAI-compatible endpoint, local (LM Studio, Ollama) or hosted, for summaries and insights.",
     "llm_model": "Chat model used for summaries and insights.",
+    "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
 }
 
 _lock = threading.Lock()
@@ -141,6 +143,8 @@ def update(changes: dict) -> dict:
             raise ValueError("appearance must be system, light or dark")
         if k == "ai" and v not in ("auto", "builtin", "server", "claude", "codex", "none"):
             raise ValueError("ai must be auto, builtin, server, claude, codex or none")
+        if k == "llm_url" and not v.startswith(("http://", "https://")):
+            raise ValueError("llm_url must start with http:// or https://, e.g. http://localhost:1234/v1")
         if k == "editor" and v not in ("default", "vscode", "cursor", "zed"):
             raise ValueError("editor must be default, vscode, cursor or zed")
         clean[k] = v
@@ -151,6 +155,11 @@ def update(changes: dict) -> dict:
     for fn in list(_listeners):
         fn(clean)
     return load()
+
+
+def public(s: dict) -> dict:
+    """Settings as the visualizer and agents see them: the API key is never sent back, only whether one is saved."""
+    return {**s, "llm_key": "", "llm_key_set": bool(s.get("llm_key"))}
 
 
 def on_change(fn):
