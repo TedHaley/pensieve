@@ -99,7 +99,7 @@ pensieve integrate claude --remove    # removes exactly what was added
 | Cost per lookup, all repos | $0.080 | **$0.075** |
 | Cost per lookup, 33k-file monorepo | $0.105 | **$0.083** |
 
-Pensieve's search alone puts the right file first for 96% of error strings, 92% of identifiers and 67% of descriptions (a single grep: 92%, 54%, 0%). In repos under ~1,800 files the tool descriptions cost more than the searches they save (a few percent per lookup). Run it on your repos:
+Those agent figures are from 0.4.3. Since 0.4.4 the MCP tools return grep-sized results (one line per hit, ~380 tokens instead of ~1,400), which made lookups 9–10% cheaper than grep in 1,500 and 2,100-file repos as well, where 0.4.3 had cost a few percent more. Pensieve's search alone puts the right file first for 96% of error strings, 92% of identifiers and 67% of descriptions (a single grep: 92%, 54%, 0%). Run it on your repos:
 
 ```bash
 uv run python bench/agent_search.py gen --repo ~/code/myrepo -n 40 --tasks tasks-v2.jsonl

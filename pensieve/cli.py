@@ -44,11 +44,15 @@ def main():
     if a.command == "integrate":
         return integrate(a.items, a.remove)
 
+    from . import reset
+    done = reset.apply_pending()  # before anything opens the database
     import uvicorn
     from . import config, settings
+    if done:
+        print(f"Pensieve was reset ({'index and settings' if done == 'all' else 'index'}); indexing from scratch.", flush=True)
     url = f"http://localhost:{a.port}"
     print(f"Pensieve → {url}  (MCP: {url}/mcp)\n  data: {config.DATA_DIR}\n  llm:  {settings.get('llm_model')} @ {settings.get('llm_url')}", flush=True)
-    if not a.no_open:
+    if not a.no_open and not os.environ.get("PENSIEVE_RESTARTED"):
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     # open streams (the app's live-update connection) would otherwise hold a graceful shutdown open indefinitely
     uvicorn.run("pensieve.server:app", host="127.0.0.1", port=a.port, log_level="warning", timeout_graceful_shutdown=2)

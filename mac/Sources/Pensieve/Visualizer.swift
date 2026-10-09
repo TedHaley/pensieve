@@ -32,7 +32,7 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
 
     private func create() {
         let config = WKWebViewConfiguration()
-        config.applicationNameForUserAgent = "PensieveMac/1"
+        config.applicationNameForUserAgent = "PensieveMac/2"  // 2: handles pensieve://check-updates
         config.userContentController.addUserScript(WKUserScript(
             source: "window.pensieveNative = true;", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let web = WKWebView(frame: .zero, configuration: config)

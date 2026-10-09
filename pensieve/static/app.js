@@ -1651,11 +1651,11 @@ async function openFile(path) {
 /* ============================== settings view ============================== */
 const SET_GROUPS = [
   ['What gets indexed', ['exclude', 'exclude_files', 'max_file_mb', 'skip_temp_sessions']],
-  ['Git repositories', ['sweep_roots', 'sweep_depth', 'max_repo_files', 'repos']],
+  ['Git repositories', ['sweep_roots', 'sweep_depth', 'max_repo_files']],
   ['Mac app', ['hotkey', 'editor']],
 ];
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
-const SET_HIDDEN = new Set(['disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'auto_update_check', 'llm_url', 'llm_model', 'llm_key', 'llm_key_set']);  // managed in their own sections
+const SET_HIDDEN = new Set(['repos', 'disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'auto_update_check', 'llm_url', 'llm_model', 'llm_key', 'llm_key_set']);  // managed in their own sections
 const SRC_ICON = {
   agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
@@ -1884,6 +1884,7 @@ function setField(k) {
 }
 // Settings is a System-Settings-style sheet: a list on the left, one section at a time on the right.
 const SET_TABS = [
+  ['general', 'General', '#8e8e93', '<circle cx="12" cy="12" r="3" fill="none" stroke="#fff" stroke-width="1.8"/><path d="M12 3.5v2.4M12 18.1v2.4M3.5 12h2.4M18.1 12h2.4M6 6l1.7 1.7M16.3 16.3 18 18M6 18l1.7-1.7M16.3 7.7 18 6" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>'],
   ['sources', 'Sources', '#0a84ff', '<path d="M4 6.5C4 5.1 7.6 4 12 4s8 1.1 8 2.5S16.4 9 12 9 4 7.9 4 6.5Z M4 6.5v11C4 18.9 7.6 20 12 20s8-1.1 8-2.5v-11 M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" fill="none" stroke="#fff" stroke-width="1.8"/>'],
   ['scopes', 'Scopes', '#5e5ce6', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="#fff"/>'],
   ['agents', 'Search & Agents', '#30b0c7', '<circle cx="11" cy="11" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
@@ -1892,6 +1893,55 @@ const SET_TABS = [
   ['advanced', 'Advanced', '#8e8e93', '<path d="M5 7h8M17 7h2M5 17h2M11 17h8" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="9" cy="17" r="2" fill="none" stroke="#fff" stroke-width="1.8"/>'],
 ];
 S.setTab = store.get('setTab', 'sources');
+// General: version, update check, reset. Inside the Mac app (PensieveMac/2+) the app checks and installs updates itself.
+const IN_APP = /PensieveMac\/(\d+)/.test(navigator.userAgent) && +RegExp.$1 >= 2;
+const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? Math.round(n / 1e6) + ' MB' : Math.round(n / 1e3) + ' KB';
+async function bindGeneral() {
+  const ab = $('#aboutbox');
+  try {
+    const a = await api('/api/about');
+    if (ab) ab.innerHTML = `<div class="set-row" style="border-top:0"><div><div class="k">Version</div><div class="d">Pensieve ${esc(a.version)}</div></div><div><a class="btn" href="https://github.com/TedHaley/pensieve/releases" target="_blank" rel="noopener">Release notes</a></div></div>
+      <div class="set-row"><div><div class="k">Index</div><div class="d">${fmtBytes(a.index_bytes)} in <code>${esc(a.data_dir)}</code></div></div><div></div></div>`;
+  } catch { if (ab) ab.innerHTML = '<p class="sc-p">Could not load version info.</p>'; }
+  const chk = $('#updcheck'), msg = $('#updmsg');
+  if (chk) chk.onclick = async () => {
+    if (IN_APP) { location.href = 'pensieve://check-updates'; return; }  // the app shows the result and can install
+    chk.disabled = true; msg.textContent = 'Checking…';
+    try {
+      const u = await api('/api/update/check');
+      msg.innerHTML = u.newer ? `Pensieve ${esc(u.latest)} is available (you have ${esc(u.current)}). <a href="${esc(u.url)}" target="_blank" rel="noopener">Download</a>, or use Check for Updates in the Mac app’s menu.`
+        : `You’re up to date: ${esc(u.current)} is the latest release.`;
+    } catch (e) { msg.textContent = 'Could not check: ' + e.message; }
+    chk.disabled = false;
+  };
+  renderReset();
+}
+function renderReset(step) {
+  const box = $('#resetbox');
+  if (!box) return;
+  if (step === 'busy') { box.innerHTML = `<p class="sc-p"><span class="spinner" style="display:inline-block;width:12px;height:12px;vertical-align:-2px;margin-right:6px"></span>Resetting. Pensieve is restarting and will rebuild the index from scratch; this page reloads when it's back.</p>`; return; }
+  const all = !!box.dataset.all;
+  box.innerHTML = step === 'confirm'
+    ? `<p class="sc-p"><b>Delete the index${all ? ' and your settings' : ''} and restart?</b> Search, maps and insights start empty and fill in again as Pensieve re-indexes your ${all ? 'default' : ''} sources, which can take a while for big repos. Your files, repos and agent sessions themselves are not touched.</p>
+       <div class="bar-btns" style="justify-content:flex-start"><button class="btn" data-reset-cancel>Cancel</button><button class="btn danger" data-reset-go>Delete and restart</button></div>`
+    : `<div class="set-row" style="border-top:0"><div><div class="k">Delete the index and start over</div><div class="d">Removes everything Pensieve has indexed (search, maps, summaries, insights) and rebuilds it. Use it if results look wrong after an upgrade.</div></div><div><button class="btn danger" data-reset>Reset…</button></div></div>
+       <div class="set-row"><div><div class="k">Also reset settings</div><div class="d">Back to default folders, scopes, AI engine and hotkey: a factory reset.</div></div><div><label class="tog"><input type="checkbox" data-reset-all ${all ? 'checked' : ''}></label></div></div>`;
+  $('[data-reset-all]', box)?.addEventListener('change', e => { if (e.target.checked) box.dataset.all = '1'; else delete box.dataset.all; });
+  $('[data-reset]', box)?.addEventListener('click', () => renderReset('confirm'));
+  $('[data-reset-cancel]', box)?.addEventListener('click', () => renderReset());
+  $('[data-reset-go]', box)?.addEventListener('click', async () => {
+    renderReset('busy');
+    try { await api('/api/reset', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({settings: all})}); }
+    catch (e) { box.innerHTML = `<p class="sc-p">Could not reset: ${esc(e.message)}</p>`; return; }
+    await new Promise(r => setTimeout(r, 2500));
+    for (let i = 0; i < 120; i++) {
+      try { if ((await fetch('/api/status', {cache: 'no-store'})).ok) { location.hash = ''; location.reload(); return; } } catch {}
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    box.innerHTML = '<p class="sc-p">Pensieve hasn’t come back yet. Quit and reopen the app if this page stays empty.</p>';
+  });
+}
+
 // Agent add-ons: an instructions block for CLAUDE.md / AGENTS.md and optional Claude Code skills (pensieve/integrations)
 const IG_STATE = {on: 'Installed', stale: 'Update available', off: '', theirs: 'A folder with this name exists (not Pensieve’s)'};
 async function loadIntegrations() {
@@ -1954,9 +2004,15 @@ async function renderSettings() {
   else if (tab === 'appearance') body = bar('Appearance', 'Matches the Pensieve Mac app.') + `
     <div class="set-card"><div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes.</div></div>
       <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>`;
-  else body = bar('Advanced', 'Fine-tuning for indexing and the local language model.', true) + `
-    <div class="set-card" id="set-Updates"><h3>Updates</h3><div class="set-row" style="border-top:0"><div><div class="k">Check for updates automatically</div><div class="d">Pensieve checks GitHub once a day and asks before installing.</div></div>
-      <div><label class="tog"><input type="checkbox" data-upd ${S.set.orig.auto_update_check !== false ? 'checked' : ''}></label></div></div></div>` + groups.filter(([g]) => g !== 'Mac app').map(card).join('') + `
+  else if (tab === 'general') body = bar('General', 'Version, updates, and starting over.') + `
+    <div class="set-card" id="set-About"><h3>About</h3><div id="aboutbox"><div class="spinner" style="margin:8px 0"></div></div></div>
+    <div class="set-card" id="set-Updates"><h3>Updates</h3>
+      <div class="set-row" style="border-top:0"><div><div class="k">Check for updates</div><div class="d" id="updmsg">${IN_APP ? 'Pensieve checks GitHub and offers to install a newer version.' : 'Compares this version with the latest release on GitHub.'}</div></div>
+        <div><button class="btn" id="updcheck">Check now</button></div></div>
+      <div class="set-row"><div><div class="k">Check for updates automatically</div><div class="d">Pensieve checks GitHub once a day and asks before installing.</div></div>
+        <div><label class="tog"><input type="checkbox" data-upd ${S.set.orig.auto_update_check !== false ? 'checked' : ''}></label></div></div></div>
+    <div class="set-card danger" id="set-Reset"><h3>Reset Pensieve</h3><div id="resetbox"></div></div>`;
+  else body = bar('Advanced', 'Fine-tuning for indexing and the local language model.', true) + groups.filter(([g]) => g !== 'Mac app').map(card).join('') + `
     <div class="set-card" id="set-Index"><h3>Index</h3><div class="set-stats">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
       <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}${st.llm ? ` · model: ${esc(st.llm)}` : ''}</p></div>`;
   const prevMain = $('#setmain'), y = prevMain && prevMain.dataset.tab === tab ? prevMain.scrollTop : keep?.tab === tab ? keep.y : 0;
@@ -1967,6 +2023,7 @@ async function renderSettings() {
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
   if (tab === 'ai') bindAISettings($('#setmain'));
   if (tab === 'agents') loadIntegrations();
+  if (tab === 'general') bindGeneral();
   const upd = $('[data-upd]', el);
   if (upd) upd.onchange = async () => {
     const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({auto_update_check: upd.checked})});

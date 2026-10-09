@@ -14,6 +14,7 @@ from . import actions, scopes, settings, sources
 AGENT_TOOLS = {"search", "read", "similar", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
                "current_scope", "open"}
 tool_profile = contextvars.ContextVar("tool_profile", default="agent")
+agent_cwd = contextvars.ContextVar("agent_cwd", default=None)  # where the agent runs (?cwd=), for relative paths
 
 
 class _Server(MCPServer):
@@ -25,15 +26,9 @@ class _Server(MCPServer):
 mcp = _Server(
     name="pensieve",
     instructions=(
-        "Pensieve indexes this Mac's documents, git repos (with blame and history) and past AI agent sessions. "
-        "To find code, call search before Grep/Glob: one call ranks the repo by meaning, keywords and exact names "
-        "together, so a description ('where do we retry failed webhooks'), a name (fetchCompanies) or an error "
-        "message all work, and the right file is usually first. Then Read that file. "
-        "Plain words search by meaning, \"double quotes\" require exact words, -word excludes, and "
-        "kind:file|code|session, ext:pdf, in:<folder or repo> filter. read(id) gives full text. "
-        "who_knows finds the people who wrote the code about a topic; use it to suggest who to ask. "
-        "Everything is limited to this connection's scope (see current_scope): e.g. the repo the agent runs in. "
-        "Connections opened with ?tools=all can also read and change Pensieve's settings, folders and scopes."),
+        "Pensieve indexes this repo (and the Mac's docs and past agent sessions). To find code, call search before "
+        "Grep/Glob: a description, a name or an error message all work and the right file is usually first; then "
+        "Read it. who_knows suggests who to ask about an area."),
 )
 
 
@@ -74,15 +69,34 @@ def tool(name=None):
 
 
 @tool()
-def search(query: str, limit: int = 10, kind: str | None = None) -> dict:
-    """Find code, files or past agent sessions in one call. Use it before Grep/Glob to locate code: describe what
-    the code does, or give a function/class name or an error string, or mix them ("fetchCompanies retry on 429");
-    meaning, keywords and exact names are ranked together and the right file is usually the first result.
-    "quoted phrases" must appear exactly; -word excludes; filters: kind:file|code|session, ext:<extension>,
-    in:<path or repo substring>. Returns ranked results (path, line, snippet) with an id for read/similar."""
+def search(query: str, limit: int = 8, kind: str | None = None) -> str:
+    """Find code (or docs, past agent sessions) in one call; use before Grep/Glob. Query by what it does, a name, an
+    error string, or a mix ("fetchCompanies retry on 429"). "quotes" = exact, -word excludes, kind:code|file|session,
+    ext:py, in:<path>. One line per hit, best first: path:line  snippet  [id for read/similar]."""
     r = _c()["searcher"].find(query, limit, [kind] if kind else None, scope=_scope())
-    return {"query": r["query"], "scope": r["scope"]["name"], "results": [{k: x[k] for k in ("id", "kind", "title", "subtitle", "path", "line", "snippet", "match", "score", "is_dir", "author")}
-                                             for x in r["results"]]}
+    return _lines(r["results"]) or "No matches."
+
+
+def _lines(results):
+    """Grep-sized results: what an agent re-reads on every later turn, so only what it needs to act on."""
+    import os
+    import re
+    cwd, home, out = agent_cwd.get(), os.path.expanduser("~"), []
+    for x in results:
+        path = x.get("path") or ""
+        if cwd and path.startswith(cwd.rstrip("/") + "/"):
+            path = path[len(cwd.rstrip("/")) + 1:]
+        elif path.startswith(home + "/"):
+            path = "~" + path[len(home):]
+        snip = re.sub(r"\s+", " ", x.get("snippet") or "").strip(" …")
+        snip = snip[:140] + ("…" if len(snip) > 140 else "")
+        kind = x.get("kind") or str(x.get("id", "")).partition(":")[0]
+        if kind == "session":
+            where = f'session "{x.get("title") or ""}" ({x.get("subtitle") or x.get("updated") or ""})'
+        else:
+            where = path + (f":{x['line']}" if x.get("line") else "") if path else x.get("title") or ""
+        out.append(f"{where}  {snip}  [{x.get('id')}]".replace("    ", "  "))
+    return "\n".join(out)
 
 
 @tool()
@@ -94,8 +108,12 @@ def read(id: str, max_chars: int = 12000) -> dict:
 
 
 @tool()
-def similar(id: str, limit: int = 8) -> list[dict]:
-    """Items most similar in meaning to a file, code or session id (within this connection's scope)."""
+def similar(id: str, limit: int = 8) -> str:
+    """Items most similar in meaning to a search result id (e.g. other code that does the same thing)."""
+    return _lines(_similar(id, limit)) or "Nothing similar."
+
+
+def _similar(id, limit):
     _check(id)
     kind, _, ref = id.partition(":")
     sc, st, rp = _scope(), _c()["store"], _c()["repos"]
@@ -106,7 +124,10 @@ def similar(id: str, limit: int = 8) -> list[dict]:
                 if scopes.contains(sc, x["id"], st, rp)][:limit]
     if kind == "code":
         c = rp.chunk(int(ref))
-        hits = _c()["searcher"].find(c["text"][:1500], limit + 1, ["code"], scope=sc)["results"] if c else []
+        import re
+        # the chunk is the query: strip what the search box would read as quotes, exclusions or filters
+        text = re.sub(r'["\']|(?<!\S)-(?=\S)|\b(kind|ext|in):', " ", c["text"][:1500]) if c else ""
+        hits = _c()["searcher"].find(text, limit + 1, ["code"], scope=sc)["results"] if c else []
         return [h for h in hits if h["id"] != id][:limit]
     raise ValueError("id must start with file:, code: or session:")
 
@@ -301,9 +322,11 @@ async def _scoped(scope, receive, send):
         return
     token = scopes.current.set(sc)
     ptoken = tool_profile.set("all" if q.get("tools") == "all" else "agent")
+    ctoken = agent_cwd.set(q.get("cwd"))
     try:
         await _endpoint(scope, receive, send)
     finally:
+        agent_cwd.reset(ctoken)
         tool_profile.reset(ptoken)
         scopes.current.reset(token)
 

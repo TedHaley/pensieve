@@ -63,6 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             visualizer.show(fragment: VisualizerController.fragment([("open", q("id")), ("q", q("q"))]))
         case "settings":
             visualizer.show(fragment: "settings")
+        case "check-updates":  // Settings → General → Check now
+            checkForUpdates()
         case "snapshot" where Debug.enabled:
             Debug.snapshot(url, panel: panel.panel, web: visualizer.webView)
         case "key" where Debug.enabled:
@@ -186,7 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func installUpdate() { Updater.shared.install() }
 
     /// Checks now and answers in a small alert: up to date, or the update with Update / Later / Skip.
-    @objc private func checkForUpdates() {
+    @objc func checkForUpdates() {
         Task {
             let up = Updater.shared
             let result = await up.check(manual: true)

@@ -746,6 +746,52 @@ def remove_folder(path: str):
     return sources.catalog(store, repos, files)
 
 
+def _version():
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return version("pensieve")
+    except PackageNotFoundError:
+        return "dev"
+
+
+@app.get("/api/about")
+def about():
+    from . import reset
+    return {"version": _version(), "data_dir": str(config.DATA_DIR).replace(str(Path.home()), "~", 1),
+            "index_bytes": reset.index_bytes()}
+
+
+@app.get("/api/update/check")
+async def update_check():
+    """For the visualizer outside the Mac app (the app checks and installs updates itself)."""
+    import httpx
+    cur = _version()
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get("https://api.github.com/repos/TedHaley/pensieve/releases/latest",
+                            headers={"Accept": "application/vnd.github+json", "User-Agent": f"Pensieve/{cur}"})
+        r.raise_for_status()
+        j = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise HTTPException(502, f"Couldn't reach GitHub: {e}")
+    latest = (j.get("tag_name") or "").lstrip("vV")
+    num = lambda v: tuple(int(x) if x.isdigit() else 0 for x in v.split("-")[0].split("."))
+    return {"current": cur, "latest": latest, "newer": cur != "dev" and num(latest) > num(cur), "url": j.get("html_url")}
+
+
+class ResetReq(BaseModel):
+    settings: bool = False
+
+
+@app.post("/api/reset")
+async def factory_reset(req: ResetReq):
+    """Delete the index (and the settings too if asked) and restart, which rebuilds everything from scratch."""
+    from . import reset
+    reset.request(req.settings)
+    asyncio.get_running_loop().call_later(0.6, reset.restart)  # after this response is sent
+    return {"ok": True}
+
+
 @app.get("/api/integrations")
 def get_integrations():
     from . import integrations
