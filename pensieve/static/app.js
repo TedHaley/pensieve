@@ -186,12 +186,12 @@ class Scene3D {
   setLabels(items) {
     this.labelObjs.forEach(o => this.scene.remove(o)); this.labelObjs = [];
     for (const it of items) {
-      const el = document.createElement('div'); el.className = 'lbl' + (it.dim ? ' dim' : '');
-      el.innerHTML = `<i class="sw" style="background:${it.color}"></i>${esc(it.text)}`;
+      const el = document.createElement('div'); el.className = 'lbl' + (it.dim ? ' dim' : '') + (it.sel ? ' sel' : '');
+      el.innerHTML = `<i class="sw" style="background:${it.color}"></i>${it.pre ? `<span class="lp">${esc(it.pre)}</span>` : ''}${esc(it.text)}${it.badge ? `<span class="cbadge">${esc(it.badge)}</span>` : ''}`;
       el.title = it.title || '';
       el.addEventListener('pointerdown', e => e.stopPropagation());
       el.addEventListener('click', e => { e.stopPropagation(); it.onClick?.(); });
-      const o = new CSS2DObject(el); o.position.set(...it.pos); o.userData.prio = (it.dim ? 0 : 1e9) + (it.n || 0);
+      const o = new CSS2DObject(el); o.position.set(...it.pos); o.userData.prio = (it.sel ? 2e9 : it.dim ? 0 : 1e9) + (it.n || 0);
       this.scene.add(o); this.labelObjs.push(o);
     }
     this.labelObjs.sort((a, b) => b.userData.prio - a.userData.prio);  // biggest (and undimmed) clusters claim space first
@@ -357,15 +357,42 @@ function centroid(idx) {
   return c.map(v => v / idx.length);
 }
 
+// the folder you zoomed into keeps a label, so clicking it again zooms back out
+function pinFolderLabel(items) {
+  const D = S.data, sk = D.sel?.kind === 'folder' ? D.sel.key : null; if (!sk) return null;
+  const idx = []; mapPts.forEach((p, i) => { if (dataPass(p)) idx.push(i); });
+  const r = repoOfKey(sk);
+  if (idx.length) items.push({n: idx.length, text: r && r.key === sk ? r.name : sk.split('/').pop(), pre: r && r.key !== sk ? r.name + ' /' : '', sel: true,
+    pos: dataAnchor(idx), color: 'transparent', title: `~/${sk}\nclick again to zoom back out`, onClick: () => selectLabel('folder', sk)});
+  return sk;
+}
 function renderLabels() {
   const items = [];
-  if (S.view === 'data') {  // repo and top-folder names at their clusters, biggest first (collisions fade)
-    const by = new Map(), D = S.data;
-    mapPts.forEach((p, i) => { if (!dataPass(p)) return; const k = p.group; if (!by.has(k)) by.set(k, []); by.get(k).push(i); });
-    [...by].sort((a, b) => b[1].length - a[1].length).slice(0, 14).forEach(([k, idx]) => {
-      const repoKey = [...D.repoKeys].find(([, n]) => n === k)?.[0];
-      items.push({n: idx.length, text: k, color: D.colorBy === 'folder' ? slotColor(D.folderSlot.get(mapPts[idx[0]].top) ?? -1) : D.colorBy === 'type' ? slotColor(TYPE_SLOT[mapPts[idx[0]].type]) : 'transparent', pos: centroid(idx),
-        title: repoKey ? `Repository ${k}` : `Folder ~/${k}`, onClick: () => toggleDataFolder(repoKey || mapPts[idx[0]].top, true)});
+  if (S.view === 'data' && S.data.colorBy !== 'folder') {  // topics: what things are about, wherever they live
+    const D = S.data, by = new Map();
+    pinFolderLabel(items);
+    mapPts.forEach((p, i) => { if (dataPass(p) && p.cluster != null) { if (!by.has(p.cluster)) by.set(p.cluster, []); by.get(p.cluster).push(i); } });
+    [...by].filter(([, idx]) => idx.length >= 3).forEach(([id, idx]) => {
+      const t = D.topics.get(id), sel = D.sel?.kind === 'topic' && D.sel.key === id;
+      items.push({n: idx.length, text: t?.name || `Topic ${id + 1}`, pos: dataAnchor(idx), sel, dim: D.sel?.kind === 'topic' && !sel,
+        color: D.colorBy === 'topic' ? slotColor(id) : 'transparent',
+        title: `${t?.description || (t?.keywords ? 'About: ' + t.keywords : '')}\n${plural(idx.length, 'item')} · click to zoom in${sel ? ' · click again to zoom back out' : ''}`,
+        onClick: () => selectLabel('topic', id)});
+    });
+  } else if (S.view === 'data') {
+    const D = S.data, typeN = {doc: 'document', code: 'code file', session: 'agent session'};
+    const sk = pinFolderLabel(items);
+    dataLabelGroups().filter(g => g.key !== sk).forEach(({key, idx}) => {
+      const repo = repoOfKey(key), parts = key.split('/');
+      // repos read as "repo / area"; other folders as "parent / name" so "medrec" keeps its "Documents" context
+      const [pre, name] = repo ? (repo.key === key ? ['', repo.name] : [repo.name + ' /', tail(key.slice(repo.key.length + 1))])
+                               : parts.length > 1 ? [parts.at(-2) + ' /', parts.at(-1)] : ['', key || '~'];
+      const tc = {}; idx.forEach(i => { const t = mapPts[i].type; tc[t] = (tc[t] || 0) + 1; });
+      const major = Object.keys(tc).sort((a, b) => tc[b] - tc[a])[0];
+      items.push({n: idx.length, text: name, pre, badge: repo && repo.key === key ? 'code' : '', pos: dataAnchor(idx),
+        color: slotColor(D.folderSlot.get(placeOf(key)) ?? -1),
+        title: `~/${key}${repo ? ` · in repository ${repo.name}` : ''}\n${Object.entries(tc).map(([t, c]) => plural(c, typeN[t])).join(', ')}`,
+        onClick: () => selectLabel('folder', key)});
     });
   } else if (S.view === 'files') {
     if (S.files.colorBy === 'folder') for (const [k, slot] of S.files.folderSlot) {
@@ -405,10 +432,11 @@ function renderLegend() {
   if (S.view === 'data') {
     const D = S.data, cb = D.colorBy, sw = (c, l) => `<span><i class="sw" style="background:${c}"></i>${esc(l)}</span>`;
     if (cb === 'type') html = Object.entries(TYPE_SLOT).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
-    else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), '~/' + k)).join('') + sw(pal().other, 'Other');
-    else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + sw(pal().other, 'Other / unknown');
+    else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), placeName(k))).join('') + sw(pal().other, 'Other');
+    else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + sw(pal().other, 'Others, bots and agents');
     else if (cb === 'recency') html = legendRamp('Older', 'Recently changed');
     else if (cb === 'risk') html = legendRamp('Active authors', 'Mostly inactive authors') + sw(pal().other, 'Not code in this repo');
+    else if (D.topics.size) html = [...D.topics.values()].filter(t => t.id < 8).map(t => sw(slotColor(t.id), t.name)).join('') + (D.topics.size > 8 ? sw(pal().other, 'Other topics') : '');
     else html = '<span class="muted">Colors group items with similar content</span>';
   } else if (S.view === 'files') {
     const cb = S.files.colorBy;
@@ -524,7 +552,7 @@ function renderToolbar() {
     rotate: () => { gl.controls.autoRotate = !gl.controls.autoRotate; store.set('autorotate', gl.controls.autoRotate); renderToolbar(); },
     clearhl: () => { S.highlight = null; refreshStates(); renderToolbar(); },
     clearfhl: () => { S.files.highlight = null; refreshStates(); renderToolbar(); },
-    cleardhl: () => { S.data.highlight = null; refreshStates(); renderToolbar(); },
+    cleardhl: () => { S.data.highlight = null; S.data.sel = null; refreshStates(); renderToolbar(); renderLabels(); },
     side: () => toggleSide(),
     who: () => openPalette('who: '),
     overlaps: showOverlaps,
@@ -795,10 +823,12 @@ function slotLabel(k) {
 
 /* ============================== drawer: session ============================== */
 function openDrawer(titleHtml, bodyHtml) {
+  S.data.drawerTopic = null;
   $('#drawer-title').innerHTML = titleHtml; $('#drawer-body').innerHTML = bodyHtml; $('#drawer-body').scrollTop = 0;
   $('#drawer').classList.add('open'); $('#drawer').setAttribute('aria-hidden', 'false');
 }
 function closeDrawer() {
+  S.data.drawerTopic = null;
   $('#drawer').classList.remove('open'); $('#drawer').setAttribute('aria-hidden', 'true');
   S.selected = null; selIdx = -1; gl.setRings(hoverIdx, -1);
 }
@@ -1127,12 +1157,44 @@ const TYPE_SLOT = {doc: 0, code: 1, session: 2};
 const TYPE_NAME = {doc: 'Documents', code: 'Code', session: 'Agent sessions'};
 const TYPE_ONE = {doc: 'Document', code: 'Code', session: 'Agent session'};
 S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type'),
-          treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map()};
+          treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map(),
+          topics: new Map(), topicsAI: false, sel: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
 const relHome = p => { const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
 const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
+// A repo, or a folder two levels under home (~/Documents/medrec): "Desktop" alone would color nearly everything the same.
+const placeOf = dir => { const r = repoOfKey(dir); return r ? r.key : dir.split('/').slice(0, 2).join('/'); };
+const placeName = k => { const r = repoOfKey(k); return r && r.key === k ? r.name : '~/' + k; };
+// One color per person: git and document metadata spell the same person several ways ("Ted", "TedHaley", "Ted Haley",
+// "tedhaley-affinity"). Two spellings are merged when one is a leading run of the other's name parts; a lone first name
+// is merged only when it matches exactly one person. Bots and agents get no color of their own.
+function canonAuthors(points) {
+  const n = new Map(); points.forEach(p => { if (p.author && p.author_source !== 'agent' && !/\[bot\]|\bbot$/i.test(p.author)) n.set(p.author, (n.get(p.author) || 0) + 1); });
+  const names = [...n.keys()], toks = new Map(names.map(a => [a, a.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)]));
+  const flat = a => toks.get(a).join(''), heads = a => toks.get(a).map((_, i, t) => t.slice(0, i + 1).join(''));
+  const up = new Map(names.map(a => [a, a])), find = a => up.get(a) === a ? a : find(up.get(a)), join = (a, b) => up.set(find(a), find(b));
+  const lone = [];
+  for (const a of names) {
+    if (flat(a).length < 3) continue;
+    if (toks.get(a).length < 2) { lone.push(a); continue; }
+    for (const b of names) if (b !== a && toks.get(b).length >= 2 && heads(b).includes(flat(a))) join(a, b);
+  }
+  for (const a of lone) { const m = new Set(names.filter(b => b !== a && heads(b).includes(flat(a))).map(find)); if (m.size === 1) join(a, [...m][0]); }
+  const groups = new Map(); names.forEach(a => { const r = find(a); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(a); });
+  const out = new Map();
+  for (const g of groups.values()) {  // shown as the spelling that looks most like a full name, then the most used
+    const best = [...g].sort((x, y) => (/\s/.test(y) - /\s/.test(x)) || (n.get(y) - n.get(x)))[0];
+    g.forEach(a => out.set(a, best));
+  }
+  return out;
+}
+async function loadDataTopics() {
+  const r = await api('/api/data/topics').catch(() => null);
+  S.data.topics = new Map((r?.topics || []).map(t => [t.id, t])); S.data.topicsAI = !!r?.ai; S.data.topicsPaused = r?.ai_paused || null;
+}
 async function loadData() {
   let r = {points: [], repos: [], home: ''};
   try { r = await api('/api/data/points'); } catch {}
+  await loadDataTopics();
   const D = S.data;
   D.home = r.home || ''; D.repos = r.repos || [];
   D.repoKeys = new Map(D.repos.map(x => [relHome(x.root), x.name]));  // '~'-relative folder key -> repo name
@@ -1141,7 +1203,9 @@ async function loadData() {
     return {...p, rel, dir, top: rel.split('/')[0], group: p.repo || rel.split('/')[0], t: ptTime(p)};
   });
   const cnt = (f) => { const m = new Map(); D.points.forEach(p => { const k = f(p); if (k) m.set(k, (m.get(k) || 0) + 1); }); return new Map([...m].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i])); };
-  D.folderSlot = cnt(p => p.top); D.authorSlot = cnt(p => p.author);
+  const who = canonAuthors(D.points);
+  D.points.forEach(p => { p.who = who.get(p.author) || null; p.place = placeOf(p.dir); });
+  D.folderSlot = cnt(p => p.place); D.authorSlot = cnt(p => p.who);
   const ts = D.points.map(p => p.t).filter(x => !isNaN(x)).sort((a, b) => a - b);
   D.tRange = [ts[Math.floor(ts.length * .05)] || 0, ts[ts.length - 1] || 1];
   D.tree = null; D.loaded = true; D.stale = false;
@@ -1150,8 +1214,8 @@ function dataColor(p) {
   const D = S.data;
   switch (D.colorBy) {
     case 'type': return slotColor(TYPE_SLOT[p.type]);
-    case 'folder': return slotColor(D.folderSlot.has(p.top) ? D.folderSlot.get(p.top) : -1);
-    case 'author': return slotColor(p.author && D.authorSlot.has(p.author) ? D.authorSlot.get(p.author) : -1);
+    case 'folder': return slotColor(D.folderSlot.has(p.place) ? D.folderSlot.get(p.place) : -1);
+    case 'author': return slotColor(p.who && D.authorSlot.has(p.who) ? D.authorSlot.get(p.who) : -1);
     case 'topic': return slotColor(p.cluster ?? -1);
     case 'recency': { const [a, b] = D.tRange; return seqColor(isNaN(p.t) ? 0 : Math.max(0, Math.min(1, (p.t - a) / Math.max(1, b - a)))); }
     case 'risk': { const r = riskOf(p); return r == null ? pal().other : seqColor(r); }
@@ -1177,6 +1241,100 @@ function dataTree() {
     }
   }
   return (D.tree = {n: D.points.length, children, roots: [...seen].filter(k => !k.includes('/'))});
+}
+// Map labels follow the folder tree: start at the folder filter (or home), step through folders that hold just one
+// subfolder, always open home-level containers (Desktop, Documents…) since their names say little, then keep splitting
+// the biggest group (a repo into its areas, a folder into its subfolders) until there are enough labels.
+const tail = k => { const p = k.split('/'); return p.length > 2 ? '…/' + p.slice(-2).join('/') : k; };
+const repoOfKey = k => { for (const [rk, name] of S.data.repoKeys) if (k === rk || k.startsWith(rk + '/')) return {key: rk, name}; return null; };
+function dataLabelGroups(budget = 22) {
+  const D = S.data, vis = [];
+  mapPts.forEach((p, i) => { if (dataPass(p)) vis.push(i); });
+  const starts = D.folders.size ? [...D.folders] : [''];
+  let groups = starts.map(k => ({key: k, idx: vis.filter(i => !k || mapPts[i].dir === k || mapPts[i].dir.startsWith(k + '/'))})).filter(g => g.idx.length);
+  const split = g => {  // [loose group?, ...one group per child folder], or null when there's nothing below
+    const kids = new Map(), loose = [], depth = g.key ? g.key.split('/').length : 0;
+    g.idx.forEach(i => { const parts = mapPts[i].dir.split('/').filter(Boolean); if (parts.length <= depth) loose.push(i); else { const k = parts.slice(0, depth + 1).join('/'); if (!kids.has(k)) kids.set(k, []); kids.get(k).push(i); } });
+    if (!kids.size) return null;
+    return [...(loose.length ? [{key: g.key, idx: loose, leaf: true}] : []), ...[...kids].map(([key, idx]) => ({key, idx}))];
+  };
+  const sized = (gs, f) => gs.filter(g => g.idx.length >= Math.max(2, vis.length / budget / f)).length;  // groups big enough to compete for a label
+  const must = g => !g.leaf && (!g.key || (!g.key.includes('/') && !D.repoKeys.has(g.key)));  // home and its top-level containers
+  for (let guard = 0; guard < 400; guard++) {
+    let i = groups.findIndex(g => !g.leaf && !g.done && (must(g) || split(g)?.length === 1));
+    if (i < 0) {
+      const cand = groups.map((g, j) => [g, j]).filter(([g]) => !g.leaf && !g.done && g.idx.length > vis.length / 6).sort((a, b) => b[0].idx.length - a[0].idx.length);
+      if (!cand.length || sized(groups, 1) >= budget) break;  // only dominant groups split, so labels stay at the project level until you zoom in
+      i = cand[0][1];
+    }
+    const parts = split(groups[i]);
+    if (!parts) { groups[i].leaf = true; continue; }
+    if (!must(groups[i]) && parts.length > 1 && (sized(parts, 4) - 1 + sized(groups, 4) > budget * 2 ||  // would flood the map
+        Math.max(...parts.map(x => x.idx.length)) < Math.max(4, vis.length / budget))) { groups[i].done = true; continue; }  // or shatter into crumbs
+    groups.splice(i, 1, ...parts);
+  }
+  return groups.filter(g => g.idx.length >= 2 || D.repoKeys.has(g.key)).sort((a, b) => b.idx.length - a.idx.length).slice(0, budget);
+}
+// anchor a label where its group is densest, not at a centroid that can fall between two far-apart clumps
+function dataAnchor(idx) {
+  if (idx.length < 4) return centroid(idx);
+  const P = i => mapPts[i].p, d2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+  const step = Math.max(1, Math.floor(idx.length / 300)), sample = idx.filter((_, k) => k % step === 0);
+  const c = centroid(idx), r2 = (sample.map(i => d2(P(i), c)).sort((a, b) => a - b)[Math.floor(sample.length / 2)] || 1e-4) * 0.25;
+  let best = sample[0], bestN = -1;
+  sample.forEach(i => { let n = 0; for (const j of sample) if (d2(P(i), P(j)) < r2) n++; if (n > bestN) { bestN = n; best = i; } });
+  return centroid(idx.filter(j => d2(P(best), P(j)) < r2));
+}
+// Clicking a map label zooms into it (a topic is highlighted and explained, a folder is filtered to); clicking the
+// same label again zooms back out to where you were, with the folder filter you had.
+function selectLabel(kind, key) {
+  const D = S.data;
+  if (D.sel?.kind === kind && D.sel.key === key) return deselectLabel();
+  const back = D.sel ? {cam: D.sel.cam, folders: D.sel.folders} : {cam: gl.saveCam(), folders: new Set(D.folders)};
+  if (kind === 'folder') toggleDataFolder(key, true);  // filters, fits, and clears any earlier selection
+  D.sel = {kind, key, ...back};
+  if (kind === 'topic') {
+    D.highlight = new Set(D.points.filter(p => p.cluster === key && dataPass(p)).map(p => p.id));
+    refreshStates(); renderToolbar(); setTimeout(() => gl.fit(visibleIdx()), 30);
+    openTopic(key);
+  }
+  renderLabels();
+}
+function deselectLabel() {
+  const D = S.data, s = D.sel; if (!s) return;
+  D.sel = null; D.highlight = null;
+  if (s.kind === 'folder') { D.folders = new Set(s.folders); dataChanged(false); } else { refreshStates(); renderToolbar(); renderLabels(); }
+  if (D.drawerTopic != null) closeDrawer();
+  const dir = s.cam.p.clone().sub(s.cam.t), dist = dir.length();
+  gl.flyTo(s.cam.t.clone(), dist, dir.normalize());
+}
+function openTopic(id) {
+  const D = S.data, t = D.topics.get(id) || {name: `Topic ${id + 1}`, keywords: '', description: '', reps: []};
+  const mem = D.points.filter(p => p.cluster === id), byId = new Map(mem.map(p => [p.id, p]));
+  const tc = {}; mem.forEach(p => tc[p.type] = (tc[p.type] || 0) + 1);
+  const where = new Map();  // repo, else the folder two levels under home
+  mem.forEach(p => { const r = repoOfKey(p.dir), k = r ? r.key : p.dir.split('/').slice(0, 2).join('/'); where.set(k, (where.get(k) || 0) + 1); });
+  const places = [...where].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const authors = new Map(); mem.forEach(p => { if (p.who) authors.set(p.who, (authors.get(p.who) || 0) + 1); });
+  const ts = mem.map(p => p.t).filter(x => !isNaN(x)).sort((a, b) => b - a);
+  const central = t.reps.map(i => byId.get(i)).filter(Boolean).slice(0, 6);
+  const recent = [...mem].filter(p => !isNaN(p.t)).sort((a, b) => b.t - a.t).filter(p => !central.includes(p)).slice(0, 5);
+  const itemRow = p => `<button class="item" data-open="${esc(p.open)}"><div class="t"><i class="sw" style="background:${slotColor(TYPE_SLOT[p.type])}"></i><span class="grow">${esc(p.title)}</span>${isNaN(p.t) ? '' : `<span class="muted">${rel(p.t)}</span>`}</div><div class="s">${esc(p.type === 'session' ? (p.repo ? 'in ' + p.repo : p.display) : p.display.replace(/\/[^/]*$/, ''))}</div></button>`;
+  openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${slotColor(id)}"></i>Topic</span>${plural(mem.length, 'item')}</div><h2>${esc(t.name)}</h2>`,
+    `${t.description ? `<p>${esc(t.description)}</p>` : `<p class="muted">${D.topicsAI ? (D.topicsPaused ? `Named from its most distinctive words for now. A written name and description come when background AI resumes (${esc(D.topicsPaused.toLowerCase())}).` : 'A written description is on its way; named from its most distinctive words for now.') : 'Named from its most distinctive words. Choose an AI engine in Settings for written names and descriptions.'}</p>`}
+     <div class="kpis" style="grid-template-columns:repeat(3,1fr)">${Object.keys(TYPE_SLOT).map(k => `<div class="kpi"><div class="l">${TYPE_NAME[k]}</div><div class="v">${(tc[k] || 0).toLocaleString()}</div></div>`).join('')}</div>
+     ${ts.length ? `<p class="muted" style="font-size:12px;margin:8px 0 0">Last changed ${rel(ts[0])}${ts.length > 1 ? ` · oldest ${rel(ts[ts.length - 1])}` : ''}</p>` : ''}
+     <div class="h4">Where it lives</div><div class="list">${places.map(([k, n]) => { const r = repoOfKey(k); return `<button class="item" data-place="${esc(k)}"><div class="t"><span class="grow">${esc(r ? r.name : '~/' + k)}${r ? '<span class="cbadge">code</span>' : ''}</span><span class="muted">${Math.round(n / mem.length * 100)}%</span></div></button>`; }).join('')}</div>
+     ${t.keywords ? `<div class="h4">Distinctive words</div><div class="chips">${t.keywords.split(',').map(w => `<span class="chip">${esc(w.trim())}</span>`).join('')}</div>` : ''}
+     ${authors.size ? `<div class="h4">Who wrote it</div><div class="chips">${[...authors].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([a, n]) => `<span class="chip">${esc(person(a))}<span class="n">${n}</span></span>`).join('')}</div>` : ''}
+     ${central.length ? `<div class="h4">Most typical</div><div class="list">${central.map(itemRow).join('')}</div>` : ''}
+     ${recent.length ? `<div class="h4">Recently changed</div><div class="list">${recent.map(itemRow).join('')}</div>` : ''}
+     <div class="actions"><button class="btn" data-zoomout>Zoom back out</button></div>`);
+  D.drawerTopic = id;
+  const body = $('#drawer-body');
+  $$('[data-open]', body).forEach(b => b.onclick = () => openItem(b.dataset.open));
+  $$('[data-place]', body).forEach(b => b.onclick = () => selectLabel('folder', b.dataset.place));
+  $('[data-zoomout]', body).onclick = () => deselectLabel();
 }
 // the repo (name, folder key) that the current folder filter is in, if exactly one
 function focusedRepo() {
@@ -1230,7 +1388,7 @@ function toggleDataFolder(k, only = false) {
     if (dataTree().children.has(k)) D.treeOpen.add(k);
     store.set('dataTreeOpen', [...D.treeOpen]);
   }
-  D.highlight = null;
+  D.highlight = null; D.sel = null;
   dataChanged();
 }
 // folder key for a repo-relative directory of the repo whose blame data is loaded
@@ -1241,6 +1399,7 @@ const codeDirToKey = dir => repoDirKey(...codeSplit(dir));
 const ensureRepo = async name => { if (name && S.code.repo !== name) { if (!S.code.repos.length) await loadRepos(); await loadRepo(name); $('#loading').classList.add('gone'); } };
 const dataPointFor = (repoName, relPath) => S.data.points.find(p => p.type === 'code' && p.repo === repoName && (p.path.endsWith('/' + relPath) || p.path === relPath));
 function highlightData(pred) {
+  S.data.sel = null;
   S.data.highlight = new Set(S.data.points.filter(pred).map(p => p.id));
   refreshStates(); renderToolbar();
   if (S.data.highlight.size) setTimeout(() => gl.fit(visibleIdx()), 30);
@@ -2374,6 +2533,7 @@ async function handleEvent(m) {
     else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { S.set = null; if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
+    else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') { renderLabels(); if (S.data.drawerTopic != null) openTopic(S.data.drawerTopic); } }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
   }

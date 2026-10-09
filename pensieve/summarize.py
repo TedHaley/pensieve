@@ -96,6 +96,29 @@ def name_topic(store, topic, key=None):
         store.db.commit()
 
 
+DATA_TOPIC_SYS = ("You name groups of a person's documents, code files and AI-agent sessions that sit together on a map of "
+                  "their work because they are about the same thing. Give a specific 2-4 word Title Case name for the subject "
+                  "(not the file type, folder or repository on its own) and 1-2 plain sentences on what the group covers and "
+                  "where it lives. Never invent anything that is not in the data.")
+
+
+def name_data_topic(datamap, topic):
+    """Name one Data-map topic from its keywords and its most central items."""
+    pts = {p["id"]: p for p in datamap.points()["points"]}
+    kinds = {"doc": "document", "code": "code", "session": "agent session"}
+    lines = []
+    for i in topic["reps"][:20]:
+        p = pts.get(i)
+        if not p:
+            continue
+        where = p.get("display") or ""
+        lines.append(f"- [{kinds.get(p['type'], p['type'])}] {p['title']} ({where})"
+                     + (f": {p['summary'][:200]}" if p.get("summary") else ""))
+    body = f"Keywords: {topic['keywords']}\n\nMost central items:\n" + "\n".join(lines)
+    d = llm.complete(body, DATA_TOPIC_SYS, max_tokens=200, temperature=0.3, schema=TOPIC_SCHEMA)
+    datamap.set_topic_name(topic, d["name"], d["description"])
+
+
 def insight_key(scope=None):
     return f"insights:{scope}" if scope else "insights"
 

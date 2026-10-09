@@ -2,9 +2,15 @@
 
 Each point is a file-like item: a document, a file in a git repo (the main checkout; worktree versions sit with it
 in search, not on the map), or an agent session. Positions come from one joint UMAP over item centroids, kept in
-`data_points` and refit when the set grows; new items are placed beside their nearest neighbours in between."""
+`data_points` and refit when the set grows; new items are placed beside their nearest neighbours in between.
+
+Topics are KMeans clusters of the same centroids (kept in `data_points.cluster`). Each gets keyword names at once and,
+when an AI engine is on, a written name and description later (`data_topics`, reset whenever the clusters change)."""
+import hashlib
 import json
-from collections import Counter
+import math
+import re
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +19,13 @@ from .indexer import LAYOUT_VERSION
 from .layout import cluster, fit3d, place_new, unit
 
 VERSION = LAYOUT_VERSION + "+data1"
+TOPIC_VERSION = "t3"
+# words that say where or what kind of file something is, not what it is about
+STOP = set("""desktop documents downloads library pycharmprojects users home applications application support agent agents
+sessions session src lib libs py js ts tsx jsx md txt json yaml yml toml cfg ini lock html css csv pdf docx xlsx pptx png jpg
+jpeg init index main test tests spec utils util helpers helper common core misc tmp temp private var file files new old copy
+readme license changelog dist build module modules package packages app apps makefile dockerfile dockerignore gitignore
+variables outputs locals inputs title page meta""".split())
 AGENT = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
 
 
@@ -22,6 +35,8 @@ class DataMap:
         self.db, self.lock = store.db, store.lock
         with self.lock:
             self.db.execute("CREATE TABLE IF NOT EXISTS data_points(id TEXT PRIMARY KEY, x REAL, y REAL, z REAL, cluster INTEGER)")
+            self.db.execute("CREATE TABLE IF NOT EXISTS data_topics(id INTEGER PRIMARY KEY, sig TEXT, name TEXT, description TEXT, "
+                            "keywords TEXT, reps TEXT)")
             self.db.commit()
         self._cache = (None, None)
 
@@ -51,7 +66,8 @@ class DataMap:
                 "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks)").fetchone()
 
     def needs_layout(self):
-        return self.store.meta("data_layout_fp") != json.dumps(self.fingerprint())
+        return (self.store.meta("data_layout_fp") != json.dumps(self.fingerprint())
+                or self.store.meta("data_topic_v") != TOPIC_VERSION)
 
     def reproject(self, force=False):
         """Joint layout. Full UMAP when new or grown >15%; otherwise place new items next to their neighbours."""
@@ -66,38 +82,119 @@ class DataMap:
         n = len(ids)
         if force or not ok or len([i for i in ids if i in placed]) < 0.5 * n or n - fit_n > max(100, 0.15 * fit_n):
             P = fit3d(C, n_neighbors=20, min_dist=0.1)
-            lab = cluster(C, kmin=4, kmax=8)
+            lab = self._cluster(C)
             rows = [(i, *map(float, p), int(c)) for i, p, c in zip(ids, P, lab)]
             with self.lock:
                 self.db.execute("DELETE FROM data_points")
                 self.db.executemany("INSERT INTO data_points VALUES(?,?,?,?,?)", rows)
                 self.store.meta("data_fit_n", n)
                 self.store.meta("data_layout", VERSION)
-        else:
-            idx = {i: k for k, i in enumerate(ids)}
-            new = [i for i in ids if i not in placed]
-            gone = [i for i in placed if i not in idx]
-            known = [i for i in ids if i in placed]
-            rows = []
-            if new and known:
-                Kk = [idx[i] for i in known]
-                Pk = np.array([placed[i][:3] for i in known], dtype=np.float32)
-                Pn = place_new(C[Kk], Pk, C[[idx[i] for i in new]], k=3, jitter=0.03)
-                near = (C[[idx[i] for i in new]] @ C[Kk].T).argmax(1)
-                rows = [(i, *map(float, p), placed[known[j]][3]) for i, p, j in zip(new, Pn, near)]
+            self._save_topics(ids, C, lab)
+        elif self.store.meta("data_topic_v") != TOPIC_VERSION or not self._has_topics():  # topics changed, positions kept
+            self._place(ids, C, placed)
+            lab = self._cluster(C)
             with self.lock:
-                self.db.executemany("INSERT OR REPLACE INTO data_points VALUES(?,?,?,?,?)", rows)
-                self.db.executemany("DELETE FROM data_points WHERE id=?", [(i,) for i in gone])
+                self.db.executemany("UPDATE data_points SET cluster=? WHERE id=?", [(int(c), i) for i, c in zip(ids, lab)])
+            self._save_topics(ids, C, lab)
+        else:
+            self._place(ids, C, placed)
         with self.lock:
             self.store.meta("data_layout_fp", fp)
             self.db.commit()
         self._cache = (None, None)
         return True
 
+    def _place(self, ids, C, placed):
+        """Add new items beside their nearest placed neighbours (in their topic) and drop removed ones."""
+        idx = {i: k for k, i in enumerate(ids)}
+        new = [i for i in ids if i not in placed]
+        gone = [i for i in placed if i not in idx]
+        known = [i for i in ids if i in placed]
+        rows = []
+        if new and known:
+            Kk = [idx[i] for i in known]
+            Pk = np.array([placed[i][:3] for i in known], dtype=np.float32)
+            Pn = place_new(C[Kk], Pk, C[[idx[i] for i in new]], k=3, jitter=0.03)
+            near = (C[[idx[i] for i in new]] @ C[Kk].T).argmax(1)
+            rows = [(i, *map(float, p), placed[known[j]][3]) for i, p, j in zip(new, Pn, near)]
+        with self.lock:
+            self.db.executemany("INSERT OR REPLACE INTO data_points VALUES(?,?,?,?,?)", rows)
+            self.db.executemany("DELETE FROM data_points WHERE id=?", [(i,) for i in gone])
+
+    # ---- topics ---------------------------------------------------------------
+    @staticmethod
+    def _cluster(C):
+        """A size-scaled number of topics, at most 8 so each has its own palette color on the dots, labels and legend."""
+        k = max(2, min(8, round(math.sqrt(len(C)) / 6), len(C) // 8)) if len(C) >= 16 else 1
+        return cluster(C, kmin=k, kmax=k) if k > 1 else np.zeros(len(C), int)
+
+    def _has_topics(self):
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM data_topics LIMIT 1").fetchone() is not None
+
+    def _save_topics(self, ids, C, lab):
+        """Keywords and representative items per topic; written names are cleared since the members changed."""
+        pts = self.points(fresh=True)["points"]
+        texts = {p["id"]: self._text(p) for p in pts}
+        exts = {e.lower() for p in pts for e in [p.get("ext")] if e}  # "tfvars", "wav"… say what kind, not what about
+        by = defaultdict(list)
+        for k, (i, c) in enumerate(zip(ids, lab)):
+            by[int(c)].append(k)
+        kw = self._keywords({c: [texts.get(ids[k], "") for k in ks] for c, ks in by.items()}, exts)
+        rows = []
+        for c, ks in sorted(by.items()):
+            cen = C[ks].mean(0)
+            reps = [ids[ks[j]] for j in np.argsort(-(C[ks] @ cen))[:24]]
+            sig = hashlib.sha1(("|".join(sorted(ids[k] for k in ks[:500])) + TOPIC_VERSION).encode()).hexdigest()[:16]
+            rows.append((c, sig, None, None, kw.get(c, ""), json.dumps(reps)))
+        with self.lock:
+            self.db.execute("DELETE FROM data_topics")
+            self.db.executemany("INSERT INTO data_topics VALUES(?,?,?,?,?,?)", rows)
+            self.store.meta("data_topic_v", TOPIC_VERSION)
+            self.db.commit()
+
+    def _text(self, p):
+        home = str(Path.home())
+        bits = [p.get("title") or "", (p.get("path") or "").replace(home, ""), p.get("repo") or "", p.get("summary") or ""]
+        t = " ".join(bits)
+        t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)  # camelCase -> camel Case
+        return re.sub(r"[_\-./\\]+", " ", t).lower()
+
+    @staticmethod
+    def _keywords(docs_by, extra_stop=()):
+        from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
+        ids = sorted(docs_by)
+        docs = [" ".join(docs_by[c]) for c in ids]
+        try:
+            vec = TfidfVectorizer(stop_words=list(STOP | ENGLISH_STOP_WORDS | set(extra_stop)),
+                                  sublinear_tf=True, max_df=0.6 if len(ids) > 3 else 1.0, max_features=8000,
+                                  token_pattern=r"(?u)\b[a-z][a-z0-9]{2,}\b")
+            M = vec.fit_transform(docs)
+            terms = np.array(vec.get_feature_names_out())
+            return {c: ", ".join(terms[np.argsort(-M[i].toarray()[0])[:6]]) for i, c in enumerate(ids)}
+        except ValueError:
+            return {c: "" for c in ids}
+
+    def topics(self):
+        with self.lock:
+            rows = self.db.execute("SELECT id, sig, name, description, keywords, reps FROM data_topics ORDER BY id").fetchall()
+        return [dict(id=c, sig=sig, named=bool(name), keywords=kw or "", reps=json.loads(reps or "[]"),
+                     name=name or " · ".join(w.strip().title() for w in (kw or "").split(",")[:2] if w.strip()) or f"Topic {c + 1}",
+                     description=desc or "") for c, sig, name, desc, kw, reps in rows]
+
+    def pending_topics(self):
+        return [t for t in self.topics() if not t["named"]]
+
+    def set_topic_name(self, topic, name, description):
+        with self.lock:  # only if the topic hasn't been reclustered while the AI was writing
+            self.db.execute("UPDATE data_topics SET name=?, description=? WHERE id=? AND sig=?",
+                            (name.strip()[:48], description.strip(), topic["id"], topic["sig"]))
+            self.db.commit()
+
     # ---- points ---------------------------------------------------------------
-    def points(self):
+    def points(self, fresh=False):
         fp = self.fingerprint()
-        if self._cache[0] == fp:
+        if self._cache[0] == fp and not fresh:
             return self._cache[1]
         home = str(Path.home())
         with self.lock:

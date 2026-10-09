@@ -28,7 +28,8 @@ status = {"indexing": False, "message": "starting", "layout": False, "insights_r
 wake_files = asyncio.Event()  # set (thread-safely) by the file watcher
 wake_repos = asyncio.Event()
 watch: "Watch | None" = None
-inflight: set[str] = set()  # background LLM jobs (scoped topic names, team summaries) already running
+inflight: set[str] = set()
+failed_topics: set[str] = set()  # Data-map topics the AI couldn't name this run (by membership signature)  # background LLM jobs (scoped topic names, team summaries) already running
 
 def broadcast(event: dict):
     for q in list(subscribers):
@@ -259,7 +260,15 @@ async def enricher():
             sess, topics, chunks = summarize.pending(store)
             if llm.provider() in ("claude", "codex"):
                 chunks = []  # one CLI call per conversation chunk would be thousands of cloud calls
-            if sess:
+            data_topics = [t for t in await _run(datamap.pending_topics) if t["sig"] not in failed_topics]
+            if data_topics:  # a handful of quick calls; first, so a session that keeps changing can't hold them up
+                res = await asyncio.gather(*[loop.run_in_executor(pool, summarize.name_data_topic, datamap, t) for t in data_topics[:3]],
+                                           return_exceptions=True)
+                if any(isinstance(r, (httpx.ConnectError, llm.Offline)) for r in res):
+                    raise next(r for r in res if isinstance(r, (httpx.ConnectError, llm.Offline)))
+                failed_topics.update(t["sig"] for t, r in zip(data_topics, res) if isinstance(r, Exception))  # keep keyword names
+                broadcast({"type": "data_topics"})
+            elif sess:
                 await asyncio.gather(*[loop.run_in_executor(pool, summarize.summarize_session, store, s) for s in sess[:3]])
                 broadcast({"type": "summaries"})
             elif topics:
@@ -619,6 +628,12 @@ def resolve_scope(scope: str = "auto", cwd: str | None = None):
 def data_points():
     """Everything on one map: documents, code files (main checkout) and agent sessions."""
     return datamap.points()
+
+
+@app.get("/api/data/topics")
+def data_topics():
+    """Topics on the Data map: clusters of items about the same thing, with keyword or AI-written names."""
+    return {"topics": datamap.topics(), "ai": llm.provider() != "none", "ai_paused": llm.paused()}
 
 
 @app.get("/api/files/points")
