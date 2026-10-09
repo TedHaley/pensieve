@@ -72,11 +72,18 @@ class DataMap:
                 "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks)").fetchone()
 
     def needs_layout(self):
+        """Changed since the last layout, or the set has drifted far from what the layout (and its topics) were fit
+        on, e.g. after a big source was switched off."""
+        fit_n = int(self.store.meta("data_fit_n") or 0)
+        with self.lock:
+            n = self.db.execute("SELECT COUNT(*) FROM data_points").fetchone()[0]
         return (self.store.meta("data_layout_fp") != json.dumps(self.fingerprint())
-                or self.store.meta("data_topic_v") != TOPIC_VERSION)
+                or self.store.meta("data_topic_v") != TOPIC_VERSION
+                or (fit_n and abs(n - fit_n) > max(100, 0.15 * fit_n)))
 
     def reproject(self, force=False):
-        """Joint layout. Full UMAP when new or grown >15%; otherwise place new items next to their neighbours."""
+        """Joint layout. Full UMAP when new or changed in size by >15%; otherwise place new items next to their
+        neighbours."""
         fp = json.dumps(self.fingerprint())
         ids, C = self._vectors()
         if len(ids) < 4:
@@ -86,7 +93,7 @@ class DataMap:
             fit_n = int(self.store.meta("data_fit_n") or 0)
             ok = self.store.meta("data_layout") == VERSION
         n = len(ids)
-        if force or not ok or len([i for i in ids if i in placed]) < 0.5 * n or n - fit_n > max(100, 0.15 * fit_n):
+        if force or not ok or len([i for i in ids if i in placed]) < 0.5 * n or abs(n - fit_n) > max(100, 0.15 * fit_n):
             P = fit3d(C, n_neighbors=20, min_dist=0.1)
             lab = self._cluster(C)
             rows = [(i, *map(float, p), int(c)) for i, p, c in zip(ids, P, lab)]

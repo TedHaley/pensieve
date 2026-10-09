@@ -558,7 +558,7 @@ class Repos:
         ids = np.array([r[0] for r in rows])
         P = np.array([r[2:5] if r[2] is not None else (0, 0, 0) for r in rows], dtype=np.float32)
         n_main = int(main.sum())
-        if force or not ok or n_main - fit_n > max(200, 0.15 * fit_n):
+        if force or not ok or abs(n_main - fit_n) > max(200, 0.15 * fit_n):
             P[main] = fit3d(X[main], n_neighbors=20, min_dist=0.08)
             P[~main] = place_new(X[main], P[main], X[~main], k=3, jitter=0.01) if (~main).any() else P[~main]
             todo = np.ones(len(rows), bool)

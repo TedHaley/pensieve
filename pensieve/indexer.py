@@ -259,7 +259,8 @@ class Store:
             return bool(self.db.execute("SELECT 1 FROM chunks WHERE x IS NULL LIMIT 1").fetchone())
 
     def reproject(self, force=False):
-        """UMAP refit when the corpus grew meaningfully (or on first run); otherwise place new points by neighbours."""
+        """UMAP refit and new topics when the corpus grew or shrank meaningfully (or on first run); otherwise place
+        new points by neighbours. Shrinking counts too: after a big removal the old topics describe what's gone."""
         with self.lock:
             rows = self.db.execute("SELECT id, session_id, vec, x, y, z FROM chunks").fetchall()
             fit_n = int(self.meta("session_fit_n") or 0)
@@ -271,7 +272,7 @@ class Store:
         X = unit(np.stack([np.frombuffer(r[2], np.float16) for r in rows]).astype(np.float32))
         have = np.array([r[3] is not None for r in rows])
         n = len(rows)
-        full = force or not version_ok or have.sum() < 0.5 * n or n - fit_n > max(60, 0.15 * fit_n)
+        full = force or not version_ok or have.sum() < 0.5 * n or abs(n - fit_n) > max(60, 0.15 * fit_n)
         sessions = sorted(set(sid))
         C = unit(np.stack([X[sid == s].mean(axis=0) for s in sessions]))
         if full:

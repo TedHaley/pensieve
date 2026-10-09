@@ -388,7 +388,7 @@ class Files:
             fit_n = int(self.store.meta("files_fit_n") or 0)
             ok = self.store.meta("files_layout") == LAYOUT_VERSION
         n = len(paths)
-        if force or not ok or len(placed) < 0.5 * n or n - fit_n > max(60, 0.15 * fit_n):
+        if force or not ok or len(placed) < 0.5 * n or abs(n - fit_n) > max(60, 0.15 * fit_n):
             P = fit3d(C, n_neighbors=12, min_dist=0.2)
             lab = cluster(C)
             with self.lock:
