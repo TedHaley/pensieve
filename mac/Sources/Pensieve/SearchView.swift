@@ -33,6 +33,7 @@ struct SearchView: View {
             }
         }
         .panelGlass()
+        .scaleEffect(model.presented ? 1 : 0.95, anchor: .top)  // grows into place while the window fades in
     }
 
     private var bar: some View {
@@ -43,6 +44,16 @@ struct SearchView: View {
             TextField("Pensieve Search", text: $model.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 24, weight: .regular))
+                .overlay(alignment: .leading) {
+                    if let c = model.completion {
+                        // the typed text, invisible, positions the rest of the Top Hit's name right after the caret
+                        (Text(model.query).foregroundColor(.clear) + Text(c.rest).foregroundColor(.secondary)
+                            + Text(" — \(c.kind)").foregroundColor(Color.secondary.opacity(0.6)))
+                            .font(.system(size: 24, weight: .regular))
+                            .lineLimit(1)
+                            .allowsHitTesting(false)
+                    }
+                }
             if model.loading {
                 ProgressView().controlSize(.small)
             }
@@ -202,6 +213,7 @@ struct ActionMenu: View {
 
 struct ResultsList: View {
     @ObservedObject var model: SearchModel
+    @Namespace private var selection  // the highlight slides between rows instead of jumping
 
     var body: some View {
         if model.results.isEmpty {
@@ -227,7 +239,7 @@ struct ResultsList: View {
                                     .frame(height: SearchModel.headerHeight, alignment: .bottomLeading)
                             case .hit(let index, let hit, _):
                                 let on = model.selected == index
-                                ResultRow(hit: hit, selected: on, actionsOpen: on && model.actionsOpen)
+                                ResultRow(hit: hit, selected: on, actionsOpen: on && model.actionsOpen, highlight: selection)
                                     .anchorPreference(key: SelectedRowKey.self, value: .bounds) { on ? $0 : nil }
                                     .onTapGesture(count: 2) { model.open(index) }
                                     .simultaneousGesture(TapGesture().onEnded {
@@ -255,6 +267,7 @@ struct ResultRow: View {
     let hit: Hit
     let selected: Bool
     var actionsOpen = false
+    var highlight: Namespace.ID?
 
     /// File names and paths keep both ends (the name and extension matter); prose like session titles keeps its start.
     private var truncation: Text.TruncationMode { hit.kind == "session" ? .tail : .middle }
@@ -303,10 +316,12 @@ struct ResultRow: View {
         .padding(.horizontal, 10)
         .frame(height: SearchModel.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(selected ? Color.accentColor : Color.clear)
-        )
+        .background {
+            if selected {
+                let shape = RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor)
+                if let highlight { shape.matchedGeometryEffect(id: "selection", in: highlight) } else { shape }
+            }
+        }
         .contentShape(Rectangle())
     }
 
@@ -345,8 +360,19 @@ struct HitIcon: View {
 
     var body: some View {
         Group {
-            if hit.kind == "file", let p = hit.path, FileManager.default.fileExists(atPath: p) {
+            if hit.kind == "file" || hit.kind == "app", let p = hit.path, FileManager.default.fileExists(atPath: p) {
                 Image(nsImage: IconCache.icon(for: p))
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 32, height: 32)
+            } else if hit.kind == "setting", let g = Launcher.shared.glyph(hit) {
+                Image(systemName: g.symbol)  // a colored tile, as in System Settings' sidebar
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(g.color.gradient))
+            } else if hit.kind == "setting" {
+                Image(nsImage: IconCache.icon(for: Launcher.settingsApp))
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 32, height: 32)

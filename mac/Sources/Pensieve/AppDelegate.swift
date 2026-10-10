@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             HotKeys.requestAccessibility(prompt: true)
         }
         backend.start()
+        Launcher.shared.refreshIfStale()
         Updater.shared.start()
         Updater.shared.$available.receive(on: RunLoop.main)
             .sink { [weak self] r in self?.badge?.isHidden = r == nil }.store(in: &watchers)

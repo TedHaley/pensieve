@@ -52,6 +52,7 @@ final class Actions {
 
     func open(_ hit: Hit) {
         dismiss()
+        if Launcher.shared.handles(hit) { return Launcher.shared.run(hit) }
         guard let path = hit.path, hit.kind != "session" else { return visualize(hit) }
         if hit.isFolder {  // a Finder window on the folder (never launches a bundle like Foo.app)
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
@@ -78,7 +79,8 @@ final class Actions {
 
     func visualize(_ hit: Hit?) {
         dismiss()
-        visualizer.show(fragment: VisualizerController.fragment([("open", hit?.id), ("q", query())]))
+        let onMap = hit.flatMap { Launcher.shared.handles($0) ? nil : $0.id }  // apps and settings aren't on the map
+        visualizer.show(fragment: VisualizerController.fragment([("open", onMap), ("q", query())]))
     }
 
     @discardableResult
@@ -98,6 +100,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     private var keyMonitor: Any?
     private var flagsMonitor: Any?
     private var top: CGFloat = 0
+    private var height: CGFloat = 0  // where the frame is headed, which can differ from the frame mid-animation
+    private var hiding = false
     private var lastFlags: NSEvent.ModifierFlags = []
     private var controlDownAt: TimeInterval?
     private var watchers: Set<AnyCancellable> = []
@@ -109,6 +113,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         actions.query = { [weak self] in self?.model.trimmed ?? "" }
         model.actions = actions
         model.onLayout = { [weak self] in self?.relayout() }
+        Launcher.shared.onScan = { [weak self] in
+            guard let self, !self.model.trimmed.isEmpty else { return }
+            self.model.matchLocal()
+            self.relayout()
+        }
         let host = NSHostingView(rootView: SearchView(model: model))
         host.sizingOptions = []
         // clip to the glass's rounded shape: the window shadow is drawn from what's opaque, and the square
@@ -126,27 +135,55 @@ final class PanelController: NSObject, NSWindowDelegate {
             .sink { [weak self] _ in Task { @MainActor in self?.relayout() } }.store(in: &watchers)
     }
 
-    var isShown: Bool { panel.isVisible }
+    var isShown: Bool { panel.isVisible && !hiding }
 
     func toggle() {
         isShown ? hide() : show()
     }
 
     func show(query: String? = nil) {
+        Launcher.shared.refreshIfStale()
         if let query { model.query = query }
+        let appearing = !isShown, fading = hiding
+        hiding = false
         place()
+        if appearing && !fading {  // a fade-out in progress reverses from where it is
+            panel.alphaValue = 0
+            model.presented = false
+        }
         panel.makeKeyAndOrderFront(nil)
         installKeyMonitor()
         focusField(selectAll: query == nil)
+        guard appearing else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+        DispatchQueue.main.async { [weak self] in  // after the shrunken frame has been drawn once
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) { self?.model.presented = true }
+        }
     }
 
     func hide() {
-        guard panel.isVisible else { return }
+        guard isShown else { return }
         model.closeActions()
-        panel.orderOut(nil)
         for m in [keyMonitor, flagsMonitor].compactMap({ $0 }) { NSEvent.removeMonitor(m) }
         keyMonitor = nil
         flagsMonitor = nil
+        hiding = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.hiding else { return }  // shown again while fading out
+                self.hiding = false
+                self.panel.orderOut(nil)
+                self.panel.alphaValue = 1
+            }
+        })
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -159,8 +196,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let vf = screen?.visibleFrame else { return }
         top = vf.maxY - vf.height * 0.2
-        let h = model.panelHeight
-        panel.setFrame(NSRect(x: vf.midX - SearchModel.width / 2, y: top - h, width: SearchModel.width, height: h),
+        height = model.panelHeight
+        panel.setFrame(NSRect(x: vf.midX - SearchModel.width / 2, y: top - height, width: SearchModel.width, height: height),
                        display: true)
         refreshShadow()
     }
@@ -171,14 +208,20 @@ final class PanelController: NSObject, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in self?.panel.invalidateShadow() }
     }
 
-    /// Grow or shrink downward as results change; the search bar never moves.
+    /// Grow or shrink downward as results change, eased rather than snapped; the search bar never moves.
     private func relayout() {
         guard panel.isVisible else { return }
         let h = model.panelHeight
+        guard abs(height - h) > 0.5 else { return }
+        height = h
         let f = panel.frame
-        guard abs(f.height - h) > 0.5 else { return }
-        panel.setFrame(NSRect(x: f.minX, y: top - h, width: f.width, height: h), display: true)
-        refreshShadow()
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
+            panel.animator().setFrame(NSRect(x: f.minX, y: top - h, width: f.width, height: h), display: true)
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated { self?.refreshShadow() }
+        })
     }
 
     /// Control tapped alone (pressed and released with nothing else) toggles the action list. Only a clean
@@ -270,6 +313,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         switch Int(e.keyCode) {
         case kVK_Escape:
             hide()
+        case kVK_Tab where mods.isEmpty:
+            return model.complete()
         case kVK_RightArrow where model.selectedHit != nil && caretAtEnd:
             model.openActions()
         case kVK_ANSI_U where mods == .command && Updater.shared.available != nil:

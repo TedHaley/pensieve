@@ -42,9 +42,14 @@ final class SearchModel: ObservableObject {
     }
     @Published var actionIndex = 0
 
+    /// Drives the panel's pop-in when it opens.
+    @Published var presented = false
+
     var onLayout: (() -> Void)?
     var actions: Actions?
     private var task: Task<Void, Never>?
+    private var local = Launcher.Results()  // apps and settings for the current query
+    private var remote: [Hit] = []  // the backend's results, possibly for an earlier query until the next ones land
 
     // Fixed metrics, so the panel can be sized without measuring SwiftUI.
     static let width: CGFloat = 680
@@ -84,7 +89,7 @@ final class SearchModel: ObservableObject {
         }
     }
 
-    static let guidance = "Search files, code, folders, people and agent sessions"
+    static let guidance = "Open apps and settings, or search files, code, folders, people and agent sessions"
     static let options: [(String, String)] = [
         ("plain words", "by meaning"),
         ("\"quotes\"", "exact words"),
@@ -93,6 +98,7 @@ final class SearchModel: ObservableObject {
         ("kind:folder  repo  person", "folders and repos by name, people who know it"),
         ("by:name", "what someone wrote"),
         ("in:folder  ext:pdf", "inside a path · a file type"),
+        ("app or setting name", "open it (Tab fills in the Top Hit)"),
         ("⌃  or  →", "actions on the selected result"),
     ]
     static let optionRowHeight: CGFloat = 18
@@ -174,12 +180,16 @@ final class SearchModel: ObservableObject {
         let q = trimmed
         searched = false
         if q.isEmpty {
+            local = Launcher.Results()
             setResults([], parsed: nil)
             loading = false
             error = nil
             onLayout?()
             return
         }
+        // Apps and settings match on every keystroke, before the backend answers; the previous backend results
+        // stay under them until the new ones arrive.
+        matchLocal()
         onLayout?()  // the hint line may change height as the query is typed
         task = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(120))
@@ -201,24 +211,44 @@ final class SearchModel: ObservableObject {
         }
     }
 
+    /// Queries with operators (quotes, -word, kind:) are for the backend only.
+    func matchLocal() {
+        let q = trimmed
+        let p = QueryParse.parse(q)
+        let plain = (p.exact ?? []).isEmpty && (p.exclude ?? []).isEmpty && (p.filters ?? [:]).isEmpty
+        local = plain && !q.isEmpty ? Launcher.shared.search(q) : Launcher.Results()
+        setResults(remote, parsed: parsed)
+    }
+
     func retry() {
         let q = query
         query = ""
         query = q
     }
 
-    /// Group by kind like Spotlight. Groups appear in the order of their best result; backend order is kept
-    /// within a group. `results` is reordered to match the display so indices line up with the selection.
+    /// Group by kind like Spotlight: a strong app or setting match first as the Top Hit, then apps and settings,
+    /// then the backend's groups in the order of their best result (backend order is kept within a group).
+    /// `results` is reordered to match the display so indices line up with the selection.
     private func setResults(_ hits: [Hit], parsed: ParsedQuery?) {
+        remote = hits
+        var groups: [(String, [Hit])] = []
+        var mine = local.hits
+        if local.top, let first = mine.first {
+            groups.append(("top", [first]))
+            mine.removeFirst()
+        }
+        for k in ["app", "setting"] where mine.contains(where: { $0.kind == k }) { groups.append((k, mine.filter { $0.kind == k })) }
         var kinds: [String] = []
         for h in hits where !kinds.contains(h.kind) { kinds.append(h.kind) }
+        for k in kinds { groups.append((k, hits.filter { $0.kind == k })) }
         var ordered: [Hit] = []
         var secs: [ResultSection] = []
-        for k in kinds {
-            let group = hits.filter { $0.kind == k }
+        for (k, group) in groups {
             secs.append(ResultSection(kind: k, items: group.enumerated().map { (ordered.count + $0.offset, $0.element) }))
             ordered += group
         }
+        // keep a selection the user moved to when backend results land under the apps and settings
+        let keep = selected.flatMap { i in i > 0 && i < results.count && i < ordered.count && results[i].id == ordered[i].id ? i : nil }
         generation += 1
         var flat: [ResultRowItem] = []
         for sec in secs {
@@ -229,7 +259,20 @@ final class SearchModel: ObservableObject {
         sections = secs
         rows = flat
         self.parsed = parsed
-        selected = ordered.isEmpty ? nil : 0
+        selected = ordered.isEmpty ? nil : keep ?? 0
+    }
+
+    /// The rest of the Top Hit's name, shown greyed after the typed text like Spotlight (Tab fills it in).
+    var completion: (rest: String, kind: String)? {
+        guard local.top, selected == 0, let top = local.hits.first, !query.hasSuffix(" "), !query.isEmpty,
+              top.title.lowercased().hasPrefix(query.lowercased()) else { return nil }
+        return (String(top.title.dropFirst(query.count)), top.kind == "app" ? "Application" : "System Settings")
+    }
+
+    func complete() -> Bool {
+        guard let top = local.hits.first, let c = completion, !c.rest.isEmpty else { return false }
+        query = top.title
+        return true
     }
 
     func rowID(for index: Int) -> String? { "\(generation)/\(index)" }
@@ -237,7 +280,7 @@ final class SearchModel: ObservableObject {
     func move(_ delta: Int) {
         guard !results.isEmpty else { return }
         let cur = selected ?? (delta > 0 ? -1 : results.count)
-        selected = max(0, min(results.count - 1, cur + delta))
+        withAnimation(.snappy(duration: 0.16)) { selected = max(0, min(results.count - 1, cur + delta)) }
     }
 
     func open(_ index: Int? = nil) {

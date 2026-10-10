@@ -14,7 +14,7 @@ struct ParsedQuery: Decodable, Equatable {
 
 struct Hit: Decodable, Identifiable, Equatable {
     let id: String
-    let kind: String  // file | code | session | folder | repo | person
+    let kind: String  // file | code | session | folder | repo | person, and app | setting from Launcher (never the backend)
     let title: String
     let subtitle: String?
     let path: String?
@@ -44,6 +44,8 @@ enum ResultAction: String, Identifiable {
 
     static func list(for hit: Hit) -> [ResultAction] {
         if hit.kind == "session" || hit.kind == "person" { return [.open] }  // both open on the map
+        if hit.kind == "setting" { return [.open] }
+        if hit.kind == "app" { return [.open, .reveal, .copy] }
         if hit.path == nil { return [.open, .map] }
         var out: [ResultAction] = [.open]
         if hit.pathExists { out.append(.reveal) }
@@ -54,7 +56,10 @@ enum ResultAction: String, Identifiable {
 
     func title(for hit: Hit) -> String {
         switch self {
-        case .open: return hit.kind == "session" || hit.kind == "person" ? "Open on map" : hit.isFolder ? "Open in Finder" : "Open"
+        case .open:
+            if hit.kind == "session" || hit.kind == "person" { return "Open on map" }
+            if hit.kind == "setting" { return hit.id.hasPrefix("toggle:") ? hit.title : "Open in System Settings" }
+            return hit.isFolder ? "Open in Finder" : "Open"
         case .reveal: return "Show in Finder"
         case .map: return "Show on map"
         case .copy: return "Copy path"
@@ -96,6 +101,9 @@ enum Kind {
         case "folder": return "Folders"
         case "repo": return "Repositories"
         case "person": return "People"
+        case "top": return "Top Hit"
+        case "app": return "Applications"
+        case "setting": return "System Settings"
         default: return kind.capitalized
         }
     }
