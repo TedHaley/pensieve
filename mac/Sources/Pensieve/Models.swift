@@ -38,13 +38,13 @@ struct Hit: Decodable, Identifiable, Equatable {
 
 /// What can be done with a result, shown in the side action list (⌃ or →).
 enum ResultAction: String, Identifiable {
-    case open, reveal, map, copy
+    case open, reveal, map, copy, settings
 
     var id: String { rawValue }
 
     static func list(for hit: Hit) -> [ResultAction] {
         if hit.kind == "session" || hit.kind == "person" { return [.open] }  // both open on the map
-        if hit.kind == "setting" { return [.open] }
+        if hit.kind == "setting" { return hit.id.hasPrefix("toggle:") ? [.open, .settings] : [.open] }
         if hit.kind == "app" { return [.open, .reveal, .copy] }
         if hit.path == nil { return [.open, .map] }
         var out: [ResultAction] = [.open]
@@ -63,6 +63,7 @@ enum ResultAction: String, Identifiable {
         case .reveal: return "Show in Finder"
         case .map: return "Show on map"
         case .copy: return "Copy path"
+        case .settings: return "Open in System Settings"
         }
     }
 
@@ -72,6 +73,7 @@ enum ResultAction: String, Identifiable {
         case .reveal: return "folder"
         case .map: return "circle.hexagongrid"
         case .copy: return "doc.on.doc"
+        case .settings: return "gearshape"
         }
     }
 
@@ -81,6 +83,7 @@ enum ResultAction: String, Identifiable {
         case .reveal: return "⌘↩"
         case .map: return "⌥↩"
         case .copy: return "⌘C"
+        case .settings: return "⌘↩"
         }
     }
 }

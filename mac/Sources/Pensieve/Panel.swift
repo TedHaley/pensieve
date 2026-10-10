@@ -42,7 +42,13 @@ final class Actions {
         case .reveal: reveal(hit)
         case .map: visualize(hit)
         case .copy: copyPath(hit)
+        case .settings: openSettings(hit)
         }
+    }
+
+    func openSettings(_ hit: Hit) {
+        dismiss()
+        Launcher.shared.openSettings(hit)
     }
 
     func settings() {
@@ -72,6 +78,7 @@ final class Actions {
     }
 
     func reveal(_ hit: Hit) {
+        if Launcher.shared.isToggle(hit) { return openSettings(hit) }  // ⌘↩ on a toggle shows its pane
         guard let path = hit.path, FileManager.default.fileExists(atPath: path) else { return }
         dismiss()
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])

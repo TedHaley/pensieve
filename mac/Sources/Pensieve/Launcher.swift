@@ -176,6 +176,14 @@ final class Launcher {
         }
     }
 
+    func isToggle(_ hit: Hit) -> Bool { byID[hit.id]?.kind == .toggle }
+
+    /// Shows a toggle's pane instead of switching it.
+    func openSettings(_ hit: Hit) {
+        guard let it = byID[hit.id], let s = it.url, let u = URL(string: s) else { return }
+        NSWorkspace.shared.open(u)
+    }
+
     nonisolated private static func scanApps() -> [Item] {
         let fm = FileManager.default
         let home = NSHomeDirectory()
@@ -273,18 +281,23 @@ final class Launcher {
         }
     }
 
-    /// Toggles act right away, without opening System Settings.
+    /// Toggles act right away; their url is the pane that holds the same setting, for "Open in System Settings".
     nonisolated private static let toggles: [Item] = [
-        Item(id: "toggle:dark", kind: .toggle, title: "Dark Mode", subtitle: "", symbol: "circle.lefthalf.filled", color: "black",
-             keywords: ["appearance", "light mode", "theme", "night"]),
-        Item(id: "toggle:wifi", kind: .toggle, title: "Wi‑Fi", subtitle: "", symbol: "wifi", color: "blue",
+        Item(id: "toggle:dark", kind: .toggle, title: "Dark Mode", subtitle: "",
+             url: "x-apple.systempreferences:com.apple.Appearance-Settings.extension", symbol: "circle.lefthalf.filled",
+             color: "black", keywords: ["appearance", "light mode", "theme", "night"]),
+        Item(id: "toggle:wifi", kind: .toggle, title: "Wi‑Fi", subtitle: "",
+             url: "x-apple.systempreferences:com.apple.wifi-settings-extension", symbol: "wifi", color: "blue",
              keywords: ["wireless", "internet", "network", "airport"]),
-        Item(id: "toggle:mute", kind: .toggle, title: "Mute", subtitle: "", symbol: "speaker.slash.fill", color: "red",
+        Item(id: "toggle:mute", kind: .toggle, title: "Mute", subtitle: "",
+             url: "x-apple.systempreferences:com.apple.Sound-Settings.extension", symbol: "speaker.slash.fill", color: "red",
              keywords: ["sound", "volume", "audio", "silence", "unmute"]),
         Item(id: "toggle:lock", kind: .toggle, title: "Lock Screen", subtitle: "Lock this Mac now",
-             symbol: "lock.fill", color: "black", keywords: ["log out", "away"]),
+             url: "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension", symbol: "lock.fill", color: "black",
+             keywords: ["log out", "away"]),
         Item(id: "toggle:sleep", kind: .toggle, title: "Sleep", subtitle: "Put this Mac to sleep now",
-             symbol: "moon.fill", color: "indigo", keywords: ["suspend"]),
+             url: "x-apple.systempreferences:com.apple.Battery-Settings.extension", symbol: "moon.fill", color: "indigo",
+             keywords: ["suspend"]),
     ]
 
     /// Toggles say what pressing Return will do, from the current state.
