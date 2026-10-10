@@ -889,8 +889,8 @@ body[data-view=insights] .mapbtn,body[data-view=settings] .mapbtn{display:none}
 .parrow:hover,.prow-w.open .parrow{background:var(--accent-soft);color:var(--accent)}
 #drawer .lead{font-size:14px;line-height:1.45;margin:2px 0 10px}
 #drawer .item.kn{cursor:default}
-#drawer .item.kn .bar{height:4px;border-radius:2px;background:var(--line);margin:6px 0 2px;overflow:hidden}
-#drawer .item.kn .bar i{display:block;height:100%;border-radius:2px}
+#drawer .item .bar{height:4px;border-radius:2px;background:var(--line);margin:6px 0 2px;overflow:hidden}
+#drawer .item .bar i{display:block;height:100%;border-radius:2px}
 .dragedge{position:fixed;z-index:60}
 .dragedge.t{top:0;left:0;right:0;height:10px}
 .dragedge.b{bottom:0;left:0;right:0;height:6px}

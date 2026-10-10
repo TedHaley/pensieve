@@ -101,7 +101,8 @@ class Scene3D {
     this.camera = new THREE.PerspectiveCamera(48, 1, 0.01, 60);
     this.camera.position.set(2.4, 1.5, 2.8);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    Object.assign(this.controls, {enableDamping: true, dampingFactor: 0.08, rotateSpeed: 0.7, zoomSpeed: 0.9, autoRotateSpeed: 0.35});
+    // zoomToCursor: scrolling heads for what's under the pointer, not the middle of the view
+    Object.assign(this.controls, {enableDamping: true, dampingFactor: 0.08, rotateSpeed: 0.7, zoomSpeed: 0.9, autoRotateSpeed: 0.35, zoomToCursor: true});
     this.controls.autoRotate = store.get('autorotate', true);
     this.mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false,
@@ -1451,7 +1452,7 @@ function openTopic(entry) {
      ${ts.length ? `<p class="muted" style="font-size:12px;margin:8px 0 0">Last changed ${rel(ts[0])}${ts.length > 1 ? ` · oldest ${rel(ts[ts.length - 1])}` : ''}</p>` : ''}
      <div class="h4">Where it lives</div><div class="list">${places.map(([k, n]) => { const r = repoOfKey(k); return `<button class="item" data-place="${esc(k)}"><div class="t"><span class="grow">${esc(r ? r.name : '~/' + k)}${r ? '<span class="cbadge">code</span>' : ''}</span><span class="muted">${Math.round(n / mem.length * 100)}%</span></div></button>`; }).join('')}</div>
      ${t.keywords ? `<div class="h4">Distinctive words</div><div class="chips">${t.keywords.split(',').map(w => `<span class="chip">${esc(w.trim())}</span>`).join('')}</div>` : ''}
-     ${authors.size ? `<div class="h4">Who wrote it</div><div class="chips">${[...authors].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([a, n]) => `<span class="chip">${esc(person(a))}<span class="n">${n}</span></span>`).join('')}</div>` : ''}
+     ${authors.size ? `<div class="h4">Who wrote it</div><div class="list">${[...authors].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([a, n]) => { const c = slotColor(D.authorSlot.get(a) ?? -1); return `<button class="item" data-twho="${esc(a)}" title="What ${esc(person(a))} knows about"><div class="t"><i class="sw" style="background:${c}"></i><span class="grow">${esc(person(a))}</span><span class="muted">${Math.round(n / mem.length * 100)}% · ${n}</span></div><div class="bar"><i style="width:${n / mem.length * 100}%;background:${c}"></i></div></button>`; }).join('')}</div>` : ''}
      ${central.length ? `<div class="h4">Most typical</div><div class="list">${central.map(itemRow).join('')}</div>` : ''}
      ${recent.length ? `<div class="h4">Recently changed</div><div class="list">${recent.map(itemRow).join('')}</div>` : ''}
      <p class="muted" style="font-size:12px;margin:12px 0 0">The map now shows the finer topics inside this one; click a label to go deeper.</p>
@@ -1460,6 +1461,7 @@ function openTopic(entry) {
   const body = $('#drawer-body');
   $$('[data-open]', body).forEach(b => b.onclick = () => openItem(b.dataset.open));
   $$('[data-place]', body).forEach(b => b.onclick = () => selectLabel('folder', b.dataset.place));
+  $$('[data-twho]', body).forEach(b => b.onclick = () => openPersonPanel(b.dataset.twho));
   $('[data-zoomout]', body).onclick = () => deselectLabel();
 }
 // the repo (name, folder key) that the current folder filter is in, if exactly one
