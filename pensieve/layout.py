@@ -3,7 +3,13 @@
 Full UMAP fits are expensive and reshuffle the map, so they only happen when the data has grown
 meaningfully; in between, new points are placed next to their nearest neighbours.
 """
+import threading
+
 import numpy as np
+
+# Numba's default threading layer on macOS (workqueue) aborts the process when two threads run parallel code at
+# once, e.g. the repo map and the Data map laid out together. One UMAP fit at a time.
+_umap_lock = threading.Lock()
 
 
 def normalize(P: np.ndarray) -> np.ndarray:
@@ -20,7 +26,8 @@ def fit3d(X: np.ndarray, n_neighbors=15, min_dist=0.12) -> np.ndarray:
     import umap
     red = umap.UMAP(n_components=3, metric="cosine", n_neighbors=min(n_neighbors, n - 1),
                     min_dist=min_dist, random_state=42, low_memory=True)
-    return normalize(red.fit_transform(X))
+    with _umap_lock:
+        return normalize(red.fit_transform(X))
 
 
 def place_new(X_known, P_known, X_new, k=4, jitter=0.03):
@@ -65,6 +72,8 @@ def cluster(X: np.ndarray, kmin=4, kmax=8):
         s = silhouette_score(X, lab, metric="cosine")
         if s > best_s:
             best, best_s = lab, s
+    if best is None:  # too few items for kmin clusters of three
+        return np.zeros(n, int)
     # relabel by size so topic 0 is the largest (stable palette order)
     order = np.argsort(-np.bincount(best))
     remap = np.empty_like(order)

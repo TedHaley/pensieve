@@ -9,9 +9,9 @@ from pathlib import Path
 
 import numpy as np
 
-from . import config, parsers, settings
-from .layout import cluster, fit3d, nearest, place_new, unit
-from .projects import project_name
+from pensieve import config, parsers, settings
+from pensieve.layout import cluster, fit3d, nearest, place_new, unit
+from pensieve.projects import project_name
 
 LAYOUT_VERSION = "umap-v1"
 ACTIVE_SECONDS = 30  # re-index a transcript that's still growing at most this often
@@ -21,13 +21,74 @@ _embed_lock = threading.Lock()
 
 
 def embedder():
+    """The embedding model: on MLX where it can run there (Apple Silicon, a Qwen3 model), else sentence-transformers."""
     global _embedder
     if _embedder is None:
-        from sentence_transformers import SentenceTransformer
-        m = SentenceTransformer(config.EMBED_MODEL, device=config.device())
-        m.max_seq_length = config.EMBED_MAX_TOKENS
-        _embedder = m
+        try:
+            _embedder = MLXEmbedder(config.EMBED_MODEL, config.EMBED_MAX_TOKENS)
+        except (ImportError, ValueError):
+            from sentence_transformers import SentenceTransformer
+            m = SentenceTransformer(config.EMBED_MODEL, device=config.device())
+            m.max_seq_length = config.EMBED_MAX_TOKENS
+            _embedder = m
     return _embedder
+
+
+class MLXEmbedder:
+    """Qwen3-Embedding on Apple's MLX, without torch. Same vectors as sentence-transformers (cosine 0.998 or more
+    on code chunks), so an index built with either one keeps working. `encode` takes the arguments that
+    SentenceTransformer.encode takes here."""
+
+    def __init__(self, name, max_tokens):
+        import mlx.core as mx
+        from huggingface_hub import snapshot_download
+        from mlx_lm.models import qwen3
+        from transformers import AutoTokenizer
+        path = Path(snapshot_download(name))
+        cfg = json.loads((path / "config.json").read_text())
+        if cfg.get("model_type") != "qwen3":
+            raise ValueError(f"MLX embedder only runs qwen3 models, not {cfg.get('model_type')}")
+        st = path / "config_sentence_transformers.json"
+        self.prompts = json.loads(st.read_text()).get("prompts", {}) if st.exists() else {}
+        self.mx, self.max_tokens = mx, max_tokens
+        self.model = qwen3.Qwen3Model(qwen3.ModelArgs.from_dict(cfg))
+        self.model.load_weights(list(mx.load(str(path / "model.safetensors")).items()))
+        mx.eval(self.model.parameters())
+        self.tok = AutoTokenizer.from_pretrained(str(path))
+        self.tok.padding_side = "left"  # the last position is then every text's last token
+
+    def get_sentence_embedding_dimension(self):
+        return self.model.args.hidden_size
+
+    def encode(self, texts, batch_size=16, normalize_embeddings=True, show_progress_bar=False, prompt=None,
+               prompt_name=None):
+        mx = self.mx
+        prompt = prompt if prompt is not None else self.prompts.get(prompt_name, "") if prompt_name else ""
+        texts = [prompt + t for t in texts]
+        order = sorted(range(len(texts)), key=lambda i: -len(texts[i]))  # similar lengths: less padding
+        out = np.zeros((len(texts), self.get_sentence_embedding_dimension()), np.float32)
+        for i in range(0, len(order), batch_size):
+            idx = order[i:i + batch_size]
+            enc = self.tok([texts[j] for j in idx], padding=True, truncation=True, max_length=self.max_tokens,
+                           return_tensors="np")
+            h = self.model.embed_tokens(mx.array(enc["input_ids"]))
+            mask = self._mask(mx.array(enc["attention_mask"]), h.dtype)
+            for layer in self.model.layers:
+                h = layer(h, mask, None)
+            v = self.model.norm(h)[:, -1, :].astype(mx.float32)
+            if normalize_embeddings:
+                v = v / mx.linalg.norm(v, axis=-1, keepdims=True)
+            out[idx] = np.array(v)
+        mx.clear_cache()  # MLX keeps freed buffers for reuse; between calls they only hold memory
+        return out
+
+    def _mask(self, attn, dtype):
+        """Causal attention that skips the left padding. Each position also sees itself, so padding rows stay finite."""
+        mx = self.mx
+        n = attn.shape[1]
+        keep = mx.tril(mx.ones((n, n), dtype=mx.bool_))[None, None] & attn.astype(mx.bool_)[:, None, None, :]
+        keep = keep | mx.eye(n, dtype=mx.bool_)[None, None]
+        return mx.where(keep, 0.0, -mx.inf).astype(dtype)
 
 
 CODE_QUERY = "Instruct: Given a description of what some code does, retrieve the source code that implements it\nQuery:"
@@ -96,7 +157,7 @@ class Store:
         self._indexed_at = {}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
-        from .search import code_words
+        from pensieve.search import code_words
         self.db.create_function("code_words", 1, code_words, deterministic=True)  # used by the code keyword index
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions(

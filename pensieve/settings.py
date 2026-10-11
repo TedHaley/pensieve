@@ -7,7 +7,7 @@ import os
 import threading
 from pathlib import Path
 
-from . import config
+from pensieve import config
 
 PATH = config.DATA_DIR / "settings.json"
 
@@ -25,6 +25,15 @@ DEFAULTS = {
     # ("agents/codex", "files/~/Downloads", "repos/sweep", "repos/<repo root>", "apps/apple_notes").
     "disabled": ["apps/apple_notes"],
     "max_file_mb": 20,
+    # Per file type in Files & folders (see files.TYPES): index = content | name | off, map = shown on the map.
+    # Types whose content can't be read (media, other) are indexed by name and never placed on the map.
+    "file_types": {"text": {"index": "content", "map": True}, "pdf": {"index": "content", "map": True},
+                   "office": {"index": "content", "map": True}, "data": {"index": "content", "map": True},
+                   "code": {"index": "content", "map": True}, "media": {"index": "name", "map": False},
+                   "other": {"index": "name", "map": False}},
+    "off_map": [],             # sources indexed for search but left off the map, by id like `disabled`
+    "chunk_chars": 1500,       # characters per document chunk (one search hit, one embedding)
+    "max_chunks": 2000,        # chunks read per document; 0 = no limit. Longer documents are cut there.
     "skip_temp_sessions": True,  # agent sessions that ran in a temp folder (e.g. Pensieve's own AI calls) aren't indexed
     # Named slices of the index for agents: {"payments": {"sources": ["repos/<root>", "files/~/specs"], "description": ""}}
     "scopes": {},
@@ -55,10 +64,15 @@ DESCRIPTIONS = {
     "exclude_files": "File name patterns never indexed (secrets, keys, password exports). Case-insensitive globs.",
     "disabled": "Sources that are switched off (whole categories or single items). Easier to change from Sources.",
     "max_file_mb": "Skip documents larger than this.",
+    "file_types": "For each file type: read its content, index only its name, or skip it; and whether it shows on the map.",
+    "off_map": "Sources that are searchable but do not show on the map.",
+    "chunk_chars": "Characters in each piece of a document. Larger pieces keep more context together in one result.",
+    "max_chunks": "Pieces read from each document (0 = all). Text after this limit is not searchable.",
     "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
     "default_scope": "Scope used by the search panel and visualizer search; empty means everything.",
-    "hotkey": "Shortcut for the search panel: 'ctrl+shift' (tap both) or a combo like 'cmd+shift+space'.",
+    "hotkey": "Shortcut for the search panel. ⌘Space turns off the Spotlight shortcut while Pensieve runs. "
+              "Choose another shortcut to give ⌘Space back to Spotlight.",
     "editor": "Where code results open: default, vscode, cursor or zed.",
     "appearance": "System, light or dark. System follows macOS.",
     "ai": "What writes summaries and insights: builtin, server, claude, codex or none (auto = not chosen yet).",
@@ -137,12 +151,27 @@ def update(changes: dict) -> dict:
                     raise ValueError(f"scope {n!r} needs a non-empty sources list")
                 if any(not isinstance(x, str) or x.split("/", 1)[0] not in ("agents", "files", "repos", "apps") for x in sc["sources"]):
                     raise ValueError(f"scope {n!r}: sources are ids like repos/<root>, files/<folder>, agents/claude, apps/obsidian")
+        elif k == "file_types":
+            if not isinstance(v, dict):
+                raise ValueError("file_types maps a type to {index: content|name|off, map: true|false}")
+            merged = {t: dict(x) for t, x in cur[k].items()}
+            for t, x in v.items():
+                if t not in d or not isinstance(x, dict):
+                    raise ValueError(f"unknown file type {t!r}; valid: {', '.join(d)}")
+                if x.get("index", "content") not in ("content", "name", "off") or not isinstance(x.get("map", True), bool):
+                    raise ValueError(f"file_types.{t}: index is content, name or off; map is true or false")
+                merged[t] = {**merged.get(t, d[t]), **x}
+                if t in ("media", "other") and merged[t]["index"] == "content":
+                    raise ValueError(f"{t} files have no text to read: index them by name or switch them off")
+            v = merged
         elif isinstance(d, dict):
             if not isinstance(v, dict) or not all(isinstance(x, bool) for x in v.values()):
                 raise ValueError(f"{k} must map names to true/false")
             v = {**cur[k], **v}
         elif not isinstance(v, str):
             raise ValueError(f"{k} must be a string")
+        if k == "chunk_chars" and not 200 <= v <= 20000:
+            raise ValueError("chunk_chars must be between 200 and 20000")
         if k == "appearance" and v not in ("system", "light", "dark"):
             raise ValueError("appearance must be system, light or dark")
         if k == "ai" and v not in ("auto", "builtin", "server", "claude", "codex", "none"):
@@ -175,6 +204,23 @@ def enabled(source_id: str) -> bool:
     off = set(get("disabled"))
     cat = source_id.split("/", 1)[0]
     return source_id not in off and cat not in off
+
+
+def on_map(source_id: str) -> bool:
+    """Shown on the map unless it, or its category, is in `off_map` (switched-off sources aren't indexed at all)."""
+    off = set(get("off_map"))
+    return source_id not in off and source_id.split("/", 1)[0] not in off
+
+
+def set_on_map(source_id: str, on: bool) -> dict:
+    off = [d for d in get("off_map") if d != source_id]
+    if not on:
+        off.append(source_id)
+    return update({"off_map": off})
+
+
+def file_type(t: str) -> dict:
+    return {**DEFAULTS["file_types"].get(t, {"index": "name", "map": False}), **get("file_types").get(t, {})}
 
 
 def set_enabled(source_id: str, on: bool) -> dict:

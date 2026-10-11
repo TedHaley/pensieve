@@ -7,7 +7,7 @@ import os
 import threading
 from pathlib import Path
 
-from . import config, settings
+from pensieve import config, settings
 
 IGNORE_PARTS = {"node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache",
                 ".next", ".turbo", ".gradle", ".idea", "dist", "build", "target"}
@@ -32,7 +32,7 @@ class Watch:
     def configure(self, checkouts: dict):
         """(Re)start watching the session folders, the indexed folders and every repo checkout."""
         self.checkouts = {k.rstrip("/"): v for k, v in checkouts.items()}
-        from .files import Files
+        from pensieve.files import Files
         self.folders = [str(p) for p in Files.roots()]
         self.sources = [str(root) for _, root, _ in config.SOURCES if root.is_dir()]
         want = sorted(set(self.sources + self.folders + list(self.checkouts)))
@@ -137,6 +137,12 @@ class Watch:
         with self.lock:
             self.full_files = self.full_repos = True
         self.wake()
+
+    def take_files(self):
+        """Just the changed document paths (leaves session changes and a full-sweep request alone)."""
+        with self.lock:
+            out, self.files = self.files, set()
+        return out
 
     def requeue_files(self, paths):
         with self.lock:

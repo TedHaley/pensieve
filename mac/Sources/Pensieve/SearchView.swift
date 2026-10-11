@@ -9,13 +9,14 @@ struct SearchView: View {
         VStack(spacing: 0) {
             bar
             HintLine(model: model, backend: backend)
-                .frame(height: model.hintHeight, alignment: .top)
+                .frame(height: model.hintHeight, alignment: .top)  // the options overflow it while closing
             if model.listHeight > 0 {
                 Divider().opacity(0.6).padding(.horizontal, 14)
                 ResultsList(model: model)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(width: model.glassSize.width, height: model.glassSize.height, alignment: .top)
+        .clipShape(RoundedRectangle(cornerRadius: SearchModel.cornerRadius, style: .continuous))
         .overlayPreferenceValue(SelectedRowKey.self) { anchor in
             GeometryReader { geo in
                 if model.actionsOpen, let anchor, let hit = model.selectedHit {
@@ -33,6 +34,27 @@ struct SearchView: View {
             }
         }
         .panelGlass()
+        .scaleEffect(model.presented ? 1 : 0.95, anchor: .top)  // grows into place while the window fades in
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var optionsChevron: some View {
+        let shown = model.showsGuidance && (model.buttonsShown || model.optionsOpen)  // open options keep their way back
+        return Button { model.optionsOpen.toggle() } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 14, weight: .semibold))
+                .rotationEffect(.degrees(model.optionsOpen ? 180 : 0))
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: model.optionsOpen)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(model.optionsOpen ? "Hide search options" : "Show search options")
+        .opacity(shown ? 1 : 0)
+        .scaleEffect(shown ? 1 : 0.6)
+        .allowsHitTesting(shown)
+        .animation(shown ? .spring(response: 0.38, dampingFraction: 0.7) : .easeIn(duration: 0.14), value: shown)
     }
 
     private var bar: some View {
@@ -40,38 +62,84 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 21, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField("Pensieve Search", text: $model.query)
+            TextField("Search", text: $model.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 24, weight: .regular))
+                .overlay(alignment: .leading) {
+                    if let c = model.completion {
+                        // the typed text, invisible, positions the rest of the Top Hit's name right after the caret
+                        (Text(model.query).foregroundColor(.clear) + Text(c.rest).foregroundColor(.secondary)
+                            + Text(" — \(c.kind)").foregroundColor(Color.secondary.opacity(0.6)))
+                            .font(.system(size: 24, weight: .regular))
+                            .lineLimit(1)
+                            .allowsHitTesting(false)
+                    }
+                }
             if model.loading {
                 ProgressView().controlSize(.small)
             }
-            Button {
-                model.actions?.visualize(nil)
-            } label: {
-                Image(systemName: "circle.hexagongrid")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Open visualizer ⌘O")
-            Button {
-                model.actions?.settings()
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Settings ⌘,")
+            optionsChevron
         }
         .padding(.leading, 20)
-        .padding(.trailing, 12)
+        .padding(.trailing, 14)
         .frame(height: SearchModel.barHeight)
+        .contentShape(Rectangle())
+        .onHover { model.overBar = $0 }
+    }
+}
+
+/// The map and Settings buttons: glass circles in their own window to the right of the bar, as in Spotlight.
+struct BarButtons: View {
+    @ObservedObject var model: SearchModel
+
+    var body: some View {
+        HStack(spacing: SearchModel.buttonGap) {
+            GlassCircle(symbol: "circle.hexagongrid", help: "Open visualizer ⌘O", index: 0, shown: model.buttonsShown) {
+                model.actions?.visualize(nil)
+            }
+            GlassCircle(symbol: "gearshape", help: "Settings ⌘,", index: 1, shown: model.buttonsShown) {
+                model.actions?.settings()
+            }
+        }
+        .padding(.leading, SearchModel.buttonGap)
+        .frame(height: SearchModel.barHeight)
+        .contentShape(Rectangle())
+        .onHover { model.overButtons = $0 }
+        .padding([.top, .bottom, .trailing], SearchModel.buttonPad)
+        .padding(.leading, SearchModel.buttonPad - SearchModel.buttonGap)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+}
+
+/// Drops into place with a spring when shown, each circle a little after the one before it.
+struct GlassCircle: View {
+    let symbol: String
+    let help: String
+    let index: Int
+    let shown: Bool
+    let action: () -> Void
+    @State private var over = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 19, weight: .medium))
+                .foregroundStyle(over ? .primary : .secondary)
+                .frame(width: SearchModel.buttonSize, height: SearchModel.buttonSize)
+                .background(Circle().fill(Color.primary.opacity(over ? 0.08 : 0)))
+                .circleGlass()
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { over = $0 }
+        .scaleEffect(shown ? 1 : 0.55)
+        .offset(y: shown ? 0 : -SearchModel.buttonPad * 0.75)
+        .blur(radius: shown ? 0 : 4)
+        .opacity(shown ? 1 : 0)
+        .allowsHitTesting(shown)
+        .animation(shown ? .spring(response: 0.42, dampingFraction: 0.62).delay(Double(index) * 0.06)
+                         : .easeIn(duration: 0.14), value: shown)
     }
 }
 
@@ -105,33 +173,19 @@ struct HintLine: View {
                     }
                 }
             } else if model.showsGuidance {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text(SearchModel.guidance)
-                        Button { model.optionsOpen.toggle() } label: {
-                            HStack(spacing: 3) {
-                                Text("Options")
-                                Image(systemName: model.optionsOpen ? "chevron.up" : "chevron.down")
-                                    .font(.system(size: 9, weight: .semibold))
+                if model.optionsOpen {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(SearchModel.options, id: \.0) { key, what in
+                            HStack(spacing: 0) {
+                                Text(key).font(.system(size: SearchModel.hintFontSize, design: .monospaced))
+                                    .foregroundStyle(.primary.opacity(0.8))
+                                    .frame(width: 215, alignment: .leading)
+                                Text(what)
                             }
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
-                        .help(model.optionsOpen ? "Hide search options" : "Show search options")
-                    }
-                    if model.optionsOpen {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(SearchModel.options, id: \.0) { key, what in
-                                HStack(spacing: 0) {
-                                    Text(key).font(.system(size: SearchModel.hintFontSize, design: .monospaced))
-                                        .foregroundStyle(.primary.opacity(0.8))
-                                        .frame(width: 215, alignment: .leading)
-                                    Text(what)
-                                }
-                                .frame(height: SearchModel.optionRowHeight, alignment: .leading)
-                            }
+                            .frame(height: SearchModel.optionRowHeight, alignment: .leading)
                         }
                     }
+                    .transition(.opacity.combined(with: .offset(y: -8)))
                 }
             } else {
                 Group {
@@ -152,6 +206,7 @@ struct HintLine: View {
         .padding(.top, 2)
         .padding(.leading, SearchModel.hintInsets.leading)
         .padding(.trailing, SearchModel.hintInsets.trailing)
+        .animation(SearchModel.resize, value: model.optionsOpen)  // the options list slides in with the glass
     }
 }
 
@@ -202,6 +257,7 @@ struct ActionMenu: View {
 
 struct ResultsList: View {
     @ObservedObject var model: SearchModel
+    @Namespace private var selection  // the highlight slides between rows instead of jumping
 
     var body: some View {
         if model.results.isEmpty {
@@ -227,7 +283,7 @@ struct ResultsList: View {
                                     .frame(height: SearchModel.headerHeight, alignment: .bottomLeading)
                             case .hit(let index, let hit, _):
                                 let on = model.selected == index
-                                ResultRow(hit: hit, selected: on, actionsOpen: on && model.actionsOpen)
+                                ResultRow(hit: hit, selected: on, actionsOpen: on && model.actionsOpen, highlight: selection)
                                     .anchorPreference(key: SelectedRowKey.self, value: .bounds) { on ? $0 : nil }
                                     .onTapGesture(count: 2) { model.open(index) }
                                     .simultaneousGesture(TapGesture().onEnded {
@@ -255,6 +311,7 @@ struct ResultRow: View {
     let hit: Hit
     let selected: Bool
     var actionsOpen = false
+    var highlight: Namespace.ID?
 
     /// File names and paths keep both ends (the name and extension matter); prose like session titles keeps its start.
     private var truncation: Text.TruncationMode { hit.kind == "session" ? .tail : .middle }
@@ -303,10 +360,12 @@ struct ResultRow: View {
         .padding(.horizontal, 10)
         .frame(height: SearchModel.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(selected ? Color.accentColor : Color.clear)
-        )
+        .background {
+            if selected {
+                let shape = RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor)
+                if let highlight { shape.matchedGeometryEffect(id: "selection", in: highlight) } else { shape }
+            }
+        }
         .contentShape(Rectangle())
     }
 
@@ -345,8 +404,19 @@ struct HitIcon: View {
 
     var body: some View {
         Group {
-            if hit.kind == "file", let p = hit.path, FileManager.default.fileExists(atPath: p) {
+            if hit.kind == "file" || hit.kind == "app" || hit.kind == "document", let p = hit.path, FileManager.default.fileExists(atPath: p) {
                 Image(nsImage: IconCache.icon(for: p))
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 32, height: 32)
+            } else if hit.kind == "setting", let g = Launcher.shared.glyph(hit) {
+                Image(systemName: g.symbol)  // a colored tile, as in System Settings' sidebar
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(g.color.gradient))
+            } else if hit.kind == "setting" {
+                Image(nsImage: IconCache.icon(for: Launcher.settingsApp))
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 32, height: 32)
@@ -370,6 +440,7 @@ struct HitIcon: View {
         case "session": return "bubble.left.and.text.bubble.right"
         case "person": return "person.crop.circle"
         case "repo": return "shippingbox"
+        case "calc": return hit.ext == "conversion" ? "arrow.left.arrow.right" : "equal"
         default: return hit.isFolder ? "folder" : "doc.text"
         }
     }
@@ -379,7 +450,7 @@ struct HitIcon: View {
         case "code": return .teal
         case "session": return .purple
         case "person": return .pink
-        case "repo": return .orange
+        case "repo", "calc": return .orange
         default: return .blue
         }
     }
@@ -422,6 +493,21 @@ extension View {
             self.background(shape.fill(.regularMaterial))
                 .overlay(shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
+        }
+    }
+
+    /// The bar's glass in a circle. These sit outside the panel's window, so they draw their own shadow, cut away
+    /// inside the circle: under translucent glass it would show through and make the circle darker than the bar.
+    @ViewBuilder func circleGlass() -> some View {
+        let shadow = Circle().fill(Color.black)
+            .shadow(color: .black.opacity(0.25), radius: 12, y: 5)
+            .mask(Rectangle().padding(-40).overlay(Circle().blendMode(.destinationOut)).compositingGroup())
+        if #available(macOS 26.0, *) {
+            self.glassEffect(.regular, in: Circle()).background(shadow)
+        } else {
+            self.background(VisualEffect().clipShape(Circle()))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
+                .background(shadow)
         }
     }
 

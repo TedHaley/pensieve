@@ -25,6 +25,30 @@ final class SpotlightPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// Holds the glass circles beside the search bar. It never takes key, so a click on a circle doesn't close the panel.
+final class ButtonsPanel: NSPanel {
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: false)
+        isFloatingPanel = true
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = false
+        isReleasedWhenClosed = false
+        ignoresMouseEvents = true
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+/// The circles' window is never key, so a click must work on the first try.
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// What happens to a result: open it, reveal it, show it in the visualizer, copy its path.
 @MainActor
 final class Actions {
@@ -42,7 +66,13 @@ final class Actions {
         case .reveal: reveal(hit)
         case .map: visualize(hit)
         case .copy: copyPath(hit)
+        case .settings: openSettings(hit)
         }
+    }
+
+    func openSettings(_ hit: Hit) {
+        dismiss()
+        Launcher.shared.openSettings(hit)
     }
 
     func settings() {
@@ -51,7 +81,13 @@ final class Actions {
     }
 
     func open(_ hit: Hit) {
+        if hit.kind == "calc" {
+            copyPath(hit)
+            NSSound(named: "Tink")?.play()
+            return dismiss()
+        }
         dismiss()
+        if Launcher.shared.handles(hit) { return Launcher.shared.run(hit) }
         guard let path = hit.path, hit.kind != "session" else { return visualize(hit) }
         if hit.isFolder {  // a Finder window on the folder (never launches a bundle like Foo.app)
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
@@ -71,6 +107,7 @@ final class Actions {
     }
 
     func reveal(_ hit: Hit) {
+        if Launcher.shared.isToggle(hit) { return openSettings(hit) }  // ⌘↩ on a toggle shows its pane
         guard let path = hit.path, FileManager.default.fileExists(atPath: path) else { return }
         dismiss()
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
@@ -78,11 +115,17 @@ final class Actions {
 
     func visualize(_ hit: Hit?) {
         dismiss()
-        visualizer.show(fragment: VisualizerController.fragment([("open", hit?.id), ("q", query())]))
+        let onMap = hit.flatMap { $0.onMap ? $0.id : nil }
+        visualizer.show(fragment: VisualizerController.fragment([("open", onMap), ("q", query())]))
     }
 
     @discardableResult
     func copyPath(_ hit: Hit) -> Bool {
+        if hit.kind == "calc" {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(String(hit.id.dropFirst("calc:".count)), forType: .string)
+            return true
+        }
         guard let path = hit.path else { return false }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(hit.line.map { "\(path):\($0)" } ?? path, forType: .string)
@@ -93,11 +136,15 @@ final class Actions {
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
     let panel = SpotlightPanel()
+    let buttons = ButtonsPanel()
     let model = SearchModel()
     let actions: Actions
     private var keyMonitor: Any?
     private var flagsMonitor: Any?
     private var top: CGFloat = 0
+    private var height: CGFloat = 0  // where the frame is headed, which can differ from the frame mid-animation
+    private var width: CGFloat = 0
+    private var hiding = false
     private var lastFlags: NSEvent.ModifierFlags = []
     private var controlDownAt: TimeInterval?
     private var watchers: Set<AnyCancellable> = []
@@ -109,6 +156,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         actions.query = { [weak self] in self?.model.trimmed ?? "" }
         model.actions = actions
         model.onLayout = { [weak self] in self?.relayout() }
+        Launcher.shared.onScan = { [weak self] in
+            guard let self, !self.model.trimmed.isEmpty else { return }
+            self.model.matchLocal()
+            self.relayout()
+        }
         let host = NSHostingView(rootView: SearchView(model: model))
         host.sizingOptions = []
         // clip to the glass's rounded shape: the window shadow is drawn from what's opaque, and the square
@@ -119,6 +171,10 @@ final class PanelController: NSObject, NSWindowDelegate {
         host.layer?.masksToBounds = true
         panel.contentView = host
         panel.delegate = self
+        buttons.contentView = FirstMouseHostingView(rootView: BarButtons(model: model))
+        // hidden circles must not block clicks on whatever is behind them
+        model.$buttonsShown.receive(on: RunLoop.main)
+            .sink { [weak self] on in self?.buttons.ignoresMouseEvents = !on }.store(in: &watchers)
         // the hint line wraps, so backend state changes (setup, errors) can change the panel's height
         Backend.shared.$state.dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.relayout() }.store(in: &watchers)
@@ -126,27 +182,59 @@ final class PanelController: NSObject, NSWindowDelegate {
             .sink { [weak self] _ in Task { @MainActor in self?.relayout() } }.store(in: &watchers)
     }
 
-    var isShown: Bool { panel.isVisible }
+    var isShown: Bool { panel.isVisible && !hiding }
 
     func toggle() {
         isShown ? hide() : show()
     }
 
     func show(query: String? = nil) {
+        Launcher.shared.refreshIfStale()
         if let query { model.query = query }
+        let appearing = !isShown, fading = hiding
+        hiding = false
         place()
+        if appearing && !fading {  // a fade-out in progress reverses from where it is
+            panel.alphaValue = 0
+            model.presented = false
+        }
         panel.makeKeyAndOrderFront(nil)
+        if buttons.parent == nil { panel.addChildWindow(buttons, ordered: .above) }
         installKeyMonitor()
         focusField(selectAll: query == nil)
+        guard appearing else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+        DispatchQueue.main.async { [weak self] in  // after the shrunken frame has been drawn once
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) { self?.model.presented = true }
+        }
     }
 
     func hide() {
-        guard panel.isVisible else { return }
+        guard isShown else { return }
         model.closeActions()
-        panel.orderOut(nil)
+        model.hideButtons()
         for m in [keyMonitor, flagsMonitor].compactMap({ $0 }) { NSEvent.removeMonitor(m) }
         keyMonitor = nil
         flagsMonitor = nil
+        hiding = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.hiding else { return }  // shown again while fading out
+                self.hiding = false
+                self.panel.removeChildWindow(self.buttons)
+                self.buttons.orderOut(nil)
+                self.panel.orderOut(nil)
+                self.panel.alphaValue = 1
+            }
+        })
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -159,9 +247,16 @@ final class PanelController: NSObject, NSWindowDelegate {
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let vf = screen?.visibleFrame else { return }
         top = vf.maxY - vf.height * 0.2
-        let h = model.panelHeight
-        panel.setFrame(NSRect(x: vf.midX - SearchModel.width / 2, y: top - h, width: SearchModel.width, height: h),
-                       display: true)
+        height = model.panelHeight
+        width = model.panelWidth
+        let left = vf.midX - SearchModel.width / 2
+        model.glassSize = CGSize(width: width, height: height)
+        panel.setFrame(NSRect(x: left, y: top - height, width: width, height: height), display: true)
+        // the circles' hover area starts at the narrowed panel's edge, so the pointer never falls between the two
+        let s = SearchModel.self
+        let w = s.buttonsReserve + 2 * s.buttonPad - s.buttonGap, h = s.barHeight + 2 * s.buttonPad
+        buttons.setFrame(NSRect(x: left + s.width - s.buttonsReserve - (s.buttonPad - s.buttonGap),
+                                y: top - s.barHeight / 2 - h / 2, width: w, height: h), display: false)
         refreshShadow()
     }
 
@@ -171,14 +266,31 @@ final class PanelController: NSObject, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in self?.panel.invalidateShadow() }
     }
 
-    /// Grow or shrink downward as results change; the search bar never moves.
+    /// SearchView animates the glass to the new size, so the window only has to hold it: it grows at once and
+    /// shrinks when the glass has finished shrinking. Its top edge stays at `top`, so the bar doesn't move.
     private func relayout() {
         guard panel.isVisible else { return }
-        let h = model.panelHeight
+        let h = model.panelHeight, w = model.panelWidth
+        guard abs(height - h) > 0.5 || abs(width - w) > 0.5 else { return }
+        height = h
+        width = w
         let f = panel.frame
-        guard abs(f.height - h) > 0.5 else { return }
-        panel.setFrame(NSRect(x: f.minX, y: top - h, width: f.width, height: h), display: true)
-        refreshShadow()
+        let grown = NSSize(width: max(f.width, w), height: max(f.height, h))
+        if grown != f.size {
+            panel.setFrame(NSRect(x: f.minX, y: top - grown.height, width: grown.width, height: grown.height), display: true)
+        }
+        DispatchQueue.main.async { [weak self] in  // after the window's resize has been laid out
+            withAnimation(SearchModel.resize) { self?.model.glassSize = CGSize(width: w, height: h) }
+            self?.refreshShadow()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + SearchModel.resizeSeconds) { [weak self] in
+            guard let self, self.panel.isVisible, self.height == h, self.width == w else { return }
+            let f = self.panel.frame
+            if f.size != NSSize(width: w, height: h) {
+                self.panel.setFrame(NSRect(x: f.minX, y: self.top - h, width: w, height: h), display: true)
+            }
+            self.refreshShadow()
+        }
     }
 
     /// Control tapped alone (pressed and released with nothing else) toggles the action list. Only a clean
@@ -270,6 +382,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         switch Int(e.keyCode) {
         case kVK_Escape:
             hide()
+        case kVK_Tab where mods.isEmpty:
+            return model.complete()
         case kVK_RightArrow where model.selectedHit != nil && caretAtEnd:
             model.openActions()
         case kVK_ANSI_U where mods == .command && Updater.shared.available != nil:

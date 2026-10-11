@@ -7,7 +7,7 @@ import urllib.parse
 import webbrowser
 from pathlib import Path
 
-from . import settings
+from pensieve import settings
 
 ctx = {}
 
@@ -102,7 +102,7 @@ def read(id: str, max_chars=20000) -> dict:
         if f and f["chunks"]:
             text = "\n".join(c["text"] for c in f["chunks"])
         else:
-            from .files import extract
+            from pensieve.files import extract
             text = extract(Path(r["path"]))
         return dict(id=id, kind="file", path=r["path"], text=text[:max_chars], truncated=len(text) > max_chars)
     if r["kind"] == "code":
@@ -153,7 +153,7 @@ def open_item(id: str, action="open"):
     if action == "reveal":
         subprocess.run(["open", "-R", r["path"]], check=False)
         return dict(ok=True, path=r["path"])
-    from . import apps
+    from pensieve import apps
     nid = apps.note_id(r["path"])
     if nid:  # an exported Apple Note: show the real note
         subprocess.run(["osascript", "-e", f'tell application "Notes" to show note id "{nid}"', "-e",

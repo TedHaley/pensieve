@@ -30,6 +30,10 @@ On first run Pensieve downloads the embedding model (~1.2 GB), then indexes in t
 
 Press **Control+Shift** (tap both, release) to open it, or **Control+Shift+Space**. The tap needs Accessibility permission (System Settings → Privacy & Security → Accessibility → Pensieve); the Space combo works without it.
 
+To open Pensieve with **⌘Space** instead of Spotlight, choose ⌘Space in the menu bar under **Search Shortcut**, or in Settings. Pensieve turns off the Spotlight shortcut while it runs. To give ⌘Space back to Spotlight, choose another shortcut. When Pensieve quits, Spotlight gets ⌘Space back too.
+
+Pensieve starts at login by default. To stop this, turn off **Launch at Login** in the menu bar.
+
 | Query | Finds |
 |---|---|
 | `pricing model` | anything about that, by meaning |
@@ -46,6 +50,12 @@ Press **Control+Shift** (tap both, release) to open it, or **Control+Shift+Space
 | `in:anastomo` | path or repo contains this |
 
 A plain search also puts a folder first when its path names every word (`person build`). Under an empty field, **Options** lists all of these.
+
+The panel also finds apps, System Settings panes, the individual settings in each pane, and quick toggles (Dark Mode, Wi‑Fi, Mute, Lock Screen, Sleep). These results come from the Mac app only, so they never show on the map. A strong name match shows first as the **Top Hit**, and **Tab** completes its name. On a toggle, **⌘Return** opens its pane in System Settings and does not change the setting. The panel ranks the apps and settings that you open frequently higher.
+
+Under **On This Mac**, the panel also finds documents and folders anywhere on the Mac by name. These matches come from the Spotlight index, so Pensieve does not index them and they do not show on the map. The list leaves out code: source files and files in a git repo are found through the code index, which also searches their content. A file that Pensieve already indexes shows only in its usual group.
+
+The panel calculates and converts units: `2^10`, `15% of 240`, `80 + 15%`, `sqrt(2)`, `3 ft in cm`, `72 f to c`, `2 cups in ml`. **Return** copies the result.
 
 **Return** opens · **⌘Return** reveals in Finder · **⌥Return** shows it on the map · **⌘C** copies the path · **⌘O** opens the visualizer · **Esc** closes.
 
@@ -84,7 +94,7 @@ Agents grep by habit, even with Pensieve connected. Optional add-ons fix that (S
 
 ```bash
 pensieve integrate                    # what's available and what's installed
-pensieve integrate recommended        # the instructions block in ~/.claude/CLAUDE.md + the pensieve-search skill
+pensieve integrate recommended        # the instructions block in ~/.claude/CLAUDE.md, the pensieve-search skill and the edit hook
 pensieve integrate codex              # the same block in ~/.codex/AGENTS.md
 pensieve integrate pensieve-teammates pensieve-plan
 pensieve integrate claude --remove    # removes exactly what was added
@@ -94,6 +104,7 @@ pensieve integrate claude --remove    # removes exactly what was added
 - **`pensieve-search` skill** (recommended): query styles, when to fall back to grep, finding similar code before writing new code, recalling past sessions.
 - **`pensieve-teammates`**: suggests who knows an area from git blame and drafts the question for you. It never messages anyone.
 - **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.
+- **`claude-hook`** (recommended): a `PostToolUse` hook in `~/.claude/settings.json`. After each Edit or Write, it sends the changed path to Pensieve. The agent's next search then always finds the new code, even when the file system event comes late. The hook adds about 50 ms to each edit.
 
 ### Does it help? The benchmark
 
@@ -122,13 +133,27 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 | Category | Items | Default |
 |---|---|---|
 | **AI agent sessions** | Claude Code (`~/.claude/projects`), Codex (`~/.codex/sessions`), Qwen Code (`~/.qwen/projects`) | on |
-| **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Text, Markdown, code, PDF, Word and PowerPoint; other files by name; folders by name and what they contain. Each document's author comes from its metadata (PDF, Office, Spotlight) or its owner. | on |
+| **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Content of text, Markdown, RTF, Word, PowerPoint, Excel, Pages, Keynote, Numbers, PDF, mail (`.eml`), subtitles, data files and code; images, audio, video and other files by name; folders by name and what they contain. Each document's author comes from its metadata (PDF, Office, Spotlight) or its owner. | on |
 | **Git repositories** | Repos your agents worked in; repos found under your home folder (4 levels deep) and inside your folders; each repo on its own | on |
 | **Apps** | Obsidian vaults; Apple Notes (exported to Markdown in `~/.pensieve`, asks for permission) | Obsidian on, Notes off |
 
 Repos are indexed as they are on disk: committed, staged, modified and untracked files, with uncommitted lines credited to you in blame. **Linked worktrees** (including `.claude/worktrees`) are indexed too: files that differ from the main checkout show up tagged with their branch, and disappear when the worktree is removed. Clones of the same remote count as one repo. Repos found by the sweep with more than 5,000 tracked files are skipped unless you switch them on.
 
-**Staying current:** Pensieve watches your folders, repos, worktrees and agent transcripts (FSEvents) and re-indexes changes within seconds; a session that's still being written updates every 30 seconds. A full sweep every 5 minutes catches anything missed.
+**Staying current:** Pensieve watches your folders, repos, worktrees and agent transcripts (FSEvents). It indexes a change about half a second after the last save. A search indexes the changes that are waiting before it runs, so a search right after an edit finds the new text. Each code and document result is also compared with the file on disk:
+
+- If the file was deleted, the result is removed.
+- If the file changed, Pensieve indexes it again and repeats the search. If it cannot (for example, during a long first index), the result is marked as edited since indexed, and a code result gets the line where its text is now.
+
+A session that is still being written updates every 30 seconds. A full sweep every 5 minutes catches anything missed.
+
+**The map** shows only what Pensieve reads the content of. Each source has a map switch next to its on/off switch. A source that is off the map stays searchable. In Settings → Sources → **File types**, you choose for each type of file:
+
+- **Read content**, **Name only** or **Skip**.
+- Whether files of this type show on the map.
+
+Images, audio, video and other files that have no text are found by name only and never show on the map. Folders never show on the map.
+
+**Long documents** are split into pieces of `chunk_chars` characters (1,500 by default). Pensieve reads at most `max_chunks` pieces of each document (2,000 by default, about 1,000 pages; 0 reads all). The Sources page shows a chart of how long your documents are, and how many are longer than the limit. When you change either setting, Pensieve reads your documents again.
 
 Files that look like secrets (password-manager emergency kits, keys, `.env`, credentials) are never indexed; see `exclude_files`.
 
@@ -142,6 +167,9 @@ Change them in the visualizer (Settings), from an agent connected with `--all-to
 |---|---|
 | `folders` | `~/Documents`, `~/Desktop`, `~/Downloads` (manage in Sources) |
 | `disabled` | sources switched off, e.g. `agents/codex`, `files/~/Downloads`, `repos/discover` (manage in Sources) |
+| `off_map` | sources that are searchable but not on the map, with the same ids as `disabled` (manage in Sources) |
+| `file_types` | for each file type, `index` (`content`, `name` or `off`) and `map` (manage in Sources → File types) |
+| `chunk_chars`, `max_chunks` | 1500, 2000 (0 = no limit) |
 | `sweep_roots`, `sweep_depth` | `~`, 4 |
 | `max_repo_files` | 5000 (swept repos only) |
 | `repos` | extra repos, always indexed |
@@ -172,12 +200,12 @@ Search, maps, activity, keyword topics, your footprint in each repo and teammate
 pensieve                 # backend + visualizer in the browser (http://localhost:8765)
 pensieve --no-open       # backend only (what the Mac app runs)
 pensieve mcp             # MCP over stdio (--all-tools to include the settings tools)
-pensieve integrate       # agent add-ons: instructions block and skills
+pensieve integrate       # agent add-ons: instructions block, skills and the edit hook
 ```
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
 
-Runs on Apple Silicon (MPS), CUDA, or CPU. The backend and visualizer work on Linux too; the search panel app is macOS only.
+On Apple Silicon, the embedding model runs on MLX. On other machines, it runs on sentence-transformers and PyTorch (CUDA or CPU), which makes the install about 650 MB larger. The backend and visualizer work on Linux too; the search panel app is macOS only.
 
 ## Development
 

@@ -27,12 +27,21 @@ final class HotKeys {
         var keyName = ""
     }
 
+    /// The choices offered in the menu and in Settings; any other combo still works when typed in the settings file.
+    static let presets: [(spec: String, title: String)] = [
+        ("cmd+space", "⌘Space (replaces Spotlight)"),
+        ("ctrl+shift", "Tap ⌃⇧"),
+        ("opt+space", "⌥Space"),
+        ("cmd+shift+space", "⇧⌘Space"),
+    ]
+
     func configure(_ newSpec: String) {
         let s = newSpec.lowercased().replacingOccurrences(of: " ", with: "")
         guard s != spec else { return }
         spec = s
         for r in refs { UnregisterEventHotKey(r) }
         refs.removeAll()
+        SpotlightShortcut.yield(Self.takesSpotlight(s))
         installHandler()
         let fb = Self.parse(Self.fallback)
         register(fb.carbon, fb.key!)
@@ -44,6 +53,11 @@ final class HotKeys {
             tapMods = p.flags
             startTapMonitor()
         }
+    }
+
+    static func takesSpotlight(_ spec: String) -> Bool {
+        let p = parse(spec)
+        return p.key == UInt32(kVK_Space) && p.flags == .command
     }
 
     var needsAccessibility: Bool { !tapMods.isEmpty && !AXIsProcessTrusted() }
@@ -139,5 +153,53 @@ final class HotKeys {
         } else if !tapMods.isSuperset(of: m) {
             armedAt = nil
         }
+    }
+}
+
+/// Spotlight's ⌘Space is system shortcut 64 in com.apple.symbolichotkeys, and while it is on, nobody else gets the
+/// key. Pensieve turns it off while its own shortcut is ⌘Space, and turns it back on when the shortcut changes or
+/// Pensieve quits, but only if Pensieve was the one that turned it off.
+@MainActor
+enum SpotlightShortcut {
+    private static let domain = "com.apple.symbolichotkeys" as CFString
+    private static let key = "AppleSymbolicHotKeys" as CFString
+    private static let spotlight = "64"
+    private static let tookKey = "disabledSpotlightShortcut"
+
+    static func yield(_ take: Bool) {
+        if take {
+            guard isOn else { return }
+            set(on: false)
+            Prefs.store.set(true, forKey: tookKey)
+        } else {
+            restore()
+        }
+    }
+
+    static func restore() {
+        guard Prefs.store.bool(forKey: tookKey) else { return }
+        set(on: true)
+        Prefs.store.set(false, forKey: tookKey)
+    }
+
+    static var isOn: Bool {
+        let all = CFPreferencesCopyAppValue(key, domain) as? [String: Any]
+        return ((all?[spotlight] as? [String: Any])?["enabled"] as? Bool) ?? true  // absent = the default, on
+    }
+
+    private static func set(on: Bool) {
+        var all = CFPreferencesCopyAppValue(key, domain) as? [String: Any] ?? [:]
+        var entry = all[spotlight] as? [String: Any]
+            ?? ["value": ["parameters": [32, 49, 1_048_576], "type": "standard"]]  // ⌘Space
+        entry["enabled"] = on
+        all[spotlight] = entry
+        CFPreferencesSetAppValue(key, all as CFDictionary, domain)
+        CFPreferencesAppSynchronize(domain)
+        // makes the change take effect now instead of at the next login
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings")
+        p.arguments = ["-u"]
+        try? p.run()
+        p.waitUntilExit()
     }
 }

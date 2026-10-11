@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import apps, settings
+from pensieve import apps, settings
 
 ALL = None  # no scope: everything
 current = contextvars.ContextVar("pensieve_scope", default=None)  # set per MCP request
@@ -76,7 +76,7 @@ def resolve(name: str | None, cwd: str | None = None, repos=None) -> Scope | Non
             return ALL
         root, _ = repos.locate(cwd)
         if root is None:
-            from .projects import project_root
+            from pensieve.projects import project_root
             pr = project_root(cwd)
             root = repos.locate(pr)[0] if pr else None
         if root is None:

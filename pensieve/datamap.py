@@ -17,8 +17,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .indexer import LAYOUT_VERSION
-from .layout import cluster, fit3d, nearest, place_new, unit
+from pensieve import settings
+from pensieve.indexer import LAYOUT_VERSION
+from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 
 VERSION = LAYOUT_VERSION + "+data1"
 TOPIC_VERSION = "t4"
@@ -50,14 +51,25 @@ class DataMap:
     def _vectors(self):
         """id -> (unit centroid). Ids: 'file:<abs>', 'code:<repo root>:<path>', 'session:<sid>'."""
         by = {}
+        file_ok = self.files.map_filter()
+        shown = {}  # source id -> on the map (settings `off_map`)
+
+        def on(sid):
+            if sid not in shown:
+                shown[sid] = settings.on_map(sid)
+            return shown[sid]
         with self.lock:
-            for path, v in self.db.execute("SELECT c.path, c.vec FROM file_chunks c JOIN files f ON f.path=c.path "
-                                           "WHERE f.kind!='folder'"):
-                by.setdefault(f"file:{path}", []).append(v)
+            for path, root, v in self.db.execute("SELECT c.path, f.root, c.vec FROM file_chunks c JOIN files f ON f.path=c.path "
+                                                 "WHERE f.kind!='folder'"):
+                if file_ok(path, root):
+                    by.setdefault(f"file:{path}", []).append(v)
             for repo, path, v in self.db.execute("SELECT repo, path, vec FROM code_chunks WHERE wt=''"):
-                by.setdefault(f"code:{repo}:{path}", []).append(v)
-            for sid, v in self.db.execute("SELECT session_id, vec FROM chunks"):
-                by.setdefault(f"session:{sid}", []).append(v)
+                if on(f"repos/{repo}"):
+                    by.setdefault(f"code:{repo}:{path}", []).append(v)
+            for sid, src, v in self.db.execute("SELECT c.session_id, s.source, c.vec FROM chunks c "
+                                               "JOIN sessions s ON s.id=c.session_id"):
+                if on(f"agents/{src}"):
+                    by.setdefault(f"session:{sid}", []).append(v)
         ids = list(by)
         if not ids:
             return [], np.zeros((0, 1024), np.float32)
@@ -66,10 +78,11 @@ class DataMap:
 
     def fingerprint(self):
         with self.lock:
-            return self.db.execute(
+            row = self.db.execute(
                 "SELECT (SELECT COUNT(*) FROM file_chunks), (SELECT MAX(id) FROM file_chunks), "
                 "(SELECT COUNT(*) FROM code_chunks WHERE wt=''), (SELECT MAX(id) FROM code_chunks), "
                 "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks)").fetchone()
+        return (*row, self.files.map_sig())
 
     def needs_layout(self):
         """Changed since the last layout, or the set has drifted far from what the layout (and its topics) were fit
@@ -86,8 +99,13 @@ class DataMap:
         neighbours."""
         fp = json.dumps(self.fingerprint())
         ids, C = self._vectors()
-        if len(ids) < 4:
-            return False
+        if len(ids) < 4:  # too few to lay out: show none rather than keep points that left the map
+            with self.lock:
+                gone = self.db.execute("DELETE FROM data_points").rowcount
+                self.store.meta("data_layout_fp", fp)
+                self.db.commit()
+            self._cache = (None, None)
+            return gone > 0
         with self.lock:
             placed = {r[0]: r[1:] for r in self.db.execute("SELECT id, x, y, z, cluster FROM data_points")}
             fit_n = int(self.store.meta("data_fit_n") or 0)

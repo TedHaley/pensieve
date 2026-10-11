@@ -19,7 +19,7 @@ import time
 
 import httpx
 
-from . import config, settings
+from pensieve import config, settings
 
 
 OWN_PREFIX = "pensieve-ai-"
