@@ -34,7 +34,7 @@ class Watch:
         self.checkouts = {k.rstrip("/"): v for k, v in checkouts.items()}
         from pensieve.files import Files
         self.folders = [str(p) for p in Files.roots()]
-        self.sources = [str(root) for _, root, _ in config.SOURCES if root.is_dir()]
+        self.sources = [str(root) for _, _, root, _ in config.session_sources() if root.is_dir()]
         want = sorted(set(self.sources + self.folders + list(self.checkouts)))
         # watching a folder covers everything below it
         roots = tuple(p for p in want if not any(p != q and p.startswith(q + "/") for q in want))

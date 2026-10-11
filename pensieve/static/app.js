@@ -1815,7 +1815,11 @@ const SRC_ICON = {
 // 'a/very/long/path/to/thing' -> 'a/very/lo…/to/thing': keeps both the root and the name readable
 const midEllipsis = (t, max) => !t || t.length <= max ? t : t.slice(0, Math.ceil(max * .4)) + '…' + t.slice(-Math.floor(max * .6 - 1));
 const srcCount = (n, unit) => n == null ? '' : `${n.toLocaleString()} ${n === 1 && unit ? unit.replace(/s$/, '') : unit || ''}`;
-const srcState = {cat: null, types: null, hints: new Map(), err: null, opts: new Set()};  // opts: cards with Options open
+const SRC_ADD = {agents: ['A folder of agent sessions, e.g. ~/work/.claude', 'Add folder'],
+                 files: ['A folder, e.g. ~/notes', 'Add folder'],
+                 repos: ['A repo, or a folder of repos, e.g. ~/code', 'Add repo']};
+const SRC_ROUTE = {agents: 'agents', files: 'folders', repos: 'repos'};
+const srcState = {cat: null, types: null, hints: new Map(), err: null, opts: new Set(), addErr: {}};  // opts: cards with Options open
 async function loadSources() {
   const [cat, types] = await Promise.all([api('/api/sources').catch(() => null), api('/api/filetypes').catch(() => null)]);
   srcState.cat = cat || srcState.cat || [];
@@ -1880,7 +1884,7 @@ function srcItem(it, catOn, parentOff = false) {
     <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(it.error ? detail : shown)}</div></div>
     <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}</div>
     ${it.kind === 'rule' || it.map == null ? '<span></span>' : mapBtn(it.id, it.map, off || !catOn || !it.enabled)}
-    ${it.removable ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.id.slice(6))}" title="Stop indexing this folder">✕</button>` : '<span></span>'}
+    ${it.remove ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.remove.kind)}" data-src-rm-path="${esc(it.remove.path)}" title="Remove from Sources">✕</button>` : '<span></span>'}
   </div>`;
 }
 function sourcesHtml() {
@@ -1898,14 +1902,25 @@ function sourcesHtml() {
           <label class="tog" title="${c.enabled ? 'Switch off everything in ' + esc(c.label) : 'Switch on'}"><input type="checkbox" data-src-id="${esc(c.id)}" ${c.enabled ? 'checked' : ''}></label></div>
         ${rules.length ? `<div class="src-rules">${rules.map(i => srcItem(i, c.enabled) + (kids(i.id).length ? `<div class="src-kids">${kids(i.id).map(k => srcItem(k, c.enabled, !i.enabled)).join('')}</div>` : '')).join('')}</div>` : ''}
         ${rest.length ? `<div class="src-items">${rest.map(i => srcItem(i, c.enabled)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
-        ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="Add a folder, e.g. ~/notes" data-src-add-in><button class="btn" data-src-add>Add folder</button></div><div class="err" data-src-add-err></div>` : ''}
+        ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="${SRC_ADD[c.id][0]}" data-src-add-in="${c.id}"><button class="btn" data-src-add="${c.id}">${SRC_ADD[c.id][1]}</button></div><div class="err" data-src-add-err="${c.id}">${esc(srcState.addErr[c.id] || '')}</div>` : ''}
         ${(SRC_OPTS[c.id] || []).some(k => S.set && k in S.set.draft) ? `<details class="src-opts" data-opts="${c.id}" ${srcState.opts.has(c.id) ? 'open' : ''}><summary>Options</summary>${SRC_OPTS[c.id].map(setRow).join('')}</details>` : ''}
       </div>`;
-    }).join('')}</div>${fileTypesHtml()}`;
+    }).join('')}</div>${byNameHtml()}${fileTypesHtml()}`;
+}
+function byNameHtml() {
+  const row = (l, d) => `<div class="src-item"><span></span><div class="src-tx"><div class="src-l">${l}</div><div class="src-d">${d}</div></div><div class="src-n"></div><span></span><span></span></div>`;
+  return `<div class="set-card src-card"><div class="src-top"><span class="src-ic"><svg viewBox="0 0 24 24" width="18" height="18"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m20 20-4.2-4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+      <div class="src-tx"><h3>Found by name in the search panel</h3><p>The Mac app finds these by name as you type, like Spotlight. Pensieve doesn't index or keep them: they aren't on the map, and agents don't see them.</p></div></div>
+    <div class="src-items">${row('Apps', '/Applications, /System/Applications and ~/Applications')}
+      ${row('System Settings', 'Its settings pages, and quick switches such as Dark Mode and Mute')}
+      ${row('Documents and folders anywhere', 'By name, from Spotlight’s index. Code is left out: it comes from Git repositories above.')}</div></div>`;
 }
 function renderSources() {
   const box = $('#srcbox'); if (!box) return;
+  const typed = Object.fromEntries($$('[data-src-add-in]', box).map(i => [i.dataset.srcAddIn, i.value]));
+  const focused = document.activeElement?.dataset?.srcAddIn;
   box.innerHTML = sourcesHtml();
+  $$('[data-src-add-in]', box).forEach(i => { i.value = typed[i.dataset.srcAddIn] || ''; if (i.dataset.srcAddIn === focused) i.focus(); });
   bindFields(box);
   $$('[data-opts]', box).forEach(d => d.ontoggle = () => srcState.opts[d.open ? 'add' : 'delete'](d.dataset.opts));
   $$('[data-src-id]', box).forEach(i => i.onchange = async () => {
@@ -1944,19 +1959,22 @@ function renderSources() {
     } catch { err.textContent = k === 'chunk_chars' ? 'Piece size must be 200 to 20,000 characters.' : 'Enter 0 or a whole number of pieces.'; }
   });
   $$('[data-src-rm]', box).forEach(b => b.onclick = async () => {
-    try { srcState.cat = await api('/api/sources/folders?path=' + enc(b.dataset.srcRm), {method: 'DELETE'}); toast('Folder removed — its files leave the index on the next sweep'); }
-    catch (e) { srcState.err = 'Could not remove folder: ' + e.message; }
+    const kind = b.dataset.srcRm;
+    try { srcState.cat = await api(`/api/sources/${SRC_ROUTE[kind]}?path=${enc(b.dataset.srcRmPath)}`, {method: 'DELETE'}); toast('Removed — its data leaves the index on the next sweep'); }
+    catch (e) { srcState.err = 'Could not remove it: ' + e.message; }
     renderSources();
   });
-  const add = async () => {
-    const inp = $('[data-src-add-in]', box), path = inp.value.trim(); if (!path) return;
-    const r = await fetch('/api/sources/folders', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({path})});
+  const add = async kind => {
+    const inp = $(`[data-src-add-in="${kind}"]`, box), path = inp.value.trim(); if (!path) return;
+    const r = await fetch(`/api/sources/${SRC_ROUTE[kind]}`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({path})});
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { $('[data-src-add-err]', box).textContent = typeof j.detail === 'string' ? j.detail : 'Could not add that folder'; return; }
-    srcState.cat = j; srcState.hints.set('files', {on: true, t: Date.now()}); renderSources(); toast('Folder added — indexing it now');
+    if (!r.ok) { srcState.addErr[kind] = typeof j.detail === 'string' ? j.detail : 'Could not add that folder'; return renderSources(); }
+    delete srcState.addErr[kind];
+    inp.value = '';
+    srcState.cat = j; srcState.hints.set(kind, {on: true, t: Date.now()}); renderSources(); toast('Added — indexing it now');
   };
-  $('[data-src-add]', box)?.addEventListener('click', add);
-  $('[data-src-add-in]', box)?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  $$('[data-src-add]', box).forEach(b => b.onclick = () => add(b.dataset.srcAdd));
+  $$('[data-src-add-in]', box).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(i.dataset.srcAddIn); } });
 }
 const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await Promise.all([loadSources(), loadScopes()]); renderSources(); renderScopes(); }, 1200);
 
@@ -2007,20 +2025,20 @@ function scopesHtml() {
   const d = scState.data;
   if (!d) return '<div class="set-card"><div class="shimmer" style="height:90px"></div></div>';
   const def = d.default_scope || '';
+  const pick = (name, on) => `<label class="tog sc-use" title="${on ? 'Searching here' : 'Search here'}"><input type="radio" name="sc-use" data-sc-use="${esc(name)}" ${on ? 'checked' : ''}></label>`;
   const card = x => {
     const chips = x.sources.map(id => { const l = srcLabel(id); return `<span class="chip sc-chip" title="${esc(l.title || id)}"><span class="muted">${CAT_SHORT[l.cat] || l.cat}</span> ${esc(l.text)}</span>`; }).join('');
-    return `<div class="set-card sc-card"><div class="sc-top"><div><h3>${esc(x.name)}${def === x.name ? ' <span class="badge">default</span>' : ''}</h3>${x.description ? `<p>${esc(x.description)}</p>` : ''}</div>
+    return `<div class="set-card sc-card ${def === x.name ? 'on' : ''}"><div class="sc-top">${pick(x.name, def === x.name)}<div class="grow"><h3>${esc(x.name)}${def === x.name ? ' <span class="badge">searching here</span>' : ''}</h3>${x.description ? `<p>${esc(x.description)}</p>` : ''}</div>
       <div class="sc-btns"><button class="btn" data-sc-editbtn="${esc(x.name)}">Edit</button><button class="btn ${scState.confirmDel === x.name ? 'danger' : ''}" data-sc-del="${esc(x.name)}">${scState.confirmDel === x.name ? 'Confirm delete' : 'Delete'}</button></div></div>
       <div class="set-chips">${chips}</div><div class="sc-n">${scopeCounts(x)}</div>
-      <div class="cmd"><code>${esc(stdioCmd(x.name))}</code><button class="btn" data-copy="${esc(stdioCmd(x.name))}">Copy</button></div>
-      <div class="cmd"><code>${esc(httpCmd(x.name))}</code><button class="btn" data-copy="${esc(httpCmd(x.name))}">Copy</button></div></div>`;
+      <details class="sc-agent"><summary>Connect an agent to this scope only</summary>
+        <div class="cmd"><code>${esc(stdioCmd(x.name))}</code><button class="btn" data-copy="${esc(stdioCmd(x.name))}">Copy</button></div>
+        <div class="cmd"><code>${esc(httpCmd(x.name))}</code><button class="btn" data-copy="${esc(httpCmd(x.name))}">Copy</button></div></details></div>`;
   };
-  // the default only means something once there is a scope to pick
-  return `<div class="src-head"><h2>Scopes</h2><p>Named slices of the index. An agent connected with a scope only searches inside it; the search panel uses the default below.</p></div>
-    ${d.scopes.length ? `<div class="set-card sc-def"><div class="sc-top"><div><h3>Default for the search panel and visualizer search</h3><p>Plain searches use this unless you pick another scope in the search box.</p></div>
-      <select class="set-in" data-sc-default style="max-width:240px"><option value="" ${def ? '' : 'selected'}>All — everything</option>${scopeNames().map(n => `<option value="${esc(n)}" ${def === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div></div>` : ''}
-    ${d.scopes.map(card).join('') || '<p class="muted" style="font-size:12.5px">No scopes yet. A scope is a group of repos and folders you work on together. Agents connected with it search only there, and you can make it the default for your own searches.</p>'}
-    ${scState.edit ? scopeEditor() : '<button class="btn" data-sc-new style="margin-bottom:14px">+ New scope</button>'}
+  return `<div class="src-head"><h2>Scopes</h2><p>A scope is a bundle of sources: some repos, folders, agents or apps you work on together. Pick one, and the search panel and the visualizer search only there. You can also pick it in the search panel.</p></div>
+    <div class="set-card sc-card ${def ? '' : 'on'}"><div class="sc-top">${pick('', !def)}<div class="grow"><h3>Everything${def ? '' : ' <span class="badge">searching here</span>'}</h3><p>Every source on the Sources page.</p></div></div></div>
+    ${d.scopes.map(card).join('')}
+    ${scState.edit ? scopeEditor() : '<button class="btn primary" data-sc-new style="margin-bottom:14px">+ New scope</button>'}
     <div class="set-card"><h3>How agents pick a scope</h3>
       <p class="sc-p"><code>pensieve mcp</code> (stdio) uses <b>--scope auto</b>: the repo the agent was started in, or the first named scope that includes that repo. Outside a repo it sees everything. Pin one with <code>pensieve mcp --scope &lt;name&gt;</code>.</p>
       <p class="sc-p">Over HTTP Pensieve can't see the agent's folder, so add <code>?scope=&lt;name&gt;</code> to the URL; without it the agent sees everything.</p>
@@ -2033,10 +2051,10 @@ function renderScopes() {
   box.innerHTML = scopesHtml();
   const E = scState.edit;
   $$('[data-copy]', box).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
-  $('[data-sc-default]', box)?.addEventListener('change', async e => {
-    const v = e.target.value;
-    try { await api('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({default_scope: v})}); toast(v ? `Search defaults to “${v}”` : 'Search covers everything'); }
-    catch (err) { toast('Could not set the default: ' + err.message); }
+  $$('[data-sc-use]', box).forEach(r => r.onchange = async () => {
+    const v = r.dataset.scUse;
+    try { await api('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({default_scope: v})}); toast(v ? `Searching in “${v}”` : 'Searching everything'); }
+    catch (err) { toast('Could not change the scope: ' + err.message); }
     await loadScopes(); renderScopes();
   });
   $('[data-sc-new]', box)?.addEventListener('click', () => { scState.edit = {name: '', description: '', sources: new Set(), orig: null}; scState.err = null; renderScopes(); $('[data-sc-name]', box)?.focus(); });
@@ -2222,7 +2240,7 @@ async function renderSettings() {
   const bar = (title, sub) => `<div class="set-bar"><div><h1>${esc(title)}</h1><div class="msg ${S.set.err && !S.set.errKey ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : esc(sub)}</div></div></div>`;
   let body = '';
   if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes, and the options for each. Switching a source off removes its data on the next sweep.') + `<div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
-  else if (tab === 'scopes') body = bar('Scopes', 'Named slices of the index that agents and search work within.') + `<div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>`;
+  else if (tab === 'scopes') body = bar('Scopes', 'Bundles of sources. Pick the one to search in.') + `<div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>`;
   else if (tab === 'agents') body = bar('Agents', 'Connect your coding agents, and help them search with Pensieve first.') + `
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
       <p class="sc-p">Pensieve is an MCP server: Claude Code, Codex, Cursor and other agents can search your files, code and sessions and find who knows what. Agents get the 10 search and people tools by default; add <code>?tools=all</code> (HTTP) or <code>--all-tools</code> (stdio) to let one change these settings too.</p>
@@ -2437,50 +2455,81 @@ function aiServerStatus(o) {
   const f = aiState.form, t = f?.test;
   if (t === 'busy') return ['', 'Checking…'];
   if (t) return t.ok ? ['ok', `Connected · ${plural(t.models.length, 'model')}`] : ['bad', t.error];
+  if (!f?.url) return ['', 'Enter the address of the server'];
+  if (f.url.replace(/\/+$/, '') !== o.url.replace(/\/+$/, '')) return ['', 'Not tested yet'];
   return o.up ? ['ok', `Connected to ${o.url}`] : ['bad', `Can't reach ${o.url}`];
 }
+// A connection from the saved list, or the current server when nothing is saved yet (settings from before the list).
+function aiConnForm(o, name) {
+  const c = (o.connections || []).find(x => x.name === name);
+  if (c) return {sel: c.name, name: c.name, url: c.url, model: c.model, key: '', keySet: c.key_set, test: null};
+  if (name === '' || (o.connections || []).length) return {sel: '', name: '', url: '', model: '', key: '', keySet: false, test: null};
+  const host = (() => { try { return new URL(o.url).hostname; } catch { return 'My server'; } })();
+  return {sel: '', name: isLocalUrl(o.url) ? 'This Mac' : host, url: o.url, model: o.model, key: '', keySet: o.key_set, test: null};
+}
 function aiServerCard(o, on, auto) {
-  const f = aiState.form || (aiState.form = {url: o.url, model: o.model, key: '', test: null}), local = isLocalUrl(f.url);
+  const conns = o.connections || [];
+  const inUse = conns.find(c => c.url.replace(/\/+$/, '') === o.url.replace(/\/+$/, '') && c.model === o.model);
+  if (!on && !aiState.srvOpen) return `<button class="ai-opt" data-aisrvopen role="radio" aria-checked="false">
+      <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${isLocalUrl(o.url) ? 'local' : 'cloud'}">${isLocalUrl(o.url) ? 'Local' : 'Cloud'}</span></div>
+      <p>${esc(o.description)}</p><p class="note">${conns.length ? `${plural(conns.length, 'saved connection')} · click to choose or add one` : 'Click to connect to one'}</p></button>`;
+  const f = aiState.form || (aiState.form = aiConnForm(o, inUse ? inUse.name : undefined)), local = isLocalUrl(f.url);
   const [cls, msg] = aiServerStatus(o);
   return `<div class="ai-opt ai-srv ${on ? 'on' : ''}" role="radio" aria-checked="${on}">
-    <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${local ? 'local' : 'cloud'}" data-aipriv>${local ? 'Local' : 'Hosted'}</span></div>
-    <p>Any OpenAI-compatible server: LM Studio or Ollama on this Mac, or a hosted API.</p>
-    <label class="ai-f"><span>Server URL</span><input class="set-in" data-aif="url" value="${esc(f.url)}" placeholder="http://localhost:1234/v1" spellcheck="false" autocomplete="off"></label>
+    <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${local ? 'local' : 'cloud'}" data-aipriv>${local ? 'Local' : 'Cloud'}</span></div>
+    <p>${esc(o.description)}</p>
+    <label class="ai-f"><span>Connection</span><select class="set-in" data-aiconn>${conns.map(c => `<option value="${esc(c.name)}" ${f.sel === c.name ? 'selected' : ''}>${esc(c.name)} · ${esc(c.model)}${inUse?.name === c.name && on ? ' (in use)' : ''}</option>`).join('')}
+      <option value="" ${f.sel ? '' : 'selected'}>New connection…</option></select></label>
+    <label class="ai-f"><span>Name</span><input class="set-in" data-aif="name" value="${esc(f.name)}" placeholder="e.g. LM Studio, OpenRouter, Work server" spellcheck="false" autocomplete="off" ${f.sel ? 'disabled' : ''}></label>
+    <label class="ai-f"><span>Address</span><input class="set-in" data-aif="url" value="${esc(f.url)}" placeholder="http://localhost:1234/v1 or https://openrouter.ai/api/v1" spellcheck="false" autocomplete="off"></label>
     <label class="ai-f"><span>Model</span><input class="set-in" data-aif="model" list="aimodels" value="${esc(f.model)}" placeholder="e.g. qwen/qwen3.5-9b" spellcheck="false" autocomplete="off">
       <datalist id="aimodels">${(f.test?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist></label>
-    <label class="ai-f"><span>API key <span class="muted">· hosted servers only</span></span><input class="set-in" type="password" data-aif="key" value="${esc(f.key)}" placeholder="${o.key_set ? 'Saved · leave empty to keep it' : 'Not needed for LM Studio or Ollama'}" autocomplete="off"></label>
+    <label class="ai-f"><span>API key <span class="muted">· if the server needs one</span></span><input class="set-in" type="password" data-aif="key" value="${esc(f.key)}" placeholder="${f.keySet ? 'Saved · leave empty to keep it' : 'Not needed for LM Studio or Ollama'}" autocomplete="off"></label>
     <div class="ai-srv-st ${cls}" data-aist>${esc(msg)}</div>
-    <div class="ai-srv-btns"><button class="btn" data-aitest>Test connection</button><button class="btn primary" data-aisave>${aiState.busy === 'server' ? 'Saving…' : on && !auto ? 'Save' : 'Use this server'}</button></div>
+    <div class="ai-srv-btns">${f.sel ? `<button class="btn" data-aidel>Delete</button>` : ''}<button class="btn" data-aitest>Test connection</button><button class="btn primary" data-aisave>${aiState.busy === 'server' ? 'Saving…' : on && !auto && inUse?.name === f.sel ? 'Save' : 'Use this connection'}</button></div>
     ${on ? `<span class="ai-check">✓ ${auto ? 'In use (picked automatically)' : 'Selected'}</span>` : ''}</div>`;
 }
 function bindAIServer(root) {
+  $('[data-aisrvopen]', root)?.addEventListener('click', () => { aiState.srvOpen = true; aiState.form = null; refreshAIViews(); });
   const card = $('.ai-srv', root); if (!card) return;
   const f = aiState.form, inp = k => $(`[data-aif=${k}]`, card);
   const paint = () => {  // update in place: re-rendering would lose the cursor in the field being typed in
     const o = aiState.data.options.find(x => x.id === 'server'), [cls, msg] = aiServerStatus(o), st = $('[data-aist]', card);
     st.className = 'ai-srv-st ' + cls; st.textContent = msg;
     $('#aimodels', card).innerHTML = (f.test?.models || []).map(m => `<option value="${esc(m)}">`).join('');
-    const local = isLocalUrl(f.url), pv = $('[data-aipriv]', card); pv.className = 'priv ' + (local ? 'local' : 'cloud'); pv.textContent = local ? 'Local' : 'Hosted';
+    const local = isLocalUrl(f.url), pv = $('[data-aipriv]', card); pv.className = 'priv ' + (local ? 'local' : 'cloud'); pv.textContent = local ? 'Local' : 'Cloud';
   };
   const test = async () => {
     if (!f.url.trim()) return;
     f.test = 'busy'; paint();
-    const r = await api(`/api/ai/models?url=${enc(f.url.trim())}&key=${enc(f.key)}`).catch(e => ({ok: false, models: [], error: e.message}));
+    const r = await api(`/api/ai/models?url=${enc(f.url.trim())}&key=${enc(f.key)}&name=${enc(f.sel)}`).catch(e => ({ok: false, models: [], error: e.message}));
     f.test = r;
     if (r.ok && r.models.length && !r.models.includes(f.model.trim())) {  // suggest a chat model when the current one isn't served
       const pick = r.models.find(m => !/embed/i.test(m)); if (pick && !f.model.trim()) { f.model = pick; inp('model').value = pick; }
     }
     paint();
   };
-  ['url', 'model', 'key'].forEach(k => inp(k).oninput = () => { f[k] = inp(k).value; if (k !== 'model') { f.test = null; paint(); } });
+  ['name', 'url', 'model', 'key'].forEach(k => inp(k).oninput = () => { f[k] = inp(k).value; if (k === 'url' || k === 'key') { f.test = null; paint(); } });
   inp('url').onchange = test; inp('key').onchange = test;
-  $('[data-aitest]', card).onclick = test;
-  $('[data-aisave]', card).onclick = () => {
-    const url = f.url.trim().replace(/\/+$/, ''), model = f.model.trim();
-    if (!url || !model) { aiState.err = 'Enter the server URL and a model name.'; refreshAIViews(); return; }
-    const ch = {ai: 'server', llm_url: url, llm_model: model}; if (f.key) ch.llm_key = f.key;
-    aiState.busy = 'server'; aiState.form = null; setAI(ch, 'AI server saved');
+  $('[data-aiconn]', card).onchange = e => {
+    aiState.form = aiConnForm(aiState.data.options.find(x => x.id === 'server'), e.target.value);
+    refreshAIViews(); if (aiState.form.url) test();
   };
+  $('[data-aitest]', card).onclick = test;
+  const send = async (method, path, body, msg) => {
+    aiState.err = null;
+    const r = await fetch(path, {method, headers: {'content-type': 'application/json'}, body: body && JSON.stringify(body)}).catch(e => ({ok: false, json: async () => ({detail: e.message})}));
+    if (!r.ok) aiState.err = (await r.json().catch(() => ({}))).detail || 'Could not save';
+    else toast(msg);
+    aiState.busy = null; aiState.form = null; await loadAI(); refreshAIViews(); pollStatus();
+  };
+  $('[data-aisave]', card).onclick = () => {
+    const name = f.name.trim(), url = f.url.trim().replace(/\/+$/, ''), model = f.model.trim();
+    if (!name || !url || !model) { aiState.err = 'Enter a name, the address and a model.'; refreshAIViews(); return; }
+    aiState.busy = 'server';
+    send('POST', '/api/ai/connections', {name, url, model, key: f.key || null, use: true}, `Using “${name}”`);
+  };
+  $('[data-aidel]', card)?.addEventListener('click', () => send('DELETE', `/api/ai/connections?name=${enc(f.sel)}`, null, `Deleted “${f.sel}”`));
 }
 function bindAISettings(root) {
   bindAIButtons(root);

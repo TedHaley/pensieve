@@ -63,8 +63,16 @@ final class Backend: ObservableObject {
 
     func start() {
         Task {
-            if await isUp() { return await becameUp() }
-            if !external, let wheel = Self.bundledWheel(), Self.installedVersion() != Self.stamp(wheel) {
+            var replaced = false
+            if await isUp() {
+                // a backend left running from an older install would keep serving its old UI and API after an update
+                guard !external, let wheel = Self.bundledWheel(), let running = await runningVersion(),
+                      Self.isOlder(running, than: Self.version(of: wheel)), await stopRunningBackend() else {
+                    return await becameUp()
+                }
+                replaced = true  // the stamp file can't be trusted: something else installed that old version
+            }
+            if !external, let wheel = Self.bundledWheel(), replaced || Self.installedVersion() != Self.stamp(wheel) {
                 // first launch (or the app was updated): install the matching backend from inside the app bundle
                 state = .installing(Self.findBinary() == nil
                     ? "Setting up Pensieve. The first launch downloads about 1 GB; this takes a few minutes."
@@ -109,6 +117,63 @@ final class Backend: ObservableObject {
         req.timeoutInterval = 2
         guard let (_, r) = try? await URLSession.shared.data(for: req) else { return false }
         return (r as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    private func runningVersion() async -> String? {
+        guard let (d, r) = try? await URLSession.shared.data(from: url("api/about")),
+              (r as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+        return obj["version"] as? String
+    }
+
+    /// "pensieve-0.5.6-py3-none-any.whl" -> "0.5.6"
+    static func version(of wheel: URL) -> String {
+        let parts = wheel.lastPathComponent.split(separator: "-")
+        return parts.count > 1 ? String(parts[1]) : ""
+    }
+
+    /// Numeric dotted versions only: "dev" or anything unparsable is never treated as older.
+    static func isOlder(_ a: String, than b: String) -> Bool {
+        let pa = a.split(separator: ".").map { Int($0) }, pb = b.split(separator: ".").map { Int($0) }
+        guard !pa.isEmpty, !pb.isEmpty, !pa.contains(nil), !pb.contains(nil) else { return false }
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i]! : 0, y = i < pb.count ? pb[i]! : 0
+            if x != y { return x < y }
+        }
+        return false
+    }
+
+    /// Stops the `pensieve serve` that listens on our port (not one this app started). True once the port is free.
+    private func stopRunningBackend() async -> Bool {
+        let port = self.port
+        let pids: [Int32] = await Task.detached {
+            func run(_ tool: String, _ args: [String]) -> String {
+                let p = Process(), out = Pipe()
+                p.executableURL = URL(fileURLWithPath: tool)
+                p.arguments = args
+                p.standardOutput = out
+                p.standardError = FileHandle.nullDevice
+                guard (try? p.run()) != nil else { return "" }
+                p.waitUntilExit()
+                return String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            }
+            return run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"])
+                .split(separator: "\n").compactMap { Int32($0) }
+                .filter { pid in
+                    let cmd = run("/bin/ps", ["-o", "command=", "-p", String(pid)])
+                    return cmd.contains("pensieve") && cmd.contains("serve")
+                }
+        }.value
+        guard !pids.isEmpty else { return false }
+        state = .installing("Updating Pensieve…")
+        pids.forEach { kill($0, SIGTERM) }
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(200))
+            if !(await isUp()) { return true }
+        }
+        pids.forEach { kill($0, SIGKILL) }
+        try? await Task.sleep(for: .milliseconds(500))
+        return !(await isUp())
     }
 
     // MARK: bundled installer (the DMG build puts uv and the backend wheel in Contents/Resources/backend)

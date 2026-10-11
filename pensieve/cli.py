@@ -114,7 +114,7 @@ def integrate(items, remove=False):
             else:
                 state = ig.set_skill(it, not remove)
             print(f"{it}: {state}")
-        except (ValueError, KeyError) as e:
+        except (ValueError, KeyError, OSError) as e:
             print(f"{it}: {e}", file=sys.stderr)
     if not remove and any(it in ig.MCP for it in items):
         print("Agents load MCP servers when they start: restart any that are open to give them Pensieve.")

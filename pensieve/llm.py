@@ -113,9 +113,12 @@ def options():
              note=("Uses the copy LM Studio already downloaded." if local else
                    "Downloads about 6 GB in the background; you can keep working.") if have_mlx
              else f"Needs an Apple Silicon Mac with {MIN_RAM_GB} GB of memory."),
-        dict(id="server", label="Local or hosted server", privacy="local" if is_local(s["llm_url"]) else "cloud", available=True,
+        dict(id="server", label="Model server", privacy="local" if is_local(s["llm_url"]) else "cloud", available=True,
              url=s["llm_url"], model=s["llm_model"], key_set=bool(s["llm_key"]), up=(up := _server_up(s["llm_url"])),
-             description="Any OpenAI-compatible server: LM Studio or Ollama on this Mac, or a hosted API. "
+             connections=[dict(name=c["name"], url=c["url"], model=c["model"], key_set=bool(c["key"]), local=is_local(c["url"]))
+                          for c in s["llm_connections"]],
+             description="Any model with an OpenAI-compatible API at an address: on this Mac (LM Studio, Ollama), on "
+                         "another computer, or a cloud provider. "
                          + ("Nothing leaves this Mac." if is_local(s["llm_url"]) else "Session and code text is sent to that server."),
              note=f"Connected to {s['llm_url']}." if up else f"Can't reach {s['llm_url']} right now."),
         dict(id="claude", label="Claude Code", privacy="cloud", available=bool(shutil.which("claude") or _find("claude")),

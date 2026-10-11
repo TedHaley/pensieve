@@ -35,6 +35,7 @@ DEFAULTS = {
     "chunk_chars": 1500,       # characters per document chunk (one search hit, one embedding)
     "max_chunks": 2000,        # chunks read per document; 0 = no limit. Longer documents are cut there.
     "skip_temp_sessions": True,  # agent sessions that ran in a temp folder (e.g. Pensieve's own AI calls) aren't indexed
+    "session_folders": [],     # more agent transcript folders, as "agent:path", e.g. "claude:~/work/.claude/projects"
     # Named slices of the index for agents: {"payments": {"sources": ["repos/<root>", "files/~/specs"], "description": ""}}
     "scopes": {},
     "default_scope": "",       # scope for the search panel and visualizer search ("" = everything)
@@ -52,14 +53,16 @@ DEFAULTS = {
     "llm_url": "http://localhost:1234/v1",
     "llm_model": "qwen/qwen3.5-9b",
     "llm_key": "",             # API key for a hosted server; sent only to llm_url, never shown back in full
+    # Saved model servers to pick from: [{"name", "url", "model", "key"}]. Using one copies it into llm_url/llm_model/llm_key.
+    "llm_connections": [],
 }
 
 DESCRIPTIONS = {
     "folders": "Folders whose documents are indexed for search (text, Markdown, code, PDF, Word).",
     "sweep_roots": "Where to look for git repos.",
     "sweep_depth": "How many folder levels below each sweep root to look for repos.",
-    "max_repo_files": "Repos found by the sweep with more tracked files than this are skipped; add them to repos to index anyway.",
-    "repos": "Extra git repos, or folders to search for repos. Always indexed, whatever their size.",
+    "max_repo_files": "Repos found by discovery with more tracked files than this are skipped; switch one on, or add it in Sources, to index it anyway.",
+    "repos": "Repos, or folders of repos, added in Sources. Always indexed, whatever their size.",
     "exclude": "Folder names never indexed or descended into.",
     "exclude_files": "File name patterns never indexed (secrets, keys, password exports). Case-insensitive globs.",
     "disabled": "Sources that are switched off (whole categories or single items). Easier to change from Sources.",
@@ -68,6 +71,7 @@ DESCRIPTIONS = {
     "off_map": "Sources that are searchable but do not show on the map.",
     "chunk_chars": "Characters in each piece of a document. Larger pieces keep more context together in one result.",
     "max_chunks": "Pieces read from each document (0 = all). Text after this limit is not searchable.",
+    "session_folders": "More folders of agent sessions, as agent:path (claude, codex or qwen). Easier to add from Sources.",
     "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
     "default_scope": "Scope used by the search panel and visualizer search; empty means everything.",
@@ -84,6 +88,7 @@ DESCRIPTIONS = {
     "llm_url": "OpenAI-compatible endpoint, local (LM Studio, Ollama) or hosted, for summaries and insights.",
     "llm_model": "Chat model used for summaries and insights.",
     "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
+    "llm_connections": "Saved model servers, each with a name, URL, model and optional API key (manage in AI & Insights).",
 }
 
 _lock = threading.Lock()
@@ -132,7 +137,16 @@ def update(changes: dict) -> dict:
         if k not in DEFAULTS:
             raise ValueError(f"unknown setting {k!r}; valid: {', '.join(DEFAULTS)}")
         d = DEFAULTS[k]
-        if isinstance(d, bool):
+        if k == "llm_connections":
+            if not isinstance(v, list) or not all(isinstance(c, dict) and c.get("name") and all(
+                    isinstance(c.get(f, ""), str) for f in ("name", "url", "model", "key")) for c in v):
+                raise ValueError("llm_connections must be a list of {name, url, model, key}")
+            if any(not c.get("url", "").startswith(("http://", "https://")) for c in v):
+                raise ValueError("each connection URL must start with http:// or https://")
+            keys = {c["name"]: c.get("key", "") for c in cur[k]}  # clients only ever see key_set
+            v = [{"name": c["name"], "url": c["url"], "model": c.get("model", ""),
+                  "key": c["key"] if "key" in c else keys.get(c["name"], "")} for c in v]
+        elif isinstance(d, bool):
             if not isinstance(v, bool):
                 raise ValueError(f"{k} must be true or false")
         elif isinstance(d, int):
@@ -192,7 +206,8 @@ def update(changes: dict) -> dict:
 
 def public(s: dict) -> dict:
     """Settings as the visualizer and agents see them: the API key is never sent back, only whether one is saved."""
-    return {**s, "llm_key": "", "llm_key_set": bool(s.get("llm_key"))}
+    conns = [{**{k: v for k, v in c.items() if k != "key"}, "key_set": bool(c.get("key"))} for c in s.get("llm_connections", [])]
+    return {**s, "llm_key": "", "llm_key_set": bool(s.get("llm_key")), "llm_connections": conns}
 
 
 def on_change(fn):

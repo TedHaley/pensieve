@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pensieve import settings
-from pensieve.config import SOURCES
+from pensieve.config import session_sources
 
 _REMINDER = re.compile(r"<(system-reminder|task-notification|local-command-\w+|command-\w+)>.*?</\1>", re.S)
 
@@ -114,8 +114,8 @@ PARSERS = {"claude": parse_claude, "qwen": parse_qwen, "codex": parse_codex}
 
 def discover():
     """Yield (source, path) for every transcript file currently on disk."""
-    for name, root, pattern in SOURCES:
-        if settings.enabled(f"agents/{name}") and root.exists():
+    for sid, name, root, pattern in session_sources():
+        if settings.enabled(sid) and settings.enabled(f"agents/{name}") and root.exists():
             for p in root.glob(pattern):
                 if p.is_file() and "subagents" not in p.parts:
                     yield name, p

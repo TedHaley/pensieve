@@ -4,6 +4,7 @@ import SwiftUI
 struct SearchView: View {
     @ObservedObject var model: SearchModel
     @ObservedObject var backend = Backend.shared
+    @ObservedObject var updater = Updater.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,6 +58,35 @@ struct SearchView: View {
         .animation(shown ? .spring(response: 0.38, dampingFraction: 0.7) : .easeIn(duration: 0.14), value: shown)
     }
 
+    @ViewBuilder private var scopeMenu: some View {
+        let names = ((backend.settings["scopes"] as? [String: Any]) ?? [:]).keys.sorted()
+        let current = backend.settings["default_scope"] as? String ?? ""
+        if !names.isEmpty {
+            Menu {
+                Button { pickScope("") } label: { Label("Everything", systemImage: current.isEmpty ? "checkmark" : "") }
+                Divider()
+                ForEach(names, id: \.self) { n in
+                    Button { pickScope(n) } label: { Label(n, systemImage: current == n ? "checkmark" : "") }
+                }
+            } label: {
+                Text(current.isEmpty ? "Everything" : current)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .help("Search in this scope")
+        }
+    }
+
+    private func pickScope(_ name: String) {
+        Task {
+            await backend.updateSettings(["default_scope": name])
+            model.retry()
+        }
+    }
+
     private var bar: some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
@@ -77,6 +107,14 @@ struct SearchView: View {
                 }
             if model.loading {
                 ProgressView().controlSize(.small)
+            }
+            scopeMenu
+            if let r = updater.available, !updater.busy {
+                Text("⌘U to update")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize()
+                    .help("Install Pensieve \(r.version)")
             }
             optionsChevron
         }
