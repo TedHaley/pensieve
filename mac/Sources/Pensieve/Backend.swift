@@ -302,7 +302,12 @@ final class Backend: ObservableObject {
                 do {
                     var req = URLRequest(url: self.url("api/events"))
                     req.timeoutInterval = 120
-                    let (bytes, _) = try await URLSession.shared.bytes(for: req)
+                    let (bytes, r) = try await URLSession.shared.bytes(for: req)
+                    // the stream stays open while the backend runs, so a reconnect is the moment it is back
+                    if (r as? HTTPURLResponse)?.statusCode == 200, self.state != .up {
+                        self.state = .up
+                        await self.loadSettings()
+                    }
                     for try await line in bytes.lines {
                         guard line.hasPrefix("data: "), let d = line.dropFirst(6).data(using: .utf8),
                               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
