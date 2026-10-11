@@ -2,7 +2,7 @@
 item. Switching a source off removes what it had indexed on the next sweep."""
 from pathlib import Path
 
-from . import apps, config, settings
+from pensieve import apps, config, settings
 
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
 CATEGORIES = [
@@ -68,16 +68,21 @@ def catalog(store, repos, files) -> list[dict]:
                               count=sum(n for r, n in per_root.items() if any(r == x or r.startswith(x + "/") for x in roots)), unit="items"))
 
     items = {"agents": agents, "files": folders, "repos": repo_items, "apps": app_items}
-    return [dict(id=c, label=label, description=desc, enabled=on(c), items=items[c],
+    for it in (i for group in items.values() for i in group if i.get("kind") != "rule"):
+        it["map"] = settings.on_map(it["id"])
+    return [dict(id=c, label=label, description=desc, enabled=on(c), map=settings.on_map(c), items=items[c],
                  count=sum(i.get("count", 0) for i in items[c]), addable=c == "files")
             for c, label, desc in CATEGORIES]
 
 
-def set_source(id: str, on: bool, repos=None):
-    """Switch a category or item on/off. Switching on a repo the sweep skipped as too big adds it to `repos`."""
+def set_source(id: str, on: bool, repos=None, map_only=False):
+    """Switch a category or item on/off (or, with map_only, only on/off the map). Switching on a repo the sweep
+    skipped as too big adds it to `repos`."""
     valid = {c for c, _, _ in CATEGORIES}
     if id.split("/", 1)[0] not in valid:
         raise ValueError(f"unknown source {id!r}: ids start with {', '.join(sorted(valid))}")
+    if map_only:
+        return settings.set_on_map(id, on)
     if on and id.startswith("repos/") and repos is not None:
         root = id[6:]
         if any(sk["root"] == root for sk in getattr(repos, "skipped", [])) and root not in settings.get("repos"):

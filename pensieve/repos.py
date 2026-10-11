@@ -10,11 +10,11 @@ from pathlib import Path
 
 import numpy as np
 
-from . import config, settings
-from .files import secret
-from .indexer import CODE_QUERY, LAYOUT_VERSION, embed, reconcile
-from .layout import fit3d, place_new, unit
-from .projects import project_root
+from pensieve import config, settings
+from pensieve.files import secret
+from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, reconcile
+from pensieve.layout import fit3d, place_new, unit
+from pensieve.projects import project_root
 
 CODE_INDEX_PATH = config.DATA_DIR / "code.tv"
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip", ".gz", ".lock", ".woff", ".woff2",
@@ -184,6 +184,9 @@ class Repos:
         self.pending = None   # callable -> set of repo roots with changes waiting (set by the server's file watcher)
         self.requeue = None   # callable(set) to put them back
         self._servicing = False
+        self.sync_lock = threading.RLock()  # one indexing pass at a time: the watcher's, or a search catching up
+        self.unsaved = False  # indexed by `refresh`: map layout and saved index still to do
+        self._refreshing = False
         self._recheck = set()
         self._last = 0
         self._scope = (None, None)
@@ -308,6 +311,46 @@ class Repos:
     def sync(self, log=lambda m: print(m, flush=True), force=False, only=None):
         """Bring every repo (or just `only`: canonical roots) up to date with what's on disk: committed, staged,
         modified and untracked files in the main checkout, plus files that differ from it in each linked worktree."""
+        with self.sync_lock:
+            return self._sync(log, force, only)
+
+    def refresh(self, roots=(), wait=1.5, log=lambda m: print(m, flush=True)):
+        """Index the edits waiting in `roots` and in the file watcher's queue now. The map layout and the saved
+        copy of the vector index are left to the watcher (`save`). Returns the files re-indexed, or None when a
+        sweep kept the index busy for `wait` seconds (the roots go back in the queue)."""
+        roots = set(roots) | (self.pending() if self.pending else set())
+        if not roots:
+            if self._refreshing and self.sync_lock.acquire(timeout=wait):  # the watcher is indexing an edit now
+                self.sync_lock.release()
+            return 0
+        if not self.sync_lock.acquire(timeout=wait):
+            if self.requeue:
+                self.requeue(roots)
+            return None
+        self._refreshing = True
+        try:
+            with self.lock:
+                remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
+            n = 0
+            for r in roots & remotes.keys():
+                try:
+                    n += self._sync_repo(r, remotes[r], log)
+                except Exception as e:
+                    log(f"repo {r}: {e!r}")
+            self.unsaved |= bool(n)
+            return n
+        finally:
+            self._refreshing = False
+            self.sync_lock.release()
+
+    def save(self):
+        """After `refresh`: place the new chunks on the map and write the vector index to disk."""
+        self.unsaved = False
+        self.reproject()
+        with self.lock:
+            self.index.sync(str(CODE_INDEX_PATH))
+
+    def _sync(self, log, force, only):
         if not force and only is None and time.time() - self._last < 30:
             return 0
         if only is None:
@@ -334,10 +377,8 @@ class Repos:
         if self._recheck and self.requeue:  # repos edited while they were being swept: one more pass
             self.requeue(self._recheck)
             self._recheck = set()
-        if touched:
-            self.reproject()
-            with self.lock:
-                self.index.sync(str(CODE_INDEX_PATH))
+        if touched or self.unsaved:
+            self.save()
         return touched
 
     def _service(self, current, log):
@@ -505,7 +546,7 @@ class Repos:
     @locked
     def backfill_session_files(self):
         """Sessions indexed before file tracking existed; a '' sentinel row marks 'parsed, nothing touched'."""
-        from . import parsers
+        from pensieve import parsers
         have = {r[0] for r in self.db.execute("SELECT DISTINCT session_id FROM session_files")}
         for sid, src, path in self.db.execute("SELECT id, source, path FROM sessions").fetchall():
             if sid in have:

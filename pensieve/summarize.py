@@ -4,7 +4,7 @@ import json
 import re
 import time
 
-from . import llm
+from pensieve import llm
 
 SESSION_SYS = ("You summarize transcripts between a developer and an AI coding agent. Write a 2-sentence summary of "
                "what was worked on and the outcome, plus 3-5 short lowercase topic tags.")

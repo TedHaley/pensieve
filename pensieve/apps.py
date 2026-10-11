@@ -8,7 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import config
+from pensieve import config
 
 EXPORT_DIR = config.DATA_DIR / "apps"
 _state = {}  # app id -> {"error": str | None, "count": int, "at": float}

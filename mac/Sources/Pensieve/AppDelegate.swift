@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import ServiceManagement
 
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             HotKeys.requestAccessibility(prompt: true)
         }
         backend.start()
+        defaultLaunchAtLogin()
         Launcher.shared.refreshIfStale()
         Updater.shared.start()
         Updater.shared.$available.receive(on: RunLoop.main)
@@ -39,7 +41,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if !Debug.enabled { SpotlightShortcut.restore() }  // ⌘Space would do nothing while Pensieve isn't running
         Backend.shared.stop()
+    }
+
+    /// Launch at Login is on by default: turned on once, the first time an installed copy runs. Turning it off
+    /// in the menu afterwards sticks.
+    private func defaultLaunchAtLogin() {
+        let installed = ["/Applications/", NSHomeDirectory() + "/Applications/"].contains { Bundle.main.bundlePath.hasPrefix($0) }
+        guard installed, !Debug.enabled, !Prefs.store.bool(forKey: "launchAtLoginDefaulted") else { return }
+        Prefs.store.set(true, forKey: "launchAtLoginDefaulted")
+        if SMAppService.mainApp.status != .enabled { try? SMAppService.mainApp.register() }
     }
 
     /// Opening the app again (Finder, Spotlight, `open -a Pensieve`) shows the search panel.
@@ -67,7 +79,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "check-updates":  // Settings → General → Check now
             checkForUpdates()
         case "snapshot" where Debug.enabled:
-            Debug.snapshot(url, panel: panel.panel, web: visualizer.webView)
+            Debug.snapshot(url, panel: q("target") == "buttons" ? panel.buttons : panel.panel, web: visualizer.webView)
+        case "hover" where Debug.enabled:  // the pointer over the search bar (`on=0`: off it), for snapshots
+            panel.model.overBar = q("on") != "0"
+        case "options" where Debug.enabled:  // the bar's chevron
+            panel.model.optionsOpen.toggle()
+        case "js" where Debug.enabled:  // e.g. scroll the visualizer before a snapshot
+            visualizer.webView?.evaluateJavaScript(q("code") ?? "")
         case "key" where Debug.enabled:
             Debug.key(url, panel: panel.panel)
         case "state" where Debug.enabled:
@@ -138,9 +156,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item("Update to Pensieve \(r.version)…", #selector(installUpdate)))
         }
         if up.available != nil || up.phase != .idle { menu.addItem(.separator()) }
-        menu.addItem(item("Search Pensieve    \(keys)", #selector(showSearch)))
+
+        let search = item(tap ? "Search Pensieve    \(keys)" : "Search Pensieve", #selector(showSearch))
+        if !tap, let k = HotKeys.parse(spec).key {  // a combo shows right-aligned like any menu shortcut
+            search.keyEquivalent = k == UInt32(kVK_Space) ? " " : HotKeys.parse(spec).keyName.lowercased()
+            search.keyEquivalentModifierMask = HotKeys.parse(spec).flags
+        }
+        menu.addItem(search)
         menu.addItem(item("Open Visualizer", #selector(openVisualizer)))
-        menu.addItem(item("Settings…", #selector(openSettings)))
+        menu.addItem(.separator())
+
+        menu.addItem(item("Settings…", #selector(openSettings), key: ","))
+        let short = NSMenuItem(title: "Search Shortcut", action: nil, keyEquivalent: "")
+        let shorts = NSMenu(title: "Search Shortcut")
+        var known = false
+        for (value, title) in HotKeys.presets {
+            let i = item(title, #selector(pickShortcut(_:)))
+            i.representedObject = value
+            i.state = spec == value ? .on : .off
+            known = known || spec == value
+            shorts.addItem(i)
+        }
+        if !known {  // a combo typed into Settings
+            let i = NSMenuItem(title: HotKeys.display(spec), action: nil, keyEquivalent: "")
+            i.state = .on
+            shorts.addItem(i)
+        }
+        short.submenu = shorts
+        menu.addItem(short)
+        if HotKeys.shared.needsAccessibility {
+            menu.addItem(item("Allow the \(HotKeys.display(spec)) Shortcut…", #selector(openAccessibility)))
+        }
+        let look = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        let looks = NSMenu(title: "Appearance")
+        for (title, value) in [("System", "system"), ("Light", "light"), ("Dark", "dark")] {
+            let i = item(title, #selector(pickAppearance(_:)))
+            i.representedObject = value
+            i.state = Backend.shared.appearance == value ? .on : .off
+            looks.addItem(i)
+        }
+        look.submenu = looks
+        menu.addItem(look)
+        let login = item("Launch at Login", #selector(toggleLogin))
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(login)
         menu.addItem(.separator())
 
         let status: String
@@ -154,23 +213,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = NSMenuItem(title: status, action: nil, keyEquivalent: "")
         s.isEnabled = false
         menu.addItem(s)
-        if HotKeys.shared.needsAccessibility {
-            menu.addItem(item("Allow the \(HotKeys.display(spec)) Hotkey…", #selector(openAccessibility)))
-        }
-        let look = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
-        let looks = NSMenu(title: "Appearance")
-        for (title, value) in [("System", "system"), ("Light", "light"), ("Dark", "dark")] {
-            let i = item(title, #selector(pickAppearance(_:)))
-            i.representedObject = value
-            i.state = Backend.shared.appearance == value ? .on : .off
-            looks.addItem(i)
-        }
-        look.submenu = looks
-        menu.addItem(look)
+        let version = NSMenuItem(title: "Version \(up.currentVersion)", action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
         menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
-        let login = item("Launch at Login", #selector(toggleLogin))
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(login)
         menu.addItem(.separator())
         menu.addItem(item("Quit Pensieve", #selector(NSApplication.terminate(_:)), key: "q", target: NSApp))
     }
@@ -219,6 +265,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if Debug.enabled { Debug.lastAlert = a.messageText }
             a.runModal()
         }
+    }
+
+    /// Applies at once (so ⌘Space works even with the backend down), then saves it like any other setting.
+    @objc private func pickShortcut(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? String else { return }
+        if !Debug.enabled { HotKeys.shared.configure(v) }
+        Task { await Backend.shared.updateSettings(["hotkey": v]) }
     }
 
     @objc private func pickAppearance(_ sender: NSMenuItem) {

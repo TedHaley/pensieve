@@ -8,7 +8,7 @@ import os
 import shutil
 import sys
 
-from . import config
+from pensieve import config
 
 MARK = config.DATA_DIR / "reset-pending"
 INDEX = ["pensieve.db", "pensieve.db-wal", "pensieve.db-shm", "index.tv", "files.tv", "code.tv"]

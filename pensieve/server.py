@@ -1,23 +1,23 @@
 import asyncio
 from collections import Counter
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import actions, config, llm, scopes, search as search_mod, settings, sources, summarize
-from .datamap import DataMap
-from .files import Files
-from .watch import Watch
-from .indexer import Store
-from .repos import Repos
-from . import mcp_server
+from pensieve import actions, config, llm, mcp_server, scopes, search as search_mod, settings, sources, summarize
+from pensieve.datamap import DataMap
+from pensieve.files import Files
+from pensieve.indexer import Store, embed
+from pensieve.repos import Repos
+from pensieve.watch import Watch
 
 store: Store | None = None
 repos: Repos | None = None
@@ -50,6 +50,17 @@ async def _wait(ev: asyncio.Event, timeout):
     except asyncio.TimeoutError:
         pass
     ev.clear()
+
+
+async def _quiet(ev: asyncio.Event, quiet=0.15, cap=1.0):
+    """Wait until changes stop for `quiet` seconds (at most `cap` seconds), so a burst of saves is indexed once."""
+    end = time.monotonic() + cap
+    while (left := end - time.monotonic()) > 0:
+        ev.clear()
+        try:
+            await asyncio.wait_for(ev.wait(), min(quiet, left))
+        except asyncio.TimeoutError:
+            return
 
 
 async def watcher():
@@ -96,6 +107,9 @@ async def watcher():
                 if retry:  # still being written: look again once it settles
                     watch.requeue_files(retry)
                     loop.call_later(config.SETTLE_SECONDS + 0.5, wake_files.set)
+            elif files.unsaved:  # a search indexed the change first
+                await _run(files.save)
+                broadcast({"type": "files"})
             # self-heal: if an earlier layout attempt failed, points without positions would never appear
             if await _run(store.needs_layout) and await _run(store.reproject):
                 broadcast({"type": "updated"})
@@ -113,7 +127,7 @@ async def watcher():
             traceback.print_exc()
             status.update(indexing=False, layout=False, message=f"error: {e!r}")
         await _wait(wake_files, config.POLL_SECONDS)
-        await asyncio.sleep(0.8)  # let a burst of saves land together
+        await _quiet(wake_files)
 
 
 async def repo_watcher():
@@ -122,14 +136,17 @@ async def repo_watcher():
         try:
             d_repos, asked = watch.take_repos()
             full = asked or time.time() - last_full > FULL_SWEEP_SECONDS
-            if full or d_repos:
+            if full or d_repos or repos.unsaved:
                 status.update(indexing=True, repo_busy=True, message="indexing repos")
                 broadcast({"type": "status", **status})
                 if full:
                     last_full = time.time()
                     n = await _run(lambda: repos.sync(force=True))
                 else:
-                    n = await _run(lambda: repos.sync(only=d_repos))
+                    n = await _run(lambda: repos.refresh(d_repos, wait=3600)) or 0
+                    if repos.unsaved:  # this pass's edits, or ones a search indexed first
+                        await _run(repos.save)
+                        n += 1
                 status.update(repo_busy=False, indexing=False, message="idle")
                 watch.configure(repos.checkouts())
                 if n:
@@ -142,7 +159,7 @@ async def repo_watcher():
             traceback.print_exc()
             status.update(repo_busy=False, indexing=False, message=f"error: {e!r}")
         await _wait(wake_repos, 30)
-        await asyncio.sleep(1.5)
+        await _quiet(wake_repos)
 
 
 def _person(author):
@@ -331,8 +348,11 @@ async def lifespan(app):
     watch = Watch(wake)
     repos.pending = watch.take_changed_repos
     repos.requeue = watch.requeue_repos
+    files.pending = watch.take_files
+    files.requeue = watch.requeue_files
     if settings.get("ai") == "builtin":
         llm.start_download()
+    loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
     tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher())]
     async with mcp_server.mcp.session_manager.run():
         yield
@@ -766,16 +786,41 @@ def get_sources():
 
 class SourceReq(BaseModel):
     id: str
-    enabled: bool
+    enabled: bool | None = None
+    map: bool | None = None  # on or off the map only; the source stays indexed
 
 
 @app.put("/api/sources")
 def put_source(req: SourceReq):
     try:
-        sources.set_source(req.id, req.enabled, repos)
+        if req.enabled is not None:
+            sources.set_source(req.id, req.enabled, repos)
+        if req.map is not None:
+            sources.set_source(req.id, req.map, repos, map_only=True)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return sources.catalog(store, repos, files)
+
+
+@app.get("/api/filetypes")
+def get_filetypes():
+    return files.types()
+
+
+class FileTypeReq(BaseModel):
+    id: str
+    index: str | None = None  # content | name | off
+    map: bool | None = None
+
+
+@app.put("/api/filetypes")
+def put_filetype(req: FileTypeReq):
+    change = {k: v for k, v in (("index", req.index), ("map", req.map)) if v is not None}
+    try:
+        settings.update({"file_types": {req.id: change}})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return files.types()
 
 
 class FolderReq(BaseModel):
@@ -810,7 +855,7 @@ def _version():
 
 @app.get("/api/about")
 def about():
-    from . import reset
+    from pensieve import reset
     return {"version": _version(), "data_dir": str(config.DATA_DIR).replace(str(Path.home()), "~", 1),
             "index_bytes": reset.index_bytes()}
 
@@ -840,7 +885,7 @@ class ResetReq(BaseModel):
 @app.post("/api/reset")
 async def factory_reset(req: ResetReq):
     """Delete the index (and the settings too if asked) and restart, which rebuilds everything from scratch."""
-    from . import reset
+    from pensieve import reset
     reset.request(req.settings)
     asyncio.get_running_loop().call_later(0.6, reset.restart)  # after this response is sent
     return {"ok": True}
@@ -848,8 +893,8 @@ async def factory_reset(req: ResetReq):
 
 @app.get("/api/integrations")
 def get_integrations():
-    from . import integrations
-    return integrations.status()
+    from pensieve import integrations
+    return integrations.status(config.PORT)
 
 
 class IntegrationReq(BaseModel):
@@ -858,15 +903,34 @@ class IntegrationReq(BaseModel):
 
 @app.put("/api/integrations/{item}")
 def put_integration(item: str, req: IntegrationReq):
-    from . import integrations
+    from pensieve import integrations
     try:
         if item in integrations.TARGETS:
             integrations.set_instructions(item, req.on)
+        elif item in integrations.HOOKS:
+            integrations.set_hook(req.on, config.PORT)
         else:
             integrations.set_skill(item, req.on)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return integrations.status()
+    return integrations.status(config.PORT)
+
+
+@app.post("/api/touched")
+async def touched(req: Request):
+    """Files an agent just changed: a Claude Code PostToolUse event ({tool_input: {file_path}, cwd}) or
+    {paths: [...]}. They are queued for indexing as if the file watcher saw them, so the next search waits for
+    them even when the file system event comes late."""
+    try:
+        body = await req.json()
+    except ValueError:
+        raise HTTPException(400, "expected JSON")
+    ti = body.get("tool_input") or {}
+    paths = [p for p in (ti.get("file_path"), ti.get("notebook_path"), *(body.get("paths") or [])) if isinstance(p, str) and p]
+    cwd = body.get("cwd") or "/"
+    for p in paths:
+        watch.note(os.path.realpath(os.path.join(cwd, os.path.expanduser(p))))
+    return {"queued": len(paths)}
 
 
 @app.get("/api/settings")
@@ -891,7 +955,7 @@ def ai_models(url: str, key: str = ""):
 
 
 def main():
-    from .cli import main as cli_main
+    from pensieve.cli import main as cli_main
     cli_main()
 
 

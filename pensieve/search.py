@@ -7,6 +7,7 @@
     kind:code  ext:pdf  in:anastomo   -> filters (kind is file, code or session; in matches the path or project)
 """
 import json
+import os
 import re
 import time
 from collections import Counter
@@ -14,8 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .indexer import CODE_QUERY, embed
-from .layout import unit
+from pensieve.indexer import CODE_QUERY, embed
+from pensieve.layout import unit
 
 CORPORA = {  # kind -> (chunk table, fts table)
     "file": ("file_chunks", "fts_files"),
@@ -145,11 +146,15 @@ class Searcher:
     def _index(self, kind):
         return {"file": self.files.index, "code": self.repos.index, "session": self.store.index}[kind]
 
-    def find(self, q: str, limit=20, kinds=None, scope=None):
+    def find(self, q: str, limit=20, kinds=None, scope=None, retry=True):
         """`scope`: a scopes.Scope (None = everything); every corpus is filtered to it. `kinds`: chunk corpora
         (file = documents, code, session). In the query, kind:file|doc|code|session|folder|repo|person picks what
-        comes back (file = documents and code; a repo is a folder too) and by:<name> keeps what that person wrote."""
-        from . import scopes
+        comes back (file = documents and code; a repo is a folder too) and by:<name> keeps what that person wrote.
+        Edits the file watcher saw are indexed first, so a search right after an edit finds the new text."""
+        from pensieve import scopes
+        if retry:
+            self.repos.refresh()
+            self.files.refresh()
         pq = parse(q)
         f = pq["filters"]
         kf = f.get("kind")
@@ -260,7 +265,50 @@ class Searcher:
             best = extra
         elif extra:  # a folder or person the query names outright goes first
             best = extra + [x for x in best if x["id"] not in {e["id"] for e in extra}]
-        return dict(query=pq, results=best[:limit], scope=scopes.describe(scope))
+        results, roots, paths = self._on_disk(best, rows, limit)
+        if retry and (roots or paths):  # changed after it was indexed and the watcher hasn't caught it yet
+            n = (self.repos.refresh(roots) or 0) + (self.files.refresh(paths) or 0)
+            if n:
+                return self.find(q, limit, kinds, scope, retry=False)
+        return dict(query=pq, results=results, scope=scopes.describe(scope))
+
+    @staticmethod
+    def _on_disk(best, rows, limit):
+        """The first `limit` results that still exist on disk, and the repos and documents of results whose file
+        changed since it was indexed. Those are marked `stale`; a code hit whose text only moved gets its new line."""
+        out, roots, paths = [], set(), set()
+        for x in best:
+            if len(out) == limit:
+                break
+            kind, path = x["kind"], x.get("path")
+            if kind not in ("code", "file") or not path or x.get("is_dir"):
+                out.append(x)
+                continue
+            try:
+                if kind == "file":
+                    if os.stat(path).st_mtime != x["mtime"]:
+                        x["stale"] = True
+                        paths.add(path)
+                else:
+                    r = rows[("code", int(x["id"].partition(":")[2]))]
+                    text = Path(path).read_bytes().decode("utf8", "replace")
+                    lines, n = text.split("\n"), r["text"].count("\n") + 1
+                    if "\n".join(lines[x["line"] - 1:x["line"] - 1 + n]) != r["text"]:
+                        x["stale"] = True
+                        roots.add(r["root"])
+                        i = text.find(r["text"])
+                        if i >= 0:
+                            x["line"] = text.count("\n", 0, i) + 1
+            except FileNotFoundError:
+                if kind == "file":
+                    paths.add(path)
+                else:
+                    roots.add(rows[("code", int(x["id"].partition(":")[2]))]["root"])
+                continue
+            except OSError:
+                pass
+            out.append(x)
+        return out, roots, paths
 
     def _code(self, q, allow, k=400):
         """Code search tuned on bench/ (agent-style queries: descriptions, names, error strings, mixes of these).
@@ -490,7 +538,7 @@ class Searcher:
 
     def _people(self, q, scope, named_only=False, limit=8):
         """People for a query: someone it names outright, or (kind:person) whoever wrote most of the matching code."""
-        from . import scopes
+        from pensieve import scopes
         names = self._folder_index()["people"]
         ql = q.strip().lower()
         named = [w for w in names if len(ql) >= 3 and (w.lower() == ql or w.lower().startswith(ql + " ")
@@ -539,7 +587,7 @@ class Searcher:
                         p = Path(path)
                         where = f"{rname}/{p.parent}".rstrip("/.") if str(p.parent) != "." else rname
                         out[(kind, cid)] = dict(id=f"code:{cid}", text=text, vec=vec, title=p.name, ext=p.suffix.lstrip("."),
-                                                path=str(Path(wt or root) / path), line=start, mtime=ts, key=f"{root}:{path}",
+                                                path=str(Path(wt or root) / path), line=start, mtime=ts, key=f"{root}:{path}", root=root,
                                                 subtitle=where + (f" @ {branch or Path(wt).name}" if wt else ""))
                 else:
                     q = (f"SELECT c.id, c.text, c.vec, s.id, s.title, s.source, s.project_name, s.updated FROM chunks c "

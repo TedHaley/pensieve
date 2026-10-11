@@ -4,8 +4,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import settings
-from .config import SOURCES
+from pensieve import settings
+from pensieve.config import SOURCES
 
 _REMINDER = re.compile(r"<(system-reminder|task-notification|local-command-\w+|command-\w+)>.*?</\1>", re.S)
 

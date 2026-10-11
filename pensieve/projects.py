@@ -2,7 +2,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from .config import HOME
+from pensieve.config import HOME
 
 
 @lru_cache(maxsize=None)

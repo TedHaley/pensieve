@@ -7,7 +7,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import actions, scopes, settings, sources
+from pensieve import actions, scopes, settings, sources
 
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
@@ -96,6 +96,8 @@ def _lines(results):
             where = f'session "{x.get("title") or ""}" ({x.get("subtitle") or x.get("updated") or ""})'
         else:
             where = path + (f":{x['line']}" if x.get("line") else "") if path else x.get("title") or ""
+            if x.get("stale"):  # edited after it was indexed: the snippet can be out of date
+                where += " (edited since indexed)"
         out.append(f"{where}  {snip}  [{x.get('id')}]".replace("    ", "  "))
     return "\n".join(out)
 
@@ -268,16 +270,31 @@ def update_settings(changes: dict[str, Any]) -> dict:
 def list_sources() -> list[dict]:
     """What Pensieve indexes, by category (agents, files, repos, apps), with on/off state and item counts.
     Use the ids with set_source."""
-    return [dict(id=c["id"], label=c["label"], enabled=c["enabled"], count=c["count"],
-                 items=[{k: i.get(k) for k in ("id", "label", "detail", "enabled", "available", "count")} for i in c["items"]])
+    return [dict(id=c["id"], label=c["label"], enabled=c["enabled"], map=c["map"], count=c["count"],
+                 items=[{k: i.get(k) for k in ("id", "label", "detail", "enabled", "map", "available", "count")}
+                        for i in c["items"]])
             for c in sources.catalog(_c()["store"], _c()["repos"], _c()["files"])]
 
 
 @tool()
-def set_source(id: str, enabled: bool) -> dict:
+def set_source(id: str, enabled: bool | None = None, map: bool | None = None) -> dict:
     """Switch a whole category ('agents', 'files', 'repos', 'apps') or one item ('agents/codex', 'files/~/Downloads',
-    'repos/discover', 'repos/<repo root>', 'apps/apple_notes') on or off. Switching off removes what it indexed."""
-    return {"disabled": sources.set_source(id, enabled, _c()["repos"])["disabled"]}
+    'repos/discover', 'repos/<repo root>', 'apps/apple_notes') on or off (`enabled`; off removes what it indexed),
+    or only on or off the map (`map`; it stays searchable)."""
+    if enabled is not None:
+        sources.set_source(id, enabled, _c()["repos"])
+    if map is not None:
+        sources.set_source(id, map, _c()["repos"], map_only=True)
+    return {k: settings.get(k) for k in ("disabled", "off_map")}
+
+
+@tool()
+def file_types() -> dict:
+    """Each file type in Files & folders (text, pdf, office, data, code, media, other): whether its content is read
+    (index: content | name | off), whether it shows on the map, how many files it has, and a histogram of their text
+    length. Change one with update_settings({"file_types": {"pdf": {"index": "name", "map": false}}}); the chunk
+    size and limit are the chunk_chars and max_chunks settings."""
+    return _c()["files"].types()
 
 
 @tool()
@@ -296,7 +313,7 @@ def remove_folder(path: str) -> dict:
 @tool()
 def reindex() -> dict:
     """Rescan folders and repos now instead of waiting for the next sweep."""
-    from . import server
+    from pensieve import server
     server.watch.force_full()
     return {"ok": True}
 

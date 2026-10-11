@@ -445,7 +445,7 @@ function renderLegend() {
     else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), placeName(k))).join('') + (rest(D.folderSlot, p => p.place) ? sw(pal().other, 'Other') : '');
     else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + (rest(D.authorSlot, p => p.who) ? sw(pal().other, 'Others, bots and agents') : '');
     else if (cb === 'recency') { const [a, b] = D.tRange; html = legendRamp(`Oldest · ${esc(monY(a / 1000) || '?')}`, `Newest · ${esc(monY(b / 1000) || '?')}`, 'Last changed (code: last commit)'); }
-    else if (cb === 'risk') html = legendRamp('Authors still active here', 'Authors no longer active', 'Knowledge risk') + sw(pal().other, 'Not code in this repo');
+    else if (cb === 'risk') html = legendRamp('Authors active', 'Authors inactive', 'Knowledge risk') + sw(pal().other, 'Not code in this repo');
     else if (dataTopics().size) { const n = new Map(); ctx.forEach(p => { const c = dataTopicOf(p); if (c != null) n.set(c, (n.get(c) || 0) + 1); });
       html = [...n].sort((a, b) => b[1] - a[1]).map(([id]) => sw(slotColor(topicSlot(id)), dataTopics().get(id)?.name || `Topic ${id + 1}`)).join(''); }
     else html = '<span class="muted">Colors group items with similar content</span>';
@@ -468,7 +468,8 @@ function renderLegend() {
   else if (S.colorBy === 'project') html = [...S.projectSlot].map(([p, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(p)}</span>`).join('') + (S.projects.length > S.projectSlot.size ? `<span><i class="sw" style="background:${pal().other}"></i>Other</span>` : '');
   L.innerHTML = html;
 }
-const legendRamp = (a, b, title) => `${title ? `<b class="lg-h">${title}</b>` : ''}<span>${a}</span><span style="display:inline-block;width:110px;height:8px;border-radius:4px;background:linear-gradient(90deg,${pal().seq.join(',')})"></span><span>${b}</span>`;
+// the bar spans the panel with its end labels underneath, so long labels never push the bar onto its own line
+const legendRamp = (a, b, title) => `${title ? `<b class="lg-h">${title}</b>` : ''}<div class="lg-ramp"><div class="lg-bar" style="background:linear-gradient(90deg,${pal().seq.join(',')})"></div><div class="lg-ends"><div>${a}</div><div>${b}</div></div></div>`;
 
 /* ============================== pointer interaction ============================== */
 const canvas = gl.renderer.domElement;
@@ -1788,7 +1789,7 @@ const SET_GROUPS = [
   ['Mac app', ['hotkey', 'editor']],
 ];
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
-const SET_HIDDEN = new Set(['repos', 'disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'insights_auto', 'auto_update_check', 'llm_url', 'llm_model', 'llm_key', 'llm_key_set']);  // managed in their own sections
+const SET_HIDDEN = new Set(['repos', 'disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'insights_auto', 'auto_update_check', 'llm_url', 'llm_model', 'llm_key', 'llm_key_set', 'file_types', 'off_map', 'chunk_chars', 'max_chunks']);  // managed in their own sections
 const SRC_ICON = {
   agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
@@ -1798,8 +1799,56 @@ const SRC_ICON = {
 // 'a/very/long/path/to/thing' -> 'a/very/lo…/to/thing': keeps both the root and the name readable
 const midEllipsis = (t, max) => !t || t.length <= max ? t : t.slice(0, Math.ceil(max * .4)) + '…' + t.slice(-Math.floor(max * .6 - 1));
 const srcCount = (n, unit) => n == null ? '' : `${n.toLocaleString()} ${n === 1 && unit ? unit.replace(/s$/, '') : unit || ''}`;
-const srcState = {cat: null, hints: new Map(), err: null};
-async function loadSources() { try { srcState.cat = await api('/api/sources'); } catch { srcState.cat = srcState.cat || []; } }
+const srcState = {cat: null, types: null, hints: new Map(), err: null};
+async function loadSources() {
+  const [cat, types] = await Promise.all([api('/api/sources').catch(() => null), api('/api/filetypes').catch(() => null)]);
+  srcState.cat = cat || srcState.cat || [];
+  srcState.types = types || srcState.types;
+}
+const MAP_IC = '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M9 4 3 6.5v13L9 17l6 2.5 6-2.5V4l-6 2.5Z M9 4v13M15 6.5v13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+function mapBtn(id, on, disabled) {
+  return `<button class="src-map ${on ? 'on' : ''}" data-src-map="${esc(id)}" data-on="${on ? 1 : 0}" ${disabled ? 'disabled' : ''} title="${on ? 'On the map. Click to leave it off the map (it stays searchable).' : 'Off the map, still searchable. Click to show it on the map.'}">${MAP_IC}</button>`;
+}
+const PAGE_CHARS = 3000;  // a rough printed page, to say how long a document is
+const pagesLabel = c => { const p = c / PAGE_CHARS; return p < 1 ? '½' : p >= 1000 ? `${+(p / 1000).toFixed(1)}K` : `${+p.toFixed(p < 10 ? 1 : 0)}`; };
+function sizeChart(ft, bins) {
+  const max = Math.max(1, ...bins), cap = ft.max_chunks ? ft.max_chunks * ft.chunk_chars : Infinity;
+  const edges = ft.bin_edges.map(e => e * ft.unit_chars);
+  const bars = bins.map((n, i) => {
+    const lo = i ? edges[i - 1] : 0, cut = lo >= cap;
+    const label = i < edges.length ? `up to ${pagesLabel(edges[i])} pages` : `over ${pagesLabel(edges[i - 1])} pages`;
+    return `<div class="fz-col" title="${n.toLocaleString()} ${n === 1 ? 'document' : 'documents'} ${label}${cut ? ' (cut at the limit)' : ''}"><div class="fz-bar ${cut ? 'cut' : ''}" style="height:${n ? Math.max(4, 100 * n / max) : 0}%"></div></div>`;
+  }).join('');
+  const ticks = [0, 4, 8, 12].map(i => `<span style="left:${(i + .5) / bins.length * 100}%">${i < edges.length ? pagesLabel(edges[i]) : '>' + pagesLabel(edges[i - 1])}</span>`).join('');
+  return `<div class="fz"><div class="fz-bars">${bars}</div><div class="fz-ticks">${ticks}</div></div>`;
+}
+function fileTypesHtml() {
+  const ft = srcState.types;
+  if (!ft) return '';
+  const filesOn = srcState.cat?.find(c => c.id === 'files')?.enabled !== false;
+  const all = ft.types.filter(t => t.readable).reduce((a, t) => a.map((n, i) => n + t.bins[i]), ft.types[0].bins.map(() => 0));
+  const read = all.reduce((a, b) => a + b, 0), cut = ft.types.reduce((a, t) => a + t.cut, 0);
+  const pages = ft.max_chunks ? pagesLabel(ft.max_chunks * ft.chunk_chars) : null;
+  const rows = ft.types.map(t => `<div class="ft-row ${t.index === 'off' ? 'off' : ''}">
+      <div class="src-tx"><div class="src-l">${esc(t.label)}</div><div class="ft-d" title="${esc(t.exts.join(', '))}">${esc(t.description)}</div></div>
+      <select class="set-in ft-sel" data-ft-index="${t.id}" ${filesOn ? '' : 'disabled'}>${(t.readable ? [['content', 'Read content'], ['name', 'Name only'], ['off', 'Skip']] : [['name', 'Name only'], ['off', 'Skip']]).map(([v, l]) => `<option value="${v}" ${t.index === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      ${t.readable ? `<button class="src-map ${t.map && t.index === 'content' ? 'on' : ''}" data-ft-map="${t.id}" data-on="${t.map ? 1 : 0}" ${t.index === 'content' && filesOn ? '' : 'disabled'} title="${t.index !== 'content' ? 'Only files whose content is read go on the map' : t.map ? 'On the map. Click to leave this type off the map.' : 'Off the map. Click to show this type on the map.'}">${MAP_IC}</button>` : `<span class="src-map na" title="Placed by name only, so never on the map">${MAP_IC}</span>`}
+      <div class="src-n">${srcCount(t.files, 'files')}</div>
+    </div>`).join('');
+  return `<div class="set-card ft-card ${filesOn ? '' : 'off'}">
+    <div class="src-top"><div class="src-tx"><h3>File types</h3><p>For files in Files &amp; folders: read each type's content, index only its name, or skip it, and choose which types show on the map. Images, audio and video are found by name; their content is not read.</p></div></div>
+    <div class="ft-rows">${rows}</div>
+    <div class="ft-chunks">
+      <div><h3>Long documents</h3><p>Documents are split into pieces of about the same length. Each piece is one search result. Larger pieces keep more context together; the limit keeps very long documents from filling the index.</p>
+        <div class="ft-in"><label>Piece size <input class="set-in" type="number" min="200" max="20000" step="100" value="${ft.chunk_chars}" data-ft-set="chunk_chars"> characters</label>
+          <label>Read at most <input class="set-in" type="number" min="0" step="100" value="${ft.max_chunks}" data-ft-set="max_chunks"> pieces per document (0 = all${pages ? `; now about ${pages} pages` : ''})</label></div>
+        <div class="err" data-ft-err></div></div>
+      <div><div class="fz-h">How long your documents are <span class="muted">${read ? `${read.toLocaleString()} read · pages of about ${PAGE_CHARS.toLocaleString()} characters` : 'nothing read yet'}</span></div>
+        ${read ? sizeChart(ft, all) : ''}
+        <div class="fz-note">${cut ? `${plural(cut, 'document')} longer than the limit: text after it is not searchable.` : read ? 'Every document fits within the limit.' : ''}</div></div>
+    </div>
+  </div>`;
+}
 function srcHint(id) {
   const h = srcState.hints.get(id);
   if (!h) return '';
@@ -1814,6 +1863,7 @@ function srcItem(it, catOn, parentOff = false) {
     <label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>
     <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(it.error ? detail : shown)}</div></div>
     <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}</div>
+    ${it.kind === 'rule' || it.map == null ? '<span></span>' : mapBtn(it.id, it.map, off || !catOn || !it.enabled)}
     ${it.removable ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.id.slice(6))}" title="Stop indexing this folder">✕</button>` : '<span></span>'}
   </div>`;
 }
@@ -1828,12 +1878,13 @@ function sourcesHtml() {
         <div class="src-top"><span class="src-ic"><svg viewBox="0 0 24 24" width="18" height="18">${SRC_ICON[c.id] || SRC_ICON.apps}</svg></span>
           <div class="src-tx"><h3>${esc(c.label)}${srcHint(c.id)}</h3><p>${esc(c.description)}</p></div>
           <div class="src-n big">${c.count != null ? srcCount(c.count, c.id === 'agents' ? 'sessions' : c.id === 'apps' ? 'items' : 'files') : ''}</div>
+          ${mapBtn(c.id, c.map, !c.enabled)}
           <label class="tog" title="${c.enabled ? 'Switch off everything in ' + esc(c.label) : 'Switch on'}"><input type="checkbox" data-src-id="${esc(c.id)}" ${c.enabled ? 'checked' : ''}></label></div>
         ${rules.length ? `<div class="src-rules">${rules.map(i => srcItem(i, c.enabled) + (kids(i.id).length ? `<div class="src-kids">${kids(i.id).map(k => srcItem(k, c.enabled, !i.enabled)).join('')}</div>` : '')).join('')}</div>` : ''}
         ${rest.length ? `<div class="src-items">${rest.map(i => srcItem(i, c.enabled)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
         ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="Add a folder, e.g. ~/notes" data-src-add-in><button class="btn" data-src-add>Add folder</button></div><div class="err" data-src-add-err></div>` : ''}
       </div>`;
-    }).join('')}</div>`;
+    }).join('')}</div>${fileTypesHtml()}`;
 }
 function renderSources() {
   const box = $('#srcbox'); if (!box) return;
@@ -1847,6 +1898,31 @@ function renderSources() {
       setTimeout(renderSources, 20500);
     } catch (e) { srcState.err = `Could not change ${id}: ${e.message}`; }
     renderSources();
+  });
+  $$('[data-src-map]', box).forEach(b => b.onclick = async () => {
+    const id = b.dataset.srcMap, on = b.dataset.on !== '1';
+    b.disabled = true;
+    try {
+      srcState.cat = await api('/api/sources', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, map: on})});
+      srcState.err = null; toast(on ? 'Back on the map after the next layout' : 'Left off the map; still searchable');
+    } catch (e) { srcState.err = `Could not change ${id}: ${e.message}`; }
+    renderSources();
+  });
+  const putType = async body => {
+    try { srcState.types = await api('/api/filetypes', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}); srcState.err = null; }
+    catch (e) { srcState.err = `Could not change ${body.id} files: ${e.message}`; }
+    renderSources();
+  };
+  $$('[data-ft-index]', box).forEach(s => s.onchange = () => { putType({id: s.dataset.ftIndex, index: s.value}); toast(s.value === 'content' ? 'Reading these files now' : s.value === 'name' ? 'Indexing these files by name only' : 'Removing these files from the index'); });
+  $$('[data-ft-map]', box).forEach(b => b.onclick = () => putType({id: b.dataset.ftMap, map: b.dataset.on !== '1'}));
+  $$('[data-ft-set]', box).forEach(inp => inp.onchange = async () => {
+    const k = inp.dataset.ftSet, v = parseInt(inp.value, 10), err = $('[data-ft-err]', box);
+    try {
+      await api('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({[k]: v})});
+      srcState.types = await api('/api/filetypes');
+      toast('Documents are read again with the new setting');
+      renderSources();
+    } catch { err.textContent = k === 'chunk_chars' ? 'Piece size must be 200 to 20,000 characters.' : 'Enter 0 or a whole number of pieces.'; }
   });
   $$('[data-src-rm]', box).forEach(b => b.onclick = async () => {
     try { srcState.cat = await api('/api/sources/folders?path=' + enc(b.dataset.srcRm), {method: 'DELETE'}); toast('Folder removed — its files leave the index on the next sweep'); }
@@ -2012,6 +2088,11 @@ function setField(k) {
       <div class="set-add"><input class="set-in" id="${id}" placeholder="${k === 'repos' ? '~/code/some-repo' : '~/path/to/folder'}" data-ladd-in="${k}"><button class="btn" data-ladd="${k}">Add</button></div>`;
   }
   if (d && typeof d === 'object') return Object.keys({...d, ...v}).map(n => `<label class="tog"><input type="checkbox" data-sobj="${k}" data-n="${n}" ${v[n] !== false ? 'checked' : ''}>${esc(AGENT_NAME[n] || n)}</label>`).join('');
+  if (k === 'hotkey') {  // the Mac app's presets; a combo typed into the settings file stays selectable
+    const opts = [['cmd+space', '⌘Space (replaces Spotlight)'], ['ctrl+shift', 'Tap ⌃⇧'], ['opt+space', '⌥Space'], ['cmd+shift+space', '⇧⌘Space']];
+    if (!opts.some(([o]) => o === v)) opts.push([v, v]);
+    return `<select class="set-in" data-sk="${k}" style="max-width:260px">${opts.map(([o, l]) => `<option value="${esc(o)}" ${v === o ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  }
   if (k === 'editor') return `<select class="set-in" data-sk="${k}" style="max-width:200px">${[['default', 'Default app'], ['vscode', 'VS Code'], ['cursor', 'Cursor'], ['zed', 'Zed']].map(([o, l]) => `<option value="${o}" ${v === o ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   return `<input class="set-in" data-sk="${k}" value="${esc(v)}">`;
 }
@@ -2089,6 +2170,8 @@ async function loadIntegrations() {
     ${st.instructions.map(t => row(esc(t.label), `Adds a marked section to <code>${esc(t.path)}</code>`, 'ins', t.id, t.state)).join('')}
     <div class="cmd-l" style="margin-top:10px">Claude Code skills (in <code>~/.claude/skills</code>)</div>
     ${st.skills.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'skill', k.id, k.state, k.state === 'theirs')).join('')}
+    <div class="cmd-l" style="margin-top:10px">Claude Code hook (in <code>${esc(st.hooks[0].path)}</code>)</div>
+    ${st.hooks.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'hook', k.id, k.state)).join('')}
     <div class="cmd-l" style="margin-top:10px">Other agents (Cursor, Windsurf, …): paste into the agent’s rules</div>
     <div class="cmd ig-text"><code>${esc(st.text)}</code><button class="btn" data-copy="${esc(st.text)}">Copy</button></div>
     <p class="sc-p" style="margin-top:6px">From a terminal: <code>pensieve integrate recommended</code></p>`;
@@ -2096,7 +2179,8 @@ async function loadIntegrations() {
     const [kind, id] = key.split(':');
     const r = await fetch('/api/integrations/' + encodeURIComponent(id), {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({on})});
     if (!r.ok) toast('Could not change: ' + ((await r.json().catch(() => ({}))).detail || r.status));
-    else toast(on ? (kind === 'ins' ? 'Instructions added' : 'Skill installed') : (kind === 'ins' ? 'Instructions removed' : 'Skill removed'));
+    else toast(({ins: ['Instructions added', 'Instructions removed'], skill: ['Skill installed', 'Skill removed'],
+                 hook: ['Hook installed', 'Hook removed']})[kind][on ? 0 : 1]);
     loadIntegrations();
   };
   $$('[data-ig]', box).forEach(i => i.onchange = () => set(i.dataset.ig, i.checked));

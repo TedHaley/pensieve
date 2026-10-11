@@ -233,16 +233,21 @@ final class Updater: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
         var env = ProcessInfo.processInfo.environment
+        // Wait until this process is gone: stopping the backend can take a few seconds, and `open` on a copy
+        // that is still running only brings that copy forward, so a fixed one-second sleep often relaunched nothing.
+        let wait = "while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done; "
+        let script: String
         if Debug.enabled {
             // Test instances relaunch the binary directly with their environment (minus the fake version), so
             // LaunchServices never hands the launch to an installed copy with the same bundle id.
             env["PENSIEVE_FAKE_VERSION"] = nil
-            p.arguments = ["-c", "sleep 1; exec \"$0/Contents/MacOS/Pensieve\" >>\"$HOME/.pensieve/update-relaunch.log\" 2>&1", bundlePath]
+            script = wait + "exec \"$0/Contents/MacOS/Pensieve\" >>\"$HOME/.pensieve/update-relaunch.log\" 2>&1"
         } else {
-            p.arguments = ["-c", "sleep 1; open \"$0\"", bundlePath]
+            script = wait + "open \"$0\" >>\"$HOME/.pensieve/update-relaunch.log\" 2>&1"
         }
+        p.arguments = ["-c", script, bundlePath]
         p.environment = env
-        try? p.run()
+        do { try p.run() } catch { log("relaunch: couldn't start the relauncher: \(error.localizedDescription)") }
         Backend.shared.stop()
         NSApp.terminate(nil)
     }

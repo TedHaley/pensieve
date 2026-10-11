@@ -2,8 +2,9 @@
 
     pensieve [serve]   run the indexer + visualizer + MCP server (http://127.0.0.1:8765, MCP at /mcp)
     pensieve mcp       MCP over stdio for agents that don't speak HTTP; starts the server if it isn't running
-    pensieve integrate [all | recommended | claude codex pensieve-search ...] [--remove]
-                       agent add-ons: an instructions block for CLAUDE.md / AGENTS.md and Claude Code skills
+    pensieve integrate [all | recommended | claude codex pensieve-search claude-hook ...] [--remove]
+                       agent add-ons: an instructions block for CLAUDE.md / AGENTS.md, Claude Code skills, and a
+                       Claude Code hook that reports edits
 
 Options are turned into env vars before anything reads config."""
 import argparse
@@ -44,10 +45,10 @@ def main():
     if a.command == "integrate":
         return integrate(a.items, a.remove)
 
-    from . import reset
+    from pensieve import reset
     done = reset.apply_pending()  # before anything opens the database
     import uvicorn
-    from . import config, settings
+    from pensieve import config, settings
     if done:
         print(f"Pensieve was reset ({'index and settings' if done == 'all' else 'index'}); indexing from scratch.", flush=True)
     url = f"http://localhost:{a.port}"
@@ -64,8 +65,8 @@ def main():
 
 
 def integrate(items, remove=False):
-    from . import integrations as ig
-    st = ig.status()
+    from pensieve import config, integrations as ig
+    st = ig.status(config.PORT)
     if not items:
         print("Instructions block (tells the agent to search with Pensieve before grepping):")
         for t in st["instructions"]:
@@ -73,17 +74,25 @@ def integrate(items, remove=False):
         print("Claude Code skills:")
         for k in st["skills"]:
             print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
-        print("\npensieve integrate recommended        # Claude Code instructions + pensieve-search")
+        print(f"Claude Code hook (in {st['hooks'][0]['path']}):")
+        for k in st["hooks"]:
+            print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
+        print("\npensieve integrate recommended        # Claude Code instructions + pensieve-search + claude-hook")
         print("pensieve integrate <id>... [--remove]")
         return
     targets = {t["id"] for t in st["instructions"]}
     if items == ["all"]:
-        items = [*targets, *ig.SKILLS]
+        items = [*targets, *ig.SKILLS, *ig.HOOKS]
     elif items == ["recommended"]:
-        items = ["claude", *(n for n, v in ig.SKILLS.items() if v[2])]
+        items = ["claude", *(n for n, v in {**ig.SKILLS, **ig.HOOKS}.items() if v[2])]
     for it in items:
         try:
-            state = ig.set_instructions(it, not remove) if it in targets else ig.set_skill(it, not remove)
+            if it in targets:
+                state = ig.set_instructions(it, not remove)
+            elif it in ig.HOOKS:
+                state = ig.set_hook(not remove, config.PORT)
+            else:
+                state = ig.set_skill(it, not remove)
             print(f"{it}: {state}")
         except (ValueError, KeyError) as e:
             print(f"{it}: {e}", file=sys.stderr)
@@ -101,7 +110,7 @@ def stdio_bridge(port, scope="auto", all_tools=False):
     """Relay newline-delimited JSON-RPC between stdin/stdout and the server's streamable HTTP endpoint."""
     import json
     import httpx
-    from . import config
+    from pensieve import config
     base = f"http://127.0.0.1:{port}"
     if not _up(base):
         log = open(config.DATA_DIR / "server.log", "a")

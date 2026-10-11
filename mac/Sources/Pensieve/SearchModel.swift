@@ -44,11 +44,36 @@ final class SearchModel: ObservableObject {
 
     /// Drives the panel's pop-in when it opens.
     @Published var presented = false
+    /// The glass's size, which trails panelWidth × panelHeight by an animation. PanelController sets it after the
+    /// window has been resized: in the same update, the window's new size would be animated too.
+    @Published var glassSize = CGSize(width: width, height: barHeight)
+
+    /// The map and Settings circles beside the bar show while the pointer is over the bar or over them. They stay a
+    /// moment after it leaves, so it can cross the gap between the two.
+    @Published private(set) var buttonsShown = false { didSet { if buttonsShown != oldValue { onLayout?() } } }
+    var overBar = false { didSet { pointerMoved() } }
+    var overButtons = false { didSet { pointerMoved() } }
+
+    private func pointerMoved() {
+        if overBar || overButtons { return buttonsShown = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, !self.overBar, !self.overButtons else { return }
+            self.buttonsShown = false
+        }
+    }
+
+    func hideButtons() {
+        overBar = false
+        overButtons = false
+        buttonsShown = false
+    }
 
     var onLayout: (() -> Void)?
     var actions: Actions?
     private var task: Task<Void, Never>?
     private var local = Launcher.Results()  // apps and settings for the current query
+    private var calc: Hit?
+    private var files: [Hit] = []  // name matches anywhere on the Mac, possibly for an earlier query like `remote`
     private var remote: [Hit] = []  // the backend's results, possibly for an earlier query until the next ones land
 
     // Fixed metrics, so the panel can be sized without measuring SwiftUI.
@@ -63,6 +88,15 @@ final class SearchModel: ObservableObject {
     static let hintInsets: (leading: CGFloat, trailing: CGFloat) = (53, 20)
     static let actionRowHeight: CGFloat = 30
     static let actionWidth: CGFloat = 218
+    static let resize = Animation.spring(response: 0.36, dampingFraction: 0.86)
+    static let resizeSeconds = 0.5  // when `resize` has settled, so the window can shrink to the glass
+    static let buttonSize: CGFloat = barHeight
+    static let buttonGap: CGFloat = 10  // between the bar and the first circle, and between circles
+    static let buttonPad: CGFloat = 24  // room in the circles' window for their shadow and their drop
+    static let buttonsReserve = 2 * buttonSize + 2 * buttonGap  // what the panel gives up while the circles show
+
+    /// The panel narrows from the right while the circles show, and they take the space it gave up.
+    var panelWidth: CGFloat { buttonsShown ? Self.width - Self.buttonsReserve : Self.width }
 
     var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     var hint: ParsedQuery { (searched ? parsed : nil) ?? QueryParse.parse(trimmed) }
@@ -89,7 +123,7 @@ final class SearchModel: ObservableObject {
         }
     }
 
-    static let guidance = "Open apps and settings, or search files, code, folders, people and agent sessions"
+    static let guidance = ""  // an empty field shows no text under it
     static let options: [(String, String)] = [
         ("plain words", "by meaning"),
         ("\"quotes\"", "exact words"),
@@ -99,11 +133,12 @@ final class SearchModel: ObservableObject {
         ("by:name", "what someone wrote"),
         ("in:folder  ext:pdf", "inside a path · a file type"),
         ("app or setting name", "open it (Tab fills in the Top Hit)"),
+        ("2^10   15% of 80   3 ft in cm", "calculate or convert (↩ copies)"),
         ("⌃  or  →", "actions on the selected result"),
     ]
     static let optionRowHeight: CGFloat = 18
 
-    /// The plain guidance line (an empty field with nothing else to report), which has the options chevron.
+    /// The field is empty and the backend is up with no error or update to show.
     var showsGuidance: Bool { statusText == Self.guidance }
 
     /// The parsed query as one line of text: `Exact "x"  Meaning y  Without z  kind:code`.
@@ -127,13 +162,15 @@ final class SearchModel: ObservableObject {
 
     /// The hint wraps instead of clipping, so its height depends on the text.
     var hintHeight: CGFloat {
+        if showsGuidance {  // an empty field is the bar alone, until the options are opened
+            return optionsOpen ? CGFloat(Self.options.count) * Self.optionRowHeight + 14 : 0
+        }
         let text = statusText ?? String(parsedText.characters)
-        let width = Self.width - Self.hintInsets.leading - Self.hintInsets.trailing - (statusShowsSpinner ? 18 : 0)
+        let width = panelWidth - Self.hintInsets.leading - Self.hintInsets.trailing - (statusShowsSpinner ? 18 : 0)
         let font = NSFont.systemFont(ofSize: Self.hintFontSize, weight: .semibold)  // bold is the wider case
         let h = (text as NSString).boundingRect(with: NSSize(width: width, height: 200),
                                                 options: [.usesLineFragmentOrigin], attributes: [.font: font]).height
-        let options = showsGuidance && optionsOpen ? CGFloat(Self.options.count) * Self.optionRowHeight + 6 : 0
-        return max(26, ceil(h) + 12) + options
+        return max(26, ceil(h) + 12)
     }
 
     /// An available update (or its download) takes the empty panel's hint line.
@@ -181,6 +218,8 @@ final class SearchModel: ObservableObject {
         searched = false
         if q.isEmpty {
             local = Launcher.Results()
+            calc = nil
+            files = []
             setResults([], parsed: nil)
             loading = false
             error = nil
@@ -217,6 +256,20 @@ final class SearchModel: ObservableObject {
         let p = QueryParse.parse(q)
         let plain = (p.exact ?? []).isEmpty && (p.exclude ?? []).isEmpty && (p.filters ?? [:]).isEmpty
         local = plain && !q.isEmpty ? Launcher.shared.search(q) : Launcher.Results()
+        calc = Calculator.answer(q).map {
+            Hit(id: "calc:" + $0.copy, kind: "calc", title: $0.value, subtitle: $0.detail, path: nil,
+                ext: $0.conversion ? "conversion" : nil)
+        }
+        if plain && calc == nil {
+            MacFiles.shared.search(q) { [weak self] hits in
+                guard let self, self.trimmed == q else { return }
+                self.files = hits
+                self.setResults(self.remote, parsed: self.parsed)
+                self.onLayout?()
+            }
+        } else {
+            files = []
+        }
         setResults(remote, parsed: parsed)
     }
 
@@ -226,18 +279,23 @@ final class SearchModel: ObservableObject {
         query = q
     }
 
-    /// Group by kind like Spotlight: a strong app or setting match first as the Top Hit, then apps and settings,
-    /// then the backend's groups in the order of their best result (backend order is kept within a group).
-    /// `results` is reordered to match the display so indices line up with the selection.
+    /// Group by kind like Spotlight: a calculation first, then a strong app or setting match as the Top Hit, apps
+    /// and settings, name matches from the rest of the Mac, and the backend's groups in the order of their best
+    /// result (backend order is kept within a group). `results` is reordered to match the display so indices line
+    /// up with the selection.
     private func setResults(_ hits: [Hit], parsed: ParsedQuery?) {
         remote = hits
         var groups: [(String, [Hit])] = []
+        if let calc { groups.append(("calc", [calc])) }
+        let known = Set(hits.compactMap(\.path))
+        let elsewhere = files.filter { !known.contains($0.path ?? "") }  // the backend's own hit says more
         var mine = local.hits
         if local.top, let first = mine.first {
             groups.append(("top", [first]))
             mine.removeFirst()
         }
         for k in ["app", "setting"] where mine.contains(where: { $0.kind == k }) { groups.append((k, mine.filter { $0.kind == k })) }
+        if !elsewhere.isEmpty { groups.append(("document", elsewhere)) }
         var kinds: [String] = []
         for h in hits where !kinds.contains(h.kind) { kinds.append(h.kind) }
         for k in kinds { groups.append((k, hits.filter { $0.kind == k })) }
@@ -264,7 +322,7 @@ final class SearchModel: ObservableObject {
 
     /// The rest of the Top Hit's name, shown greyed after the typed text like Spotlight (Tab fills it in).
     var completion: (rest: String, kind: String)? {
-        guard local.top, selected == 0, let top = local.hits.first, !query.hasSuffix(" "), !query.isEmpty,
+        guard local.top, let top = local.hits.first, selectedHit?.id == top.id, !query.hasSuffix(" "), !query.isEmpty,
               top.title.lowercased().hasPrefix(query.lowercased()) else { return nil }
         return (String(top.title.dropFirst(query.count)), top.kind == "app" ? "Application" : "System Settings")
     }

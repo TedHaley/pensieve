@@ -14,7 +14,9 @@ struct ParsedQuery: Decodable, Equatable {
 
 struct Hit: Decodable, Identifiable, Equatable {
     let id: String
-    let kind: String  // file | code | session | folder | repo | person, and app | setting from Launcher (never the backend)
+    // file | code | session | folder | repo | person from the backend; app | setting (Launcher), document (MacFiles)
+    // and calc (Calculator) never leave the app
+    let kind: String
     let title: String
     let subtitle: String?
     let path: String?
@@ -31,7 +33,15 @@ struct Hit: Decodable, Identifiable, Equatable {
         case isDir = "is_dir"
     }
 
+    init(id: String, kind: String, title: String, subtitle: String?, path: String?, line: Int? = nil,
+         snippet: String? = nil, highlights: [[Int]]? = nil, score: Double? = nil, match: String? = nil,
+         ext: String? = nil, isDir: Bool? = nil) {
+        (self.id, self.kind, self.title, self.subtitle, self.path, self.line) = (id, kind, title, subtitle, path, line)
+        (self.snippet, self.highlights, self.score, self.match, self.ext, self.isDir) = (snippet, highlights, score, match, ext, isDir)
+    }
+
     var isExact: Bool { match == "exact" || match == "both" }
+    var onMap: Bool { !["app", "setting", "document", "calc"].contains(kind) }
     var isFolder: Bool { isDir == true }
     var pathExists: Bool { path.map { FileManager.default.fileExists(atPath: $0) } ?? false }
 }
@@ -45,7 +55,8 @@ enum ResultAction: String, Identifiable {
     static func list(for hit: Hit) -> [ResultAction] {
         if hit.kind == "session" || hit.kind == "person" { return [.open] }  // both open on the map
         if hit.kind == "setting" { return hit.id.hasPrefix("toggle:") ? [.open, .settings] : [.open] }
-        if hit.kind == "app" { return [.open, .reveal, .copy] }
+        if hit.kind == "calc" { return [.open] }
+        if hit.kind == "app" || hit.kind == "document" { return [.open, .reveal, .copy] }
         if hit.path == nil { return [.open, .map] }
         var out: [ResultAction] = [.open]
         if hit.pathExists { out.append(.reveal) }
@@ -59,6 +70,7 @@ enum ResultAction: String, Identifiable {
         case .open:
             if hit.kind == "session" || hit.kind == "person" { return "Open on map" }
             if hit.kind == "setting" { return hit.id.hasPrefix("toggle:") ? hit.title : "Open in System Settings" }
+            if hit.kind == "calc" { return "Copy result" }
             return hit.isFolder ? "Open in Finder" : "Open"
         case .reveal: return "Show in Finder"
         case .map: return "Show on map"
@@ -107,6 +119,8 @@ enum Kind {
         case "top": return "Top Hit"
         case "app": return "Applications"
         case "setting": return "System Settings"
+        case "calc": return "Calculator"
+        case "document": return "On This Mac"
         default: return kind.capitalized
         }
     }
