@@ -102,8 +102,7 @@ class Scene3D {
     this.camera.position.set(2.4, 1.5, 2.8);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     // zoomToCursor: scrolling heads for what's under the pointer, not the middle of the view
-    Object.assign(this.controls, {enableDamping: true, dampingFactor: 0.08, rotateSpeed: 0.7, zoomSpeed: 0.9, autoRotateSpeed: 0.35, zoomToCursor: true});
-    this.controls.autoRotate = store.get('autorotate', true);
+    Object.assign(this.controls, {enableDamping: true, dampingFactor: 0.08, rotateSpeed: 0.7, zoomSpeed: 0.9, autoRotateSpeed: 0.35, zoomToCursor: true});    this.controls.autoRotate = store.get('autorotate', true);
     this.mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false,
       uniforms: {uPR: {value: this.renderer.getPixelRatio()}, uScale: {value: 300}, uRing: {value: new THREE.Color(pal().ring)}},
@@ -2139,9 +2138,9 @@ function renderReset(step) {
     ? `<p class="sc-p"><b>Delete the index${all ? ' and your settings' : ''} and restart?</b> Search, maps and insights start empty and fill in again as Pensieve re-indexes your ${all ? 'default' : ''} sources, which can take a while for big repos. Your files, repos and agent sessions themselves are not touched.</p>
        <div class="bar-btns" style="justify-content:flex-start"><button class="btn" data-reset-cancel>Cancel</button><button class="btn danger" data-reset-go>Delete and restart</button></div>`
     : `<div class="set-row" style="border-top:0"><div><div class="k">Delete the index and start over</div><div class="d">Removes everything Pensieve has indexed (search, maps, summaries, insights) and rebuilds it. Use it if results look wrong after an upgrade.</div></div><div><button class="btn danger" data-reset>Reset…</button></div></div>
-       <div class="set-row"><div><div class="k">Also reset settings</div><div class="d">Back to default folders, scopes, AI engine and hotkey: a factory reset.</div></div><div><label class="tog"><input type="checkbox" data-reset-all ${all ? 'checked' : ''}></label></div></div>`;
-  $('[data-reset-all]', box)?.addEventListener('change', e => { if (e.target.checked) box.dataset.all = '1'; else delete box.dataset.all; });
-  $('[data-reset]', box)?.addEventListener('click', () => renderReset('confirm'));
+       <div class="set-row"><div><div class="k">Factory reset</div><div class="d">Deletes the index and puts folders, scopes, AI engine and hotkey back to their defaults.</div></div><div><button class="btn danger" data-reset-all>Factory reset…</button></div></div>`;
+  $('[data-reset]', box)?.addEventListener('click', () => { delete box.dataset.all; renderReset('confirm'); });
+  $('[data-reset-all]', box)?.addEventListener('click', () => { box.dataset.all = '1'; renderReset('confirm'); });
   $('[data-reset-cancel]', box)?.addEventListener('click', () => renderReset());
   $('[data-reset-go]', box)?.addEventListener('click', async () => {
     renderReset('busy');

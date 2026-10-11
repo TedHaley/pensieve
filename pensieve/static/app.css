@@ -110,7 +110,7 @@ button.chip{cursor:pointer}
 .seg button.on{background:var(--accent);color:var(--accent-ink)}
 .seg.sm button{padding:2px 8px;font-size:11.5px}
 .seg-label{font-size:11px;color:var(--text-3);padding:0 6px 0 6px;align-self:center;white-space:nowrap}
-.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:5px 11px;color:var(--text);font-size:12px;font-weight:500;display:inline-flex;gap:6px;align-items:center;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:5px 11px;color:var(--text);font-size:12px;font-weight:500;display:inline-flex;gap:6px;align-items:center;box-shadow:0 1px 2px rgba(0,0,0,.06);text-decoration:none}
 .btn:hover{border-color:var(--line-2);background:var(--surface-2)}
 .btn.on{border-color:var(--accent);color:var(--accent)}
 .primary{background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px}
