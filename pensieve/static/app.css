@@ -966,6 +966,18 @@ body.native #top{pointer-events:auto}  /* the whole top bar drags the window, li
 .setup-energy b,.sync-strip b{display:block;font-size:13px}
 .setup-energy span{color:var(--text-2)}
 .setup-btns{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.setup-dots{display:flex;gap:6px;margin:0 0 18px}
+.setup-dots i{width:22px;height:4px;border-radius:2px;background:var(--line)}
+.setup-dots i.done{background:color-mix(in srgb,var(--accent) 45%,transparent)}
+.setup-dots i.on{background:var(--accent)}
+.setup-hero{display:flex;align-items:center;gap:14px;margin:4px 0 14px}
+.setup-hero h1{margin:0}
+.setup-about{margin:0 0 14px;padding-left:18px;font-size:13.5px;line-height:1.6}
+.setup-about li{margin:0 0 4px}
+.setup-profiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.setup-profiles .ai-opt p,.setup-card .ai-opts .ai-opt p{margin:0;font-size:12px;color:var(--text-2);line-height:1.45}
+.setup-addbtn{margin:4px 0 0 10px;font-size:12.5px}
+.setup-add{margin:6px 0 0 10px}
 .sync-strip{margin:0 0 16px;background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .sync-strip svg{color:var(--accent)}
 .sync-strip.warn{background:color-mix(in srgb,#ff9f0a 14%,transparent);align-items:center}

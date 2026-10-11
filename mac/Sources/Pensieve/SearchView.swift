@@ -132,7 +132,7 @@ struct BarButtons: View {
 
     var body: some View {
         HStack(spacing: SearchModel.buttonGap) {
-            GlassCircle(symbol: "circle.hexagongrid", help: "Open visualizer ⌘O", index: 0, shown: model.buttonsShown) {
+            GlassCircle(symbol: "circle.hexagongrid", help: "Open the Map ⌘O", index: 0, shown: model.buttonsShown) {
                 model.actions?.visualize(nil)
             }
             GlassCircle(symbol: "gearshape", help: "Settings ⌘,", index: 1, shown: model.buttonsShown) {
@@ -536,12 +536,15 @@ extension View {
 
     /// The bar's glass in a circle. These sit outside the panel's window, so they draw their own shadow, cut away
     /// inside the circle: under translucent glass it would show through and make the circle darker than the bar.
+    /// The bar's window shadow also draws a hairline edge; the circles' window has no shadow, so they stroke one.
     @ViewBuilder func circleGlass() -> some View {
         let shadow = Circle().fill(Color.black)
             .shadow(color: .black.opacity(0.25), radius: 12, y: 5)
             .mask(Rectangle().padding(-40).overlay(Circle().blendMode(.destinationOut)).compositingGroup())
         if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: Circle()).background(shadow)
+            self.glassEffect(.regular, in: Circle())
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.28), lineWidth: 1))
+                .background(shadow)
         } else {
             self.background(VisualEffect().clipShape(Circle()))
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))

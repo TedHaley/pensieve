@@ -38,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Updater.shared.start()
         Updater.shared.$available.receive(on: RunLoop.main)
             .sink { [weak self] r in self?.badge?.isHidden = r == nil }.store(in: &watchers)
+        backend.$syncing.receive(on: RunLoop.main)
+            .sink { [weak self] jobs in self?.showSyncing(jobs) }.store(in: &watchers)
         if ProcessInfo.processInfo.environment["PENSIEVE_SHOW_PANEL"] != nil { panel.show() }
     }
 
@@ -80,7 +82,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "check-updates":  // Settings → General → Check now
             checkForUpdates()
         case "snapshot" where Debug.enabled:
-            Debug.snapshot(url, panel: q("target") == "buttons" ? panel.buttons : panel.panel, web: visualizer.webView)
+            if q("target") == "statusitem" {
+                if let img = statusItem.button?.image, let p = q("path") { Debug.writeEnlarged(img, to: p) }
+            } else {
+                Debug.snapshot(url, panel: q("target") == "buttons" ? panel.buttons : panel.panel, web: visualizer.webView)
+            }
         case "hover" where Debug.enabled:  // the pointer over the search bar (`on=0`: off it), for snapshots
             panel.model.overBar = q("on") != "0"
         case "options" where Debug.enabled:  // the bar's chevron
@@ -134,6 +140,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
+    private var syncJobs: [Backend.SyncJob] = []
+    private var syncTimer: Timer?
+    private var spin = 0.0
+
+    /// While anything is indexing, the dots swirl in the ring; the menu lists what is being indexed.
+    private func showSyncing(_ jobs: [Backend.SyncJob]) {
+        syncJobs = jobs
+        if jobs.isEmpty {
+            syncTimer?.invalidate()
+            syncTimer = nil
+            spin = 0
+            statusItem.button?.image = Mark.menuBarImage()
+        } else if syncTimer == nil {
+            syncTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.spin += 2 * .pi / 60  // one turn every 3 s
+                    self.statusItem.button?.image = Mark.menuBarImage(spin: self.spin)
+                }
+            }
+        }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let spec = HotKeys.shared.spec
@@ -158,13 +187,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if up.available != nil || up.phase != .idle { menu.addItem(.separator()) }
 
+        if !syncJobs.isEmpty {
+            let head = NSMenuItem(title: "Indexing now", action: nil, keyEquivalent: "")
+            head.isEnabled = false
+            menu.addItem(head)
+            for j in syncJobs {
+                let i = NSMenuItem(title: j.label, action: nil, keyEquivalent: "")
+                i.isEnabled = false
+                i.indentationLevel = 1
+                menu.addItem(i)
+            }
+            menu.addItem(.separator())
+        }
+
         let search = item(tap ? "Search Pensieve    \(keys)" : "Search Pensieve", #selector(showSearch))
         if !tap, let k = HotKeys.parse(spec).key {  // a combo shows right-aligned like any menu shortcut
             search.keyEquivalent = k == UInt32(kVK_Space) ? " " : HotKeys.parse(spec).keyName.lowercased()
             search.keyEquivalentModifierMask = HotKeys.parse(spec).flags
         }
         menu.addItem(search)
-        menu.addItem(item("Open Visualizer", #selector(openVisualizer)))
+        menu.addItem(item("Open Map",#selector(openVisualizer)))
         menu.addItem(.separator())
 
         menu.addItem(item("Settings…", #selector(openSettings), key: ","))

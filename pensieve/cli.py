@@ -160,7 +160,7 @@ def setup(port, items):
         if not items:
             d = httpx.get(f"{base}/api/setup", timeout=300).json()
             print("Pensieve setup: choose what to index." + ("" if not d["done"] else " (Already set up; this changes it.)"))
-            for c in d["categories"]:
+            for c in d["candidates"]:
                 print(f"\n{c['label']}: {c['description']}")
                 for i in c["items"]:
                     size = f"{i['size']:,} {i['unit']}" if i.get("size") is not None else ""
