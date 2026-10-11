@@ -2165,11 +2165,13 @@ async function loadIntegrations() {
   const tog = (kind, id, state, dis) => `<label class="tog"><input type="checkbox" data-ig="${kind}:${id}" ${state === 'on' || state === 'stale' ? 'checked' : ''} ${dis ? 'disabled' : ''}></label>`;
   const row = (k, d, kind, id, state, dis) => `<div class="set-row"><div><div class="k">${k}</div><div class="d">${d}${IG_STATE[state] ? ` · <b>${esc(IG_STATE[state])}</b>` : ''}</div></div><div>${state === 'stale' ? `<button class="btn" data-igup="${kind}:${id}">Update</button> ` : ''}${tog(kind, id, state, dis)}</div></div>`;
   box.innerHTML = `<p class="sc-p">Agents grep by habit. These tell them to search with Pensieve first, which on our benchmark solved more lookups with about 40% fewer tool calls. Nothing changes until you switch one on; switching it off removes exactly what was added.</p>
-    <div class="cmd-l">Instructions block: “search before you grep”</div>
+    <div class="cmd-l">Pensieve as an MCP server: agents search with it in every project, within the repo they start in</div>
+    ${st.mcp.filter(k => k.available || k.state === 'on').map(k => row(esc(k.label), `Adds Pensieve to <code>${esc(k.path)}</code>`, 'mcp', k.id, k.state, k.state === 'theirs')).join('') || '<p class="sc-p">No agents found on this Mac.</p>'}
+    <div class="cmd-l" style="margin-top:10px">Instructions block: “search before you grep”</div>
     ${st.instructions.map(t => row(esc(t.label), `Adds a marked section to <code>${esc(t.path)}</code>`, 'ins', t.id, t.state)).join('')}
     <div class="cmd-l" style="margin-top:10px">Claude Code skills (in <code>~/.claude/skills</code>)</div>
     ${st.skills.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'skill', k.id, k.state, k.state === 'theirs')).join('')}
-    <div class="cmd-l" style="margin-top:10px">Claude Code hook (in <code>${esc(st.hooks[0].path)}</code>)</div>
+    <div class="cmd-l" style="margin-top:10px">Claude Code hooks (in <code>${esc(st.hooks[0].path)}</code>)</div>
     ${st.hooks.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'hook', k.id, k.state)).join('')}
     <div class="cmd-l" style="margin-top:10px">Other agents (Cursor, Windsurf, …): paste into the agent’s rules</div>
     <div class="cmd ig-text"><code>${esc(st.text)}</code><button class="btn" data-copy="${esc(st.text)}">Copy</button></div>
@@ -2179,7 +2181,7 @@ async function loadIntegrations() {
     const r = await fetch('/api/integrations/' + encodeURIComponent(id), {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({on})});
     if (!r.ok) toast('Could not change: ' + ((await r.json().catch(() => ({}))).detail || r.status));
     else toast(({ins: ['Instructions added', 'Instructions removed'], skill: ['Skill installed', 'Skill removed'],
-                 hook: ['Hook installed', 'Hook removed']})[kind][on ? 0 : 1]);
+                 hook: ['Hook installed', 'Hook removed'], mcp: ['Added; restart the agent to load it', 'Removed']})[kind][on ? 0 : 1]);
     loadIntegrations();
   };
   $$('[data-ig]', box).forEach(i => i.onchange = () => set(i.dataset.ig, i.checked));
@@ -2210,7 +2212,7 @@ async function renderSettings() {
   else if (tab === 'agents') body = bar('Search & Agents', 'How you and your agents reach Pensieve.', true) + form(['Mac app']).map(card).join('') + `
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
       <p class="sc-p">Pensieve is an MCP server: Claude Code, Codex, Cursor and other agents can search your files, code and sessions and find who knows what. Agents get the 10 search and people tools by default; add <code>?tools=all</code> (HTTP) or <code>--all-tools</code> (stdio) to let one change these settings too.</p>
-      <div class="cmd-l">Claude Code (HTTP)</div>${cmd(`claude mcp add --transport http pensieve ${mcpUrl}`)}
+      <div class="cmd-l">Claude Code (HTTP)</div>${cmd(`claude mcp add --scope user --transport http pensieve ${mcpUrl}`)}
       <div class="cmd-l">Agents that only speak stdio — scoped automatically to the repo the agent starts in</div>${cmd('pensieve mcp')}
       <div class="cmd-l">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>

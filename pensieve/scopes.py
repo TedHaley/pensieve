@@ -27,6 +27,7 @@ class Scope:
     repos: set | None = field(default_factory=set)     # None = every repo
     folders: list | None = field(default_factory=list)  # None = every indexed file
     agents: set | None = field(default_factory=set)     # None = every agent's sessions; sessions in `repos` always count
+    unindexed: bool = False  # 'auto' in a git repo Pensieve doesn't index
 
     def label(self):
         return self.name
@@ -79,6 +80,17 @@ def resolve(name: str | None, cwd: str | None = None, repos=None) -> Scope | Non
             from pensieve.projects import project_root
             pr = project_root(cwd)
             root = repos.locate(pr)[0] if pr else None
+        if root is None and pr:  # a repo the session history doesn't link to one we index: ask the repos table
+            from pensieve.repos import check
+            with repos.lock:
+                indexed = dict(repos.db.execute("SELECT root, remote FROM repos").fetchall())
+            c = check(pr, indexed)
+            if c["state"] != "indexed":  # searching everything would return other repos' code as if it were this one's
+                s = _build(f"{c['name']} (not indexed)", [f"repos/{c['root']}"],
+                           f"Pensieve doesn't index {c['name']}; use grep for its code")
+                s.unindexed = True
+                return s
+            root = c["root"]
         if root is None:
             return ALL
         for n, sc in named().items():

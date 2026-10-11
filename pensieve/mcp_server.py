@@ -74,8 +74,12 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     error string, or a mix ("fetchCompanies retry on 429"). "quotes" = exact, -word excludes, ext:py, in:<path>,
     by:<person>, kind:file|code|doc|session|folder|repo|person (folder: "person build" -> that directory; person: who
     wrote the code about it). One line per hit, best first: path:line  snippet  [id for read/similar]."""
-    r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=_scope())
-    return _lines(r["results"]) or "No matches."
+    sc = _scope()
+    r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc)
+    found = _lines(r["results"])
+    if getattr(sc, "unindexed", False):  # only past sessions in this repo can match; its code isn't indexed
+        return (f"{sc.description}. `pensieve repo index` indexes it." + (f"\n{found}" if found else ""))
+    return found or "No matches."
 
 
 def _lines(results):

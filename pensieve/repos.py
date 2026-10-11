@@ -36,6 +36,29 @@ def norm_remote(url: str) -> str:
     return re.sub(r"\.git$", "", u).lower()
 
 
+def check(cwd: str, indexed: dict) -> dict:
+    """What Pensieve knows about the git repo at cwd. `indexed` is the repos table's root -> remote; a clone of one
+    of them (same remote) counts as that repo. state: 'none' (not in a repo), 'indexed', 'pending' (chosen, not
+    indexed yet), 'declined' (switched off in Sources) or 'unknown'. Takes no sync lock, so it answers during an
+    indexing pass."""
+    root = project_root(cwd) if cwd else None
+    if not root:
+        return dict(state="none")
+    canon = root if root in indexed else None
+    if canon is None:
+        remote = norm_remote(git(root, "config", "--get", "remote.origin.url"))
+        canon = next((r for r, rem in indexed.items() if remote and rem == remote), None)
+    root = canon or root
+    out = dict(root=root, name=Path(root).name)
+    if not settings.enabled("repos") or not settings.enabled(f"repos/{root}"):
+        return dict(out, state="declined")
+    if canon:
+        return dict(out, state="indexed")
+    if Path(root) in settings.paths("repos"):
+        return dict(out, state="pending")
+    return dict(out, state="unknown", files=git(root, "ls-files").count("\n"))
+
+
 def area_of(path: str) -> str:
     """Two-level area key for a repo-relative file path ('core/pipelines/x.py' -> 'core/pipelines')."""
     parts = path.split("/")

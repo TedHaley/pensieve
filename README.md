@@ -15,13 +15,23 @@ Everything runs on your Mac. Text is embedded with `Qwen3-Embedding-0.6B` and st
 curl -fsSL https://tedhaley.ca/pensieve/install.sh | sh
 ```
 
-This installs [uv](https://docs.astral.sh/uv/) if needed and the `pensieve` backend. On a Mac with the Xcode command-line tools (`xcode-select --install`), it also builds the Pensieve app into `~/Applications` and starts it. Otherwise it starts the backend and opens the visualizer in your browser.
+On an Apple Silicon Mac, the script downloads the latest `Pensieve.dmg` and copies the app to Applications. Then it installs the `pensieve` backend with the installer inside the app. You do not need git, the Xcode tools or Python. The app starts when you run the script in a terminal. When an agent runs it, the script installs only.
+
+Then connect your agents:
+
+```bash
+pensieve integrate recommended
+```
+
+This command finds the agents on your Mac (Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Claude Desktop and VS Code) and gives each one Pensieve as an MCP server.
+
+On Linux and Intel Macs, the script installs [uv](https://docs.astral.sh/uv/) and the backend from source. Then it starts the backend and opens the visualizer in your browser.
 
 Or by hand:
 
 ```bash
 uv tool install git+https://github.com/TedHaley/pensieve   # the backend: `pensieve`
-git clone https://github.com/TedHaley/pensieve && pensieve/mac/build.sh --install   # the Mac app
+git clone https://github.com/TedHaley/pensieve && pensieve/mac/build.sh --install   # the Mac app (needs the Xcode tools)
 ```
 
 On first run Pensieve downloads the embedding model (~1.2 GB), then indexes in the background. Search and the map fill in as it goes.
@@ -73,13 +83,15 @@ Code results open at the matching line in your editor if you set `editor` to `vs
 
 Agents are only as good as the context they're given, so each agent connection works within a **scope**: a slice of the index, such as the repo it's working in.
 
+`pensieve integrate recommended` connects every agent on your Mac. For Claude Code, it runs the first command below. `--scope user` makes Pensieve available in every project. Without it, `claude mcp add` connects only the folder you run it in.
+
 ```bash
-claude mcp add pensieve -- pensieve mcp          # stdio; scope "auto" = the repo the agent was started in
+claude mcp add --scope user pensieve -- pensieve mcp   # stdio; scope "auto" = the repo the agent was started in
 claude mcp add pensieve -- pensieve mcp --scope payments
 claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=payments"
 ```
 
-- **auto** (the default for `pensieve mcp`) uses the agent's working directory: the first named scope that includes that repo, otherwise just that repo with its worktrees and the agent sessions run in it. Outside any repo it means everything. HTTP connections can't see the agent's folder, so name a scope there (no `?scope` = everything).
+- **auto** (the default for `pensieve mcp`) uses the agent's working directory: the first named scope that includes that repo, otherwise just that repo with its worktrees and the agent sessions run in it. Outside any repo it means everything. In a repo that Pensieve does not index, search tells the agent to use grep. It does not return code from your other repos. HTTP connections can't see the agent's folder, so name a scope there (no `?scope` = everything).
 - **Named scopes** are lists of sources, e.g. `payments = repos/~/code/billing + repos/~/code/ledger + files/~/Documents/specs`. Create them in Settings → Scopes or with the `save_scope` tool. Everything stays in one index; a scope only filters, so nothing is embedded twice.
 - Every tool respects the scope: search, read, similar, who_knows, list_repos, team, unexplored. An item outside it is refused.
 - The search panel and the visualizer use `default_scope` (empty = everything).
@@ -94,17 +106,20 @@ Agents grep by habit, even with Pensieve connected. Optional add-ons fix that (S
 
 ```bash
 pensieve integrate                    # what's available and what's installed
-pensieve integrate recommended        # the instructions block in ~/.claude/CLAUDE.md, the pensieve-search skill and the edit hook
-pensieve integrate codex              # the same block in ~/.codex/AGENTS.md
+pensieve integrate recommended        # for each agent on this Mac: the MCP server and the instructions block;
+                                      # for Claude Code also the pensieve-search skill and both hooks
+pensieve integrate cursor-mcp codex   # only these
 pensieve integrate pensieve-teammates pensieve-plan
 pensieve integrate claude --remove    # removes exactly what was added
 ```
 
-- **Instructions block** ([`instructions.md`](pensieve/integrations/instructions.md)): a short "search before you grep" section, kept between `<!-- pensieve:start -->` markers. Paste it into any other agent's rules (Cursor, Windsurf, …).
+- **MCP server** (`claude-mcp`, `codex-mcp`, `cursor-mcp`, `gemini-mcp`, `windsurf-mcp`, `claude-desktop-mcp`, `vscode-mcp`): adds Pensieve to the agent's MCP config for every project. For Claude Code, it runs `claude mcp add --scope user`. In other config files, Pensieve changes only its own entry. Restart an open agent to load the server.
+- **Instructions block** ([`instructions.md`](pensieve/integrations/instructions.md)): a short "search before you grep" section in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` or `~/.gemini/GEMINI.md`, kept between `<!-- pensieve:start -->` markers. For other agents (Cursor, Windsurf, …), paste it into the agent's rules.
 - **`pensieve-search` skill** (recommended): query styles, when to fall back to grep, finding similar code before writing new code, recalling past sessions.
 - **`pensieve-teammates`**: suggests who knows an area from git blame and drafts the question for you. It never messages anyone.
 - **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.
 - **`claude-hook`** (recommended): a `PostToolUse` hook in `~/.claude/settings.json`. After each Edit or Write, it sends the changed path to Pensieve. The agent's next search then always finds the new code, even when the file system event comes late. The hook adds about 50 ms to each edit.
+- **`claude-repo-check`** (recommended): a `SessionStart` hook. When a session starts in a repo that Pensieve does not index, Claude asks you once whether to index it. If you say yes, Claude runs `pensieve repo index`. If you say no, Claude runs `pensieve repo skip` and uses grep in that repo. Pensieve keeps the answer as the repo's switch in Settings → Sources, so Claude does not ask again. To change it, use that switch or `pensieve repo index`.
 
 ### Does it help? The benchmark
 
