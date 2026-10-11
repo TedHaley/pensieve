@@ -1782,13 +1782,30 @@ async function openFile(path) {
 }
 
 /* ============================== settings view ============================== */
-const SET_GROUPS = [
-  ['What gets indexed', ['exclude', 'exclude_files', 'max_file_mb', 'skip_temp_sessions']],
-  ['Git repositories', ['sweep_roots', 'sweep_depth', 'max_repo_files']],
-  ['Mac app', ['hotkey', 'editor']],
-];
+// Each setting sits with the thing it controls: a source's options in its Sources card, the Mac app's in General,
+// the AI models with the engines. Every change saves at once, like the switches next to them.
+const SRC_OPTS = {agents: ['skip_temp_sessions'], files: ['exclude', 'exclude_files', 'max_file_mb'], repos: ['sweep_roots', 'sweep_depth', 'max_repo_files']};
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
-const SET_HIDDEN = new Set(['repos', 'disabled', 'folders', 'sources', 'sweep_repos', 'default_scope', 'scopes', 'appearance', 'ai', 'ai_on_battery', 'insights_auto', 'auto_update_check', 'llm_url', 'llm_model', 'llm_key', 'llm_key_set', 'file_types', 'off_map', 'chunk_chars', 'max_chunks']);  // managed in their own sections
+function setRow(k) {
+  if (!S.set || !(k in S.set.draft)) return '';
+  return `<div class="set-row"><div><div class="k">${esc(SET_LABEL[k] || k)}</div><div class="d">${esc(S.set.desc[k] || '')}</div></div>
+    <div>${setField(k)}${S.set.errKey === k ? `<div class="err">${esc(S.set.err)}</div>` : ''}</div></div>`;
+}
+function bindFields(root) {
+  const D = S.set?.draft; if (!D) return;
+  const commit = () => saveSettings();
+  $$('[data-sk]', root).forEach(i => i.onchange = () => {
+    const k = i.dataset.sk, d = S.set.defaults[k];
+    D[k] = typeof d === 'boolean' ? i.checked : typeof d === 'number' ? (i.value === '' ? i.value : Number(i.value)) : i.value;
+    commit();
+  });
+  $$('[data-sobj]', root).forEach(i => i.onchange = () => { D[i.dataset.sobj] = {...D[i.dataset.sobj], [i.dataset.n]: i.checked}; commit(); });
+  $$('[data-li]', root).forEach(i => i.onchange = () => { D[i.dataset.li] = D[i.dataset.li].map((x, j) => j === +i.dataset.i ? i.value.trim() : x).filter(Boolean); commit(); });
+  $$('[data-lrm]', root).forEach(b => b.onclick = () => { D[b.dataset.lrm] = D[b.dataset.lrm].filter((_, j) => j !== +b.dataset.i); commit(); });
+  const addTo = k => { const i = $(`[data-ladd-in="${k}"]`, root), v = i.value.trim(); if (v && !D[k].includes(v)) { D[k] = [...D[k], v]; commit(); } };
+  $$('[data-ladd]', root).forEach(b => b.onclick = () => addTo(b.dataset.ladd));
+  $$('[data-ladd-in]', root).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); addTo(i.dataset.laddIn); } });
+}
 const SRC_ICON = {
   agents: '<path d="M4 5h16v11H8l-4 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 10h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
@@ -1798,7 +1815,7 @@ const SRC_ICON = {
 // 'a/very/long/path/to/thing' -> 'a/very/lo…/to/thing': keeps both the root and the name readable
 const midEllipsis = (t, max) => !t || t.length <= max ? t : t.slice(0, Math.ceil(max * .4)) + '…' + t.slice(-Math.floor(max * .6 - 1));
 const srcCount = (n, unit) => n == null ? '' : `${n.toLocaleString()} ${n === 1 && unit ? unit.replace(/s$/, '') : unit || ''}`;
-const srcState = {cat: null, types: null, hints: new Map(), err: null};
+const srcState = {cat: null, types: null, hints: new Map(), err: null, opts: new Set()};  // opts: cards with Options open
 async function loadSources() {
   const [cat, types] = await Promise.all([api('/api/sources').catch(() => null), api('/api/filetypes').catch(() => null)]);
   srcState.cat = cat || srcState.cat || [];
@@ -1882,12 +1899,15 @@ function sourcesHtml() {
         ${rules.length ? `<div class="src-rules">${rules.map(i => srcItem(i, c.enabled) + (kids(i.id).length ? `<div class="src-kids">${kids(i.id).map(k => srcItem(k, c.enabled, !i.enabled)).join('')}</div>` : '')).join('')}</div>` : ''}
         ${rest.length ? `<div class="src-items">${rest.map(i => srcItem(i, c.enabled)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
         ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="Add a folder, e.g. ~/notes" data-src-add-in><button class="btn" data-src-add>Add folder</button></div><div class="err" data-src-add-err></div>` : ''}
+        ${(SRC_OPTS[c.id] || []).some(k => S.set && k in S.set.draft) ? `<details class="src-opts" data-opts="${c.id}" ${srcState.opts.has(c.id) ? 'open' : ''}><summary>Options</summary>${SRC_OPTS[c.id].map(setRow).join('')}</details>` : ''}
       </div>`;
     }).join('')}</div>${fileTypesHtml()}`;
 }
 function renderSources() {
   const box = $('#srcbox'); if (!box) return;
   box.innerHTML = sourcesHtml();
+  bindFields(box);
+  $$('[data-opts]', box).forEach(d => d.ontoggle = () => srcState.opts[d.open ? 'add' : 'delete'](d.dataset.opts));
   $$('[data-src-id]', box).forEach(i => i.onchange = async () => {
     const id = i.dataset.srcId, on = i.checked;
     i.disabled = true;
@@ -1995,10 +2015,11 @@ function scopesHtml() {
       <div class="cmd"><code>${esc(stdioCmd(x.name))}</code><button class="btn" data-copy="${esc(stdioCmd(x.name))}">Copy</button></div>
       <div class="cmd"><code>${esc(httpCmd(x.name))}</code><button class="btn" data-copy="${esc(httpCmd(x.name))}">Copy</button></div></div>`;
   };
+  // the default only means something once there is a scope to pick
   return `<div class="src-head"><h2>Scopes</h2><p>Named slices of the index. An agent connected with a scope only searches inside it; the search panel uses the default below.</p></div>
-    <div class="set-card sc-def"><div class="sc-top"><div><h3>Default for the search panel and visualizer search</h3><p>Plain searches use this unless you pick another scope in the search box.</p></div>
-      <select class="set-in" data-sc-default style="max-width:240px"><option value="" ${def ? '' : 'selected'}>All — everything</option>${scopeNames().map(n => `<option value="${esc(n)}" ${def === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div></div>
-    ${d.scopes.map(card).join('') || '<p class="muted" style="font-size:12.5px">No scopes yet. Create one for a group of repos you work on together.</p>'}
+    ${d.scopes.length ? `<div class="set-card sc-def"><div class="sc-top"><div><h3>Default for the search panel and visualizer search</h3><p>Plain searches use this unless you pick another scope in the search box.</p></div>
+      <select class="set-in" data-sc-default style="max-width:240px"><option value="" ${def ? '' : 'selected'}>All — everything</option>${scopeNames().map(n => `<option value="${esc(n)}" ${def === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div></div>` : ''}
+    ${d.scopes.map(card).join('') || '<p class="muted" style="font-size:12.5px">No scopes yet. A scope is a group of repos and folders you work on together. Agents connected with it search only there, and you can make it the default for your own searches.</p>'}
     ${scState.edit ? scopeEditor() : '<button class="btn" data-sc-new style="margin-bottom:14px">+ New scope</button>'}
     <div class="set-card"><h3>How agents pick a scope</h3>
       <p class="sc-p"><code>pensieve mcp</code> (stdio) uses <b>--scope auto</b>: the repo the agent was started in, or the first named scope that includes that repo. Outside a repo it sees everything. Pin one with <code>pensieve mcp --scope &lt;name&gt;</code>.</p>
@@ -2064,9 +2085,9 @@ function renderPalScope() {
   sel.value = [...sel.options].some(o => o.value === cur) ? cur : def;
   sel.hidden = !scopeNames().length;
 }
-const settingsNav = () => `<div class="sec"><div class="sec-h"><span>Settings</span></div><div class="rows"><button class="row" data-setgo="Sources"><span class="name">Sources</span></button><button class="row" data-setgo="Scopes"><span class="name">Scopes</span></button>${SET_GROUPS.map(([g]) => `<button class="row" data-setgo="${esc(g)}"><span class="name">${esc(g)}</span></button>`).join('')}<button class="row" data-setgo="Connect an agent"><span class="name">Connect an agent</span></button><button class="row" data-setgo="Index"><span class="name">Index</span></button></div></div>`;
+const settingsNav = () => `<div class="sec"><div class="sec-h"><span>Settings</span></div><div class="rows">${SET_TABS.map(([id, l]) => `<button class="row" data-setgo="${id}"><span class="name">${esc(l)}</span></button>`).join('')}</div></div>`;
 function bindSettingsNav(side) {
-  $$('[data-setgo]', side).forEach(b => b.onclick = () => document.getElementById('set-' + b.dataset.setgo.replace(/\W+/g, '-'))?.scrollIntoView({behavior: 'smooth', block: 'start'}));
+  $$('[data-setgo]', side).forEach(b => b.onclick = () => setTab(b.dataset.setgo));
 }
 async function loadSettings(force = false) {
   if (S.set && !force) return;
@@ -2100,12 +2121,12 @@ const SET_TABS = [
   ['general', 'General', '#8e8e93', '<circle cx="12" cy="12" r="3" fill="none" stroke="#fff" stroke-width="1.8"/><path d="M12 3.5v2.4M12 18.1v2.4M3.5 12h2.4M18.1 12h2.4M6 6l1.7 1.7M16.3 16.3 18 18M6 18l1.7-1.7M16.3 7.7 18 6" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>'],
   ['sources', 'Sources', '#0a84ff', '<path d="M4 6.5C4 5.1 7.6 4 12 4s8 1.1 8 2.5S16.4 9 12 9 4 7.9 4 6.5Z M4 6.5v11C4 18.9 7.6 20 12 20s8-1.1 8-2.5v-11 M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" fill="none" stroke="#fff" stroke-width="1.8"/>'],
   ['scopes', 'Scopes', '#5e5ce6', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="#fff"/>'],
-  ['agents', 'Search & Agents', '#30b0c7', '<circle cx="11" cy="11" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
+  ['agents', 'Agents', '#30b0c7', '<circle cx="11" cy="11" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
   ['ai', 'AI & Insights', '#bf5af2', '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9Z" fill="#fff"/><circle cx="18.5" cy="17.5" r="1.6" fill="#fff"/>'],
-  ['appearance', 'Appearance', '#ff9f0a', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><path d="M12 4.5a7.5 7.5 0 0 1 0 15Z" fill="#fff"/>'],
-  ['advanced', 'Advanced', '#8e8e93', '<path d="M5 7h8M17 7h2M5 17h2M11 17h8" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="7" r="2" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="9" cy="17" r="2" fill="none" stroke="#fff" stroke-width="1.8"/>'],
 ];
+const OLD_TABS = {appearance: 'general', advanced: 'general'};  // removed tabs, still in saved state and old links
 S.setTab = store.get('setTab', 'sources');
+S.setTab = OLD_TABS[S.setTab] || S.setTab;
 // General: version, update check, reset. Inside the Mac app (PensieveMac/2+) the app checks and installs updates itself.
 const IN_APP = /PensieveMac\/(\d+)/.test(navigator.userAgent) && +RegExp.$1 >= 2;
 const fmtBytes = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? Math.round(n / 1e6) + ' MB' : Math.round(n / 1e3) + ' KB';
@@ -2164,7 +2185,7 @@ async function loadIntegrations() {
   try { st = await (await fetch('/api/integrations')).json(); } catch { box.innerHTML = '<p class="sc-p">Could not load add-ons.</p>'; return; }
   const tog = (kind, id, state, dis) => `<label class="tog"><input type="checkbox" data-ig="${kind}:${id}" ${state === 'on' || state === 'stale' ? 'checked' : ''} ${dis ? 'disabled' : ''}></label>`;
   const row = (k, d, kind, id, state, dis) => `<div class="set-row"><div><div class="k">${k}</div><div class="d">${d}${IG_STATE[state] ? ` · <b>${esc(IG_STATE[state])}</b>` : ''}</div></div><div>${state === 'stale' ? `<button class="btn" data-igup="${kind}:${id}">Update</button> ` : ''}${tog(kind, id, state, dis)}</div></div>`;
-  box.innerHTML = `<p class="sc-p">Agents grep by habit. These tell them to search with Pensieve first, which on our benchmark solved more lookups with about 40% fewer tool calls. Nothing changes until you switch one on; switching it off removes exactly what was added.</p>
+  box.innerHTML = `<p class="sc-p">Agents grep by habit. These tell them to search with Pensieve first, which on our benchmark solved more lookups with fewer tool calls. Nothing changes until you switch one on; switching it off removes exactly what was added.</p>
     <div class="cmd-l">Pensieve as an MCP server: agents search with it in every project, within the repo they start in</div>
     ${st.mcp.filter(k => k.available || k.state === 'on').map(k => row(esc(k.label), `Adds Pensieve to <code>${esc(k.path)}</code>`, 'mcp', k.id, k.state, k.state === 'theirs')).join('') || '<p class="sc-p">No agents found on this Mac.</p>'}
     <div class="cmd-l" style="margin-top:10px">Instructions block: “search before you grep”</div>
@@ -2194,22 +2215,15 @@ async function renderSettings() {
   const el = $('#settings');
   const was = $('#setmain'), keep = was ? {tab: was.dataset.tab, y: was.scrollTop} : null;  // before anything replaces it
   if (!S.set) { el.innerHTML = '<div class="empty"><div class="spinner" style="margin:auto"></div></div>'; try { await loadSettings(); } catch { el.innerHTML = '<div class="empty">Could not load settings.</div>'; return; } }
-  const st = S.status, dirty = setDirty(), port = location.port || '8765', mcpUrl = `http://127.0.0.1:${port}/mcp`;
+  const st = S.status, port = location.port || '8765', mcpUrl = `http://127.0.0.1:${port}/mcp`;
   const tab = SET_TABS.some(t => t[0] === S.setTab) ? S.setTab : 'sources';
-  const known = new Set([...SET_GROUPS.flatMap(g => g[1]), ...SET_HIDDEN]);
-  const groups = [...SET_GROUPS.map(([g, ks]) => [g, ks.filter(k => k in S.set.draft)]), ['Other', Object.keys(S.set.draft).filter(k => !known.has(k))]].filter(g => g[1].length);
-  const row = k => `<div class="set-row ${dirty.includes(k) ? 'changed' : ''}"><div><div class="k">${esc(SET_LABEL[k] || k)}</div><div class="d">${esc(S.set.desc[k] || '')}</div></div>
-    <div>${setField(k)}${S.set.errKey === k ? `<div class="err">${esc(S.set.err)}</div>` : ''}</div></div>`;
   const cmd = (c, label) => `<div class="cmd"><code>${esc(c)}</code><button class="btn" data-copy="${esc(c)}">${label || 'Copy'}</button></div>`;
   const kpi = (l, v) => `<div class="kpi"><div class="l">${l}</div><div class="v">${(v || 0).toLocaleString()}</div></div>`;
-  const card = ([g, ks]) => `<div class="set-card" id="set-${g.replace(/\W+/g, '-')}"><h3>${esc(g)}</h3>${ks.map(row).join('')}</div>`;
-  const form = ks => groups.filter(([g]) => ks.includes(g));
-  const bar = (title, sub, withSave) => `<div class="set-bar"><div><h1>${esc(title)}</h1><div class="msg ${S.set.err ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : withSave && dirty.length ? plural(dirty.length, 'unsaved change') : esc(sub)}</div></div>
-      ${withSave ? `<div class="bar-btns"><button class="btn" id="setreset" ${dirty.length ? '' : 'disabled'}>Discard</button><button class="btn primary" id="setsave" ${dirty.length ? '' : 'disabled'}>Save</button></div>` : ''}</div>`;
+  const bar = (title, sub) => `<div class="set-bar"><div><h1>${esc(title)}</h1><div class="msg ${S.set.err && !S.set.errKey ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : esc(sub)}</div></div></div>`;
   let body = '';
-  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes. Switching a source off removes its data on the next sweep.') + `<div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
+  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes, and the options for each. Switching a source off removes its data on the next sweep.') + `<div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
   else if (tab === 'scopes') body = bar('Scopes', 'Named slices of the index that agents and search work within.') + `<div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>`;
-  else if (tab === 'agents') body = bar('Search & Agents', 'How you and your agents reach Pensieve.', true) + form(['Mac app']).map(card).join('') + `
+  else if (tab === 'agents') body = bar('Agents', 'Connect your coding agents, and help them search with Pensieve first.') + `
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
       <p class="sc-p">Pensieve is an MCP server: Claude Code, Codex, Cursor and other agents can search your files, code and sessions and find who knows what. Agents get the 10 search and people tools by default; add <code>?tools=all</code> (HTTP) or <code>--all-tools</code> (stdio) to let one change these settings too.</p>
       <div class="cmd-l">Claude Code (HTTP)</div>${cmd(`claude mcp add --scope user --transport http pensieve ${mcpUrl}`)}
@@ -2219,20 +2233,19 @@ async function renderSettings() {
     </div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
   else if (tab === 'ai') body = bar('AI & Insights', 'Optional: the engine that writes summaries, topic names and insights.') + aiSettingsHtml();
-  else if (tab === 'appearance') body = bar('Appearance', 'Matches the Pensieve Mac app.') + `
-    <div class="set-card"><div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes.</div></div>
-      <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>`;
-  else if (tab === 'general') body = bar('General', 'Version, updates, and starting over.') + `
-    <div class="set-card" id="set-About"><h3>About</h3><div id="aboutbox"><div class="spinner" style="margin:8px 0"></div></div></div>
+  else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
+    <div class="set-card" id="set-Mac-app"><h3>Mac app</h3>${setRow('hotkey')}${setRow('editor')}
+      <div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes. The search panel and the visualizer both use it.</div></div>
+      <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>
+    <div class="set-card" id="set-About"><h3>About</h3><div id="aboutbox"><div class="spinner" style="margin:8px 0"></div></div>
+      <div class="set-stats" style="margin-top:12px">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
+      <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}${st.llm ? ` · model: ${esc(st.llm)}` : ''}</p></div>
     <div class="set-card" id="set-Updates"><h3>Updates</h3>
       <div class="set-row" style="border-top:0"><div><div class="k">Check for updates</div><div class="d" id="updmsg">${IN_APP ? 'Pensieve checks GitHub and offers to install a newer version.' : 'Compares this version with the latest release on GitHub.'}</div></div>
         <div><button class="btn" id="updcheck">Check now</button></div></div>
       <div class="set-row"><div><div class="k">Check for updates automatically</div><div class="d">Pensieve checks GitHub once a day and asks before installing.</div></div>
         <div><label class="tog"><input type="checkbox" data-upd ${S.set.orig.auto_update_check !== false ? 'checked' : ''}></label></div></div></div>
     <div class="set-card danger" id="set-Reset"><h3>Reset Pensieve</h3><div id="resetbox"></div></div>`;
-  else body = bar('Advanced', 'Fine-tuning for indexing and the local language model.', true) + groups.filter(([g]) => g !== 'Mac app').map(card).join('') + `
-    <div class="set-card" id="set-Index"><h3>Index</h3><div class="set-stats">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
-      <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}${st.llm ? ` · model: ${esc(st.llm)}` : ''}</p></div>`;
   const prevMain = $('#setmain'), y = prevMain && prevMain.dataset.tab === tab ? prevMain.scrollTop : keep?.tab === tab ? keep.y : 0;
   el.innerHTML = `<div class="set-sheet"><nav class="set-nav">${SET_TABS.map(([id, l, c, ic]) => `<button class="${id === tab ? 'on' : ''}" data-settab="${id}"><span class="set-ic" style="background:${c}"><svg viewBox="0 0 24 24" width="14" height="14">${ic}</svg></span>${esc(l)}</button>`).join('')}<span class="grow"></span><button class="btn set-done" data-setdone title="Close (Esc)">Done</button></nav>
     <div class="set-main" id="setmain" data-tab="${tab}">${body}</div></div>`;
@@ -2249,24 +2262,11 @@ async function renderSettings() {
     else { upd.checked = !upd.checked; toast('Could not save: ' + ((await r.json().catch(() => ({}))).detail || r.status)); }
   };
   $('[data-setdone]', el).onclick = () => setView(S.prevView || 'code');
-  const D = S.set.draft, again = () => renderSettings();
-  $$('[data-sk]', el).forEach(i => i.onchange = () => {
-    const k = i.dataset.sk, d = S.set.defaults[k];
-    D[k] = typeof d === 'boolean' ? i.checked : typeof d === 'number' ? (i.value === '' ? i.value : Number(i.value)) : i.value;
-    again();
-  });
-  $$('[data-sobj]', el).forEach(i => i.onchange = () => { D[i.dataset.sobj] = {...D[i.dataset.sobj], [i.dataset.n]: i.checked}; again(); });
-  $$('[data-li]', el).forEach(i => i.onchange = () => { D[i.dataset.li] = D[i.dataset.li].map((x, j) => j === +i.dataset.i ? i.value.trim() : x).filter(Boolean); again(); });
-  $$('[data-lrm]', el).forEach(b => b.onclick = () => { D[b.dataset.lrm] = D[b.dataset.lrm].filter((_, j) => j !== +b.dataset.i); again(); });
-  const addTo = k => { const i = $(`[data-ladd-in="${k}"]`, el), v = i.value.trim(); if (v && !D[k].includes(v)) { D[k] = [...D[k], v]; again(); } };
-  $$('[data-ladd]', el).forEach(b => b.onclick = () => addTo(b.dataset.ladd));
-  $$('[data-ladd-in]', el).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); addTo(i.dataset.laddIn); } });
+  bindFields($('#setmain'));
   $$('#setmain > .set-card [data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
-  $('#setreset')?.addEventListener('click', () => { S.set.draft = structuredClone(S.set.orig); S.set.err = S.set.errKey = null; again(); });
-  $('#setsave')?.addEventListener('click', saveSettings);
   renderSources(); renderScopes();
 }
-const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Largest swept repo (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model'};
+const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Largest repo to discover (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model', builtin_model: 'Built-in engine', agent_model: 'Claude Code engine'};
 async function saveSettings() {
   const ks = setDirty(); if (!ks.length) return;
   const body = Object.fromEntries(ks.map(k => [k, S.set.draft[k]]));
@@ -2314,8 +2314,8 @@ async function route() {
   if (!h) return;
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
-  if (['sources', 'scopes', 'agents', 'appearance', 'advanced', 'ai'].includes(h)) {
-    S.setTab = h; store.set('setTab', h);
+  if (['sources', 'scopes', 'agents', 'ai', 'general', ...Object.keys(OLD_TABS)].includes(h)) {
+    S.setTab = OLD_TABS[h] || h; store.set('setTab', S.setTab);
     return S.view === 'settings' ? renderSettings() : setView('settings');
   }
   const q = new URLSearchParams(h);
@@ -2375,7 +2375,7 @@ function aiProgressHtml(d) {
   const pct = d.progress != null ? Math.round(d.progress * 100) : null;
   return `<div class="ai-prog"><div class="ai-prog-t"><span>${esc(d.detail || (d.status === 'starting' ? 'Starting the model…' : 'Downloading…'))}</span>${pct != null ? `<b>${pct}%</b>` : ''}</div>
     <div class="ai-bar ${pct == null ? 'indet' : ''}"><i style="width:${pct ?? 30}%"></i></div>
-    ${d.paused ? `<p class="ai-paused">⏸ ${esc(d.paused)}${S.set?.orig?.ai_on_battery === false || !S.set ? ' — <a href="#ai">change in Settings</a>' : ''}</p>` : '<p class="ai-paused muted">Keep working; Pensieve carries on in the background.</p>'}</div>`;
+    ${d.paused ? `<p class="ai-paused">⏸ ${esc(d.paused)}${(S.set?.orig?.ai_on_battery === false || !S.set) && S.view !== 'settings' ? ' — <a href="#ai">change in Settings</a>' : ''}</p>` : '<p class="ai-paused muted">Keep working; Pensieve carries on in the background.</p>'}</div>`;
 }
 const INSIGHTS_ADD = ['Plain-language summaries of every session and code area', 'Topic names instead of keyword lists', 'Themes, open threads and unexplored directions across your work', 'Short summaries of what each teammate has been shipping'];
 const NO_AI_WORKS = 'Maps, search, activity, keyword topics, your code footprint and team commits all work without it.';
@@ -2412,7 +2412,7 @@ function aiSettingsHtml() {
   const d = aiState.data;
   if (!d) { loadAI().then(() => S.setTab === 'ai' && renderSettings()); return '<div class="set-card"><p class="sc-p">Checking…</p></div>'; }
   const bat = !!S.set?.orig?.ai_on_battery;
-  return `<div class="set-card ai-set"><h3>Status</h3>${aiStatusHtml(d)}${aiProgressHtml(d)}${d.paused && !aiPreparing(d) ? `<p class="ai-paused">⏸ ${esc(d.paused)}</p>` : ''}</div>
+  return `<div class="set-card ai-set"><h3>Status</h3>${aiStatusHtml(d)}${aiProgressHtml(d)}</div>
     <div class="set-card ai-set"><h3>Engine</h3><p class="sc-p">${esc(NO_AI_WORKS)}</p>
       <div class="ai-opts" role="radiogroup" aria-label="AI engine">${d.options.filter(o => o.id !== 'none').map(o => {
         const on = d.setting === o.id || (d.setting === 'auto' && d.provider === o.id);
@@ -2421,13 +2421,15 @@ function aiSettingsHtml() {
           <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
           <p>${esc(o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}
           ${on ? `<span class="ai-check">✓ ${d.setting === 'auto' ? 'In use (picked automatically)' : 'Selected'}</span>` : ''}</button>`;
-      }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}</div>
+      }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
+      <div class="cmd-l" style="margin-top:14px">Models</div>${setRow('builtin_model')}${setRow('agent_model')}</div>
     <div class="set-card ai-set"><div class="set-row" style="border-top:0"><div><div class="k">Keep working on battery power</div><div class="d">Off by default: background insight work pauses until your Mac is plugged in.</div></div>
       <div><label class="tog"><input type="checkbox" data-aibat ${bat ? 'checked' : ''}></label></div></div>
     <div class="set-row"><div><div class="k">Refresh insights automatically</div><div class="d">When the sessions or topics behind them have changed a lot, insights are rewritten in the background, at most every 6 hours.</div></div>
       <div><label class="tog"><input type="checkbox" data-aiauto ${S.set?.orig?.insights_auto !== false ? 'checked' : ''}></label></div></div>
-      <div class="set-row"><div><div class="k">Turn off insights</div><div class="d">Stops all AI work. ${esc(NO_AI_WORKS)}</div></div>
-      <div><button class="btn" data-ai="none" ${d.setting === 'none' ? 'disabled' : ''}>${d.setting === 'none' ? 'Insights are off' : 'Turn off'}</button></div></div></div>`;
+      ${d.setting === 'none' ? `<div class="set-row"><div><div class="k">Insights are off</div><div class="d">Pick an engine above to turn them on. ${esc(NO_AI_WORKS)}</div></div><div></div></div>`
+        : `<div class="set-row"><div><div class="k">Turn off insights</div><div class="d">Stops all AI work. ${esc(NO_AI_WORKS)}</div></div>
+      <div><button class="btn" data-ai="none">Turn off</button></div></div>`}</div>`;
 }
 // The local-or-hosted server option: URL, model and an optional API key, with a connection test that lists models.
 const isLocalUrl = u => { try { const h = new URL(u).hostname; return ['localhost', '127.0.0.1', '[::1]'].includes(h) || h.endsWith('.local'); } catch { return true; } };
