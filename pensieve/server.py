@@ -892,6 +892,52 @@ def remove_folder(path: str):
     return sources.catalog(store, repos, files)
 
 
+def _tilde(p: Path) -> str:
+    return str(p).replace(str(Path.home()), "~", 1)
+
+
+@app.post("/api/sources/agents")
+def add_session_folder(req: FolderReq):
+    """A folder of agent transcripts; which agent wrote them is read from the files."""
+    p = Path(req.path).expanduser()
+    if not p.is_dir():
+        raise HTTPException(400, f"not a folder: {req.path}")
+    found = config.detect_sessions(p)
+    if not found:
+        raise HTTPException(400, f"No Claude Code, Codex or Qwen Code sessions found in {req.path}")
+    name, root = found
+    entry = f"{name}:{_tilde(root)}"
+    known = {(n, str(r)) for _, n, r, _ in config.session_sources()}
+    if (name, str(root)) not in known:
+        settings.update({"session_folders": settings.get("session_folders") + [entry]})
+    return sources.catalog(store, repos, files)
+
+
+@app.delete("/api/sources/agents")
+def remove_session_folder(path: str):
+    settings.update({"session_folders": [e for e in settings.get("session_folders") if e.partition(":")[2] != path],
+                     "disabled": [d for d in settings.get("disabled") if not d.endswith(f"@{path}")]})
+    return sources.catalog(store, repos, files)
+
+
+@app.post("/api/sources/repos")
+def add_repos(req: FolderReq):
+    """A repo, or a folder whose repos are all indexed (sweep_depth levels deep), whatever their size."""
+    p = Path(req.path).expanduser()
+    if not p.is_dir():
+        raise HTTPException(400, f"not a folder: {req.path}")
+    cur = settings.get("repos")
+    if not any(Path(r).expanduser() == p for r in cur):
+        settings.update({"repos": cur + [_tilde(p)]})
+    return sources.catalog(store, repos, files)
+
+
+@app.delete("/api/sources/repos")
+def remove_repos(path: str):
+    settings.update({"repos": [r for r in settings.get("repos") if r != path]})
+    return sources.catalog(store, repos, files)
+
+
 def _version():
     from importlib.metadata import PackageNotFoundError, version
     try:
@@ -996,11 +1042,49 @@ def put_settings(changes: dict):
 
 
 @app.get("/api/ai/models")
-def ai_models(url: str, key: str = ""):
-    """Test an OpenAI-compatible server and list its models. The saved key is only used for the saved URL."""
-    if not key and url.rstrip("/") == settings.get("llm_url").rstrip("/"):
-        key = settings.get("llm_key")
+def ai_models(url: str, key: str = "", name: str = ""):
+    """Test an OpenAI-compatible server and list its models. A saved key is only used for the URL it was saved with."""
+    if not key:
+        saved = next((c for c in settings.get("llm_connections") if c["name"] == name), None)
+        if saved and saved["url"].rstrip("/") == url.rstrip("/"):
+            key = saved["key"]
+        elif url.rstrip("/") == settings.get("llm_url").rstrip("/"):
+            key = settings.get("llm_key")
     return llm.server_models(url, key)
+
+
+class ConnectionReq(BaseModel):
+    name: str
+    url: str
+    model: str
+    key: str | None = None  # None keeps the saved key
+    use: bool = True
+
+
+@app.post("/api/ai/connections")
+def save_connection(req: ConnectionReq):
+    """Save a model server under a name and, with `use`, make it the AI engine."""
+    name, url, model = req.name.strip(), req.url.strip().rstrip("/"), req.model.strip()
+    if not name or not url or not model:
+        raise HTTPException(400, "Enter a name, the server URL and a model.")
+    conns = settings.get("llm_connections")
+    old = next((c for c in conns if c["name"] == name), None)
+    key = req.key if req.key else (old["key"] if old else "")
+    conns = [c for c in conns if c["name"] != name] + [{"name": name, "url": url, "model": model, "key": key}]
+    changes = {"llm_connections": conns}
+    if req.use:
+        changes.update(ai="server", llm_url=url, llm_model=model, llm_key=key)
+    try:
+        settings.update(changes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return llm.status()
+
+
+@app.delete("/api/ai/connections")
+def delete_connection(name: str):
+    settings.update({"llm_connections": [c for c in settings.get("llm_connections") if c["name"] != name]})
+    return llm.status()
 
 
 def main():

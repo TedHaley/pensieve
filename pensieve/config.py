@@ -10,12 +10,35 @@ INDEX_PATH = DATA_DIR / "index.tv"
 PORT = int(os.environ.get("PENSIEVE_PORT", 8765))
 URL = f"http://127.0.0.1:{PORT}"
 
-# Session sources: (name, root, glob). Add more agents here.
+# Where each agent keeps its transcripts, and their file pattern below that folder. Add more agents here.
+SESSION_GLOB = {"claude": "*/*.jsonl", "qwen": "*/chats/*.jsonl", "codex": "**/rollout-*.jsonl"}
 SOURCES = [
-    ("claude", HOME / ".claude" / "projects", "*/*.jsonl"),
-    ("qwen", HOME / ".qwen" / "projects", "*/chats/*.jsonl"),
-    ("codex", HOME / ".codex" / "sessions", "**/rollout-*.jsonl"),
+    ("claude", HOME / ".claude" / "projects", SESSION_GLOB["claude"]),
+    ("qwen", HOME / ".qwen" / "projects", SESSION_GLOB["qwen"]),
+    ("codex", HOME / ".codex" / "sessions", SESSION_GLOB["codex"]),
 ]
+
+
+def session_sources() -> list[tuple[str, str, Path, str]]:
+    """(source id, agent, folder, glob) for the default folders and the ones added in Sources (`session_folders`,
+    "agent:path" strings)."""
+    from pensieve import settings
+    out = [(f"agents/{name}", name, root, pattern) for name, root, pattern in SOURCES]
+    for entry in settings.get("session_folders"):
+        name, _, p = entry.partition(":")
+        if name in SESSION_GLOB and p:
+            out.append((f"agents/{name}@{p}", name, Path(p).expanduser(), SESSION_GLOB[name]))
+    return out
+
+
+def detect_sessions(folder: Path) -> tuple[str, Path] | None:
+    """Which agent's transcripts a folder holds, and the folder the glob starts from (a config folder like ~/.claude
+    holds them in projects/, ~/.codex in sessions/)."""
+    for name, sub in (("codex", "sessions"), ("qwen", "projects"), ("claude", "projects")):
+        for root in (folder / sub, folder):
+            if root.is_dir() and next(root.glob(SESSION_GLOB[name]), None):
+                return name, root
+    return None
 
 EMBED_MODEL = os.environ.get("PENSIEVE_EMBED_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 EMBED_DIM = 1024

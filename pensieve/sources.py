@@ -21,21 +21,27 @@ def catalog(store, repos, files) -> list[dict]:
     on = settings.enabled
     with store.lock:
         db = store.db
-        per_agent = dict(db.execute("SELECT source, COUNT(*) FROM sessions WHERE n_chunks>0 GROUP BY source").fetchall())
         per_root = dict(db.execute("SELECT root, COUNT(*) FROM files GROUP BY root").fetchall())
         per_repo = dict(db.execute("SELECT repo, COUNT(DISTINCT path) FROM code_chunks GROUP BY repo").fetchall())
         wts = dict(db.execute("SELECT repo, COUNT(*) FROM worktrees GROUP BY repo").fetchall())
         repo_rows = db.execute("SELECT root, name FROM repos ORDER BY name").fetchall()
 
-    agents = [dict(id=f"agents/{k}", label=v, detail=_home(root), available=root.is_dir(), enabled=on(f"agents/{k}"),
-                   count=per_agent.get(k, 0), unit="sessions")
-              for k, root, _ in config.SOURCES for v in [AGENTS.get(k, k)]]
+    agents = []
+    for sid, k, root, _ in config.session_sources():
+        extra = "@" in sid
+        with store.lock:
+            n = store.db.execute("SELECT COUNT(*) FROM sessions WHERE n_chunks>0 AND source=? AND path LIKE ?",
+                                 (k, str(root) + "/%")).fetchone()[0]
+        where = root.parent.name if root.name in ("projects", "sessions") else root.name
+        agents.append(dict(id=sid, label=AGENTS.get(k, k) + (f" · {where}" if extra else ""), detail=_home(root),
+                           available=root.is_dir(), enabled=on(sid), count=n, unit="sessions",
+                           remove=dict(kind="agents", path=sid.split("@", 1)[1]) if extra else None))
 
     folders = []
     for f in settings.get("folders"):
         p = Path(f).expanduser()
         folders.append(dict(id=f"files/{f}", label=p.name or f, detail=_home(p), available=p.is_dir(), enabled=on(f"files/{f}"),
-                            count=per_root.get(str(p), 0), unit="files", removable=True))
+                            count=per_root.get(str(p), 0), unit="files", remove=dict(kind="files", path=f)))
 
     s = settings.load()
     skipped = getattr(repos, "skipped", [])
@@ -45,10 +51,22 @@ def catalog(store, repos, files) -> list[dict]:
                     f"({s['sweep_depth']} levels deep, up to {s['max_repo_files']:,} files each)",
              available=True, enabled=on("repos/discover"), kind="rule"),
     ]
+    added = {a: str(Path(a).expanduser()) for a in s["repos"]}  # added in Sources: indexed whatever discovery finds
+
+    def added_by(root):
+        return next((a for a, p in added.items() if root == p or root.startswith(p + "/")), None)
+
     for root, name in repo_rows:
+        a = added_by(root)
         repo_items.append(dict(id=f"repos/{root}", label=name, detail=_home(root) + (f" · {wts[root]} worktrees" if wts.get(root) else ""),
                                available=Path(root).is_dir(), enabled=on(f"repos/{root}"), count=per_repo.get(root, 0), unit="files",
-                               parent="repos/discover"))
+                               parent=None if a else "repos/discover",
+                               remove=dict(kind="repos", path=a) if a and added[a] == root else None))
+    for a, p in added.items():  # a folder of repos, or a repo not indexed yet
+        if not any(r == p for r, _ in repo_rows):
+            repo_items.append(dict(id=f"repos/{p}", label=Path(p).name, detail=_home(p) + " · repos inside are always indexed",
+                                   available=Path(p).is_dir(), enabled=on(f"repos/{p}"), count=sum(n for r, n in per_repo.items()
+                                   if r.startswith(p + "/")), unit="files", remove=dict(kind="repos", path=a)))
     for sk in skipped:
         repo_items.append(dict(id=f"repos/{sk['root']}", label=Path(sk["root"]).name, detail=f"{_home(sk['root'])} · skipped: "
                                f"{sk['files']:,} files (switch on to index anyway)", available=True, enabled=False, count=0, unit="files",
@@ -71,7 +89,7 @@ def catalog(store, repos, files) -> list[dict]:
     for it in (i for group in items.values() for i in group if i.get("kind") != "rule"):
         it["map"] = settings.on_map(it["id"])
     return [dict(id=c, label=label, description=desc, enabled=on(c), map=settings.on_map(c), items=items[c],
-                 count=sum(i.get("count", 0) for i in items[c]), addable=c == "files")
+                 count=sum(i.get("count", 0) for i in items[c] if i.get("kind") != "rule"), addable=c != "apps")
             for c, label, desc in CATEGORIES]
 
 

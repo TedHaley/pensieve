@@ -275,13 +275,22 @@ class Store:
         return touched
 
     def _purge_disabled(self, log):
-        """Drop sessions from agents that were switched off in Sources."""
+        """Drop sessions from agents, or session folders, that were switched off or removed in Sources."""
+        roots = defaultdict(list)
+        for sid, name, root, _ in config.session_sources():
+            if settings.enabled(sid):
+                roots[name].append(str(root) + "/")
         with self.lock:
             off = [s for (s,) in self.db.execute("SELECT DISTINCT source FROM sessions") if not settings.enabled(f"agents/{s}")]
             n = 0
             for src in off:
                 n += self._delete_sessions([sid for (sid,) in self.db.execute("SELECT id FROM sessions WHERE source=?", (src,))])
                 log(f"removed {src} sessions (source switched off)")
+            gone = [sid for sid, src, path in self.db.execute("SELECT id, source, path FROM sessions")
+                    if src not in off and path and not any(path.startswith(r) for r in roots[src])]
+            if gone:
+                n += self._delete_sessions(gone)
+                log(f"removed {len(gone)} sessions from session folders that were switched off")
         return n
 
     def _purge_own(self, log):

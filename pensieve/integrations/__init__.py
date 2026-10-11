@@ -22,6 +22,7 @@ TARGETS = {  # id -> (label, memory file the instructions go in)
     "claude": ("Claude Code", Path.home() / ".claude" / "CLAUDE.md"),
     "codex": ("Codex", Path.home() / ".codex" / "AGENTS.md"),
     "gemini": ("Gemini CLI", Path.home() / ".gemini" / "GEMINI.md"),
+    "qwen": ("Qwen Code", Path.home() / ".qwen" / "QWEN.md"),
 }
 SKILLS_DIR = Path.home() / ".claude" / "skills"
 SKILLS = {  # id -> (label, what it does, recommended)
@@ -61,6 +62,7 @@ MCP = {
     "codex-mcp": ("Codex", CODEX_TOML, None, Path.home() / ".codex"),
     "cursor-mcp": ("Cursor", Path.home() / ".cursor" / "mcp.json", "mcpServers", Path.home() / ".cursor"),
     "gemini-mcp": ("Gemini CLI", Path.home() / ".gemini" / "settings.json", "mcpServers", Path.home() / ".gemini"),
+    "qwen-mcp": ("Qwen Code", Path.home() / ".qwen" / "settings.json", "mcpServers", Path.home() / ".qwen"),
     "windsurf-mcp": ("Windsurf", Path.home() / ".codeium" / "windsurf" / "mcp_config.json", "mcpServers",
                      Path.home() / ".codeium" / "windsurf"),
     "claude-desktop-mcp": ("Claude Desktop", APP_SUPPORT / "Claude" / "claude_desktop_config.json", "mcpServers",
@@ -288,6 +290,9 @@ def set_skill(name: str, on: bool) -> str:
     if state == "theirs":
         raise ValueError(f"{d} exists and wasn't installed by Pensieve; leaving it alone")
     if on:
+        if SKILLS_DIR.is_symlink() and not SKILLS_DIR.exists():
+            raise ValueError(f"{SKILLS_DIR} links to {os.readlink(SKILLS_DIR)}, which doesn't exist; "
+                             "fix or remove that link, then try again")
         if d.exists():
             shutil.rmtree(d)
         shutil.copytree(HERE / "skills" / name, d)
