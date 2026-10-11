@@ -102,7 +102,7 @@ Tools: `search`, `read`, `similar`, `who_knows`, `knowledge_gaps`, `list_repos`,
 
 ### Get the most out of it: agent add-ons
 
-Agents grep by habit, even with Pensieve connected. Optional add-ons fix that (Settings → Search & Agents → Agent add-ons, or the command line):
+Agents grep by habit, even with Pensieve connected. Optional add-ons fix that (Settings → Agents → Agent add-ons, or the command line):
 
 ```bash
 pensieve integrate                    # what's available and what's installed
