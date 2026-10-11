@@ -4,6 +4,7 @@ The running server can't safely delete a database its threads have open, so a re
 a note and the server restarts itself in place (same process id, so the Mac app keeps tracking it); on the way up,
 `apply_pending()` runs before anything opens the database.
 """
+import json
 import os
 import shutil
 import sys
@@ -37,6 +38,13 @@ def apply_pending() -> str | None:
     shutil.rmtree(config.DATA_DIR / EXPORTS, ignore_errors=True)
     if what == "all":
         (config.DATA_DIR / "settings.json").unlink(missing_ok=True)
+    else:  # the sources are asked again before anything is re-indexed
+        f = config.DATA_DIR / "settings.json"
+        try:
+            s = json.loads(f.read_text())
+            f.write_text(json.dumps({**s, "setup_done": False}, indent=2))
+        except (OSError, ValueError):
+            pass
     MARK.unlink(missing_ok=True)
     return what
 

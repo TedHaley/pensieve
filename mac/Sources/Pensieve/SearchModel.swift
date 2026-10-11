@@ -114,6 +114,9 @@ final class SearchModel: ObservableObject {
         case .failed(let msg): return msg
         case .up:
             if let error { return error }
+            if Backend.shared.settings["setup_done"] as? Bool == false {
+                return "Pensieve indexes nothing yet. Choose your sources in Settings (⌘,)."
+            }
             if showsUpdate, let u = Updater.shared.panelText {  // measured with its buttons
                 let buttons = "Update ⌘U    Later    Skip this version"
                 return !updateButtons ? u : Self.updateButtonsBelow(u) ? u + "\n" + buttons : u + "     " + buttons

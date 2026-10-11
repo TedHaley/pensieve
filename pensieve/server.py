@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, llm, mcp_server, scopes, search as search_mod, settings, sources, summarize
+from pensieve import actions, apps, config, llm, mcp_server, scopes, search as search_mod, settings, sources, summarize
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -85,6 +85,10 @@ async def watcher():
     asyncio.create_task(repo_watcher())
     last_full = 0
     while True:
+        if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
+            status.update(indexing=False, message="waiting for setup")
+            await _wait(wake_files, config.POLL_SECONDS)
+            continue
         try:
             d = watch.take()
             if sorted(str(p) for p in files.roots()) != sorted(watch.folders):  # a folder appeared or went away
@@ -133,6 +137,9 @@ async def watcher():
 async def repo_watcher():
     last_full = 0
     while True:
+        if not settings.get("setup_done"):
+            await _wait(wake_repos, 30)
+            continue
         try:
             d_repos, asked = watch.take_repos()
             full = asked or time.time() - last_full > FULL_SWEEP_SECONDS
@@ -363,6 +370,21 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan)
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+@app.middleware("http")
+async def local_only(request: Request, call_next):
+    """Only this Mac's own pages and programs. The server listens on 127.0.0.1, but a web page in the browser can
+    still reach it: through DNS rebinding (its own host name pointed at 127.0.0.1, which the Host header shows) or
+    with a cross-site request (which carries the page's Origin)."""
+    from urllib.parse import urlsplit
+    host = urlsplit("//" + request.headers.get("host", "")).hostname
+    origin = request.headers.get("origin")
+    if host not in LOCAL_HOSTS or (origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS):  # "null" too
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("Pensieve only answers requests from this Mac", status_code=403)
+    return await call_next(request)
 app.router.routes.extend(mcp_server.app_routes)  # MCP at /mcp
 STATIC = Path(__file__).parent / "static"
 NO_CACHE = {"Cache-Control": "no-store"}
@@ -399,7 +421,17 @@ def _status():
             "topics": db.execute("SELECT COUNT(*) FROM topics").fetchone()[0],
             "code_chunks": db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0],
             "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL,
-            "ai": settings.get("ai")}
+            "ai": settings.get("ai"), "setup_done": settings.get("setup_done"), "syncing": _syncing()}
+
+
+def _syncing() -> list[dict]:
+    """What is being indexed right now, with progress where the total is known."""
+    out = []
+    for kind, src in (("sessions", store), ("files", files), ("repo", repos)):
+        p = getattr(src, "progress", None)
+        if p:
+            out.append({"kind": kind, **p})
+    return out
 
 
 @app.get("/api/projects")
@@ -892,6 +924,98 @@ def remove_folder(path: str):
     return sources.catalog(store, repos, files)
 
 
+ENERGY_NOTE = ("Indexing runs the embedding model on your Mac until it finishes, so the Mac gets warm and uses more battery. "
+               "Plug it in if you can. Search works while it indexes, and later changes are quick to index.")
+REPO_FILES_PER_MINUTE = 500  # first index on Apple Silicon, limited by the embedding model
+_candidates = {"at": 0, "data": None}
+
+
+def _setup_candidates(fresh=False):
+    """What the user can choose to index, with sizes, before anything is indexed. Repo discovery walks the disk,
+    so the list is kept for ten minutes."""
+    if not fresh and _candidates["data"] and time.time() - _candidates["at"] < 600:
+        return _candidates["data"]
+    s = settings.load()
+    on = settings.enabled
+    agents = []
+    temp = ("-private-", "-tmp-", "-var-folders-") if s["skip_temp_sessions"] else ()
+    for sid, name, root, pattern in config.session_sources():
+        # a project folder is named after the session's working folder; parsing thousands of transcripts to read
+        # their cwd would make this list slow, and sessions in temp folders are skipped at indexing anyway
+        n = sum(1 for p in root.glob(pattern) if "subagents" not in p.parts
+                and not p.relative_to(root).parts[0].startswith(temp)) if root.is_dir() else 0
+        agents.append(dict(id=sid, label=sources.AGENTS.get(name, name), detail=_tilde(root), size=n, unit="sessions",
+                           available=n > 0, checked=n > 0 and on(sid)))
+    folders = [dict(id=f"files/{f}", label=Path(f).name or f, detail=_tilde(Path(f).expanduser()), size=None, unit="",
+                    available=Path(f).expanduser().is_dir(), checked=Path(f).expanduser().is_dir() and on(f"files/{f}"))
+               for f in s["folders"]]
+    repos._extra = None
+    found = repos._extra_roots()
+    big = {sk["root"]: sk["files"] for sk in getattr(repos, "skipped", [])}
+    repo_items = [dict(id="repos/discover", label="Find new repos automatically",
+                       detail=f"Repos under {', '.join(s['sweep_roots'])} and your folders, and repos your agents work in, "
+                              f"up to {s['max_repo_files']:,} files each", size=None, unit="", available=True,
+                       checked=on("repos/discover"), rule=True)]
+    from pensieve.repos import git, norm_remote
+    clones = {}  # one row per remote: Pensieve indexes a single clone of each (Repos.discover)
+    for r in sorted(set(found) | set(big), key=lambda r: (len(Path(r).name), Path(r).name.lower())):
+        clones.setdefault(norm_remote(git(r, "config", "--get", "remote.origin.url")) or r, []).append(r)
+    for r, *others in sorted(clones.values(), key=lambda c: Path(c[0]).name.lower()):
+        n = big.get(r) or git_files(r)
+        also = f" · also {len(others)} other clone{'s' if len(others) > 1 else ''}" if others else ""
+        repo_items.append(dict(id=f"repos/{r}", label=Path(r).name, detail=_tilde(Path(r)) + also, size=n, unit="files",
+                               available=True, checked=r not in big and on(f"repos/{r}"), big=r in big,
+                               clones=[f"repos/{o}" for o in others]))
+    app_items = [dict(id=f"apps/{k}", label=a["label"], detail=a["detail"], size=None, unit="",
+                      available=a["available"](), checked=a["available"]() and on(f"apps/{k}")) for k, a in apps.APPS.items()]
+    data = [dict(id=c, label=label, description=desc, items=items)
+            for (c, label, desc), items in zip(sources.CATEGORIES, (agents, folders, repo_items, app_items))]
+    _candidates.update(at=time.time(), data=data)
+    return data
+
+
+def git_files(root) -> int:
+    from pensieve.repos import git
+    return git(root, "ls-files").count("\n")
+
+
+@app.get("/api/setup")
+def get_setup(fresh: bool = False):
+    """The first-run (and after-reset) choice of sources: what can be indexed, and how big each part is."""
+    return {"done": settings.get("setup_done"), "categories": _setup_candidates(fresh), "energy": ENERGY_NOTE,
+            "files_per_minute": REPO_FILES_PER_MINUTE}
+
+
+class SetupReq(BaseModel):
+    sources: list[str] | None = None  # ids to index; None with recommended=true takes the pre-checked ones
+    recommended: bool = False
+
+
+@app.post("/api/setup")
+def post_setup(req: SetupReq):
+    """Index exactly the chosen sources: every other candidate is switched off, then indexing starts."""
+    cats = _setup_candidates()
+    items = [i for c in cats for i in c["items"]]
+    known = {i["id"] for i in items}
+    if req.sources is None and not req.recommended:
+        raise HTTPException(400, "Send the source ids to index, or recommended: true")
+    chosen = {i["id"] for i in items if i["checked"]} if req.sources is None else set(req.sources)
+    unknown = chosen - known
+    if unknown:
+        raise HTTPException(400, f"unknown sources: {', '.join(sorted(unknown))}; GET /api/setup lists them")
+    off = [d for d in settings.get("disabled") if d not in known and d not in {c["id"] for c in cats}]
+    off += [i for i in known if i not in chosen]
+    off += [c for i in items if i["id"] not in chosen for c in i.get("clones", [])]  # else another clone stands in
+    off = [d for d in off if d not in {c for i in items if i["id"] in chosen for c in i.get("clones", [])}]
+    off += [c["id"] for c in cats if not any(i["id"] in chosen for i in c["items"])]  # nothing chosen: the whole category
+    big = [i["id"][6:] for i in items if i.get("big") and i["id"] in chosen]
+    settings.update({"disabled": off, "repos": list(dict.fromkeys(settings.get("repos") + big)), "setup_done": True})
+    picked = [i for i in items if i["id"] in chosen and not i.get("rule")]
+    files = sum(i["size"] or 0 for i in picked if i["unit"] == "files")
+    return {"done": True, "indexing": [i["label"] for i in picked], "repo_files": files,
+            "minutes": round(files / REPO_FILES_PER_MINUTE), "energy": ENERGY_NOTE}
+
+
 def _tilde(p: Path) -> str:
     return str(p).replace(str(Path.home()), "~", 1)
 
@@ -938,12 +1062,20 @@ def remove_repos(path: str):
     return sources.catalog(store, repos, files)
 
 
-def _version():
+def _read_version():
     from importlib.metadata import PackageNotFoundError, version
     try:
         return version("pensieve")
     except PackageNotFoundError:
         return "dev"
+
+
+# read once: an upgrade replaces the package files under a running backend, and the running code is still the old one
+VERSION = _read_version()
+
+
+def _version():
+    return VERSION
 
 
 @app.get("/api/about")

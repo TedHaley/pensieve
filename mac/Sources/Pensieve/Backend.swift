@@ -297,6 +297,7 @@ final class Backend: ObservableObject {
     private func listen() {
         events?.cancel()
         events = Task { [weak self] in
+            var down = 0
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
@@ -316,10 +317,16 @@ final class Backend: ObservableObject {
                 } catch {}
                 try? await Task.sleep(for: .seconds(3))
                 if await self.isUp() {
+                    down = 0
                     if self.state != .up { self.state = .up }
                     await self.loadSettings()
-                } else if self.state == .up {
-                    self.state = .starting
+                } else {
+                    if self.state == .up { self.state = .starting }
+                    down += 1
+                    // gone for good (stopped, crashed, or replaced by an installer): start it again
+                    if down == 3, !self.external, self.child?.isRunning != true, let bin = Self.findBinary() {
+                        self.spawn(bin)
+                    }
                 }
             }
         }

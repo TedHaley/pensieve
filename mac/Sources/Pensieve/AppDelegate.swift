@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         backend.onSettingsChange = { [weak self] in
             if hotkeys { HotKeys.shared.configure(Backend.shared.hotkey) }
             self?.applyAppearance()
+            self?.askForSourcesIfNeeded()
         }
         if hotkeys && HotKeys.shared.needsAccessibility && !Prefs.store.bool(forKey: "askedAccessibility") {
             Prefs.store.set(true, forKey: "askedAccessibility")
@@ -283,6 +284,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Prefs.store.set(value, forKey: "appearance")
         NSApp.appearance = Self.appearance(value)
         Task { await Backend.shared.updateSettings(["appearance": value]) }
+    }
+
+    private var askedForSources = false
+
+    /// A fresh install or a reset indexes nothing until the user picks the sources: show that choice once per launch.
+    private func askForSourcesIfNeeded() {
+        guard !askedForSources, Backend.shared.settings["setup_done"] as? Bool == false, !Debug.enabled else { return }
+        askedForSources = true
+        visualizer.show(fragment: "setup")
     }
 
     private func applyAppearance() {

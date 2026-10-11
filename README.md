@@ -25,6 +25,16 @@ pensieve integrate recommended
 
 This command finds the agents on your Mac (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code) and gives each one Pensieve as an MCP server.
 
+Then choose what to index. Pensieve indexes nothing until you choose, also after a reset. The app shows the choice when it opens. From a terminal or an agent chat:
+
+```bash
+pensieve setup                  # list the agent sessions, folders, repos and apps found, with their sizes
+pensieve setup recommended      # index the ones marked [x]
+pensieve setup agents/claude repos//Users/me/code/app   # or exactly these
+```
+
+The first index uses a lot of energy: the embedding model runs until it finishes, about 500 code files a minute on Apple Silicon. Settings → Sources shows what is syncing now.
+
 On Linux and Intel Macs, the script installs [uv](https://docs.astral.sh/uv/) and the backend from source. Then it starts the backend and opens the visualizer in your browser.
 
 Or by hand:

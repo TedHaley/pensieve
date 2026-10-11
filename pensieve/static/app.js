@@ -1978,6 +1978,63 @@ function renderSources() {
 }
 const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await Promise.all([loadSources(), loadScopes()]); renderSources(); renderScopes(); }, 1200);
 
+const ENERGY_IC = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M13 2 4 14h7l-1 8 9-12h-7Z" fill="currentColor"/></svg>';
+const setupState = {data: null, chosen: null, busy: false, err: null};
+async function openSetup() {
+  let el = $('#setupsheet');
+  if (!el) { el = document.createElement('div'); el.id = 'setupsheet'; el.className = 'setup-sheet'; document.body.appendChild(el); }
+  setupState.err = null;
+  el.innerHTML = `<div class="setup-card"><h1>Choose what Pensieve indexes</h1><p class="sub">Looking for agent sessions, folders and repos on this Mac…</p><div class="spinner" style="margin:24px auto"></div></div>`;
+  try { setupState.data = await api('/api/setup?fresh=1'); }
+  catch (e) { el.querySelector('.sub').textContent = 'Could not load the sources: ' + e.message; return; }
+  setupState.chosen = new Set(setupState.data.categories.flatMap(c => c.items.filter(i => i.checked).map(i => i.id)));
+  renderSetup();
+}
+function renderSetup() {
+  const el = $('#setupsheet'), d = setupState.data; if (!el || !d) return;
+  const items = d.categories.flatMap(c => c.items), files = items.filter(i => setupState.chosen.has(i.id) && i.unit === 'files').reduce((a, i) => a + (i.size || 0), 0);
+  const mins = Math.max(1, Math.round(files / d.files_per_minute));
+  const row = i => `<label class="setup-row ${i.available ? '' : 'na'}"><input type="checkbox" data-setup-id="${esc(i.id)}" ${setupState.chosen.has(i.id) ? 'checked' : ''} ${i.available ? '' : 'disabled'}>
+      <span class="tx"><b>${esc(i.label)}${i.big ? ' <span class="badge">big</span>' : ''}</b><span>${esc(i.available ? i.detail : 'Not found on this Mac')}</span></span>
+      <span class="n">${i.size != null ? `${i.size.toLocaleString()} ${esc(i.unit)}` : ''}</span></label>`;
+  el.innerHTML = `<div class="setup-card"><h1>Choose what Pensieve indexes</h1>
+    <p class="sub">Nothing is indexed until you choose. Everything stays on this Mac. You can change this later in Settings → Sources.</p>
+    ${d.categories.map(c => `<div class="setup-cat"><h3>${esc(c.label)}</h3><p>${esc(c.description)}</p>${c.items.map(row).join('') || '<p class="muted">Nothing found.</p>'}</div>`).join('')}
+    <div class="setup-energy">${ENERGY_IC}<div><b>Indexing uses a lot of energy</b><span>${esc(d.energy)}${files ? ` The code you picked (${files.toLocaleString()} files) takes about ${mins} minute${mins === 1 ? '' : 's'}.` : ''}</span></div></div>
+    ${setupState.err ? `<p class="err">${esc(setupState.err)}</p>` : ''}
+    <div class="setup-btns">${d.done ? '<button class="btn" data-setup-cancel>Cancel</button>' : ''}<button class="btn primary" data-setup-go ${setupState.busy || !setupState.chosen.size ? 'disabled' : ''}>${setupState.busy ? 'Starting…' : 'Start indexing'}</button></div></div>`;
+  $$('[data-setup-id]', el).forEach(c => c.onchange = () => { setupState.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
+  $('[data-setup-cancel]', el)?.addEventListener('click', () => el.remove());
+  $('[data-setup-go]', el).onclick = async () => {
+    setupState.busy = true; renderSetup();
+    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...setupState.chosen]})});
+    const j = await r.json().catch(() => ({}));
+    setupState.busy = false;
+    if (!r.ok) { setupState.err = typeof j.detail === 'string' ? j.detail : 'Could not start indexing'; return renderSetup(); }
+    el.remove(); S.status.setup_done = true;
+    S.setTab = 'sources'; store.set('setTab', 'sources');
+    await loadSettings(true); await setView('settings'); renderSettings(); pollStatus();
+    toast('Indexing started');
+  };
+}
+function syncingHtml() {
+  const jobs = S.status?.syncing || [];
+  if (S.status?.setup_done === false) return `<div class="sync-strip warn">${ENERGY_IC}<div><b>Nothing is indexed yet</b><span>Choose the sources to start.</span></div><button class="btn primary" data-open-setup>Choose sources</button></div>`;
+  if (!jobs.length) return '';
+  const what = j => j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
+  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} files`
+    : `${j.done.toLocaleString()} ${j.kind === 'sessions' ? 'sessions' : 'files'} so far`;
+  return `<div class="sync-strip">${ENERGY_IC}<div><b>Syncing now</b>${jobs.map(j => `<span class="job">${what(j)} · ${prog(j)}</span>`).join('')}
+    <span class="muted">Indexing uses a lot of energy: plug in your Mac if you can. Search works meanwhile.</span></div></div>`;
+}
+function renderSyncing() {
+  const box = $('#syncbox'); if (!box) return;
+  box.innerHTML = syncingHtml();
+  $('[data-open-setup]', box)?.addEventListener('click', openSetup);
+  clearTimeout(renderSyncing.t);  // a long repo index sends no status events while it runs: poll for its progress
+  if ((S.status?.syncing || []).length && S.view === 'settings') renderSyncing.t = setTimeout(pollStatus, 3000);
+}
+
 /* ---- scopes: named slices of the index an agent (or the search panel) works within ---- */
 const scState = {data: null, edit: null, filter: '', resolve: null, confirmDel: null, err: null};
 async function loadScopes() { try { scState.data = await api('/api/scopes'); } catch { scState.data = scState.data || {scopes: [], default_scope: ''}; } renderPalScope(); }
@@ -2239,7 +2296,7 @@ async function renderSettings() {
   const kpi = (l, v) => `<div class="kpi"><div class="l">${l}</div><div class="v">${(v || 0).toLocaleString()}</div></div>`;
   const bar = (title, sub) => `<div class="set-bar"><div><h1>${esc(title)}</h1><div class="msg ${S.set.err && !S.set.errKey ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : esc(sub)}</div></div></div>`;
   let body = '';
-  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes, and the options for each. Switching a source off removes its data on the next sweep.') + `<div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
+  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes, and the options for each. Switching a source off removes its data on the next sweep.') + `<div id="syncbox"></div><div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
   else if (tab === 'scopes') body = bar('Scopes', 'Bundles of sources. Pick the one to search in.') + `<div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>`;
   else if (tab === 'agents') body = bar('Agents', 'Connect your coding agents, and help them search with Pensieve first.') + `
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
@@ -2282,7 +2339,7 @@ async function renderSettings() {
   $('[data-setdone]', el).onclick = () => setView(S.prevView || 'code');
   bindFields($('#setmain'));
   $$('#setmain > .set-card [data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
-  renderSources(); renderScopes();
+  renderSources(); renderScopes(); renderSyncing();
 }
 const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Largest repo to discover (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model', builtin_model: 'Built-in engine', agent_model: 'Claude Code engine'};
 async function saveSettings() {
@@ -2332,6 +2389,7 @@ async function route() {
   if (!h) return;
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
+  if (h === 'setup') return openSetup();
   if (['sources', 'scopes', 'agents', 'ai', 'general', ...Object.keys(OLD_TABS)].includes(h)) {
     S.setTab = OLD_TABS[h] || h; store.set('setTab', S.setTab);
     return S.view === 'settings' ? renderSettings() : setView('settings');
@@ -3077,12 +3135,13 @@ const reloadFilesSoon = debounce(async () => {
   if (S.view !== 'files') return;
   await loadFiles(); const c = gl.saveCam(); buildMap(); gl.loadCam(c); renderSidebar();
 }, 1500);
-const pollStatus = debounce(async () => { try { Object.assign(S.status, await api('/api/status')); renderStatus(); } catch {} }, 300);
+const pollStatus = debounce(async () => { try { Object.assign(S.status, await api('/api/status')); renderStatus(); renderSyncing(); } catch {} }, 300);
 
 async function init() {
   try {
     await Promise.all([loadSessions(), loadInsights(), loadData(), api('/api/status').then(s => Object.assign(S.status, s))]);
   } catch (e) { $('#loadingtext').textContent = 'Could not reach the Pensieve server.'; return; }
+  if (S.status.setup_done === false) openSetup();  // first, so nothing later on an empty index can keep it from opening
   renderStatus();
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
   document.body.dataset.view = S.view;

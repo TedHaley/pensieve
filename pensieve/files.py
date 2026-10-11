@@ -29,6 +29,7 @@ TEXTUTIL_EXT = {".rtf", ".doc", ".odt"}  # macOS textutil converts these to plai
 SPOTLIGHT_EXT = {".pages", ".key", ".numbers"}  # read through Spotlight's importer (mdimport)
 FILES_VERSION = "files-v3"  # part of every content file's mode: bump to re-extract every file on the next sweep
 NAME_ONLY_MAX = 4000  # per folder sweep: name-only entries beyond this are skipped (e.g. huge Downloads)
+PROGRESS_MIN_FILES = 10  # a sweep that indexes at least this many documents reports its progress (Sources, status)
 KIND = {**{e: "doc" for e in (".md", ".markdown", ".rst", ".org", ".txt", ".tex", ".rtf", ".doc", ".odt", ".pages",
                               ".eml", ".srt", ".vtt", ".docx")},
         ".pdf": "pdf", ".pptx": "slides", ".key": "slides", ".csv": "data", ".tsv": "data", ".json": "data",
@@ -259,6 +260,7 @@ class Files:
         self.unsaved = False  # indexed by a search catching up: map layout and saved index still to do
         self._refreshing = False
         self._sweeping = False  # a full sync holds sync_lock
+        self.progress = None  # the folder being indexed now: {name, root, done, total=None}
 
     # ---- indexing ----------------------------------------------------------
     def sync(self, log=lambda m: print(m, flush=True), force=False, on_progress=None) -> int:
@@ -269,6 +271,7 @@ class Files:
                 return self._sync(log, force, on_progress)
             finally:
                 self._sweeping = False
+                self.progress = None
 
     def refresh(self, paths=(), wait=1.5):
         """Index `paths` and the file watcher's queue now, even files saved a moment ago. Returns the files
@@ -348,6 +351,8 @@ class Files:
                 try:
                     self._index_file(p, root, st, k, max_bytes, lv)
                     touched += 1
+                    if touched >= PROGRESS_MIN_FILES:  # the walk has no total in advance: a count only
+                        self.progress = dict(name=root.name, root=str(root), done=touched, total=None)
                 except Exception as e:
                     log(f"skip {p}: {e!r}")
                 if touched % 50 == 0 and touched:
