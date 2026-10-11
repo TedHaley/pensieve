@@ -1126,7 +1126,7 @@ wheels = [
 
 [[package]]
 name = "pensieve"
-version = "0.5.1"
+version = "0.5.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1136,7 +1136,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pypdf" },
     { name = "scikit-learn" },
-    { name = "sentence-transformers" },
+    { name = "sentence-transformers", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
     { name = "turbovec" },
     { name = "umap-learn" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1152,7 +1152,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.5.3" },
     { name = "pypdf", specifier = ">=6.19.0" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
-    { name = "sentence-transformers", specifier = ">=6.1.0" },
+    { name = "sentence-transformers", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'", specifier = ">=6.1.0" },
     { name = "turbovec", specifier = ">=1.1.2" },
     { name = "umap-learn", specifier = ">=0.5.12" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
