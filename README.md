@@ -123,16 +123,19 @@ pensieve integrate claude --remove    # removes exactly what was added
 
 ### Does it help? The benchmark
 
-[`bench/`](bench) measures it with Claude Code itself. Tasks are generated from your indexed code (a chunk is described in plain words, or by a name it defines, an error string from it, or a mix), and Claude Sonnet runs headless with and without Pensieve; the answer is the file. On 72 held-out tasks across four repos (483 to 33k files):
+[`bench/`](bench) measures it with Claude Code itself. Tasks are generated from your indexed code (a chunk is described in plain words, or by a name it defines, an error string from it, or a mix), and Claude Sonnet runs headless with and without Pensieve; the answer is the file. These are the 72 held-out tasks across four repos (504 to 34,847 files), each run twice, both setups in one batch, with Pensieve 0.5.6:
 
 | | Grep, Glob, Read | With Pensieve + instructions block |
 |---|---|---|
-| Tasks solved | 62 / 72 | **66 / 72** |
-| Tool calls per lookup | 3.6 | **2.1** |
-| Cost per lookup, all repos | $0.080 | **$0.075** |
-| Cost per lookup, 33k-file monorepo | $0.105 | **$0.083** |
+| Tasks solved | 123 / 144 (85%) | **131 / 144 (91%)** |
+| Tool calls per lookup | 3.44 | **1.97** (−43%) |
+| Cost per lookup | $0.050 | **$0.041** (−18%) |
+| Tokens per lookup | 67k | **57k** (−16%) |
+| Time per lookup | 10.9 s | **8.6 s** (−21%) |
 
-Those agent figures are from 0.4.3. Since 0.4.4 the MCP tools return grep-sized results (one line per hit, ~380 tokens instead of ~1,400), which made lookups 9–10% cheaper than grep in 1,500 and 2,100-file repos as well, where 0.4.3 had cost a few percent more. Pensieve's search alone puts the right file first for 96% of error strings, 92% of identifiers and 67% of descriptions (a single grep: 92%, 54%, 0%). Run it on your repos:
+Pensieve solved as many or more tasks and cost less in every repo: 15% less in the 504-file repo, 6–14% less in the 1,783 and 2,383-file repos, and 28% less in the 34,847-file monorepo, where it also needed 47% fewer tool calls. In 82 of the 144 runs the agent answered after a single search. Pensieve's search alone puts the right file first for 94% of names, 88% of error strings, 74% of name-and-description mixes and 58% of descriptions (a single grep: 54%, 92%, 0%, 0%).
+
+Costs are Claude Code's reported API costs. They depend on how warm Claude's prompt cache is, so compare them only within one batch. Run it on your repos:
 
 ```bash
 uv run python bench/agent_search.py gen --repo ~/code/myrepo -n 40 --tasks tasks-v2.jsonl
@@ -160,6 +163,8 @@ Repos are indexed as they are on disk: committed, staged, modified and untracked
 - If the file changed, Pensieve indexes it again and repeats the search. If it cannot (for example, during a long first index), the result is marked as edited since indexed, and a code result gets the line where its text is now.
 
 A session that is still being written updates every 30 seconds. A full sweep every 5 minutes catches anything missed.
+
+**Speed:** a search takes about 0.1 to 0.2 seconds, also in a 35,000-file repo and while Pensieve indexes, because indexing pauses for a moment whenever a search runs. A first index runs as fast as the embedding model allows: git blame runs in parallel through a commit-graph that Pensieve keeps in `~/.pensieve/git` (it never writes to your repo), and the database writes run on their own thread. On an Apple Silicon Mac, a 35,000-file repo takes a little over an hour.
 
 **The map** shows only what Pensieve reads the content of. Each source has a map switch next to its on/off switch. A source that is off the map stays searchable. In Settings → Sources → **File types**, you choose for each type of file:
 

@@ -353,6 +353,7 @@ async def lifespan(app):
     if settings.get("ai") == "builtin":
         llm.start_download()
     loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
+    loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
     tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher())]
     async with mcp_server.mcp.session_manager.run():
         yield

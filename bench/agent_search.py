@@ -18,6 +18,7 @@ Arms (each a `claude -p` run in the repo, sessions not saved so they never reach
 """
 import argparse
 import json
+import os
 import random
 import re
 import sqlite3
@@ -29,8 +30,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-DB = Path.home() / ".pensieve" / "pensieve.db"
-API = "http://127.0.0.1:8765"
+# PENSIEVE_DATA / PENSIEVE_BENCH_API point the benchmark at a copy of the index served by a dev backend
+DB = Path(os.environ.get("PENSIEVE_DATA", Path.home() / ".pensieve")).expanduser() / "pensieve.db"
+API = os.environ.get("PENSIEVE_BENCH_API", "http://127.0.0.1:8765")
 OUT = Path(__file__).parent / "out"
 SRC_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".scala", ".go", ".rs", ".java", ".kt", ".rb", ".sh", ".swift",
            ".vue", ".php", ".cs", ".c", ".cc", ".cpp", ".h"}

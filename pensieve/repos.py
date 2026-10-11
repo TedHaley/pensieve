@@ -2,17 +2,20 @@
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
 
 from pensieve import config, settings
 from pensieve.files import secret
-from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, reconcile
+from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, reconcile, yield_to_searches
 from pensieve.layout import fit3d, place_new, unit
 from pensieve.projects import project_root
 
@@ -21,6 +24,11 @@ SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip", ".g
             ".ttf", ".mp4", ".mov", ".parquet", ".pkl", ".csv", ".ipynb", ".map", ".snap"}
 SKIP_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock", "Cargo.lock"}
 MAX_BYTES = 200_000
+INDEX_WORKERS = 4   # threads reading, chunking and git-blaming files ahead of the embedder (blame is the slow part on
+                    # a repo with long history; 6 indexes faster still but doubles search time during indexing)
+INDEX_AHEAD = 32    # files prepared ahead at most (bounds the memory held by blame results)
+EMBED_GROUP = 48    # chunks gathered from several files before one embed() call, so small files fill model batches
+SHADOW_MIN_FILES = 20  # files to (re)index before blame goes through the commit-graph shadow (see blame_shadow)
 GENERATED_DIRS = {"dist", "build", "vendor", "third_party", "node_modules", "out", "target", ".venv"}
 CODE_CHUNK_CHARS = 1500
 ALL = "__all__"  # pseudo-repo: every indexed repo in one joint layout, paths prefixed with '<repo>/' 
@@ -152,24 +160,70 @@ def worktree_list(root):
     return out
 
 
-def blame_lines(root, path, me=None):
+SHADOW_DIR = config.DATA_DIR / "git"
+
+
+def shadow_dir(root) -> Path:
+    return SHADOW_DIR / (hashlib.sha1(str(root).encode()).hexdigest()[:16] + ".git")
+
+
+def blame_shadow(root, checkout):
+    """A bare repo in Pensieve's data that borrows `root`'s objects and keeps a commit-graph with changed-path
+    filters, so blame walks history ~6x faster on a long-history repo without writing anything into the user's
+    repo. Returns (shadow git dir, HEAD of `checkout`), or None to blame the plain way."""
+    try:
+        head = git(checkout, "rev-parse", "HEAD").strip()
+        if len(head) != 40:
+            return None
+        d = shadow_dir(root)
+        if not (d / "objects").exists():
+            common = Path(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+            if not (common / "objects").is_dir():
+                return None
+            subprocess.run(["git", "init", "-q", "--bare", str(d)], check=True, capture_output=True)
+            (d / "objects" / "info" / "alternates").write_text(str(common / "objects") + "\n")
+        mark = d / "pensieve-graph-head"
+        if not mark.exists() or head not in mark.read_text().split():
+            # --split adds a layer for commits the graph doesn't have yet, so updates after the first are quick
+            subprocess.run(["git", "--git-dir", str(d), "commit-graph", "write", "--stdin-commits", "--changed-paths",
+                            "--split"], input=head, text=True, check=True, capture_output=True, timeout=600)
+            mark.write_text((mark.read_text() if mark.exists() else "") + head + "\n")
+        return str(d), head
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def blame_lines(root, path, me=None, shadow=None):
     """line number (1-based) -> (author 'Name <email>', epoch) for the file as it is on disk; lines not committed
     yet are credited to `me` (name, email)."""
-    out = git(root, "blame", "-w", "--line-porcelain", "--", path)
-    res, cur_a, cur_m, cur_t, n = {}, "", "", 0, 0
+    # --porcelain prints a commit's details once, not on every line (--line-porcelain): ~10x less to parse, and the
+    # parsing holds the interpreter lock in the indexing threads
+    if shadow:  # (git dir, HEAD) from blame_shadow; --contents blames the file as it is on disk, edits included
+        out = subprocess.run(["git", "--git-dir", shadow[0], "blame", "-w", "--porcelain", "--contents",
+                              str(Path(root) / path), shadow[1], "--", path],
+                             capture_output=True, text=True, errors="replace").stdout
+    else:
+        out = git(root, "blame", "-w", "--porcelain", "--", path)
+    res, commits, cur, n = {}, {}, None, 0
     for ln in out.split("\n"):
-        if ln.startswith("author "):
-            cur_a = ln[7:]
-        elif ln.startswith("author-mail "):
-            cur_m = ln[12:].strip("<>")
-        elif ln.startswith("author-time "):
-            cur_t = int(ln[12:])
-        elif ln.startswith("\t"):
+        if ln.startswith("\t"):
             n += 1
-            if cur_a == "Not Committed Yet" and me:
-                res[n] = (f"{me[0]} <{me[1]}>", cur_t)
-            else:
-                res[n] = (f"{cur_a} <{cur_m}>", cur_t)
+            res[n] = commits[cur]
+        elif len(ln) > 41 and ln[40] == " " and ln[:40].isalnum():  # "<sha> <orig line> <final line> [<count>]"
+            cur = ln[:40]
+            commits.setdefault(cur, ["", "", 0])
+        elif cur is not None and isinstance(commits[cur], list):
+            if ln.startswith("author "):
+                commits[cur][0] = ln[7:]
+            elif ln.startswith("author-mail "):
+                commits[cur][1] = ln[12:].strip("<>")
+            elif ln.startswith("author-time "):
+                commits[cur][2] = int(ln[12:])
+            elif ln.startswith("filename "):  # the last field of a commit's details
+                a, m, t = commits[cur]
+                # uncommitted lines: git says "Not Committed Yet", or "External file (--contents)" through the shadow
+                mine = a in ("Not Committed Yet", "External file (--contents)")
+                commits[cur] = (f"{me[0]} <{me[1]}>", t) if mine and me else (f"{a} <{m}>", t)
     return res
 
 
@@ -210,6 +264,7 @@ class Repos:
         self.sync_lock = threading.RLock()  # one indexing pass at a time: the watcher's, or a search catching up
         self.unsaved = False  # indexed by `refresh`: map layout and saved index still to do
         self._refreshing = False
+        self._sweeping = False  # a full sync holds sync_lock
         self._recheck = set()
         self._last = 0
         self._scope = (None, None)
@@ -335,18 +390,23 @@ class Repos:
         """Bring every repo (or just `only`: canonical roots) up to date with what's on disk: committed, staged,
         modified and untracked files in the main checkout, plus files that differ from it in each linked worktree."""
         with self.sync_lock:
-            return self._sync(log, force, only)
+            self._sweeping = True
+            try:
+                return self._sync(log, force, only)
+            finally:
+                self._sweeping = False
 
     def refresh(self, roots=(), wait=1.5, log=lambda m: print(m, flush=True)):
         """Index the edits waiting in `roots` and in the file watcher's queue now. The map layout and the saved
         copy of the vector index are left to the watcher (`save`). Returns the files re-indexed, or None when a
-        sweep kept the index busy for `wait` seconds (the roots go back in the queue)."""
+        sweep holds the index (the roots go back in the queue). A sweep can take minutes, so a search doesn't
+        wait for one; results from files that changed meanwhile are marked stale instead."""
         roots = set(roots) | (self.pending() if self.pending else set())
         if not roots:
             if self._refreshing and self.sync_lock.acquire(timeout=wait):  # the watcher is indexing an edit now
                 self.sync_lock.release()
             return 0
-        if not self.sync_lock.acquire(timeout=wait):
+        if self._sweeping or not self.sync_lock.acquire(timeout=wait):
             if self.requeue:
                 self.requeue(roots)
             return None
@@ -491,45 +551,83 @@ class Repos:
         me = git(checkout, "config", "user.name").strip(), git(checkout, "config", "user.email").strip()
         secrets = settings.get("exclude_files")
         label = f"{Path(root).name}" + (f" @ {branch or Path(wt).name}" if wt else "")
-        n_new = 0
-        for path, blob in target.items():
-            if have.get(path) == blob:
-                continue
-            self._service(root, log)  # keep other repos' edits flowing during a long index
-            p = Path(path)
-            if p.suffix.lower() in SKIP_EXT or p.name in SKIP_NAMES or ".min." in p.name or secret(p.name, secrets):
-                continue
+        todo = [(path, blob) for path, blob in target.items() if have.get(path) != blob and not (
+            Path(path).suffix.lower() in SKIP_EXT or Path(path).name in SKIP_NAMES or ".min." in path.rsplit("/", 1)[-1]
+            or secret(Path(path).name, secrets))]
+
+        shadow = blame_shadow(root, checkout) if len(todo) >= SHADOW_MIN_FILES else None
+
+        def prepare(item):  # in a worker thread: everything but the model and the database
+            path, blob = item
+            yield_to_searches()
             try:
                 raw = (Path(checkout) / path).read_bytes()
             except OSError:
-                continue
+                return None
             if len(raw) > MAX_BYTES or b"\x00" in raw[:2000] or not raw.strip():
-                continue
+                return None
             chunks = chunk_code(raw.decode("utf8", "replace"))
-            if not chunks:
-                continue
-            bl = blame_lines(checkout, path, me)
-            now = int(time.time())
-            vecs = embed([f"{path}\n{c[2]}" for c in chunks])
-            ids = []
-            with self.lock:
-                for (s, e, text), v in zip(chunks, vecs):
+            return (path, blob, chunks, blame_lines(checkout, path, me, shadow)) if chunks else None
+
+        # code.tv is written once, when the sweep ends (save): rewriting the whole file under the lock mid-sweep
+        # stalled searches for seconds on a big repo, and after a crash reconcile re-adds vectors from the database
+        n_new, group, writing = 0, [], None
+
+        def write(group, vecs):  # on the writer thread, while the model embeds the next group
+            nonlocal n_new
+            now, k = int(time.time()), 0
+            for path, blob, chunks, bl in group:
+                yield_to_searches()
+                p = Path(path)
+                d = p.parts[0] if len(p.parts) > 1 else "."
+                rows = []
+                for j, (s, e, text) in enumerate(chunks):
                     # lines without blame (untracked file) are the user's own, written just now
                     au = Counter(bl[i][0] if i in bl else f"{me[0]} <{me[1]}>" for i in range(s, e + 1))
                     ts = max((bl[i][1] if i in bl else now for i in range(s, e + 1)), default=0)
-                    d = p.parts[0] if len(p.parts) > 1 else "."
-                    cur_ = self.db.execute(
-                        "INSERT INTO code_chunks(repo,path,dir,start,end,text,vec,authors,last_ts,wt) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (root, path, d, s, e, text, v.astype(np.float16).tobytes(), json.dumps(au), ts, wt))
-                    ids.append(cur_.lastrowid)
-                self.index.add_with_ids(vecs, np.array(ids, dtype=np.uint64))
-                self.db.execute("INSERT OR REPLACE INTO checkout_files VALUES(?,?,?,?)", (root, wt, path, blob))
+                    rows.append((root, path, d, s, e, text, vecs[k + j].astype(np.float16).tobytes(), json.dumps(au), ts, wt))
+                with self.lock:  # one file at a time, so a search waits for a few inserts at most
+                    ids = [self.db.execute("INSERT INTO code_chunks(repo,path,dir,start,end,text,vec,authors,last_ts,wt) "
+                                           "VALUES(?,?,?,?,?,?,?,?,?,?)", r).lastrowid for r in rows]
+                    self.index.add_with_ids(vecs[k:k + len(ids)], np.array(ids, dtype=np.uint64))
+                    self.db.execute("INSERT OR REPLACE INTO checkout_files VALUES(?,?,?,?)", (root, wt, path, blob))
+                k += len(ids)
+            with self.lock:
                 self.db.commit()
-            n_new += 1
-            if n_new % 100 == 0:
-                log(f"  {label}: {n_new} files")
-                with self.lock:
-                    self.index.sync(str(CODE_INDEX_PATH))
+            for _ in group:
+                n_new += 1
+                if n_new % 100 == 0:
+                    log(f"  {label}: {n_new} files")
+
+        def flush():
+            nonlocal writing
+            if not group:
+                return
+            vecs = embed([f"{path}\n{c[2]}" for path, _, chunks, _ in group for c in chunks])
+            if writing:
+                writing.result()  # in order, and an error surfaces here
+            writing = writer.submit(write, list(group), vecs)
+            group.clear()
+
+        # git blame runs in worker threads a few files ahead, the database writes on its own thread, and chunks from
+        # several small files share one embedding batch, so the model is rarely idle
+        with ThreadPoolExecutor(INDEX_WORKERS) as ex, ThreadPoolExecutor(1) as writer:
+            items = iter(todo)
+            ahead = deque(ex.submit(prepare, it) for it in islice(items, INDEX_AHEAD))
+            while ahead:
+                fut = ahead.popleft()
+                nxt = next(items, None)
+                if nxt is not None:
+                    ahead.append(ex.submit(prepare, nxt))
+                self._service(root, log)  # keep other repos' edits flowing during a long index
+                r = fut.result()
+                if r:
+                    group.append(r)
+                    if sum(len(g[2]) for g in group) >= EMBED_GROUP:
+                        flush()
+            flush()
+            if writing:
+                writing.result()
         if n_new:
             log(f"repo {label}: {n_new} files updated")
         return n_new
@@ -547,6 +645,7 @@ class Repos:
             self.db.commit()
         self._cache.clear()
         self._team.clear()
+        shutil.rmtree(shadow_dir(root), ignore_errors=True)
 
     def _drop_file(self, root, path, wt=""):
         with self.lock:

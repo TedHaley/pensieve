@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -94,12 +95,57 @@ class MLXEmbedder:
 CODE_QUERY = "Instruct: Given a description of what some code does, retrieve the source code that implements it\nQuery:"
 
 
+class _Count:
+    """A thread-safe counter (`+=` on a global int can lose updates between threads)."""
+
+    def __init__(self):
+        self.n, self._lock = 0, threading.Lock()
+
+    def add(self, d):
+        with self._lock:
+            self.n += d
+
+    def __bool__(self):
+        return self.n > 0
+
+
+queries_waiting = _Count()   # searches waiting for the model; indexing lets them go first
+searches_running = _Count()  # searches in progress: indexing threads pause between files so a search gets the interpreter
+
+
+def _wait_while(count, limit=1.0):
+    t = time.monotonic()
+    while count and time.monotonic() - t < limit:
+        time.sleep(0.003)
+
+
+def yield_to_searches():
+    """Called by indexing threads between units of work. Waits while a search runs, at most a second."""
+    _wait_while(searches_running)
+BULK_SLICE = 8  # indexing texts per model call: 16 runs ~10% faster, but a search could then wait twice as long
+
+
 def embed(texts, query=False) -> np.ndarray:
-    """`query`: True for the model's general search instruction, or an instruction string (e.g. CODE_QUERY)."""
-    kw = {"prompt": query} if isinstance(query, str) else {"prompt_name": "query" if query else None}
-    with _embed_lock:
-        v = embedder().encode(texts, batch_size=16, normalize_embeddings=True, show_progress_bar=False, **kw)
-    return np.asarray(v, dtype=np.float32)
+    """`query`: True for the model's general search instruction, or an instruction string (e.g. CODE_QUERY).
+    Indexing embeds its texts BULK_SLICE at a time and steps aside between slices while a search waits, so a search
+    during indexing waits for one slice (a quarter second at most), not for a whole batch of files."""
+    kw = dict(batch_size=16, normalize_embeddings=True, show_progress_bar=False,
+              **({"prompt": query} if isinstance(query, str) else {"prompt_name": "query" if query else None}))
+    if query:
+        queries_waiting.add(1)
+        try:
+            with _embed_lock:
+                return np.asarray(embedder().encode(texts, **kw), dtype=np.float32)
+        finally:
+            queries_waiting.add(-1)
+    order = sorted(range(len(texts)), key=lambda i: -len(texts[i]))  # similar lengths in a slice: less padding
+    out = np.zeros((len(texts), config.EMBED_DIM), np.float32)
+    for i in range(0, len(order), BULK_SLICE):
+        _wait_while(queries_waiting)
+        idx = order[i:i + BULK_SLICE]
+        with _embed_lock:
+            out[idx] = embedder().encode([texts[j] for j in idx], **kw)
+    return out
 
 
 def chunk_session(turns):
@@ -157,8 +203,13 @@ class Store:
         self._indexed_at = {}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
-        from pensieve.search import code_words
+        # write-ahead log: a commit appends instead of rewriting a journal, and NORMAL syncs at checkpoints rather
+        # than every commit (still crash-safe; a power cut can lose only the last few commits, which re-index)
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA synchronous=NORMAL")
+        from pensieve.search import code_words, repo_token
         self.db.create_function("code_words", 1, code_words, deterministic=True)  # used by the code keyword index
+        self.db.create_function("repo_token", 1, repo_token, deterministic=True)
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions(
           id TEXT PRIMARY KEY, source TEXT, project TEXT, title TEXT, path TEXT,

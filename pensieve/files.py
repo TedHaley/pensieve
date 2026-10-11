@@ -258,22 +258,28 @@ class Files:
         self.requeue = None   # callable(set) to put them back
         self.unsaved = False  # indexed by a search catching up: map layout and saved index still to do
         self._refreshing = False
+        self._sweeping = False  # a full sync holds sync_lock
 
     # ---- indexing ----------------------------------------------------------
     def sync(self, log=lambda m: print(m, flush=True), force=False, on_progress=None) -> int:
         """Index new/changed files in the configured folders and drop ones that are gone. Returns files touched."""
         with self.sync_lock:
-            return self._sync(log, force, on_progress)
+            self._sweeping = True
+            try:
+                return self._sync(log, force, on_progress)
+            finally:
+                self._sweeping = False
 
     def refresh(self, paths=(), wait=1.5):
         """Index `paths` and the file watcher's queue now, even files saved a moment ago. Returns the files
-        changed, or None when a sweep kept the index busy for `wait` seconds (the paths go back in the queue)."""
+        changed, or None when a sweep holds the index (the paths go back in the queue): a search doesn't wait
+        for a sweep."""
         paths = set(paths) | (self.pending() if self.pending else set())
         if not paths:
             if self._refreshing and self.sync_lock.acquire(timeout=wait):  # the watcher is indexing an edit now
                 self.sync_lock.release()
             return 0
-        if not self.sync_lock.acquire(timeout=wait):
+        if self._sweeping or not self.sync_lock.acquire(timeout=wait):
             if self.requeue:
                 self.requeue(paths)
             return None

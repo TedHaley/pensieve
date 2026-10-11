@@ -10,6 +10,7 @@ dev split; the test split is only for confirming a winner.
 import argparse
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -19,7 +20,7 @@ from pathlib import Path
 import numpy as np
 from scipy import sparse
 
-DB = Path.home() / ".pensieve" / "pensieve.db"
+DB = Path(os.environ.get("PENSIEVE_DATA", Path.home() / ".pensieve")).expanduser() / "pensieve.db"
 OUT = Path(__file__).parent / "out"
 CACHE = OUT / "cache"
 
@@ -456,6 +457,9 @@ def main():
                 for t, qv in zip(tss, Q):
                     ans = t.get("files") or (t.get("ident_files") if style == "ident" else None) or [t["file"]]
                     targets = [repo.files.index(f) for f in ans if f in repo.files]
+                    if not targets:  # the answer file isn't in this index (e.g. switched off or deleted since)
+                        print(f"  skip {t['id']}: {ans[0]} not indexed", file=sys.stderr)
+                        continue
                     ms = methods(repo, qv, t[style])
                     for rr in filter(None, a.rerank.split(",")):
                         top, docs = candidates(repo, qv, ms[a.base], a.topn)

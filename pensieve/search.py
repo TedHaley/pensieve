@@ -6,15 +6,20 @@
     -draft  -"old notes"          -> exclude
     kind:code  ext:pdf  in:anastomo   -> filters (kind is file, code or session; in matches the path or project)
 """
+import bisect
+import hashlib
 import json
 import os
 import re
+import sqlite3
+import threading
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
 
+from pensieve import indexer
 from pensieve.indexer import CODE_QUERY, embed
 from pensieve.layout import unit
 
@@ -24,8 +29,17 @@ CORPORA = {  # kind -> (chunk table, fts table)
     "session": ("chunks", "fts_sessions"),
 }
 FTS_VERSION = "trigram-v1"
-WORDS_VERSION = "words-v1"
+WORDS_VERSION = "words-v3"  # v3: a `repo` column holds the chunk's repo_token; it filters, and bm25 gives it no weight
 WORDS_FTS = "fts_code_words"  # code split into words (camelCase and snake_case too), for keyword ranking
+
+
+_WORDS_OF = "code_words({r}.path || ' ' || {r}.text), repo_token({r}.repo)"  # one chunk's (words, repo) columns
+
+
+def repo_token(root):
+    """A made-up word for one repo, in the keyword index's `repo` column, so a search scoped to a repo asks SQLite for
+    "these words AND this repo" rather than scoring every repo's matches. Letters only, so FTS5 keeps it whole."""
+    return "zzrepo" + "".join(chr(97 + int(c, 16)) for c in hashlib.sha1(str(root).encode()).hexdigest()[:12])
 _TOKEN = re.compile(r'(-?)"([^"]*)"?|(\S+)')
 _FILTER = re.compile(r"^(kind|ext|in|by):(.+)$", re.I)
 _KINDS = {"file": "file", "files": "file", "doc": "doc", "docs": "doc", "document": "doc", "documents": "doc",
@@ -81,25 +95,31 @@ def ensure_fts(db, lock, meta, log=print):
               INSERT INTO {fts}({fts}, rowid, text) VALUES('delete', old.id, old.text);
               INSERT INTO {fts}(rowid, text) VALUES (new.id, new.text); END;
             """)
+        words_fresh = meta("fts_words") == WORDS_VERSION
+        if not words_fresh:  # the table's columns changed: CREATE ... IF NOT EXISTS would keep the old ones
+            db.executescript(f"DROP TABLE IF EXISTS {WORDS_FTS}_vocab; DROP TABLE IF EXISTS {WORDS_FTS};")
         db.executescript(f"""
-        CREATE VIRTUAL TABLE IF NOT EXISTS {WORDS_FTS} USING fts5(words, content='', contentless_delete=1);
-        CREATE TRIGGER IF NOT EXISTS {WORDS_FTS}_ai AFTER INSERT ON code_chunks BEGIN
-          INSERT INTO {WORDS_FTS}(rowid, words) VALUES (new.id, code_words(new.path || ' ' || new.text)); END;
+        CREATE VIRTUAL TABLE IF NOT EXISTS {WORDS_FTS} USING fts5(words, repo, content='', contentless_delete=1);
+        CREATE VIRTUAL TABLE IF NOT EXISTS {WORDS_FTS}_vocab USING fts5vocab({WORDS_FTS}, 'row');
+        DROP TRIGGER IF EXISTS {WORDS_FTS}_ai;
+        DROP TRIGGER IF EXISTS {WORDS_FTS}_au;
+        CREATE TRIGGER {WORDS_FTS}_ai AFTER INSERT ON code_chunks BEGIN
+          INSERT INTO {WORDS_FTS}(rowid, words, repo) VALUES (new.id, {_WORDS_OF.format(r="new")}); END;
         CREATE TRIGGER IF NOT EXISTS {WORDS_FTS}_ad AFTER DELETE ON code_chunks BEGIN
           DELETE FROM {WORDS_FTS} WHERE rowid=old.id; END;
-        CREATE TRIGGER IF NOT EXISTS {WORDS_FTS}_au AFTER UPDATE OF text ON code_chunks BEGIN
+        CREATE TRIGGER {WORDS_FTS}_au AFTER UPDATE OF text ON code_chunks BEGIN
           DELETE FROM {WORDS_FTS} WHERE rowid=old.id;
-          INSERT INTO {WORDS_FTS}(rowid, words) VALUES (new.id, code_words(new.path || ' ' || new.text)); END;
+          INSERT INTO {WORDS_FTS}(rowid, words, repo) VALUES (new.id, {_WORDS_OF.format(r="new")}); END;
         """)
         db.commit()
-        fresh, words_fresh = meta("fts") == FTS_VERSION, meta("fts_words") == WORDS_VERSION
+        fresh = meta("fts") == FTS_VERSION
     if fresh and words_fresh:
         return False
     if not words_fresh:
         t = time.time()
         with lock:
-            db.execute(f"DELETE FROM {WORDS_FTS}")
-            db.execute(f"INSERT INTO {WORDS_FTS}(rowid, words) SELECT id, code_words(path || ' ' || text) FROM code_chunks")
+            db.execute(f"INSERT INTO {WORDS_FTS}(rowid, words, repo) SELECT id, {_WORDS_OF.format(r='code_chunks')} "
+                       f"FROM code_chunks")
             meta("fts_words", WORDS_VERSION)
             db.commit()
         log(f"full-text index {WORDS_FTS}: {time.time() - t:.1f}s")
@@ -117,6 +137,27 @@ def ensure_fts(db, lock, meta, log=print):
     return True
 
 
+class _Laps:
+    """With PENSIEVE_TRACE set, logs how long each phase of a search took (milliseconds)."""
+
+    def __init__(self, q):
+        self.on = bool(os.environ.get("PENSIEVE_TRACE"))
+        self.q, self.t, self.laps = q, time.perf_counter(), []
+
+    def __call__(self, name, done=False):
+        if not self.on:
+            return
+        now = time.perf_counter()
+        self.laps.append(f"{name} {(now - self.t) * 1000:.0f}")
+        self.t = now
+        if done:
+            print(f"trace find {self.q[:40]!r}: " + ", ".join(self.laps), flush=True)
+
+
+FOLDER_REBUILD = 30  # seconds between background rebuilds of the folder index while the index keeps changing
+COMMON_WORD = 0.05  # keyword ranking skips query words in more than this share of code chunks (see _rare_terms)
+_NO_FOLDERS = dict(fp=None, at=0, keys=[], dirs={}, C=np.zeros((0, 1), np.float32), ids=[], people=Counter(),
+                   by_word={}, words=[], authors={}, doc_author={})  # until the first folder index is built
 _TESTY = re.compile(r"(^|/)(tests?|__tests__|spec|specs|__mocks__|mocks?|fixtures?|stories|e2e)/|"
                     r"([._-](test|spec|stories|mock)s?\.[a-z]+$)|(^|/)test_[^/]+$|/docs?/schema/")
 _SYMBOL = re.compile(r"^\s*(?:export\s+)?(?:async\s+)?(?:def|class|function|module|interface|type|struct|fn|func|"
@@ -142,6 +183,7 @@ class Searcher:
     def __init__(self, store, repos, files):
         self.store, self.repos, self.files = store, repos, files
         self.db, self.lock = store.db, store.lock
+        self._fbuilding = False
 
     def _index(self, kind):
         return {"file": self.files.index, "code": self.repos.index, "session": self.store.index}[kind]
@@ -151,10 +193,27 @@ class Searcher:
         (file = documents, code, session). In the query, kind:file|doc|code|session|folder|repo|person picks what
         comes back (file = documents and code; a repo is a folder too) and by:<name> keeps what that person wrote.
         Edits the file watcher saw are indexed first, so a search right after an edit finds the new text."""
+        indexer.searches_running.add(1)
+        try:
+            return self._find(q, limit, kinds, scope, retry)
+        finally:
+            indexer.searches_running.add(-1)
+
+    def _catch_up(self, roots=(), paths=()):
+        """Index pending edits now. This search stops counting as running meanwhile: the indexing it waits for
+        would otherwise step aside for it."""
+        indexer.searches_running.add(-1)
+        try:
+            return (self.repos.refresh(roots) or 0) + (self.files.refresh(paths) or 0)
+        finally:
+            indexer.searches_running.add(1)
+
+    def _find(self, q, limit, kinds, scope, retry):
         from pensieve import scopes
+        lap = _Laps(q)
         if retry:
-            self.repos.refresh()
-            self.files.refresh()
+            self._catch_up()
+            lap("catch-up")
         pq = parse(q)
         f = pq["filters"]
         kf = f.get("kind")
@@ -165,6 +224,7 @@ class Searcher:
         if by:  # what that person wrote: code by blame, documents by author, sessions by agent
             kinds = [k for k in kinds if k != "session" or any(by in a for a in ("claude", "codex", "qwen"))]
         qv = embed([pq["semantic"]], query=True)[0] if pq["semantic"] else None
+        lap("embed")
         code_ranked = {}  # (kind, chunk id) -> file-level score from _code
         hits = {}  # (kind, chunk id) -> score dict
         exact_short = [p for p in pq["exact"] if len(p) < 3]  # trigram needs 3+ chars: checked by substring instead
@@ -201,7 +261,7 @@ class Searcher:
                     allow = self._by_allow(by, allow)
                     if not len(allow):
                         continue
-                for cid, sc in self._code(pq["semantic"], allow).items():
+                for cid, sc in self._code(pq["semantic"], allow, roots=scope.repos if scope is not None else None).items():
                     hits[(kind, cid)] = dict(exact=False, bm25=0, sem=sc)
                     code_ranked[(kind, cid)] = sc
             elif qv is not None:
@@ -214,7 +274,9 @@ class Searcher:
                                    else idx.search(qv[None, :], k=k))
                         for s, cid in zip(sc[0], ids[0]):
                             hits[(kind, int(cid))] = dict(exact=False, bm25=0, sem=float(s))
+        lap("corpora")
         rows = self._rows(hits)
+        lap("rows")
         if qv is not None and pq["exact"]:  # phrase matches ranked by meaning of the remaining words
             for key, r in rows.items():
                 hits[key]["sem"] = float(np.frombuffer(r["vec"], np.float16).astype(np.float32) @ qv)
@@ -253,6 +315,7 @@ class Searcher:
                 continue
             seen.add(k)
             best.append(x)
+        lap("rank")
         extra = []
         if not pq["semantic"] and kf == "repo":  # kind:repo alone: every repo, biggest first
             extra += self._folders("", scope, repos_only=True, limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
@@ -265,11 +328,24 @@ class Searcher:
             best = extra
         elif extra:  # a folder or person the query names outright goes first
             best = extra + [x for x in best if x["id"] not in {e["id"] for e in extra}]
+        lap("folders+people")
         results, roots, paths = self._on_disk(best, rows, limit)
+        lap("on-disk")
         if retry and (roots or paths):  # changed after it was indexed and the watcher hasn't caught it yet
-            n = (self.repos.refresh(roots) or 0) + (self.files.refresh(paths) or 0)
+            n = self._catch_up(roots, paths)
             if n:
                 return self.find(q, limit, kinds, scope, retry=False)
+        shown = 0
+        for x in results:
+            if x["kind"] == "code" and x.get("line"):
+                text = rows[("code", int(x["id"].partition(":")[2]))]["text"]
+                off, x["definition"], x["focus"] = _focus(text, pq["semantic"], pq["exact"])
+                x["focus_line"] = x["line"] + off
+                x["chunk_line"], x["line"] = x["line"], x["focus_line"]  # apps open code at the line that matched
+                if shown < 3:  # enough of the best hits to judge them without opening the file
+                    shown += 1
+                    x["excerpt"] = _excerpt(text, x["chunk_line"], pq["semantic"], pq["exact"])
+        lap("lines", done=True)
         return dict(query=pq, results=results, scope=scopes.describe(scope))
 
     @staticmethod
@@ -310,7 +386,25 @@ class Searcher:
             out.append(x)
         return out, roots, paths
 
-    def _code(self, q, allow, k=400):
+    def _rare_terms(self, terms):
+        """The query words worth keyword-ranking on. A word in more than COMMON_WORD of all code chunks weighs almost
+        nothing in BM25, yet SQLite scores every chunk that contains it (about 0.1 s for a word like "data"), so it
+        is left out; the two rarest words are kept when every word is that common. Call with self.lock held."""
+        now = time.time()
+        if not hasattr(self, "_df") or now - self._df_at > 300:
+            self._df, self._df_at = {}, now
+            self._n_chunks = self.db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0] or 1
+        try:
+            for t in terms:
+                if t not in self._df:
+                    r = self.db.execute(f"SELECT doc FROM {WORDS_FTS}_vocab WHERE term=?", (t,)).fetchone()
+                    self._df[t] = r[0] if r else 0
+        except sqlite3.OperationalError:  # the vocabulary table comes with ensure_fts, which runs in the background
+            return terms
+        keep = [t for t in terms if self._df[t] <= COMMON_WORD * self._n_chunks]
+        return keep or sorted(terms, key=self._df.get)[:2]
+
+    def _code(self, q, allow, k=400, roots=None):
         """Code search tuned on bench/ (agent-style queries: descriptions, names, error strings, mixes of these).
 
         Candidates: the top-k chunks by meaning and by keywords (identifier-aware), plus chunks containing the
@@ -333,11 +427,14 @@ class Searcher:
                        else idx.search(qv[None, :], k=k))
             cand.update(int(c) for c in ids[0])
             kw = {}
-            terms = sorted(set(code_words(q).split()))
+            terms = self._rare_terms(sorted(set(code_words(q).split())))
             if terms:
                 fq = " OR ".join(f'"{t}"' for t in terms)
-                for cid, bm in self.db.execute(f"SELECT rowid, bm25({WORDS_FTS}) FROM {WORDS_FTS} WHERE {WORDS_FTS} "
-                                               f"MATCH ? ORDER BY 2 LIMIT ?", (fq, k if allowed is None else 20000)):
+                scoped = bool(roots) and self.store.meta("fts_words") == WORDS_VERSION  # the index has repo tokens
+                if scoped:
+                    fq = f"words : ({fq}) AND repo : ({' OR '.join(repo_token(r) for r in roots)})"
+                for cid, bm in self.db.execute(f"SELECT rowid, bm25({WORDS_FTS}, 1.0, 0.0) FROM {WORDS_FTS} WHERE {WORDS_FTS} "
+                                               f"MATCH ? ORDER BY 2 LIMIT ?", (fq, k if allowed is None or scoped else 20000)):
                     if ok(cid) and len(kw) < k:
                         kw[cid] = -bm
             cand.update(kw)
@@ -402,14 +499,34 @@ class Searcher:
         return {best[f]: float(total[i]) for i, f in enumerate(keys)}
 
     # ---- folders, repos, people ----
-    def _folder_index(self):
+    def _folder_index(self, wait=False):
         """Every folder of the indexed repos (main checkouts) and document folders: path words, files, and the mean
-        vector of what's in it. Rebuilt when the index changes."""
+        vector of what's in it. Kept in memory and built in the background (the server starts it at launch): when the
+        index changes it is rebuilt at most every FOLDER_REBUILD seconds and not during a sweep. A search never
+        waits for it; until the first build is done it gets no folders or people. `wait`: build now if there is none
+        (by:<person> needs the authors to filter at all)."""
         with self.lock:
-            fp = self.db.execute("SELECT (SELECT COUNT(*) FROM code_chunks WHERE wt=''), (SELECT MAX(id) FROM code_chunks), "
-                                 "(SELECT COUNT(*) FROM file_chunks)").fetchone()
-        if getattr(self, "_fidx", None) and self._fidx["fp"] == fp:
-            return self._fidx
+            fp = self.db.execute("SELECT (SELECT MAX(id) FROM code_chunks), (SELECT MAX(id) FROM file_chunks), "
+                                 "(SELECT COUNT(*) FROM repos)").fetchone()
+        cur = getattr(self, "_fidx", None)
+        if cur is None and wait:
+            return self._build_folder_index(fp)
+        sweeping = getattr(self.repos, "_sweeping", False) or getattr(self.files, "_sweeping", False)
+        # a rebuild walks every chunk in Python; during a sweep it would run back to back and slow searches down
+        if cur is None or (cur["fp"] != fp and not sweeping and time.time() - cur["at"] > FOLDER_REBUILD):
+            if self._fbuilding:
+                return cur or _NO_FOLDERS
+            self._fbuilding = True
+
+            def rebuild():
+                try:
+                    self._build_folder_index(fp)
+                finally:
+                    self._fbuilding = False
+            threading.Thread(target=rebuild, daemon=True, name="folder-index").start()
+        return cur or _NO_FOLDERS
+
+    def _build_folder_index(self, fp):
         home = str(Path.home())
         with self.lock:
             names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
@@ -443,14 +560,19 @@ class Searcher:
         V = unit(np.stack([np.frombuffer(v, np.float16) for v in vecs]).astype(np.float32)) if vecs else np.zeros((0, 1))
         keys = [k for k, d in dirs.items() if len(d["files"]) >= 1]
         C = unit(np.stack([V[dirs[k]["idx"]].mean(0) for k in keys])) if keys else np.zeros((0, 1))
-        for k in keys:  # words of the path, by segment (repo name first)
+        by_word = defaultdict(set)  # path word -> folders (positions in keys) whose path has it
+        for j, k in enumerate(keys):  # words of the path, by segment (repo name first)
             d = dirs[k]
             d["segs"] = [set(code_words(x).split()) for x in [d["name"], *(d["rel"].split("/") if d["rel"] else [])]]
+            for seg in d["segs"]:
+                for w in seg:
+                    by_word[w].add(j)
         people = Counter()
         for c in code:
             for who, n in json.loads(c[4] or "{}").items():
                 people[who.split(" <")[0]] += n
-        self._fidx = dict(fp=fp, keys=keys, dirs=dirs, C=C, ids=ids, people=people,
+        self._fidx = dict(fp=fp, at=time.time(), keys=keys, dirs=dirs, C=C, ids=ids, people=people,
+                          by_word=by_word, words=sorted(by_word),
                           authors={("code", c[0]): (c[4] or "").lower() for c in code},
                           doc_author={("file", c[0]): (c[3] or "").lower() for c in docs})
         return self._fidx
@@ -485,7 +607,22 @@ class Searcher:
         if by:
             by_ok = {i for i, k in enumerate(ix["ids"]) if by in (ix["authors"].get(k) or ix["doc_author"].get(k) or "").lower()}
         out = []
-        for j, key in enumerate(ix["keys"]):
+        candidates = range(len(ix["keys"]))
+        if strong_only and words:  # only folders whose path has every word (the check below), found by word
+            candidates = None
+            for w in words:
+                hit = set(ix["by_word"].get(w, ()))
+                if len(w) >= 4:  # a word may be a prefix of a path word: 'pipeline' ~ 'pipelines'
+                    i = bisect.bisect_left(ix["words"], w)
+                    while i < len(ix["words"]) and ix["words"][i].startswith(w):
+                        hit |= ix["by_word"][ix["words"][i]]
+                        i += 1
+                candidates = hit if candidates is None else candidates & hit
+                if not candidates:
+                    return []
+            candidates = sorted(candidates)
+        for j in candidates:
+            key = ix["keys"][j]
             d = ix["dirs"][key]
             if repos_only and not d["root"]:
                 continue
@@ -534,7 +671,7 @@ class Searcher:
             return by in (r.get("subtitle") or "").lower()
         if kind == "file":
             return by in (r.get("author") or "").lower()
-        return by in self._folder_index()["authors"].get(("code", int(r["id"].split(":")[1])), "")
+        return by in self._folder_index(wait=True)["authors"].get(("code", int(r["id"].split(":")[1])), "")
 
     def _people(self, q, scope, named_only=False, limit=8):
         """People for a query: someone it names outright, or (kind:person) whoever wrote most of the matching code."""
@@ -608,6 +745,51 @@ def _ts(m):
         return datetime.fromisoformat(str(m).replace("Z", "+00:00")).timestamp()
     except ValueError:
         return 0
+
+
+_STOP = set("the and for with from that this into when where what how all any each its are was has have not but "
+             "you your can will use used uses using code file files function method class which then than them they".split())
+
+
+def _stems(text):
+    return {w[:6] for w in code_words(text).split() if len(w) >= 3 and w not in _STOP}
+
+
+def _line_scores(lines, query, exact=()):
+    """How well each line matches: shared words (identifiers split), and much more for an exact phrase or a code
+    name from the query (`ICON_CANVAS`, `retryWebhook`) used on that line."""
+    want, phrases = _stems(query), [p.lower() for p in exact]
+    names = [re.compile(r"(?<![\w])" + re.escape(n) + r"(?![\w])") for n in code_names(query) if len(n) >= 3]
+    return [0.0 if not ln.strip() else
+            len(want & _stems(ln)) + 3 * sum(p in ln.lower() for p in phrases) + 4 * sum(bool(rx.search(ln)) for rx in names)
+            for ln in lines]
+
+
+def _focus(text, query, exact=()):
+    """The line of a code chunk that best matches the query, and the definition it sits in, so an agent can tell
+    from one result line whether it found the right code. Returns (line offset in the chunk, definition line or
+    None, best line)."""
+    lines = text.split("\n")
+    sc = _line_scores(lines, query, exact)
+    best = max(range(len(lines)), key=lambda i: (sc[i], -i)) if lines else 0
+    if not sc or sc[best] == 0:  # nothing matched word for word: the chunk's first line of substance
+        best = next((i for i, ln in enumerate(lines) if ln.strip()), 0)
+    sym = next((lines[j] for j in range(best, -1, -1) if _SYMBOL.match(lines[j])), None)
+    if sym is None:
+        sym = next((ln for ln in lines if _SYMBOL.match(ln)), None)
+    return best, (sym.strip() if sym and sym.strip() != lines[best].strip() else None), lines[best].strip()
+
+
+def _excerpt(text, start, query, exact=()):
+    """A few numbered lines that show why a chunk matched: its definition line and its two best-matching lines."""
+    lines = text.split("\n")
+    sc = _line_scores(lines, query, exact)
+    top = sorted((i for i in range(len(lines)) if sc[i] > 0), key=lambda i: (-sc[i], i))[:2]
+    if not top:
+        top = [next((i for i, ln in enumerate(lines) if ln.strip()), 0)]
+    sym = next((j for j in range(min(top), -1, -1) if _SYMBOL.match(lines[j])), None)
+    keep = sorted(set(top) | ({sym} if sym is not None else set()))
+    return [(start + j, lines[j][:120]) for j in keep]
 
 
 def _snippet(text: str, terms, width=220):
