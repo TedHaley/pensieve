@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, llm, mcp_server, scopes, search as search_mod, settings, sources, summarize
+from pensieve import actions, config, llm, mcp_server, onboarding, scopes, search as search_mod, settings, sources, summarize
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -81,10 +81,19 @@ async def watcher():
         import traceback
         traceback.print_exc()
     status.update(layout=False)
+    # watching (and the repo sweep behind checkouts) reads the user's folders: not before they've chosen what to index,
+    # so macOS asks for folder access at that step instead of at launch
+    while not settings.get("setup_done"):
+        status.update(indexing=False, message="waiting for setup")
+        await _wait(wake_files, config.POLL_SECONDS)
     watch.configure(repos.checkouts())
     asyncio.create_task(repo_watcher())
     last_full = 0
     while True:
+        if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
+            status.update(indexing=False, message="waiting for setup")
+            await _wait(wake_files, config.POLL_SECONDS)
+            continue
         try:
             d = watch.take()
             if sorted(str(p) for p in files.roots()) != sorted(watch.folders):  # a folder appeared or went away
@@ -133,6 +142,9 @@ async def watcher():
 async def repo_watcher():
     last_full = 0
     while True:
+        if not settings.get("setup_done"):
+            await _wait(wake_repos, 30)
+            continue
         try:
             d_repos, asked = watch.take_repos()
             full = asked or time.time() - last_full > FULL_SWEEP_SECONDS
@@ -363,6 +375,21 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan)
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+@app.middleware("http")
+async def local_only(request: Request, call_next):
+    """Only this Mac's own pages and programs. The server listens on 127.0.0.1, but a web page in the browser can
+    still reach it: through DNS rebinding (its own host name pointed at 127.0.0.1, which the Host header shows) or
+    with a cross-site request (which carries the page's Origin)."""
+    from urllib.parse import urlsplit
+    host = urlsplit("//" + request.headers.get("host", "")).hostname
+    origin = request.headers.get("origin")
+    if host not in LOCAL_HOSTS or (origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS):  # "null" too
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("Pensieve only answers requests from this Mac", status_code=403)
+    return await call_next(request)
 app.router.routes.extend(mcp_server.app_routes)  # MCP at /mcp
 STATIC = Path(__file__).parent / "static"
 NO_CACHE = {"Cache-Control": "no-store"}
@@ -399,7 +426,23 @@ def _status():
             "topics": db.execute("SELECT COUNT(*) FROM topics").fetchone()[0],
             "code_chunks": db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0],
             "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL,
-            "ai": settings.get("ai")}
+            "ai": settings.get("ai"), "setup_done": settings.get("setup_done"), "syncing": _syncing()}
+
+
+@app.get("/api/syncing")
+def get_syncing():
+    """Just the running jobs, for the menu bar to poll: no database work, so it never waits on indexing."""
+    return {"syncing": _syncing()}
+
+
+def _syncing() -> list[dict]:
+    """What is being indexed right now, with progress where the total is known."""
+    out = []
+    for kind, src in (("sessions", store), ("files", files), ("repo", repos)):
+        p = getattr(src, "progress", None)
+        if p:
+            out.append({"kind": kind, **p})
+    return out
 
 
 @app.get("/api/projects")
@@ -892,6 +935,48 @@ def remove_folder(path: str):
     return sources.catalog(store, repos, files)
 
 
+@app.get("/api/setup")
+def get_setup(fresh: bool = False, categories: str | None = None, scan: bool = True):
+    """The first-run (and after-reset) steps: what Pensieve is, the profiles, the AI engines and, with `scan`, what
+    can be indexed in `categories` (comma-separated; all by default). Only the scan reads the user's folders."""
+    out = onboarding.guide()
+    if scan:
+        out["candidates"] = onboarding.scan(categories.split(",") if categories else None, fresh)
+    return out
+
+
+class SetupReq(BaseModel):
+    sources: list[str] | None = None  # ids to index; None with recommended=true takes the pre-checked ones
+    recommended: bool = False
+    ai: str | None = None  # the insights engine
+
+
+@app.post("/api/setup")
+async def post_setup(req: SetupReq):
+    """Index exactly the chosen sources: every other candidate is switched off, then indexing starts."""
+    try:
+        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.ai))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    wake_files.set()
+    wake_repos.set()
+    return res
+
+
+class AddReq(BaseModel):
+    kind: str  # files | repos | agents
+    path: str
+
+
+@app.post("/api/setup/add")
+def setup_add(req: AddReq):
+    """A source the setup scan didn't find. Returns its id, to choose in the next POST /api/setup."""
+    try:
+        return {"id": onboarding.add(req.kind, req.path)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 def _tilde(p: Path) -> str:
     return str(p).replace(str(Path.home()), "~", 1)
 
@@ -938,12 +1023,20 @@ def remove_repos(path: str):
     return sources.catalog(store, repos, files)
 
 
-def _version():
+def _read_version():
     from importlib.metadata import PackageNotFoundError, version
     try:
         return version("pensieve")
     except PackageNotFoundError:
         return "dev"
+
+
+# read once: an upgrade replaces the package files under a running backend, and the running code is still the old one
+VERSION = _read_version()
+
+
+def _version():
+    return VERSION
 
 
 @app.get("/api/about")

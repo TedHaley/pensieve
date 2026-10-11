@@ -23,6 +23,14 @@ app_dest() {
   else echo "$HOME/Applications/Pensieve.app"; fi
 }
 
+# A backend left running keeps the old code in memory while its files are replaced. The app starts the new one.
+stop_backend() {
+  # [p]: this pattern must not match the installer's own command line, which holds this script's text
+  if pkill -f "[p]ensieve serve" 2>/dev/null; then
+    echo "Stopped the running Pensieve backend; the app starts the new one."
+  fi
+}
+
 install_from_dmg() {
   if [ -n "${PENSIEVE_REF:-}" ]; then url="$REPO_URL/releases/download/$PENSIEVE_REF/Pensieve.dmg"
   else url="$REPO_URL/releases/latest/download/Pensieve.dmg"; fi
@@ -53,6 +61,7 @@ install_from_dmg() {
   # the same stamp the app writes, so it doesn't install the backend again on first launch
   mkdir -p "$HOME/.pensieve"
   printf '%s %s\n' "$(basename "$wheel")" "$(shasum -a 256 "$wheel" | cut -c1-16)" > "$HOME/.pensieve/backend-version"
+  stop_backend
   BIN="$HOME/.local/bin/pensieve"
   [ -z "$running" ] || open "$APP"
 }
@@ -74,6 +83,7 @@ install_from_source() {
   bold "Installing the Pensieve backend…"
   uv tool install --force --python 3.12 "git+$REPO_URL@$REF"
   uv tool update-shell >/dev/null 2>&1 || true
+  stop_backend
   BIN="$(command -v pensieve 2>/dev/null || echo "$(uv tool dir --bin)/pensieve")"
   if [ "$(uname)" = Darwin ] && [ -z "${PENSIEVE_NO_APP:-}" ] && xcrun --find swift >/dev/null 2>&1; then
     bold "Building the Pensieve app (about a minute)…"
@@ -101,8 +111,9 @@ if [ -n "$APP" ]; then
   echo "  App:                 $APP  (menu bar; press Control+Shift to search)"
 fi
 echo "  Backend:             $BIN  (visualizer at http://localhost:8765)"
-echo "  Set up your agents:  pensieve integrate recommended   (Claude Code, Codex, Cursor, Gemini CLI, Windsurf,"
-echo "                       Claude Desktop and VS Code: the ones on this Mac get Pensieve as an MCP server)"
+echo "  Set up your agents:  pensieve integrate recommended   (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code,"
+echo "                       Windsurf, Claude Desktop and VS Code: the ones on this Mac get Pensieve as an MCP server)"
+echo "  Choose what to index: pensieve setup   (lists what it found; nothing is indexed until you choose)"
 echo "  Uninstall:           rm -rf ~/.local/share/uv/tools/pensieve ~/.local/bin/pensieve ~/.pensieve ${APP:-}"
 echo
 

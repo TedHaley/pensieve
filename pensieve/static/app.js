@@ -1482,7 +1482,7 @@ function renderDataSidebar(side) {
       <div class="sec-note" style="margin-top:8px">${vis.length.toLocaleString()} of ${plural(all.length, 'item')}${D.folders.size ? ` in <b>${esc([...D.folders].join(', '))}</b> <button class="linkbtn" data-dclearf>Clear</button>` : ''}</div></div>
     <div class="sec"><div class="sec-h"><span>People</span>${D.authors.size ? `<button class="linkbtn" data-dclearp>Clear</button>` : ''}</div>
       ${people.length ? `<div class="rows">${people.map(x => `<div class="prow-w ${D.drawerPerson === x.who ? 'open' : ''}"><button class="row prow ${D.authors.has(x.who) ? 'on' : ''}" data-who="${esc(x.who)}" aria-pressed="${D.authors.has(x.who)}" title="${D.authors.has(x.who) ? 'Click again to stop filtering by ' + esc(x.who) : 'Show only work by ' + esc(x.who) + ' (pick several to compare)'}"><span class="check"></span><span class="sw" style="background:${slotColor(D.authorSlot.get(x.who) ?? -1)}"></span><span class="name">${esc(x.who)}</span><span class="n">${x.n.toLocaleString()}</span></button><button class="parrow" data-pwho="${esc(x.who)}" title="What ${esc(x.who)} knows about, in what's shown" aria-label="About ${esc(x.who)}"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>` : '<div class="sec-note">No authors known for what is shown.</div>'}</div>
-    <div class="sec"><div class="sec-h"><span>Folders</span></div>
+    <div class="sec"><div class="sec-h"><span>Sources</span></div>
       <div class="tree">${T.roots.filter(k => cnt.get(k)).sort((a, b) => cnt.get(b) - cnt.get(a)).map(k => treeHtml(k, 0, cnt, 'ddir', T.children, null, D.treeOpen)).join('') || '<div class="empty" style="padding:8px">Nothing indexed yet</div>'}</div></div>`;
   $$('[data-type]', side).forEach(b => b.onclick = () => { const t = b.dataset.type; if (D.types.has(t) && D.types.size === 1) D.types = new Set(Object.keys(TYPE_SLOT)); else toggleSet(D.types, t); dataChanged(); });
   bindTree(side, 'ddir', k => toggleDataFolder(k), () => renderSidebar(), D.treeOpen, 'dataTreeOpen');
@@ -1978,6 +1978,141 @@ function renderSources() {
 }
 const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await Promise.all([loadSources(), loadScopes()]); renderSources(); renderScopes(); }, 1200);
 
+const ENERGY_IC = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M13 2 4 14h7l-1 8 9-12h-7Z" fill="currentColor"/></svg>';
+// First run (and after a reset), in the same steps an agent takes through the MCP setup tools: what Pensieve is, who
+// it's for, permission to look, what to index, the insights engine, then start. No folder is read before "Look".
+const SETUP_STEPS = ['about', 'profile', 'look', 'choose', 'ai', 'start'];
+const SETUP_ADD = {files: 'Add folder…', repos: 'Add repo…', agents: 'Add session folder…'};
+const setupState = {step: 'about', guide: null, profiles: new Set(), cands: null, chosen: new Set(), ai: null, busy: false, err: null, adding: null};
+async function openSetup() {
+  let el = $('#setupsheet');
+  if (!el) { el = document.createElement('div'); el.id = 'setupsheet'; el.className = 'setup-sheet'; document.body.appendChild(el); }
+  Object.assign(setupState, {step: 'about', profiles: new Set(), cands: null, chosen: new Set(), busy: false, err: null, adding: null});
+  el.innerHTML = '<div class="setup-card"><div class="spinner" style="margin:24px auto"></div></div>';
+  try { setupState.guide = await api('/api/setup?scan=0'); }
+  catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
+  const ai = setupState.guide.ai;
+  setupState.ai = ai.find(o => o.id === 'builtin' && o.available) ? 'builtin' : 'none';
+  renderSetup();
+}
+const setupCats = () => { const want = new Set(setupState.guide.profiles.filter(p => setupState.profiles.has(p.id)).flatMap(p => p.categories));
+  return setupState.guide.categories.filter(c => want.has(c.id)); };
+async function setupScan(extra) {
+  const cats = [...new Set([...setupCats().map(c => c.id), ...(setupState.cands || []).map(c => c.id), ...(extra ? [extra] : [])])];
+  const d = await api(`/api/setup?fresh=1&categories=${enc(cats.join(','))}`);
+  const first = !setupState.cands;
+  setupState.cands = d.candidates;
+  if (first) d.candidates.forEach(c => c.items.forEach(i => i.checked && setupState.chosen.add(i.id)));
+}
+function setupGo(step) { setupState.step = step; setupState.err = null; renderSetup(); $('#setupsheet')?.scrollTo(0, 0); }
+function renderSetup() {
+  const el = $('#setupsheet'), g = setupState.guide; if (!el || !g) return;
+  const st = setupState, step = st.step, n = SETUP_STEPS.indexOf(step);
+  const dots = `<div class="setup-dots">${SETUP_STEPS.map((s, i) => `<i class="${i < n ? 'done' : i === n ? 'on' : ''}"></i>`).join('')}</div>`;
+  const cancel = g.done ? '<button class="btn" data-setup-cancel>Cancel</button>' : '';
+  const btns = (next, label, ok = true) => `${st.err ? `<p class="err">${esc(st.err)}</p>` : ''}<div class="setup-btns">${cancel}<span style="flex:1"></span>${n > 0 ? '<button class="btn" data-setup-back>Back</button>' : ''}
+    <button class="btn primary" data-setup-next="${next}" ${ok && !st.busy ? '' : 'disabled'}>${esc(label)}</button></div>`;
+  const items = (st.cands || []).flatMap(c => c.items), picked = items.filter(i => st.chosen.has(i.id));
+  const files = picked.filter(i => i.unit === 'files').reduce((a, i) => a + (i.size || 0), 0);
+  const mins = Math.max(1, Math.round(files / g.files_per_minute));
+  let body;
+  if (step === 'about') {
+    body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg>
+      <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+      <p class="sub">Setup takes a minute: tell Pensieve how you work, choose what it indexes, and pick an engine for insights.</p>${btns('profile', 'Get started')}`;
+  } else if (step === 'profile') {
+    body = `<h1>How do you use your Mac?</h1><p class="sub">Choose all that fit. Pensieve suggests what to index from this.</p>
+      <div class="setup-profiles">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="checkbox" aria-checked="${st.profiles.has(p.id)}">
+        <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${btns('look', 'Next', st.profiles.size > 0)}`;
+  } else if (step === 'look') {
+    body = `<h1>Allow Pensieve to look</h1><p class="sub">To suggest sources, Pensieve looks in these places. macOS may ask you to allow access to some folders. Pensieve reads them only on this Mac, and nothing is indexed until you choose.</p>
+      ${setupCats().map(c => `<div class="setup-cat"><h3>${esc(c.label)}</h3><p>${esc(c.reads)}</p></div>`).join('')}
+      ${btns('choose', st.busy ? 'Looking…' : 'Look for sources')}`;
+  } else if (step === 'choose') {
+    const row = i => `<label class="setup-row ${i.available ? '' : 'na'}"><input type="checkbox" data-setup-id="${esc(i.id)}" ${st.chosen.has(i.id) ? 'checked' : ''} ${i.available ? '' : 'disabled'}>
+      <span class="tx"><b>${esc(i.label)}${i.big ? ' <span class="badge">big</span>' : ''}</b><span>${esc(i.available ? i.detail : 'Not found on this Mac')}</span></span>
+      <span class="n">${i.size != null ? `${i.size.toLocaleString()} ${esc(i.unit)}` : ''}</span></label>`;
+    const add = kind => SETUP_ADD[kind] ? (st.adding === kind && !window.pensieveNative
+      ? `<div class="set-add setup-add"><input class="set-in" data-setup-addin="${kind}" placeholder="${kind === 'repos' ? '~/code/my-repo' : '~/folder'}"><button class="btn" data-setup-addgo="${kind}">Add</button></div>`
+      : `<button class="linkbtn setup-addbtn" data-setup-add="${kind}">${esc(SETUP_ADD[kind])}</button>`) : '';
+    const more = Object.keys(SETUP_ADD).filter(k => !st.cands.some(c => c.id === k));
+    body = `<h1>Choose what Pensieve indexes</h1><p class="sub">This is what Pensieve found. Add anything it missed. You can change this later in Settings → Sources.</p>
+      ${st.cands.map(c => `<div class="setup-cat"><h3>${esc(c.label)}</h3><p>${esc(c.description)}</p>${c.items.map(row).join('') || '<p class="muted">Nothing found.</p>'}${add(c.id)}</div>`).join('')}
+      ${more.length ? `<div class="setup-cat"><h3>Something else?</h3>${more.map(add).join(' · ')}</div>` : ''}
+      ${btns('ai', 'Next', picked.length > 0)}`;
+  } else if (step === 'ai') {
+    body = `<h1>Insights</h1><p class="sub">Optional. An AI engine writes summaries, topic names and insights about your work. ${esc(NO_AI_WORKS)}</p>
+      <div class="ai-opts" role="radiogroup">${g.ai.map(o => `<button class="ai-opt ${st.ai === o.id ? 'on' : ''}" data-setup-ai="${esc(o.id)}" role="radio" aria-checked="${st.ai === o.id}" ${o.available ? '' : 'disabled'}>
+        <div class="ai-opt-h"><b>${esc(o.id === 'none' ? 'Not now' : o.label)}</b>${o.privacy && o.id !== 'none' ? `<span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span>` : ''}</div>
+        <p>${esc(o.id === 'none' ? 'Turn insights on later in Settings → AI & Insights.' : o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}</button>`).join('')}</div>
+      ${btns('start', 'Next', !!st.ai)}`;
+  } else {
+    body = `<h1>Ready to index</h1><p class="sub">Pensieve will index ${esc(plural(picked.filter(i => !i.rule).length, 'source'))}${files ? `, including ${files.toLocaleString()} code files` : ''}.</p>
+      <div class="setup-energy">${ENERGY_IC}<div><b>This takes a while and uses a lot of energy</b><span>${files ? `The code alone takes about ${mins} minute${mins === 1 ? '' : 's'}; documents and sessions add to that. ` : ''}If this is a laptop, plug it in before you start. Search works while Pensieve indexes, and the dots in the menu bar turn until it is done.</span></div></div>
+      ${btns('go', st.busy ? 'Starting…' : 'Start indexing')}`;
+  }
+  el.innerHTML = `<div class="setup-card">${dots}${body}</div>`;
+  $('[data-setup-cancel]', el)?.addEventListener('click', () => el.remove());
+  $('[data-setup-back]', el)?.addEventListener('click', () => setupGo(SETUP_STEPS[n - 1]));
+  $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { const id = b.dataset.setupProf; st.profiles[st.profiles.has(id) ? 'delete' : 'add'](id); st.cands = null; st.chosen.clear(); renderSetup(); });
+  $$('[data-setup-id]', el).forEach(c => c.onchange = () => { st.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
+  $$('[data-setup-ai]', el).forEach(b => b.onclick = () => { st.ai = b.dataset.setupAi; renderSetup(); });
+  $$('[data-setup-add]', el).forEach(b => b.onclick = () => {
+    if (window.pensieveNative) window.webkit?.messageHandlers?.pensieveWindow?.postMessage({pickFolder: b.dataset.setupAdd});
+    else { st.adding = b.dataset.setupAdd; renderSetup(); $(`[data-setup-addin]`, el)?.focus(); }
+  });
+  $$('[data-setup-addgo]', el).forEach(b => b.onclick = () => setupAdd(b.dataset.setupAddgo, $(`[data-setup-addin]`, el).value.trim()));
+  $('[data-setup-next]', el)?.addEventListener('click', async e => {
+    const next = e.currentTarget.dataset.setupNext;
+    if (next === 'choose' && !st.cands) {
+      st.busy = true; renderSetup();
+      try { await setupScan(); } catch (err) { st.busy = false; st.err = 'Could not look for sources: ' + err.message; return renderSetup(); }
+      st.busy = false;
+    }
+    if (next !== 'go') return setupGo(next);
+    st.busy = true; renderSetup();
+    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], ai: st.ai})});
+    const j = await r.json().catch(() => ({}));
+    st.busy = false;
+    if (!r.ok) { st.err = typeof j.detail === 'string' ? j.detail : 'Could not start indexing'; return renderSetup(); }
+    el.remove(); S.status.setup_done = true;
+    S.setTab = 'sources'; store.set('setTab', 'sources');
+    await loadSettings(true); await setView('settings'); renderSettings(); pollStatus(); loadAI();
+    toast('Indexing started');
+  });
+}
+async function setupAdd(kind, path) {
+  const st = setupState; if (!path) return;
+  st.err = null;
+  const r = await fetch('/api/setup/add', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind, path})});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { st.err = typeof j.detail === 'string' ? j.detail : 'Could not add that folder'; return renderSetup(); }
+  st.adding = null;
+  const before = new Set((st.cands || []).flatMap(c => c.items.map(i => i.id)));
+  try { await setupScan(kind); } catch (e) { st.err = e.message; }
+  // An added folder of repos has no row of its own: the scan shows each repo inside it as a new row instead.
+  st.cands.flatMap(c => c.items).forEach(i => { if (i.id === j.id || (!before.has(i.id) && i.available)) st.chosen.add(i.id); });
+  renderSetup();
+}
+window.pensieveFolderPicked = (kind, path) => { if ($('#setupsheet')) setupAdd(kind, path); };
+function syncingHtml() {
+  const jobs = S.status?.syncing || [];
+  if (S.status?.setup_done === false) return `<div class="sync-strip warn">${ENERGY_IC}<div><b>Nothing is indexed yet</b><span>Choose the sources to start.</span></div><button class="btn primary" data-open-setup>Choose sources</button></div>`;
+  if (!jobs.length) return '';
+  const what = j => j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
+  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} files`
+    : `${j.done.toLocaleString()} ${j.kind === 'sessions' ? 'sessions' : 'files'} so far`;
+  return `<div class="sync-strip">${ENERGY_IC}<div><b>Syncing now</b>${jobs.map(j => `<span class="job">${what(j)} · ${prog(j)}</span>`).join('')}
+    <span class="muted">Indexing uses a lot of energy: plug in your Mac if you can. Search works meanwhile.</span></div></div>`;
+}
+function renderSyncing() {
+  const box = $('#syncbox'); if (!box) return;
+  box.innerHTML = syncingHtml();
+  $('[data-open-setup]', box)?.addEventListener('click', openSetup);
+  clearTimeout(renderSyncing.t);  // a long repo index sends no status events while it runs: poll for its progress
+  if ((S.status?.syncing || []).length && S.view === 'settings') renderSyncing.t = setTimeout(pollStatus, 3000);
+}
+
 /* ---- scopes: named slices of the index an agent (or the search panel) works within ---- */
 const scState = {data: null, edit: null, filter: '', resolve: null, confirmDel: null, err: null};
 async function loadScopes() { try { scState.data = await api('/api/scopes'); } catch { scState.data = scState.data || {scopes: [], default_scope: ''}; } renderPalScope(); }
@@ -2035,7 +2170,7 @@ function scopesHtml() {
         <div class="cmd"><code>${esc(stdioCmd(x.name))}</code><button class="btn" data-copy="${esc(stdioCmd(x.name))}">Copy</button></div>
         <div class="cmd"><code>${esc(httpCmd(x.name))}</code><button class="btn" data-copy="${esc(httpCmd(x.name))}">Copy</button></div></details></div>`;
   };
-  return `<div class="src-head"><h2>Scopes</h2><p>A scope is a bundle of sources: some repos, folders, agents or apps you work on together. Pick one, and the search panel and the visualizer search only there. You can also pick it in the search panel.</p></div>
+  return `<div class="src-head"><h2>Scopes</h2><p>A scope is a bundle of sources: some repos, folders, agents or apps you work on together. Pick one, and the search panel and the Map search only there. You can also pick it in the search panel.</p></div>
     <div class="set-card sc-card ${def ? '' : 'on'}"><div class="sc-top">${pick('', !def)}<div class="grow"><h3>Everything${def ? '' : ' <span class="badge">searching here</span>'}</h3><p>Every source on the Sources page.</p></div></div></div>
     ${d.scopes.map(card).join('')}
     ${scState.edit ? scopeEditor() : '<button class="btn primary" data-sc-new style="margin-bottom:14px">+ New scope</button>'}
@@ -2239,7 +2374,7 @@ async function renderSettings() {
   const kpi = (l, v) => `<div class="kpi"><div class="l">${l}</div><div class="v">${(v || 0).toLocaleString()}</div></div>`;
   const bar = (title, sub) => `<div class="set-bar"><div><h1>${esc(title)}</h1><div class="msg ${S.set.err && !S.set.errKey ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : esc(sub)}</div></div></div>`;
   let body = '';
-  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes, and the options for each. Switching a source off removes its data on the next sweep.') + `<div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
+  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes, and the options for each. Switching a source off removes its data on the next sweep.') + `<div id="syncbox"></div><div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
   else if (tab === 'scopes') body = bar('Scopes', 'Bundles of sources. Pick the one to search in.') + `<div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>`;
   else if (tab === 'agents') body = bar('Agents', 'Connect your coding agents, and help them search with Pensieve first.') + `
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
@@ -2253,7 +2388,7 @@ async function renderSettings() {
   else if (tab === 'ai') body = bar('AI & Insights', 'Optional: the engine that writes summaries, topic names and insights.') + aiSettingsHtml();
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
     <div class="set-card" id="set-Mac-app"><h3>Mac app</h3>${setRow('hotkey')}${setRow('editor')}
-      <div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes. The search panel and the visualizer both use it.</div></div>
+      <div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes. The search panel and the Map both use it.</div></div>
       <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>
     <div class="set-card" id="set-About"><h3>About</h3><div id="aboutbox"><div class="spinner" style="margin:8px 0"></div></div>
       <div class="set-stats" style="margin-top:12px">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
@@ -2282,7 +2417,7 @@ async function renderSettings() {
   $('[data-setdone]', el).onclick = () => setView(S.prevView || 'code');
   bindFields($('#setmain'));
   $$('#setmain > .set-card [data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
-  renderSources(); renderScopes();
+  renderSources(); renderScopes(); renderSyncing();
 }
 const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Largest repo to discover (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model', builtin_model: 'Built-in engine', agent_model: 'Claude Code engine'};
 async function saveSettings() {
@@ -2332,6 +2467,7 @@ async function route() {
   if (!h) return;
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
+  if (h === 'setup') return openSetup();
   if (['sources', 'scopes', 'agents', 'ai', 'general', ...Object.keys(OLD_TABS)].includes(h)) {
     S.setTab = OLD_TABS[h] || h; store.set('setTab', S.setTab);
     return S.view === 'settings' ? renderSettings() : setView('settings');
@@ -3077,12 +3213,13 @@ const reloadFilesSoon = debounce(async () => {
   if (S.view !== 'files') return;
   await loadFiles(); const c = gl.saveCam(); buildMap(); gl.loadCam(c); renderSidebar();
 }, 1500);
-const pollStatus = debounce(async () => { try { Object.assign(S.status, await api('/api/status')); renderStatus(); } catch {} }, 300);
+const pollStatus = debounce(async () => { try { Object.assign(S.status, await api('/api/status')); renderStatus(); renderSyncing(); } catch {} }, 300);
 
 async function init() {
   try {
     await Promise.all([loadSessions(), loadInsights(), loadData(), api('/api/status').then(s => Object.assign(S.status, s))]);
   } catch (e) { $('#loadingtext').textContent = 'Could not reach the Pensieve server.'; return; }
+  if (S.status.setup_done === false) openSetup();  // first, so nothing later on an empty index can keep it from opening
   renderStatus();
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
   document.body.dataset.view = S.view;

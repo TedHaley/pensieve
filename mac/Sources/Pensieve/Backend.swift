@@ -14,7 +14,29 @@ final class Backend: ObservableObject {
 
     @Published private(set) var state: State = .checking
     @Published private(set) var settings: [String: Any] = [:]
+    /// What is being indexed now (GET /api/syncing): empty when idle.
+    @Published private(set) var syncing: [SyncJob] = []
     var onSettingsChange: (() -> Void)?
+
+    /// One running indexing job: `total` is known for repos, not for documents or sessions.
+    struct SyncJob: Decodable, Equatable {
+        let kind: String  // "repo" | "files" | "sessions"
+        let name: String
+        let done: Int
+        let total: Int?
+
+        /// "Code in pensieve · 312 of 1,204 files"
+        var label: String {
+            let what = switch kind {
+            case "repo": "Code in \(name)"
+            case "files": "Documents in \(name)"
+            default: "\(["claude": "Claude Code", "qwen": "Qwen Code", "codex": "Codex"][name] ?? name) sessions"
+            }
+            let n = done.formatted()
+            if let total { return "\(what) · \(n) of \(total.formatted()) files" }
+            return "\(what) · \(n) \(kind == "sessions" ? "sessions" : "files") so far"
+        }
+    }
 
     let base: URL
     /// Set when PENSIEVE_URL points somewhere else (dev, tests): never spawn a backend then, just wait for it.
@@ -22,6 +44,7 @@ final class Backend: ObservableObject {
     private let port: Int
     private var child: Process?
     private var events: Task<Void, Never>?
+    private var syncPoll: Task<Void, Never>?
 
     private init() {
         let env = ProcessInfo.processInfo.environment
@@ -110,6 +133,26 @@ final class Backend: ObservableObject {
         state = .up
         await loadSettings()
         listen()
+        pollSyncing()
+    }
+
+    /// A long index sends no events while it runs, so the menu bar polls: every second while something is
+    /// indexing, every 3 s otherwise. A backend without /api/syncing (older) reads as idle.
+    private func pollSyncing() {
+        syncPoll?.cancel()
+        syncPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                var jobs: [SyncJob] = []
+                if self.state == .up, let (d, r) = try? await URLSession.shared.data(from: self.url("api/syncing")),
+                   (r as? HTTPURLResponse)?.statusCode == 200,
+                   let res = try? JSONDecoder().decode([String: [SyncJob]].self, from: d) {
+                    jobs = res["syncing"] ?? []
+                }
+                if jobs != self.syncing { self.syncing = jobs }
+                try? await Task.sleep(for: .seconds(jobs.isEmpty ? 3 : 1))
+            }
+        }
     }
 
     private func isUp() async -> Bool {
@@ -297,12 +340,18 @@ final class Backend: ObservableObject {
     private func listen() {
         events?.cancel()
         events = Task { [weak self] in
+            var down = 0
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
                     var req = URLRequest(url: self.url("api/events"))
                     req.timeoutInterval = 120
-                    let (bytes, _) = try await URLSession.shared.bytes(for: req)
+                    let (bytes, r) = try await URLSession.shared.bytes(for: req)
+                    // the stream stays open while the backend runs, so a reconnect is the moment it is back
+                    if (r as? HTTPURLResponse)?.statusCode == 200, self.state != .up {
+                        self.state = .up
+                        await self.loadSettings()
+                    }
                     for try await line in bytes.lines {
                         guard line.hasPrefix("data: "), let d = line.dropFirst(6).data(using: .utf8),
                               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
@@ -311,10 +360,16 @@ final class Backend: ObservableObject {
                 } catch {}
                 try? await Task.sleep(for: .seconds(3))
                 if await self.isUp() {
+                    down = 0
                     if self.state != .up { self.state = .up }
                     await self.loadSettings()
-                } else if self.state == .up {
-                    self.state = .starting
+                } else {
+                    if self.state == .up { self.state = .starting }
+                    down += 1
+                    // gone for good (stopped, crashed, or replaced by an installer): start it again
+                    if down == 3, !self.external, self.child?.isRunning != true, let bin = Self.findBinary() {
+                        self.spawn(bin)
+                    }
                 }
             }
         }

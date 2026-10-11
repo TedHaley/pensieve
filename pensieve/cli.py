@@ -7,6 +7,8 @@
                        AGENTS.md, Claude Code skills, and Claude Code hooks (report edits; ask before indexing a repo)
     pensieve repo [status | index | skip] [path]
                        whether Pensieve indexes the git repo at path (default: here); index it, or never ask again
+    pensieve setup [recommended | <source id> ...]
+                       choose what to index on first run or after a reset (no items: list the sources)
 
 Options are turned into env vars before anything reads config."""
 import argparse
@@ -20,9 +22,10 @@ import webbrowser
 
 def main():
     ap = argparse.ArgumentParser(prog="pensieve", description="Semantic search and a 3D map over your files, git repos and AI agent sessions.")
-    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate", "repo"], default="serve")
+    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate", "repo", "setup"], default="serve")
     ap.add_argument("items", nargs="*", help="integrate: what to install (no items: show what's available); "
-                                             "repo: status | index | skip, then a folder (default: this one)")
+                                             "repo: status | index | skip, then a folder (default: this one); "
+                                             "setup: the source ids to index, or recommended (no items: list them)")
     ap.add_argument("--remove", action="store_true", help="integrate only: remove the named add-ons")
     ap.add_argument("--all-tools", action="store_true",
                     help="mcp only: also expose the tools that change Pensieve's settings, folders and scopes")
@@ -49,6 +52,8 @@ def main():
         return integrate(a.items, a.remove)
     if a.command == "repo":
         return repo(a.port, *a.items[:2])
+    if a.command == "setup":
+        return setup(a.port, a.items)
 
     from pensieve import reset
     done = reset.apply_pending()  # before anything opens the database
@@ -145,6 +150,54 @@ def repo(port, action="status", path="."):
                       f"`pensieve repo index` adds it; `pensieve repo skip` stops the question."}[c["state"]])
 
 
+def setup(port, items):
+    """Choose what Pensieve indexes (first run, or after a reset). No items: list the sources, for the user to pick
+    from; `recommended`: the pre-checked ones; otherwise the ids to index. Nothing is indexed until this is done."""
+    import httpx
+    base = f"http://127.0.0.1:{port}"
+    _start_server(base, port)
+    try:
+        if not items:
+            d = httpx.get(f"{base}/api/setup", timeout=300).json()
+            print("Pensieve setup: choose what to index." + ("" if not d["done"] else " (Already set up; this changes it.)"))
+            for c in d["candidates"]:
+                print(f"\n{c['label']}: {c['description']}")
+                for i in c["items"]:
+                    size = f"{i['size']:,} {i['unit']}" if i.get("size") is not None else ""
+                    mark = "x" if i["checked"] else (" " if i["available"] else "-")
+                    note = " (big: slow to index)" if i.get("big") else "" if i["available"] else " (not found on this Mac)"
+                    print(f"  [{mark}] {i['id']:<48} {i['label']}  {size}{note}")
+            print(f"\n[x] = recommended. {d['energy']}")
+            print("\nNext: `pensieve setup recommended`, or `pensieve setup <id> <id> ...` with exactly the ids to index.")
+            return
+        body = {"recommended": True} if items == ["recommended"] else {"sources": items}
+        r = httpx.post(f"{base}/api/setup", json=body, timeout=300)
+    except httpx.HTTPError as e:
+        sys.exit(f"Couldn't reach Pensieve ({e}). Open the Pensieve app, then try again.")
+    if r.status_code >= 400:
+        sys.exit(r.json().get("detail", r.text))
+    d = r.json()
+    print("Pensieve is indexing: " + (", ".join(d["indexing"]) or "nothing"))
+    if d["repo_files"]:
+        print(f"Code: {d['repo_files']:,} files, about {max(1, d['minutes'])} minutes for the first index.")
+    print(d["energy"])
+    print("Change this any time in Settings > Sources.")
+
+
+def _start_server(base, port):
+    """Start the backend in the background if it isn't running."""
+    if _up(base):
+        return
+    from pensieve import config
+    log = open(config.DATA_DIR / "server.log", "a")
+    subprocess.Popen([sys.executable, "-m", "pensieve.cli", "serve", "--no-open", "--port", str(port)],
+                     stdout=log, stderr=log, start_new_session=True)
+    for _ in range(120):
+        if _up(base):
+            return
+        time.sleep(0.5)
+
+
 def _up(base):
     import httpx
     try:
@@ -157,16 +210,8 @@ def stdio_bridge(port, scope="auto", all_tools=False):
     """Relay newline-delimited JSON-RPC between stdin/stdout and the server's streamable HTTP endpoint."""
     import json
     import httpx
-    from pensieve import config
     base = f"http://127.0.0.1:{port}"
-    if not _up(base):
-        log = open(config.DATA_DIR / "server.log", "a")
-        subprocess.Popen([sys.executable, "-m", "pensieve.cli", "serve", "--no-open", "--port", str(port)],
-                         stdout=log, stderr=log, start_new_session=True)
-        for _ in range(120):
-            if _up(base):
-                break
-            time.sleep(0.5)
+    _start_server(base, port)
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
     from urllib.parse import urlencode
     url = f"{base}/mcp?" + urlencode({"scope": scope, "cwd": os.getcwd(), **({"tools": "all"} if all_tools else {})})

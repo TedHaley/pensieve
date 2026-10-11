@@ -201,6 +201,7 @@ class Store:
         from turbovec import IdMapIndex
         self.lock = threading.RLock()
         self._indexed_at = {}
+        self.progress = None  # sessions being indexed now: {name: agent, root, done, total=None}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
         # write-ahead log: a commit appends instead of rewriting a journal, and NORMAL syncs at checkpoints rather
@@ -263,11 +264,14 @@ class Store:
                     continue
                 touched += 1
                 log(f"indexed {source}:{path.stem[:8]}")
+                if touched >= 5:  # a first index or a batch of new sessions, not one live session's new turns
+                    self.progress = dict(name=source, root=str(path.parent), done=touched, total=None)
                 if on_progress and touched % 8 == 0:
                     self.reproject()
                     on_progress(touched)
             except Exception as e:  # one bad file shouldn't stop the sweep
                 log(f"skip {path}: {e!r}")
+        self.progress = None
         if touched:
             self.reproject()
             with self.lock:

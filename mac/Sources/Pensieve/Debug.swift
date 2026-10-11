@@ -1,7 +1,7 @@
 import AppKit
 import WebKit
 
-/// Development aid, active only when PENSIEVE_DEBUG is set: `pensieve://snapshot?target=panel|visualizer&path=/x.png`
+/// Development aid, active only when PENSIEVE_DEBUG is set: `pensieve://snapshot?target=panel|buttons|statusitem|visualizer&path=/x.png`
 /// renders that window to a PNG.
 @MainActor
 enum Debug {
@@ -86,7 +86,19 @@ enum Debug {
     /// The window as composited on screen (glass included). Capturing our own windows needs no permission.
     @available(macOS, deprecated: 14.0)
     private static func windowImage(_ number: Int) -> CGImage? {
-        CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(number), [.boundsIgnoreFraming, .bestResolution])
+        guard let id = CGWindowID(exactly: number) else { return nil }
+        return CGWindowListCreateImage(.null, .optionIncludingWindow, id, [.boundsIgnoreFraming, .bestResolution])
+    }
+
+    /// A menu bar image drawn large on white, since its window isn't ours to capture.
+    static func writeEnlarged(_ img: NSImage, scale: CGFloat = 6, to path: String) {
+        let size = NSSize(width: img.size.width * scale, height: img.size.height * scale)
+        write(NSImage(size: size, flipped: false) { r in
+            NSColor.white.setFill()
+            r.fill()
+            img.draw(in: r)
+            return true
+        }, to: path)
     }
 
     private static func write(_ img: NSImage, to path: String) {

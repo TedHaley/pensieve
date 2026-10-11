@@ -25,7 +25,26 @@ pensieve integrate recommended
 
 This command finds the agents on your Mac (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code) and gives each one Pensieve as an MCP server.
 
-On Linux and Intel Macs, the script installs [uv](https://docs.astral.sh/uv/) and the backend from source. Then it starts the backend and opens the visualizer in your browser.
+Then set up Pensieve. Pensieve indexes nothing until you finish setup, also after a reset. When the app opens, it shows the steps:
+
+1. Read what Pensieve does.
+2. Choose how you use your Mac: software development, AI coding agents, documents and office work, or research and notes.
+3. Let Pensieve look for sources in the folders that those choices need. macOS can ask you to allow access to some folders. Pensieve reads no folder before this step.
+4. Choose what to index from what it found. Add folders or repos that it did not find.
+5. Choose an engine for insights, or turn insights on later.
+6. Start indexing.
+
+An agent can do the same setup in its chat. Until setup is done, every MCP connection also gets the `setup_guide`, `setup_scan`, `setup_add_source` and `setup_start` tools. `setup_guide` tells the agent which questions to ask, in order. From a terminal:
+
+```bash
+pensieve setup                  # list the agent sessions, folders, repos and apps found, with their sizes
+pensieve setup recommended      # index the ones marked [x]
+pensieve setup agents/claude repos//Users/me/code/app   # or exactly these
+```
+
+The first index uses a lot of energy: the embedding model runs until it finishes, about 500 code files a minute on Apple Silicon. Settings → Sources shows what is syncing now.
+
+On Linux and Intel Macs, the script installs [uv](https://docs.astral.sh/uv/) and the backend from source. Then it starts the backend and opens the Map in your browser.
 
 Or by hand:
 
@@ -67,15 +86,15 @@ Under **On This Mac**, the panel also finds documents and folders anywhere on th
 
 The panel calculates and converts units: `2^10`, `15% of 240`, `80 + 15%`, `sqrt(2)`, `3 ft in cm`, `72 f to c`, `2 cups in ml`. **Return** copies the result.
 
-**Return** opens · **⌘Return** reveals in Finder · **⌥Return** shows it on the map · **⌘C** copies the path · **⌘O** opens the visualizer · **Esc** closes.
+**Return** opens · **⌘Return** reveals in Finder · **⌥Return** shows it on the map · **⌘C** copies the path · **⌘O** opens the Map · **Esc** closes.
 
 Code results open at the matching line in your editor if you set `editor` to `vscode`, `cursor` or `zed`.
 
-## The visualizer
+## The Map window
 
 | | |
 |---|---|
-| **Data** | Documents, code and agent sessions on one 3D map, laid out by meaning. Filter by type (Documents · Code · Agent sessions) or by folder; repos show as folders with a *code* badge. Color by type, folder, author, recency or topic. Inside a repo: git blame per line, owners, *who knows about X*, overlaps, and knowledge gaps. |
+| **Map** | Documents, code and agent sessions on one 3D map, laid out by meaning. Filter by type (Documents · Code · Agent sessions) or by folder; repos show as folders with a *code* badge. Color by type, folder, author, recency or topic. Inside a repo: git blame per line, owners, *who knows about X*, overlaps, and knowledge gaps. |
 | **Insights** | Activity and topics, AI themes and open threads per repo or folder; your footprint in each repo, unexplored areas next to your work and who owns them, what each teammate shipped in the last 90 days, and knowledge gaps. |
 | **Settings** | Everything below, plus copy-paste commands for connecting agents. |
 
@@ -94,11 +113,11 @@ claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=paymen
 - **auto** (the default for `pensieve mcp`) uses the agent's working directory: the first named scope that includes that repo, otherwise just that repo with its worktrees and the agent sessions run in it. Outside any repo it means everything. In a repo that Pensieve does not index, search tells the agent to use grep. It does not return code from your other repos. HTTP connections can't see the agent's folder, so name a scope there (no `?scope` = everything).
 - **Named scopes** are lists of sources, e.g. `payments = repos/~/code/billing + repos/~/code/ledger + files/~/Documents/specs`. Create them in Settings → Scopes or with the `save_scope` tool. Everything stays in one index; a scope only filters, so nothing is embedded twice.
 - Every tool respects the scope: search, read, similar, who_knows, list_repos, team, unexplored. An item outside it is refused.
-- The search panel and the visualizer use `default_scope` (empty = everything).
+- The search panel and the Map use `default_scope` (empty = everything).
 
 For agents that only speak stdio, the JSON config is `{"mcpServers": {"pensieve": {"command": "pensieve", "args": ["mcp"]}}}`. `pensieve mcp` starts the backend if it isn't running.
 
-Tools: `search`, `read`, `similar`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `unexplored`, `open`, `current_scope`. Tool descriptions are sent to the agent on every turn, so these ten are all an agent sees by default. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`.
+Tools: `search`, `read`, `similar`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `unexplored`, `open`, `current_scope`. Tool descriptions are sent to the agent on every turn, so these ten are all an agent sees by default. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`. Until setup is done, every connection also gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source`, `setup_start`.
 
 ### Get the most out of it: agent add-ons
 
@@ -181,7 +200,7 @@ Everything Pensieve stores lives in `~/.pensieve`. Delete that folder to start o
 
 ## Settings
 
-Change them in the visualizer (Settings), from an agent connected with `--all-tools` (`update_settings`), or in `~/.pensieve/settings.json`.
+Change them in the Map window (Settings), from an agent connected with `--all-tools` (`update_settings`), or in `~/.pensieve/settings.json`.
 
 | Setting | Default |
 |---|---|
@@ -217,7 +236,7 @@ Search, maps, activity, keyword topics, your footprint in each repo and teammate
 ## Command line
 
 ```bash
-pensieve                 # backend + visualizer in the browser (http://localhost:8765)
+pensieve                 # backend + Map in the browser (http://localhost:8765)
 pensieve --no-open       # backend only (what the Mac app runs)
 pensieve mcp             # MCP over stdio (--all-tools to include the settings tools)
 pensieve integrate       # agent add-ons: instructions block, skills and the edit hook
@@ -225,7 +244,7 @@ pensieve integrate       # agent add-ons: instructions block, skills and the edi
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
 
-On Apple Silicon, the embedding model runs on MLX. On other machines, it runs on sentence-transformers and PyTorch (CUDA or CPU), which makes the install about 650 MB larger. The backend and visualizer work on Linux too; the search panel app is macOS only.
+On Apple Silicon, the embedding model runs on MLX. On other machines, it runs on sentence-transformers and PyTorch (CUDA or CPU), which makes the install about 650 MB larger. The backend and the Map work on Linux too; the search panel app is macOS only.
 
 ## Development
 

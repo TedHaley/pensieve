@@ -50,6 +50,7 @@ DEFAULTS = {
     "ai_on_battery": False,    # run background AI work (summaries, insights) on battery power
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "auto_update_check": True,  # the Mac app checks GitHub Releases daily and offers updates (never installs by itself)
+    "setup_done": False,       # the user has chosen what to index; until then nothing is indexed (see /api/setup)
     "llm_url": "http://localhost:1234/v1",
     "llm_model": "qwen/qwen3.5-9b",
     "llm_key": "",             # API key for a hosted server; sent only to llm_url, never shown back in full
@@ -74,7 +75,7 @@ DESCRIPTIONS = {
     "session_folders": "More folders of agent sessions, as agent:path (claude, codex or qwen). Easier to add from Sources.",
     "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
-    "default_scope": "Scope used by the search panel and visualizer search; empty means everything.",
+    "default_scope": "Scope used by the search panel and Map search; empty means everything.",
     "hotkey": "Shortcut for the search panel. ⌘Space turns off the Spotlight shortcut while Pensieve runs. "
               "Choose another shortcut to give ⌘Space back to Spotlight.",
     "editor": "Where code results open: default, vscode, cursor or zed.",
@@ -85,6 +86,7 @@ DESCRIPTIONS = {
     "ai_on_battery": "Keep writing summaries and insights in the background while on battery power.",
     "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
     "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
+    "setup_done": "Whether the sources to index were chosen. Pensieve indexes nothing until they are.",
     "llm_url": "OpenAI-compatible endpoint, local (LM Studio, Ollama) or hosted, for summaries and insights.",
     "llm_model": "Chat model used for summaries and insights.",
     "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
@@ -118,6 +120,8 @@ def load() -> dict:
                 except (OSError, json.JSONDecodeError):
                     pass
             _data = {**DEFAULTS, **{k: v for k, v in saved.items() if k in DEFAULTS}}
+            if saved and "setup_done" not in saved:  # set up by a version from before the setup step
+                _data["setup_done"] = True
             off = _data["disabled"]  # the two repo-discovery rules became one
             if "repos/sessions" in off or "repos/sweep" in off:
                 _data["disabled"] = [d for d in off if d not in ("repos/sessions", "repos/sweep")] + \

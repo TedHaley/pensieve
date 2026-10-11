@@ -165,11 +165,32 @@ final class DragHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let web = message.webView, let window = web.window, let body = message.body as? [String: Any] else { return }
+        if let kind = body["pickFolder"] as? String {  // {pickFolder: "files"} -> window.pensieveFolderPicked("files", path)
+            pickFolder(kind, web: web, window: window)
+            return
+        }
         guard body["drag"] as? Bool == true, let down = lastDown, down.window === window else { return }
         if down.clickCount == 2 {
             window.performZoom(nil)  // double-click on a title bar
         } else if NSEvent.pressedMouseButtons & 1 != 0 {
             window.performDrag(with: down)
+        }
+    }
+
+    /// A web page can't learn a folder's path from a file input, so the app shows the open panel and hands it back.
+    private func pickFolder(_ kind: String, web: WKWebView, window: NSWindow) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add"
+        panel.message = kind == "repos" ? "Choose a git repo, or a folder of repos"
+            : kind == "agents" ? "Choose a folder of agent sessions" : "Choose a folder of documents"
+        panel.beginSheetModal(for: window) { r in
+            guard r == .OK, let path = panel.url?.path,
+                  let args = try? JSONSerialization.data(withJSONObject: [kind, path]),
+                  let json = String(data: args, encoding: .utf8) else { return }
+            web.evaluateJavaScript("window.pensieveFolderPicked?.(...\(json))")
         }
     }
 }

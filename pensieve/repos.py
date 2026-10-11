@@ -29,6 +29,7 @@ INDEX_WORKERS = 4   # threads reading, chunking and git-blaming files ahead of t
 INDEX_AHEAD = 32    # files prepared ahead at most (bounds the memory held by blame results)
 EMBED_GROUP = 48    # chunks gathered from several files before one embed() call, so small files fill model batches
 SHADOW_MIN_FILES = 20  # files to (re)index before blame goes through the commit-graph shadow (see blame_shadow)
+PROGRESS_MIN_FILES = 20  # checkouts with at least this many files to index report their progress (Sources, status)
 GENERATED_DIRS = {"dist", "build", "vendor", "third_party", "node_modules", "out", "target", ".venv"}
 CODE_CHUNK_CHARS = 1500
 ALL = "__all__"  # pseudo-repo: every indexed repo in one joint layout, paths prefixed with '<repo>/' 
@@ -265,6 +266,7 @@ class Repos:
         self.unsaved = False  # indexed by `refresh`: map layout and saved index still to do
         self._refreshing = False
         self._sweeping = False  # a full sync holds sync_lock
+        self.progress = None  # the checkout being indexed now: {name, root, done, total}
         self._recheck = set()
         self._last = 0
         self._scope = (None, None)
@@ -611,23 +613,32 @@ class Repos:
 
         # git blame runs in worker threads a few files ahead, the database writes on its own thread, and chunks from
         # several small files share one embedding batch, so the model is rarely idle
+        big = len(todo) >= PROGRESS_MIN_FILES  # small edits aren't shown as syncing
         with ThreadPoolExecutor(INDEX_WORKERS) as ex, ThreadPoolExecutor(1) as writer:
             items = iter(todo)
             ahead = deque(ex.submit(prepare, it) for it in islice(items, INDEX_AHEAD))
-            while ahead:
-                fut = ahead.popleft()
-                nxt = next(items, None)
-                if nxt is not None:
-                    ahead.append(ex.submit(prepare, nxt))
-                self._service(root, log)  # keep other repos' edits flowing during a long index
-                r = fut.result()
-                if r:
-                    group.append(r)
-                    if sum(len(g[2]) for g in group) >= EMBED_GROUP:
-                        flush()
-            flush()
-            if writing:
-                writing.result()
+            done = 0
+            try:
+                while ahead:
+                    fut = ahead.popleft()
+                    nxt = next(items, None)
+                    if nxt is not None:
+                        ahead.append(ex.submit(prepare, nxt))
+                    self._service(root, log)  # keep other repos' edits flowing during a long index
+                    r = fut.result()
+                    done += 1
+                    if big:
+                        self.progress = dict(name=label, root=root, done=done, total=len(todo))
+                    if r:
+                        group.append(r)
+                        if sum(len(g[2]) for g in group) >= EMBED_GROUP:
+                            flush()
+                flush()
+                if writing:
+                    writing.result()
+            finally:
+                if big:
+                    self.progress = None
         if n_new:
             log(f"repo {label}: {n_new} files updated")
         return n_new

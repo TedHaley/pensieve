@@ -62,12 +62,16 @@ def catalog(store, repos, files) -> list[dict]:
                                available=Path(root).is_dir(), enabled=on(f"repos/{root}"), count=per_repo.get(root, 0), unit="files",
                                parent=None if a else "repos/discover",
                                remove=dict(kind="repos", path=a) if a and added[a] == root else None))
-    for a, p in added.items():  # a folder of repos, or a repo not indexed yet
+    for a, p in added.items():  # a repo not indexed yet (switched off, or waiting for the sweep), or a folder of repos
         if not any(r == p for r, _ in repo_rows):
-            repo_items.append(dict(id=f"repos/{p}", label=Path(p).name, detail=_home(p) + " · repos inside are always indexed",
-                                   available=Path(p).is_dir(), enabled=on(f"repos/{p}"), count=sum(n for r, n in per_repo.items()
+            is_repo, enabled = (Path(p) / ".git").exists(), on(f"repos/{p}")
+            note = ("switched off" if not enabled else "indexing soon") if is_repo else "repos inside are always indexed"
+            repo_items.append(dict(id=f"repos/{p}", label=Path(p).name, detail=f"{_home(p)} · {note}",
+                                   available=Path(p).is_dir(), enabled=enabled, count=sum(n for r, n in per_repo.items()
                                    if r.startswith(p + "/")), unit="files", remove=dict(kind="repos", path=a)))
     for sk in skipped:
+        if sk["root"] in added.values():  # listed above, as added
+            continue
         repo_items.append(dict(id=f"repos/{sk['root']}", label=Path(sk["root"]).name, detail=f"{_home(sk['root'])} · skipped: "
                                f"{sk['files']:,} files (switch on to index anyway)", available=True, enabled=False, count=0, unit="files",
                                parent="repos/discover"))

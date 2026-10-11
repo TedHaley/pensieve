@@ -7,12 +7,15 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from pensieve import actions, scopes, settings, sources
+from pensieve import actions, onboarding, scopes, settings, sources
 
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
                "current_scope", "open"}
+# Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
+# Pensieve can walk the user through it in its conversation.
+SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
 tool_profile = contextvars.ContextVar("tool_profile", default="agent")
 agent_cwd = contextvars.ContextVar("agent_cwd", default=None)  # where the agent runs (?cwd=), for relative paths
 
@@ -20,7 +23,10 @@ agent_cwd = contextvars.ContextVar("agent_cwd", default=None)  # where the agent
 class _Server(MCPServer):
     async def list_tools(self):
         tools = await super().list_tools()
-        return tools if tool_profile.get() == "all" else [t for t in tools if t.name in AGENT_TOOLS]
+        if tool_profile.get() == "all":
+            return tools
+        shown = AGENT_TOOLS | (set() if settings.get("setup_done") else SETUP_TOOLS)
+        return [t for t in tools if t.name in shown]
 
 
 mcp = _Server(
@@ -28,7 +34,8 @@ mcp = _Server(
     instructions=(
         "Pensieve indexes this repo, the Mac's documents and past agent sessions. To find code, call search before "
         "Grep/Glob, with what the code does plus names you'd guess it uses; the first hit is usually right. "
-        "who_knows suggests who to ask about an area."),
+        "who_knows suggests who to ask about an area. If Pensieve isn't set up yet, it indexes nothing: call "
+        "setup_guide and walk the user through the steps it lists."),
 )
 
 
@@ -210,7 +217,7 @@ def open_item(id: str, action: str = "open") -> dict:
 
 @tool()
 def show_visualizer(view: str | None = None) -> dict:
-    """Open the Pensieve visualizer. view: code, map, files, insights or settings."""
+    """Open the Pensieve Map window. view: code, map, files, insights or settings."""
     return actions.visualize(view=view)
 
 
@@ -319,6 +326,49 @@ def add_folder(path: str) -> dict:
 def remove_folder(path: str) -> dict:
     """Stop indexing a folder. Its documents drop out of search on the next sweep."""
     return {"folders": settings.update({"folders": [f for f in settings.get("folders") if f != path]})["folders"]}
+
+
+@tool()
+def setup_guide() -> dict:
+    """Start of setup (first run, or after a reset). Returns what Pensieve is (`about`), user profiles, the source
+    categories with the folders scanning each one reads, the insights engines (`ai`) and the energy note. Reads no
+    folders. Walk the user through it in order, one question at a time:
+    1. Tell them what Pensieve is, from `about`.
+    2. Ask which profiles fit them (several can).
+    3. Tell them which folders the scan reads (`reads` of each profile's categories) and that macOS may ask them to
+       allow access. When they agree, call setup_scan with those profiles.
+    4. Show what the scan found, pre-checked items first, and ask what to index. Offer setup_add_source for folders
+       or repos it missed.
+    5. Ask which insights engine to use (`ai`; "none" is fine, it can change later in Settings).
+    6. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
+    return onboarding.guide()
+
+
+@tool()
+def setup_scan(profiles: list[str] | None = None, categories: list[str] | None = None) -> list[dict]:
+    """Look for what can be indexed, in the categories of the chosen profiles (ids from setup_guide), or in the
+    named categories ('agents', 'files', 'repos', 'apps'). This reads the user's folders, so macOS may ask them for
+    access. Returns each category's items: id (for setup_start), label, size, and `checked` = recommended."""
+    cats = categories or (onboarding.categories_for(profiles) if profiles else None)
+    return onboarding.scan(cats, fresh=True)
+
+
+@tool()
+def setup_add_source(kind: str, path: str) -> dict:
+    """Add a folder the scan missed: kind 'files' (documents), 'repos' (a repo, or a folder of repos) or 'agents' (a
+    folder of agent transcripts). Returns the source id to include in setup_start."""
+    return {"id": onboarding.add(kind, path)}
+
+
+@tool()
+def setup_start(sources: list[str] | None = None, recommended: bool = False, ai: str | None = None) -> dict:
+    """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
+    ones); everything else is switched off. `ai` sets the insights engine (an id from setup_guide's `ai`, or "none").
+    Indexing starts at once and can take a while; search works meanwhile."""
+    res = onboarding.start(sources, recommended, ai)
+    from pensieve import server
+    server.watch.force_full()
+    return res
 
 
 @tool()
