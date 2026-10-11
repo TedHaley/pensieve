@@ -1,15 +1,17 @@
-"""Optional add-ons that help agents get the most out of Pensieve: an instructions block for an agent's global
-memory file (CLAUDE.md, AGENTS.md), Claude Code skills, and a Claude Code hook. Nothing is installed unless the user
-turns it on.
+"""Optional add-ons that help agents get the most out of Pensieve: Pensieve as an MCP server for Claude Code, an
+instructions block for an agent's global memory file (CLAUDE.md, AGENTS.md), Claude Code skills, and a Claude Code
+hook. Nothing is installed unless the user turns it on.
 
 The instructions block is kept between markers so it can be updated or removed without touching the rest of the file;
 skills are copied into ~/.claude/skills/<name>/ with a marker file so only Pensieve's own copies are ever removed.
-The hook is the PostToolUse entry in ~/.claude/settings.json whose command posts to /api/touched.
+The hooks are the entries in ~/.claude/settings.json whose commands post to Pensieve (HOOK_SPEC).
 """
 import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -19,6 +21,7 @@ MARK = ".pensieve"  # inside an installed skill folder: Pensieve put it there
 TARGETS = {  # id -> (label, memory file the instructions go in)
     "claude": ("Claude Code", Path.home() / ".claude" / "CLAUDE.md"),
     "codex": ("Codex", Path.home() / ".codex" / "AGENTS.md"),
+    "gemini": ("Gemini CLI", Path.home() / ".gemini" / "GEMINI.md"),
 }
 SKILLS_DIR = Path.home() / ".claude" / "skills"
 SKILLS = {  # id -> (label, what it does, recommended)
@@ -38,14 +41,152 @@ HOOKS = {  # id -> (label, what it does, recommended)
     "claude-hook": ("Index edits right away",
                     "After each Edit or Write, Claude Code tells Pensieve the file changed, so its next search finds "
                     "the new code instead of the old.", True),
+    "claude-repo-check": ("Ask before indexing a new repo",
+                          "When a session starts in a repo Pensieve doesn't index, Claude asks you once whether to "
+                          "index it. If you say no, it uses grep there and doesn't ask again.", True),
 }
-HOOK_TOOLS = "Edit|MultiEdit|Write|NotebookEdit"
-HOOK_URL = "/api/touched"
+HOOK_SPEC = {  # id -> (Claude Code hook event, matcher or None, the URL path the hook posts its JSON to)
+    "claude-hook": ("PostToolUse", "Edit|MultiEdit|Write|NotebookEdit", "/api/touched"),
+    "claude-repo-check": ("SessionStart", None, "/api/repo-check"),
+}
 
 
-def hook_command(port: int) -> str:
+CLAUDE_JSON = Path.home() / ".claude.json"  # Claude Code keeps user-scope MCP servers here, under "mcpServers"
+CODEX_TOML = Path.home() / ".codex" / "config.toml"
+APP_SUPPORT = Path.home() / "Library" / "Application Support"
+# Pensieve as an MCP server in each agent. id -> (agent, config file, key of the server table or None, the folder
+# that shows the agent is installed). Claude Code's file is changed through its CLI; Codex's is TOML.
+MCP = {
+    "claude-mcp": ("Claude Code", CLAUDE_JSON, None, Path.home() / ".claude"),
+    "codex-mcp": ("Codex", CODEX_TOML, None, Path.home() / ".codex"),
+    "cursor-mcp": ("Cursor", Path.home() / ".cursor" / "mcp.json", "mcpServers", Path.home() / ".cursor"),
+    "gemini-mcp": ("Gemini CLI", Path.home() / ".gemini" / "settings.json", "mcpServers", Path.home() / ".gemini"),
+    "windsurf-mcp": ("Windsurf", Path.home() / ".codeium" / "windsurf" / "mcp_config.json", "mcpServers",
+                     Path.home() / ".codeium" / "windsurf"),
+    "claude-desktop-mcp": ("Claude Desktop", APP_SUPPORT / "Claude" / "claude_desktop_config.json", "mcpServers",
+                           APP_SUPPORT / "Claude"),
+    "vscode-mcp": ("VS Code", APP_SUPPORT / "Code" / "User" / "mcp.json", "servers", APP_SUPPORT / "Code" / "User"),
+}
+TOML_START, TOML_END = "# pensieve:start", "# pensieve:end"
+
+
+def _claude_bin():
+    from pensieve.llm import _find
+    return shutil.which("claude") or _find("claude")
+
+
+def _pensieve_bin() -> str:
+    """This install's `pensieve` command, by full path: an agent may start it without ~/.local/bin on PATH."""
+    here = Path(sys.executable).with_name("pensieve")
+    return str(here) if here.exists() else shutil.which("pensieve") or "pensieve"
+
+
+def mcp_present(item: str) -> bool:
+    if item == "claude-mcp":
+        return bool(_claude_bin())
+    return MCP[item][3].exists()
+
+
+def _read_json(f: Path) -> dict:
+    if not f.exists() or not f.read_text().strip():
+        return {}
+    try:
+        return json.loads(f.read_text())
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{f} is not valid JSON ({e}); leaving it alone") from e
+
+
+def _write(f: Path, text: str):
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f.name + ".pensieve-tmp")
+    tmp.write_text(text)
+    os.replace(tmp, f)
+
+
+def mcp_state(item: str) -> str:
+    """'on', 'off', or 'theirs' (Codex has a pensieve server that Pensieve didn't add)."""
+    f, key = MCP[item][1], MCP[item][2]
+    try:
+        if item == "codex-mcp":
+            import tomllib
+            text = f.read_text() if f.exists() else ""
+            if "pensieve" not in (tomllib.loads(text).get("mcp_servers") or {}):
+                return "off"
+            return "on" if TOML_START in text else "theirs"
+        servers = _read_json(f).get(key or "mcpServers") or {}
+    except (OSError, ValueError):
+        return "off"
+    return "on" if "pensieve" in servers else "off"
+
+
+def set_mcp(item: str, on: bool) -> str:
+    agent, f, key, _ = MCP[item]
+    if not mcp_present(item):
+        raise ValueError(f"{agent} isn't installed")
+    state = mcp_state(item)
+    if state == "theirs":
+        raise ValueError(f"{f} already has a pensieve server that Pensieve didn't add; leaving it alone")
+    if on == (state == "on"):
+        return state
+    if item == "claude-mcp":  # through the claude CLI, which owns ~/.claude.json and writes it while it runs
+        argv = [_claude_bin(), "mcp", "add", "--scope", "user", "pensieve", "--", _pensieve_bin(), "mcp"] if on \
+            else [_claude_bin(), "mcp", "remove", "--scope", "user", "pensieve"]
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        if r.returncode:
+            raise ValueError((r.stderr or r.stdout).strip() or f"`claude mcp` failed ({r.returncode})")
+    elif item == "codex-mcp":  # a marked block, so removing it leaves the rest of config.toml as it was
+        text = f.read_text() if f.exists() else ""
+        rest = re.sub(rf"\n*{re.escape(TOML_START)}.*?{re.escape(TOML_END)}\n?", "\n", text, flags=re.S).strip("\n")
+        block = f'{TOML_START}\n[mcp_servers.pensieve]\ncommand = {json.dumps(_pensieve_bin())}\nargs = ["mcp"]\n{TOML_END}\n'
+        _write(f, ((rest + "\n\n" if rest else "") + block) if on else (rest + "\n" if rest else ""))
+    else:
+        s = _read_json(f)
+        servers = s.setdefault(key, {})
+        if on:
+            servers["pensieve"] = {**({"type": "stdio"} if key == "servers" else {}), "command": _pensieve_bin(), "args": ["mcp"]}
+        else:
+            servers.pop("pensieve", None)
+            if not servers:
+                s.pop(key)
+        _write(f, json.dumps(s, indent=2) + "\n")
+    return mcp_state(item)
+
+
+def _how_long(files: int) -> str:
+    """Indexing time varies about 6x with how many pieces each file splits into, so only a range."""
+    return "a few minutes" if files < 1000 else "10 to 30 minutes" if files < 5000 else "an hour or more"
+
+
+def repo_note(c: dict) -> str | None:
+    """What the SessionStart hook tells the agent about the repo it starts in (see repos.check), or None."""
+    name = c.get("name")
+    if c["state"] == "unknown":
+        return (f"Pensieve (the semantic search MCP server) does not index the repo {name} ({c['files']:,} tracked file{'' if c['files'] == 1 else 's'}). "
+                f"Before your first code search in this session, ask the user once: \"Index {name} with Pensieve? It "
+                f"takes {_how_long(c['files'])} in the background.\" If yes, run `pensieve repo index` in this repo, "
+                f"then use grep until indexing finishes. If no, run `pensieve repo skip` in this repo, then use grep and "
+                f"file reads for its code. Pensieve keeps the answer, so it doesn't ask again.")
+    if c["state"] == "declined":
+        return (f"The user chose not to index the repo {name} with Pensieve. For its code, use grep and file reads, "
+                f"not Pensieve search. Pensieve still covers the user's other repos, documents and agent sessions.")
+    if c["state"] == "pending":
+        return f"Pensieve is indexing the repo {name}. Until it finishes, its search can miss this repo's code; use grep then."
+    return None
+
+
+def hook_command(hook: str, port: int) -> str:
+    """curl posts the hook's JSON to the backend. If the backend isn't running, the hook does nothing."""
+    event, _, url = HOOK_SPEC[hook]
+    if event == "SessionStart":  # its answer is the hook's output: a note for the session
+        return (f"curl -s -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- "
+                f"http://127.0.0.1:{port}{url} 2>/dev/null || true")
     return (f"curl -s -m 1 -X POST -H 'Content-Type: application/json' --data-binary @- "
-            f"http://127.0.0.1:{port}{HOOK_URL} >/dev/null 2>&1 || true")
+            f"http://127.0.0.1:{port}{url} >/dev/null 2>&1 || true")
+
+
+def _hook_entry(hook: str, port: int) -> dict:
+    _, matcher, _ = HOOK_SPEC[hook]
+    return {**({"matcher": matcher} if matcher else {}), "hooks": [{"type": "command", "command": hook_command(hook, port)}]}
 
 
 def _claude_settings() -> dict:
@@ -57,40 +198,42 @@ def _claude_settings() -> dict:
         raise ValueError(f"{CLAUDE_SETTINGS} is not valid JSON ({e}); leaving it alone") from e
 
 
-def _ours(entry) -> bool:
-    return any(HOOK_URL in str(h.get("command", "")) for h in entry.get("hooks", []) if isinstance(h, dict))
+def _ours(entry, url: str) -> bool:
+    return isinstance(entry, dict) and any(url in str(h.get("command", "")) for h in entry.get("hooks", [])
+                                           if isinstance(h, dict))
 
 
-def hook_state(port: int) -> str:
+def hook_state(hook: str, port: int) -> str:
     """'off', 'on', or 'stale' (installed with another port or tool list)."""
+    event, _, url = HOOK_SPEC[hook]
     try:
-        entries = _claude_settings().get("hooks", {}).get("PostToolUse", [])
+        entries = _claude_settings().get("hooks", {}).get(event, [])
     except ValueError:
         return "off"
-    mine = [e for e in entries if isinstance(e, dict) and _ours(e)]
+    mine = [e for e in entries if _ours(e, url)]
     if not mine:
         return "off"
-    want = {"matcher": HOOK_TOOLS, "hooks": [{"type": "command", "command": hook_command(port)}]}
-    return "on" if mine == [want] else "stale"
+    return "on" if mine == [_hook_entry(hook, port)] else "stale"
 
 
-def set_hook(on: bool, port: int) -> str:
+def set_hook(hook: str, on: bool, port: int) -> str:
+    event, _, url = HOOK_SPEC[hook]
     s = _claude_settings()
     hooks = s.setdefault("hooks", {})
-    entries = [e for e in hooks.get("PostToolUse", []) if not (isinstance(e, dict) and _ours(e))]
+    entries = [e for e in hooks.get(event, []) if not _ours(e, url)]
     if on:
-        entries.append({"matcher": HOOK_TOOLS, "hooks": [{"type": "command", "command": hook_command(port)}]})
+        entries.append(_hook_entry(hook, port))
     if entries:
-        hooks["PostToolUse"] = entries
+        hooks[event] = entries
     else:
-        hooks.pop("PostToolUse", None)
+        hooks.pop(event, None)
     if not hooks:
         s.pop("hooks")
     CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     tmp = CLAUDE_SETTINGS.with_suffix(".json.pensieve-tmp")
     tmp.write_text(json.dumps(s, indent=2) + "\n")
     os.replace(tmp, CLAUDE_SETTINGS)
-    return hook_state(port)
+    return hook_state(hook, port)
 
 
 def instructions() -> str:
@@ -156,7 +299,9 @@ def set_skill(name: str, on: bool) -> str:
 
 def status(port: int) -> dict:
     return dict(
-        hooks=[dict(id=n, label=label, description=desc, recommended=rec, state=hook_state(port),
+        mcp=[dict(id=n, label=agent, path=str(f).replace(str(Path.home()), "~", 1), state=mcp_state(n),
+                  available=mcp_present(n)) for n, (agent, f, _, _) in MCP.items()],
+        hooks=[dict(id=n, label=label, description=desc, recommended=rec, state=hook_state(n, port),
                     path=str(CLAUDE_SETTINGS).replace(str(Path.home()), "~", 1))
                for n, (label, desc, rec) in HOOKS.items()],
         instructions=[dict(id=t, label=label, path=str(f).replace(str(Path.home()), "~", 1),

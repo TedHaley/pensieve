@@ -16,7 +16,7 @@ from pensieve import actions, config, llm, mcp_server, scopes, search as search_
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
-from pensieve.repos import Repos
+from pensieve.repos import Repos, check as repo_check
 from pensieve.watch import Watch
 
 store: Store | None = None
@@ -779,6 +779,52 @@ async def ai_status():
     return await asyncio.get_running_loop().run_in_executor(None, llm.status)
 
 
+def _repo_check(cwd: str) -> dict:
+    with store.lock:
+        indexed = dict(store.db.execute("SELECT root, remote FROM repos").fetchall())
+    return repo_check(cwd, indexed)
+
+
+@app.get("/api/repo-check")
+def get_repo_check(cwd: str):
+    return _repo_check(cwd)
+
+
+@app.post("/api/repo-check")
+async def hook_repo_check(request: Request):
+    """Claude Code's SessionStart hook posts its JSON here; the answer adds a note about the repo to the session."""
+    from pensieve import integrations
+    try:
+        cwd = (await request.json()).get("cwd") or ""
+    except ValueError:
+        return {}
+    note = integrations.repo_note(await asyncio.to_thread(_repo_check, cwd))
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": note}} if note else {}
+
+
+class RepoChoiceReq(BaseModel):
+    cwd: str
+    index: bool
+
+
+@app.post("/api/repo-choice")
+def repo_choice(req: RepoChoiceReq):
+    """`pensieve repo index|skip`: index the repo at cwd, or switch it off in Sources so no one asks again."""
+    c = _repo_check(req.cwd)
+    if c["state"] == "none":
+        raise HTTPException(400, f"not in a git repo: {req.cwd}")
+    sid = f"repos/{c['root']}"
+    if not req.index:
+        settings.set_enabled(sid, False)
+    else:
+        if not settings.enabled("repos"):
+            settings.set_enabled("repos", True)
+        settings.set_enabled(sid, True)
+        if c["state"] != "indexed" and Path(c["root"]) not in settings.paths("repos"):
+            settings.update({"repos": settings.get("repos") + [c["root"]]})
+    return _repo_check(req.cwd)
+
+
 @app.get("/api/sources")
 def get_sources():
     return sources.catalog(store, repos, files)
@@ -907,8 +953,10 @@ def put_integration(item: str, req: IntegrationReq):
     try:
         if item in integrations.TARGETS:
             integrations.set_instructions(item, req.on)
+        elif item in integrations.MCP:
+            integrations.set_mcp(item, req.on)
         elif item in integrations.HOOKS:
-            integrations.set_hook(req.on, config.PORT)
+            integrations.set_hook(item, req.on, config.PORT)
         else:
             integrations.set_skill(item, req.on)
     except ValueError as e:

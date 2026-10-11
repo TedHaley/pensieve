@@ -2,9 +2,11 @@
 
     pensieve [serve]   run the indexer + visualizer + MCP server (http://127.0.0.1:8765, MCP at /mcp)
     pensieve mcp       MCP over stdio for agents that don't speak HTTP; starts the server if it isn't running
-    pensieve integrate [all | recommended | claude codex pensieve-search claude-hook ...] [--remove]
-                       agent add-ons: an instructions block for CLAUDE.md / AGENTS.md, Claude Code skills, and a
-                       Claude Code hook that reports edits
+    pensieve integrate [all | recommended | claude-mcp claude codex pensieve-search claude-hook ...] [--remove]
+                       agent add-ons: Pensieve as Claude Code's MCP server, an instructions block for CLAUDE.md /
+                       AGENTS.md, Claude Code skills, and Claude Code hooks (report edits; ask before indexing a repo)
+    pensieve repo [status | index | skip] [path]
+                       whether Pensieve indexes the git repo at path (default: here); index it, or never ask again
 
 Options are turned into env vars before anything reads config."""
 import argparse
@@ -18,8 +20,9 @@ import webbrowser
 
 def main():
     ap = argparse.ArgumentParser(prog="pensieve", description="Semantic search and a 3D map over your files, git repos and AI agent sessions.")
-    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate"], default="serve")
-    ap.add_argument("items", nargs="*", help="integrate only: what to install (no items: show what's available)")
+    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate", "repo"], default="serve")
+    ap.add_argument("items", nargs="*", help="integrate: what to install (no items: show what's available); "
+                                             "repo: status | index | skip, then a folder (default: this one)")
     ap.add_argument("--remove", action="store_true", help="integrate only: remove the named add-ons")
     ap.add_argument("--all-tools", action="store_true",
                     help="mcp only: also expose the tools that change Pensieve's settings, folders and scopes")
@@ -44,6 +47,8 @@ def main():
         return stdio_bridge(a.port, a.scope, a.all_tools)
     if a.command == "integrate":
         return integrate(a.items, a.remove)
+    if a.command == "repo":
+        return repo(a.port, *a.items[:2])
 
     from pensieve import reset
     done = reset.apply_pending()  # before anything opens the database
@@ -68,34 +73,76 @@ def integrate(items, remove=False):
     from pensieve import config, integrations as ig
     st = ig.status(config.PORT)
     if not items:
+        print("Pensieve as an MCP server, per agent:")
+        for k in st["mcp"]:
+            print(f"  {k['id']:<20} {k['state'] if k['available'] else '-':<6} {k['label']} ({k['path']})"
+                  f"{'' if k['available'] else ': not installed'}")
         print("Instructions block (tells the agent to search with Pensieve before grepping):")
         for t in st["instructions"]:
             print(f"  {t['id']:<20} {t['state']:<6} {t['path']}")
         print("Claude Code skills:")
         for k in st["skills"]:
             print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
-        print(f"Claude Code hook (in {st['hooks'][0]['path']}):")
+        print(f"Claude Code hooks (in {st['hooks'][0]['path']}):")
         for k in st["hooks"]:
             print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
-        print("\npensieve integrate recommended        # Claude Code instructions + pensieve-search + claude-hook")
+        print("\npensieve integrate recommended        # every agent on this Mac: the MCP server and the instructions block;")
+        print("                                      # for Claude Code also pensieve-search and both hooks")
         print("pensieve integrate <id>... [--remove]")
         return
     targets = {t["id"] for t in st["instructions"]}
+    found = [k["id"] for k in st["mcp"] if k["available"]]
+    claude = "claude-mcp" in found
     if items == ["all"]:
-        items = [*targets, *ig.SKILLS, *ig.HOOKS]
+        items = [*found, *(t["id"] for t in st["instructions"] if t["present"]), *(ig.SKILLS if claude else ()),
+                 *(ig.HOOKS if claude else ())]
     elif items == ["recommended"]:
-        items = ["claude", *(n for n, v in {**ig.SKILLS, **ig.HOOKS}.items() if v[2])]
+        if not found:
+            print("No agent found on this Mac. Add Pensieve to your agent as the MCP server "
+                  f"`{ig._pensieve_bin()} mcp` (stdio), or http://127.0.0.1:{config.PORT}/mcp over HTTP.")
+            return
+        items = [*found, *(t["id"] for t in st["instructions"] if t["present"]),
+                 *(n for n, v in {**ig.SKILLS, **ig.HOOKS}.items() if v[2] and claude)]
     for it in items:
         try:
             if it in targets:
                 state = ig.set_instructions(it, not remove)
+            elif it in ig.MCP:
+                state = ig.set_mcp(it, not remove)
             elif it in ig.HOOKS:
-                state = ig.set_hook(not remove, config.PORT)
+                state = ig.set_hook(it, not remove, config.PORT)
             else:
                 state = ig.set_skill(it, not remove)
             print(f"{it}: {state}")
         except (ValueError, KeyError) as e:
             print(f"{it}: {e}", file=sys.stderr)
+    if not remove and any(it in ig.MCP for it in items):
+        print("Agents load MCP servers when they start: restart any that are open to give them Pensieve.")
+
+
+def repo(port, action="status", path="."):
+    """Whether Pensieve indexes the git repo at path; `index` adds it, `skip` switches it off in Sources. Either
+    answer is kept, so the SessionStart hook doesn't ask about this repo again."""
+    import httpx
+    if action not in ("status", "index", "skip"):
+        sys.exit(f"pensieve repo: unknown action {action!r} (status, index or skip)")
+    base, cwd = f"http://127.0.0.1:{port}", os.path.abspath(os.path.expanduser(path))
+    try:
+        if action == "status":
+            r = httpx.get(f"{base}/api/repo-check", params={"cwd": cwd}, timeout=30)
+        else:
+            r = httpx.post(f"{base}/api/repo-choice", json={"cwd": cwd, "index": action == "index"}, timeout=30)
+    except httpx.HTTPError:
+        sys.exit("Pensieve isn't running. Open the Pensieve app (or run `pensieve`), then try again.")
+    if r.status_code >= 400:
+        sys.exit(r.json().get("detail", r.text) if "json" in r.headers.get("content-type", "") else r.text)
+    c = r.json()
+    print({"none": f"{cwd} is not in a git repo.",
+           "indexed": f"Pensieve indexes {c.get('name')}.",
+           "pending": f"Pensieve is indexing {c.get('name')}; search covers it when that finishes.",
+           "declined": f"Pensieve doesn't index {c.get('name')} (switched off in Settings > Sources).",
+           "unknown": f"Pensieve doesn't index {c.get('name')} yet ({c.get('files', 0):,} tracked files). "
+                      f"`pensieve repo index` adds it; `pensieve repo skip` stops the question."}[c["state"]])
 
 
 def _up(base):
