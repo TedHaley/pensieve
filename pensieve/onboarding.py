@@ -156,6 +156,36 @@ def add(kind: str, path: str) -> str:
     return sid
 
 
+def index(path: str, cwd=None) -> dict:
+    """Index a folder from now on, whatever it holds: a git repo, a folder of repos, a folder of agent sessions, or
+    documents. Turns on that one source; when its whole category was off, the category's other sources stay off."""
+    from pensieve.repos import find_repos
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = Path(cwd or Path.cwd()) / p
+    p = p.resolve()
+    if not p.is_dir():
+        raise ValueError(f"not a folder: {path}")
+    if (p / ".git").exists() or find_repos(p, 2, set(settings.get("exclude"))):
+        kind, what = "repos", "git repo" if (p / ".git").exists() else "folder of git repos"
+    elif config.detect_sessions(p):
+        kind, what = "agents", "agent sessions"
+    else:
+        kind, what = "files", "documents"
+    sid = add(kind, _tilde(p) if kind == "files" else str(p))
+    off = [d for d in settings.get("disabled") if d != sid]
+    if kind in off:  # the category was off: only this source comes on
+        off.remove(kind)
+        others = {"files": [f"files/{f}" for f in settings.get("folders")],
+                  "agents": [s for s, _, _, _ in config.session_sources()], "repos": ["repos/discover"]}[kind]
+        off += [o for o in others if o != sid and o not in off]
+    settings.update({"disabled": off})
+    _scanned.clear()
+    return {"id": sid, "path": str(p), "indexed_as": what,
+            "note": "Indexing starts within seconds; search covers it as it goes." if settings.get("setup_done")
+            else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
+
+
 def start(chosen=None, recommended=False, ai=None) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
     switched off, then indexing starts. Categories that were never scanned are switched off whole. `ai` picks the
@@ -164,7 +194,12 @@ def start(chosen=None, recommended=False, ai=None) -> dict:
         raise ValueError("Send the source ids to index, or recommended: true")
     if ai is not None and ai not in {o["id"] for o in llm.options()} | {"none", "auto"}:
         raise ValueError(f"unknown AI engine {ai!r}")
-    cats = scan(sorted(_scanned) if _scanned else None)  # `pensieve setup <ids>` chooses without a scan first
+    if _scanned:
+        cats = scan(sorted(_scanned))
+    elif chosen is None or chosen:  # `pensieve setup <ids>` chooses without a scan first
+        cats = scan()
+    else:  # nothing chosen: no folder needs reading
+        cats = []
     items = [i for c in cats for i in c["items"]]
     known = {i["id"] for i in items}
     chosen = {i["id"] for i in items if i["checked"]} if chosen is None else set(chosen)

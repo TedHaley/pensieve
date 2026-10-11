@@ -213,12 +213,20 @@ def stdio_bridge(port, scope="auto", all_tools=False):
     base = f"http://127.0.0.1:{port}"
     _start_server(base, port)
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    import uuid
     from urllib.parse import urlencode
-    url = f"{base}/mcp?" + urlencode({"scope": scope, "cwd": os.getcwd(), **({"tools": "all"} if all_tools else {})})
+    params = {"scope": scope, "cwd": os.getcwd(), **({"tools": "all"} if all_tools else {}), "conn": uuid.uuid4().hex[:12]}
+    url = f"{base}/mcp?" + urlencode(params)
     with httpx.Client(timeout=None) as c:
         for line in sys.stdin:
             if not line.strip():
                 continue
+            if "client" not in params and '"initialize"' in line:  # the usage log names the agent that called
+                try:
+                    params["client"] = json.loads(line)["params"]["clientInfo"]["name"]
+                    url = f"{base}/mcp?" + urlencode(params)
+                except (ValueError, KeyError, TypeError):
+                    pass
             try:
                 r = c.post(url, content=line, headers=headers)
                 if r.status_code == 202 or not r.content:

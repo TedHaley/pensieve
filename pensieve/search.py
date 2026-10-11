@@ -138,20 +138,19 @@ def ensure_fts(db, lock, meta, log=print):
 
 
 class _Laps:
-    """With PENSIEVE_TRACE set, logs how long each phase of a search took (milliseconds)."""
+    """How long each phase of a search took (milliseconds), in `ms` for the usage log; with PENSIEVE_TRACE set, also
+    printed."""
 
     def __init__(self, q):
         self.on = bool(os.environ.get("PENSIEVE_TRACE"))
-        self.q, self.t, self.laps = q, time.perf_counter(), []
+        self.q, self.t, self.ms = q, time.perf_counter(), {}
 
     def __call__(self, name, done=False):
-        if not self.on:
-            return
         now = time.perf_counter()
-        self.laps.append(f"{name} {(now - self.t) * 1000:.0f}")
+        self.ms[name] = round(self.ms.get(name, 0) + (now - self.t) * 1000, 2)
         self.t = now
-        if done:
-            print(f"trace find {self.q[:40]!r}: " + ", ".join(self.laps), flush=True)
+        if done and self.on:
+            print(f"trace find {self.q[:40]!r}: " + ", ".join(f"{k} {v:.0f}" for k, v in self.ms.items()), flush=True)
 
 
 FOLDER_REBUILD = 30  # seconds between background rebuilds of the folder index while the index keeps changing
@@ -346,7 +345,7 @@ class Searcher:
                     shown += 1
                     x["excerpt"] = _excerpt(text, x["chunk_line"], pq["semantic"], pq["exact"])
         lap("lines", done=True)
-        return dict(query=pq, results=results, scope=scopes.describe(scope))
+        return dict(query=pq, results=results, scope=scopes.describe(scope), timing=lap.ms)
 
     @staticmethod
     def _on_disk(best, rows, limit):
