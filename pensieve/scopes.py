@@ -143,8 +143,8 @@ def allowlist(scope: Scope, kind: str, store, repos, index) -> np.ndarray | None
     if scope is None:
         return None
     table = {"file": "file_chunks", "code": "code_chunks", "session": "chunks"}[kind]
-    with store.lock:
-        fp = store.db.execute(f"SELECT COUNT(*), MAX(id) FROM {table}").fetchone()
+    with store.lock:  # MAX(id) only: a COUNT(*) scans the whole table, and the cache expires anyway
+        fp = store.db.execute(f"SELECT MAX(id) FROM {table}").fetchone()
     key = (scope.name, tuple(scope.sources), kind, fp)
     hit = _cache.get(key)
     if hit is not None and time.time() - hit[0] < 120:

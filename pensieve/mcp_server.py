@@ -26,9 +26,9 @@ class _Server(MCPServer):
 mcp = _Server(
     name="pensieve",
     instructions=(
-        "Pensieve indexes this repo (and the Mac's docs and past agent sessions). To find code, call search before "
-        "Grep/Glob: a description, a name or an error message all work and the right file is usually first; then "
-        "Read it. who_knows suggests who to ask about an area."),
+        "Pensieve indexes this repo, the Mac's documents and past agent sessions. To find code, call search before "
+        "Grep/Glob, with what the code does plus names you'd guess it uses; the first hit is usually right. "
+        "who_knows suggests who to ask about an area."),
 )
 
 
@@ -70,13 +70,18 @@ def tool(name=None):
 
 @tool()
 def search(query: str, limit: int = 8, kind: str | None = None) -> str:
-    """Find code (or docs, past agent sessions) in one call; use before Grep/Glob. Query by what it does, a name, an
-    error string, or a mix ("fetchCompanies retry on 429"). "quotes" = exact, -word excludes, ext:py, in:<path>,
-    by:<person>, kind:file|code|doc|session|folder|repo|person (folder: "person build" -> that directory; person: who
-    wrote the code about it). One line per hit, best first: path:line  snippet  [id for read/similar]."""
+    """Find code (or docs, past agent sessions) in one call; use before Grep/Glob. Best query: what the code does plus
+    names you'd guess it uses ("retry failed webhook delivery with backoff retryWebhook"); a bare name or an error
+    string also works. "quotes" = exact, -word excludes, ext:py, in:<path>, by:<person>,
+    kind:code|doc|session|folder|repo|person. One line per hit, best first: path:line  enclosing definition ▸ the
+    line that matched  [id for read/similar]. If those lines show what you need, use the hit: no grep to confirm."""
     sc = _scope()
     r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc)
-    found = _lines(r["results"])
+    cwd = (agent_cwd.get() or "").rstrip("/")
+    # hits in linked worktrees (other branches' copies) rank below the checkout the agent runs in
+    elsewhere = lambda x: " @ " in (x.get("subtitle") or "") and not (cwd and (x.get("path") or "").startswith(cwd + "/"))
+    res = [x for x in r["results"] if not elsewhere(x)] + [x for x in r["results"] if elsewhere(x)]
+    found = _lines(res)
     if getattr(sc, "unindexed", False):  # only past sessions in this repo can match; its code isn't indexed
         return (f"{sc.description}. `pensieve repo index` indexes it." + (f"\n{found}" if found else ""))
     return found or "No matches."
@@ -99,17 +104,22 @@ def _lines(results):
         if kind == "session":
             where = f'session "{x.get("title") or ""}" ({x.get("subtitle") or x.get("updated") or ""})'
         else:
-            where = path + (f":{x['line']}" if x.get("line") else "") if path else x.get("title") or ""
+            line = x.get("focus_line") or x.get("line")
+            where = path + (f":{line}" if line else "") if path else x.get("title") or ""
             if x.get("stale"):  # edited after it was indexed: the snippet can be out of date
                 where += " (edited since indexed)"
+            if x.get("focus"):  # code: the line that matched, inside its definition
+                cut = lambda s, n: s[:n] + ("…" if len(s) > n else "")
+                snip = (f"{cut(x['definition'], 90)}  ▸ " if x.get("definition") else "") + cut(x["focus"], 140)
         out.append(f"{where}  {snip}  [{x.get('id')}]".replace("    ", "  "))
+        if x.get("excerpt"):  # the top hits: a few numbered lines, as Read would show them
+            out += [f"    {n}│ {t.rstrip()}" for n, t in x["excerpt"]]
     return "\n".join(out)
 
 
 @tool()
 def read(id: str, max_chars: int = 12000) -> dict:
-    """Full text of a search result: a document, a code chunk (with its owners, recent commits and the agent
-    sessions that touched it), or an agent session transcript with its summary."""
+    """Full text of a search result id: code with its owners and recent commits, a document, or a session."""
     _check(id)
     return actions.read(id, max_chars)
 
@@ -141,8 +151,7 @@ def _similar(id, limit):
 
 @tool()
 def who_knows(topic: str, repo: str | None = None) -> dict:
-    """People who wrote the code most related to a topic (git blame weighted by relevance), with the files involved.
-    Use this to suggest who to talk to. Optionally limit to one repo name (see list_repos)."""
+    """Who wrote the code most related to a topic (git blame), with their files: who to ask. repo: just one repo."""
     if repo:
         _check_repo(repo)
     sc = _scope()
@@ -182,9 +191,8 @@ def unexplored(repo: str) -> dict:
 
 @tool()
 def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
-    """Areas of a repo whose knowledge may have left: most of the code (git blame) was written by people with no
-    commits in `inactive_days`. Each gap lists who wrote it, who still active knows it best (`ask`), and the bus
-    factor (active people holding >=10% of it). Use it to find who to ask, or what needs documenting or an owner."""
+    """Areas of a repo mostly written (git blame) by people with no commits in `inactive_days`: who wrote each, who
+    active knows it best (`ask`), and its bus factor (active people holding >=10%)."""
     _check_repo(repo)
     r = _c()["repos"].knowledge_gaps(repo, inactive_days)
     if r is None:
@@ -194,8 +202,8 @@ def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
 
 @tool(name="open")
 def open_item(id: str, action: str = "open") -> dict:
-    """Open an item on the user's Mac. action: 'open' (default app, or the configured editor at the line for code),
-    'reveal' (show in Finder) or 'visualize' (show it on the Pensieve map)."""
+    """Open an item on the user's Mac. action: 'open' (code opens in the editor at the line), 'reveal' (Finder) or
+    'visualize' (the Pensieve map)."""
     _check(id)
     return actions.open_item(id, action)
 
@@ -226,8 +234,7 @@ def status() -> dict:
 
 @tool()
 def current_scope() -> dict:
-    """The slice of the index this connection works within (set by the agent's MCP config: ?scope=<name>, or 'auto'
-    = the repo the agent was started in). 'all' means everything Pensieve indexes."""
+    """The slice of the index this connection searches: 'auto' = the repo the agent started in, 'all' = everything."""
     return scopes.describe(_scope())
 
 
