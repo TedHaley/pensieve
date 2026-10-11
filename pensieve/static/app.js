@@ -379,6 +379,22 @@ function renderLabels() {
         title: `${plural(idx.length, 'item')} · click to step back out`, onClick: () => deselectLabel()});
     }
     mapPts.forEach((p, i) => { const c = dataTopicOf(p); if (dataInView(p) && c != null && (!basis || basis.has(i))) { if (!by.has(c)) by.set(c, []); by.get(c).push(i); } });
+    if (D.colorBy === 'author') {  // each author in the legend once, on the topic they have the most items in
+      const best = new Map();  // author -> [topic, their items in it]
+      by.forEach((idx, id) => {
+        const mine = new Map();
+        idx.forEach(i => { const w = mapPts[i].who; if (w && D.authorSlot.has(w)) { if (!mine.has(w)) mine.set(w, []); mine.get(w).push(i); } });
+        mine.forEach((m, w) => { if (m.length > (best.get(w)?.[1].length || 0)) best.set(w, [id, m]); });
+      });
+      best.forEach(([id, idx], w) => {
+        if (idx.length < 3) return;
+        const t = dataTopics().get(id), name = t?.name || `Topic ${id + 1}`;
+        items.push({n: idx.length, text: w, pos: dataAnchor(idx), color: slotColor(D.authorSlot.get(w)),
+          title: `${w}: ${plural(idx.length, 'item')} in “${name}”, the topic here they worked on most\nclick to zoom in`,
+          onClick: () => selectLabel('topic', id)});
+      });
+      return gl.setLabels(items);
+    }
     [...by].filter(([, idx]) => idx.length >= 3).forEach(([id, idx]) => {
       const t = dataTopics().get(id);
       if (D.sel?.kind === 'topic' && t?.name === D.sel.name && by.size === 1) return;  // the same topic again: the pinned label says it
