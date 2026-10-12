@@ -2,22 +2,26 @@
 (streamable HTTP); `pensieve mcp` bridges stdio to it for agents that only speak stdio."""
 import contextvars
 import functools
+import json
+import time
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from pensieve import actions, onboarding, scopes, settings, sources
+from pensieve import actions, onboarding, scopes, settings, sources, usage
 
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
-               "current_scope", "open"}
+               "current_scope", "open", "index_path"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
 tool_profile = contextvars.ContextVar("tool_profile", default="agent")
 agent_cwd = contextvars.ContextVar("agent_cwd", default=None)  # where the agent runs (?cwd=), for relative paths
+agent_client = contextvars.ContextVar("agent_client", default=None)  # ?client=: the agent's name, e.g. claude-code
+agent_conn = contextvars.ContextVar("agent_conn", default=None)  # ?conn=: one id per agent connection (stdio bridge)
 
 
 class _Server(MCPServer):
@@ -61,16 +65,33 @@ def _check_repo(repo):
 
 
 def tool(name=None):
-    """Register an MCP tool; bad input (ValueError, unknown id) reaches the agent as a readable error."""
+    """Register an MCP tool; bad input (ValueError, unknown id) reaches the agent as a readable error. Every call is
+    logged to usage.db (see usage.py)."""
     def deco(fn):
         @functools.wraps(fn)
         def wrap(*a, **k):
+            info, t, res, err = {}, time.perf_counter(), None, None
+            token = usage.current.set(info)
             try:
-                return fn(*a, **k)
+                res = fn(*a, **k)
+                return res
             except KeyError as e:
-                raise ToolError(f"not found: {e.args[0] if e.args else e}") from e
+                err = f"not found: {e.args[0] if e.args else e}"
+                raise ToolError(err) from e
             except ValueError as e:
-                raise ToolError(str(e)) from e
+                err = str(e)
+                raise ToolError(err) from e
+            except Exception as e:
+                err = repr(e)[:500]
+                raise
+            finally:
+                usage.current.reset(token)
+                sc = scopes.current.get(None)
+                usage.record(ts=time.time(), source="mcp", tool=name or fn.__name__, client=agent_client.get(),
+                             conn=agent_conn.get(), cwd=agent_cwd.get(), scope=getattr(sc, "name", None),
+                             args={**dict(enumerate(a)), **k}, ms=round((time.perf_counter() - t) * 1000, 2),
+                             ok=err is None, error=err, out_chars=len(res) if isinstance(res, str) else
+                             len(json.dumps(res, default=str)) if res is not None else 0, **info)
         return mcp.tool(name=name)(wrap)
     return deco
 
@@ -88,6 +109,7 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     # hits in linked worktrees (other branches' copies) rank below the checkout the agent runs in
     elsewhere = lambda x: " @ " in (x.get("subtitle") or "") and not (cwd and (x.get("path") or "").startswith(cwd + "/"))
     res = [x for x in r["results"] if not elsewhere(x)] + [x for x in r["results"] if elsewhere(x)]
+    usage.note(n_results=len(res), results=[[x.get("id"), x.get("path")] for x in res], laps=r.get("timing"))
     found = _lines(res)
     if getattr(sc, "unindexed", False):  # only past sessions in this repo can match; its code isn't indexed
         return (f"{sc.description}. `pensieve repo index` indexes it." + (f"\n{found}" if found else ""))
@@ -329,6 +351,22 @@ def remove_folder(path: str) -> dict:
 
 
 @tool()
+def index_path(path: str) -> dict:
+    """Index a folder when the user asks you to: a git repo, a folder of repos, a folder of agent sessions, or a
+    folder of documents (Pensieve works out which). Relative paths are from your working folder."""
+    res = onboarding.index(path, agent_cwd.get())
+    from pensieve import server
+    server.watch.force_full()
+    return res
+
+
+@tool()
+def usage_stats(days: float = 7) -> dict:
+    """Pensieve's own MCP tool calls over the last `days`: per tool, the number of calls, errors, and p50/p95 time."""
+    return usage.summary(days)
+
+
+@tool()
 def setup_guide() -> dict:
     """Start of setup (first run, or after a reset). Returns what Pensieve is (`about`), user profiles, the source
     categories with the folders scanning each one reads, the insights engines (`ai`) and the energy note. Reads no
@@ -402,9 +440,13 @@ async def _scoped(scope, receive, send):
     token = scopes.current.set(sc)
     ptoken = tool_profile.set("all" if q.get("tools") == "all" else "agent")
     ctoken = agent_cwd.set(q.get("cwd"))
+    ktoken = agent_client.set(q.get("client") or "http")
+    ntoken = agent_conn.set(q.get("conn"))
     try:
         await _endpoint(scope, receive, send)
     finally:
+        agent_conn.reset(ntoken)
+        agent_client.reset(ktoken)
         agent_cwd.reset(ctoken)
         tool_profile.reset(ptoken)
         scopes.current.reset(token)

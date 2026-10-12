@@ -2,6 +2,7 @@ import asyncio
 from collections import Counter
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, llm, mcp_server, onboarding, scopes, search as search_mod, settings, sources, summarize
+from pensieve import actions, config, llm, mcp_server, onboarding, scopes, search as search_mod, settings, sources, summarize, usage
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -427,6 +428,12 @@ def _status():
             "code_chunks": db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0],
             "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL,
             "ai": settings.get("ai"), "setup_done": settings.get("setup_done"), "syncing": _syncing()}
+
+
+@app.get("/api/usage")
+def get_usage(days: float = 7):
+    """MCP tool calls over the last `days` (the log is ~/.pensieve/usage.db)."""
+    return usage.summary(days)
 
 
 @app.get("/api/syncing")
@@ -1019,7 +1026,15 @@ def add_repos(req: FolderReq):
 
 @app.delete("/api/sources/repos")
 def remove_repos(path: str):
+    """✕ on a repo: remove it from the index and stop finding it. On a folder of repos added by hand: stop indexing
+    the folder (the sweep removes the repos in it that nothing else finds)."""
+    root = str(Path(path).expanduser())
     settings.update({"repos": [r for r in settings.get("repos") if r != path]})
+    with store.lock:
+        indexed = store.db.execute("SELECT 1 FROM repos WHERE root=?", (root,)).fetchone()
+    if indexed:
+        sources.set_source(f"repos/{root}", False)
+        threading.Thread(target=repos.remove, args=(root,), daemon=True).start()
     return sources.catalog(store, repos, files)
 
 

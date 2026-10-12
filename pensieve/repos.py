@@ -32,6 +32,12 @@ SHADOW_MIN_FILES = 20  # files to (re)index before blame goes through the commit
 PROGRESS_MIN_FILES = 20  # checkouts with at least this many files to index report their progress (Sources, status)
 GENERATED_DIRS = {"dist", "build", "vendor", "third_party", "node_modules", "out", "target", ".venv"}
 CODE_CHUNK_CHARS = 1500
+
+
+class SwitchedOff(Exception):
+    """The repo was switched off in Sources while it was being indexed."""
+
+
 ALL = "__all__"  # pseudo-repo: every indexed repo in one joint layout, paths prefixed with '<repo>/' 
 
 
@@ -268,6 +274,8 @@ class Repos:
         self._sweeping = False  # a full sync holds sync_lock
         self.progress = None  # the checkout being indexed now: {name, root, done, total}
         self._recheck = set()
+        self._removing = set()  # repos to remove from the index (✕ in Sources) once no sweep holds them
+        self.found = []  # (root, remote) of the repos the last sweep found to sync
         self._last = 0
         self._scope = (None, None)
         self._team = {}
@@ -418,6 +426,8 @@ class Repos:
                 remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
             n = 0
             for r in roots & remotes.keys():
+                if self.switched_off(r):
+                    continue
                 try:
                     n += self._sync_repo(r, remotes[r], log)
                 except Exception as e:
@@ -441,12 +451,14 @@ class Repos:
         if only is None:
             self._last = time.time()
             self.backfill_session_files()
-        touched = 0
+        touched = self._purge_removed(log)
         found = self.discover()
-        if only is None:  # repos no longer found or switched off: remove them
+        self.found = found
+        if only is None:  # repos gone from disk, or no longer found while discovery is on: remove them
             keep = {r for r, _ in found}
             with self.lock:
-                stale = [r for (r,) in self.db.execute("SELECT root FROM repos") if r not in keep]
+                stale = [r for (r,) in self.db.execute("SELECT root FROM repos")
+                         if r not in keep and (not Path(r).is_dir() or not self.switched_off(r))]
             for r in stale:
                 self.purge(r)
                 log(f"repo {Path(r).name}: removed from the index")
@@ -457,14 +469,46 @@ class Repos:
             touched += self._service(root, log)
             try:
                 touched += self._sync_repo(root, remote, log)
+            except SwitchedOff:  # what is indexed so far stays searchable; switching it on again goes on from there
+                log(f"repo {Path(root).name}: switched off, stopped indexing")
+                touched += self._purge_removed(log)
             except Exception as e:  # one broken repo shouldn't stop the rest
                 log(f"repo {root}: {e!r}")
         if self._recheck and self.requeue:  # repos edited while they were being swept: one more pass
             self.requeue(self._recheck)
             self._recheck = set()
+        touched += self._purge_removed(log)
         if touched or self.unsaved:
             self.save()
         return touched
+
+    @staticmethod
+    def switched_off(root):
+        """Switched off in Sources (the repo, the category, or discovery for a repo not added by hand): no longer
+        synced, but kept in the index."""
+        if not (settings.enabled("repos") and settings.enabled(f"repos/{root}")):
+            return True
+        added = any(root == str(p) or root.startswith(f"{p}/") for p in settings.paths("repos"))
+        return not added and not settings.enabled("repos/discover")
+
+    def remove(self, root, log=lambda m: print(m, flush=True)):
+        """Remove a repo from the index (✕ in Sources). A sweep in progress removes it once it lets go of the repo."""
+        self._removing.add(root)
+        if self.sync_lock.acquire(blocking=False):
+            try:
+                if self._purge_removed(log):
+                    self.save()
+            finally:
+                self.sync_lock.release()
+
+    def _purge_removed(self, log):
+        n = 0
+        while self._removing:
+            r = self._removing.pop()
+            self.purge(r)
+            log(f"repo {Path(r).name}: removed from the index")
+            n += 1
+        return n
 
     def _service(self, current, log):
         """During a long sweep, sync other repos that changed meanwhile so edits don't wait for the sweep to end."""
@@ -485,8 +529,11 @@ class Repos:
             with self.lock:
                 remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
             for r in roots - {current}:
-                if r in remotes:
-                    n += self._sync_repo(r, remotes[r], log)
+                if r in remotes and not self.switched_off(r):
+                    try:
+                        n += self._sync_repo(r, remotes[r], log)
+                    except SwitchedOff:  # that repo, not the one being swept
+                        pass
         finally:
             self._servicing = False
         return n
@@ -620,6 +667,8 @@ class Repos:
             done = 0
             try:
                 while ahead:
+                    if self.switched_off(root) or root in self._removing:
+                        raise SwitchedOff(root)
                     fut = ahead.popleft()
                     nxt = next(items, None)
                     if nxt is not None:
