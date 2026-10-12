@@ -427,6 +427,43 @@ class _Scoped:
         await _scoped(scope, receive, send)
 
 
+_http_clients = {}  # User-Agent -> the name the agent gave in `initialize` (HTTP is stateless: later calls don't carry it)
+
+
+async def _note_client(scope, receive):
+    """Read the request body; if it is `initialize`, remember the agent's name for its User-Agent. Returns a receive
+    that replays the body to the MCP endpoint."""
+    body, more = b"", True
+    while more:
+        msg = await receive()
+        if msg["type"] != "http.request":
+            return lambda: _done(msg)
+        body += msg.get("body", b"")
+        more = msg.get("more_body", False)
+    try:
+        req = json.loads(body)
+        if isinstance(req, dict) and req.get("method") == "initialize":
+            name = ((req.get("params") or {}).get("clientInfo") or {}).get("name")
+            if name:
+                ua = dict(scope.get("headers") or []).get(b"user-agent", b"").decode(errors="replace")
+                _http_clients[ua] = str(name)[:80]
+    except ValueError:
+        pass
+    sent = False
+
+    async def replay():
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return await receive()
+    return replay
+
+
+async def _done(msg):
+    return msg
+
+
 async def _scoped(scope, receive, send):
     """Every MCP request runs inside the connection's scope: ?scope=<name>|auto|all (&cwd=<dir> for auto)."""
     from urllib.parse import parse_qs
@@ -437,10 +474,13 @@ async def _scoped(scope, receive, send):
         from starlette.responses import JSONResponse
         await JSONResponse({"error": f"unknown Pensieve scope {e.args[0]!r}"}, status_code=404)(scope, receive, send)
         return
+    if scope.get("method") == "POST":
+        receive = await _note_client(scope, receive)
+    ua = dict(scope.get("headers") or []).get(b"user-agent", b"").decode(errors="replace")
     token = scopes.current.set(sc)
     ptoken = tool_profile.set("all" if q.get("tools") == "all" else "agent")
     ctoken = agent_cwd.set(q.get("cwd"))
-    ktoken = agent_client.set(q.get("client") or "http")
+    ktoken = agent_client.set(q.get("client") or _http_clients.get(ua) or "http")
     ntoken = agent_conn.set(q.get("conn"))
     try:
         await _endpoint(scope, receive, send)

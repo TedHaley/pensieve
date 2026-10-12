@@ -274,6 +274,8 @@ async def summarize_team(team, key):
     try:
         await asyncio.get_running_loop().run_in_executor(None, summarize.summarize_team, store, team, key)
         broadcast({"type": "team", "repo": team["repo"]})
+    except llm.Offline:  # no engine right now (server down, model loading): no summary, and no error toast
+        pass
     except Exception as e:
         broadcast({"type": "toast", "message": f"Team summary failed: {e!r}"[:200]})
     finally:
@@ -431,9 +433,9 @@ def _status():
 
 
 @app.get("/api/usage")
-def get_usage(days: float = 7):
-    """MCP tool calls over the last `days` (the log is ~/.pensieve/usage.db)."""
-    return usage.summary(days)
+def get_usage(days: float = 7, recent: int = 0):
+    """MCP tool calls over the last `days` (the log is ~/.pensieve/usage.db); `recent`: also the latest calls."""
+    return usage.summary(days, min(recent, 200))
 
 
 @app.get("/api/syncing")
@@ -569,10 +571,11 @@ async def team(name: str, days: int = 90):
         raise HTTPException(404)
     key = _team_key(t)
     raw = store.meta(key)
-    if raw is None and t["people"]:
+    summarizing = raw is None and bool(t["people"]) and llm.provider() != "none"  # AI off: no summaries, no spinner
+    if summarizing:
         asyncio.create_task(summarize_team(t, key))
     return {**{k: v for k, v in t.items() if k != "area_activity"}, "summaries": json.loads(raw) if raw else None,
-            "summarizing": raw is None and bool(t["people"])}
+            "summarizing": summarizing}
 
 
 @app.post("/api/territory/{name}")

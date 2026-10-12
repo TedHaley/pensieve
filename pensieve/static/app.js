@@ -390,8 +390,8 @@ function renderLabels() {
         if (idx.length < 3) return;
         const t = dataTopics().get(id), name = t?.name || `Topic ${id + 1}`;
         items.push({n: idx.length, text: w, pos: dataAnchor(idx), color: slotColor(D.authorSlot.get(w)),
-          title: `${w}: ${plural(idx.length, 'item')} in “${name}”, the topic here they worked on most\nclick to zoom in`,
-          onClick: () => selectLabel('topic', id)});
+          title: `${w}: ${plural(idx.length, 'item')} in “${name}”, the topic here they worked on most\nclick for their card`,
+          onClick: () => openPersonPanel(w)});
       });
       return gl.setLabels(items);
     }
@@ -2294,7 +2294,46 @@ const SET_TABS = [
   ['scopes', 'Scopes', '#5e5ce6', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="#fff"/>'],
   ['agents', 'Agents', '#30b0c7', '<circle cx="11" cy="11" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
   ['ai', 'AI & Insights', '#bf5af2', '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9Z" fill="#fff"/><circle cx="18.5" cy="17.5" r="1.6" fill="#fff"/>'],
+  ['usage', 'Usage', '#34c759', '<path d="M5 19V11M10 19V5M15 19v-6M20 19V9" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>'],
 ];
+// Usage: how agents call Pensieve over MCP, from the local log (~/.pensieve/usage.db)
+S.usageDays = +store.get('usageDays', 7);
+const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms / 1000).toFixed(1) + ' s' : Math.round(ms) + ' ms';
+const fmtWhen = ts => { const s = Date.now() / 1000 - ts; return s < 60 ? 'just now' : s < 3600 ? Math.floor(s / 60) + ' min ago' : s < 86400 ? Math.floor(s / 3600) + ' h ago' : new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'}); };
+async function bindUsage() {
+  const box = $('#usagebox'); if (!box) return;
+  let u;
+  try { u = await api(`/api/usage?days=${S.usageDays}&recent=50`); } catch { box.innerHTML = '<p class="sc-p">Could not load usage.</p>'; return; }
+  if (!$('#usagebox')) return;
+  const seg = `<div class="seg" role="radiogroup" aria-label="Period">${[[1, 'Day'], [7, 'Week'], [30, 'Month']].map(([d, l]) => `<button data-udays="${d}" class="${S.usageDays === d ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const kpi = (l, v, d = '') => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${d ? `<div class="d">${d}</div>` : ''}</div>`;
+  const tools = Object.entries(u.tools).sort((a, b) => b[1].calls - a[1].calls);
+  const search = u.tools.search;
+  let html = `<div class="set-card"><div class="u-head"><h3>Tool calls</h3>${seg}</div>`;
+  if (!u.calls) {
+    html += `<p class="sc-p">No agent called Pensieve in this period. Connect one in <a href="#agents" data-settab-link="agents">Agents</a>.</p></div>`;
+  } else {
+    const days = [];
+    for (let i = Math.max(1, Math.round(u.days)) - 1; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000), k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      days.push([k, u.per_day[k] || 0, d]);
+    }
+    const top = Math.max(...days.map(d => d[1]), 1);
+    html += `<div class="set-stats">${kpi('Calls', u.calls.toLocaleString(), u.connections ? `from ${plural(u.connections, 'connection')}` : '')}${kpi('Median time', fmtMs(u.p50_ms), `95% under ${fmtMs(u.p95_ms)}`)}
+      ${kpi('Searches with no results', search ? search.empty.toLocaleString() : '0', search ? `of ${search.calls.toLocaleString()} searches` : '')}${kpi('Errors', u.errors.toLocaleString())}</div>
+      ${days.length > 1 ? `<div class="u-bars">${days.map(([k, n, d]) => `<div class="u-bar" title="${k}: ${plural(n, 'call')}"><b><i style="height:${Math.round(100 * n / top)}%"></i></b><span>${days.length > 7 ? (d.getDate() === 1 || d.getDay() === 1 ? d.getDate() : '') : d.toLocaleDateString(undefined, {weekday: 'short'})}</span></div>`).join('')}</div>` : ''}</div>
+    <div class="set-card"><h3>By tool</h3><table class="tbl"><tr><th>Tool</th><th class="num">Calls</th><th class="num">Median</th><th class="num">95%</th><th class="num">No results</th><th class="num">Errors</th></tr>
+      ${tools.map(([t, d]) => `<tr><td><code>${esc(t)}</code></td><td class="num">${d.calls.toLocaleString()}</td><td class="num">${fmtMs(d.p50_ms)}</td><td class="num">${fmtMs(d.p95_ms)}</td><td class="num">${d.empty || ''}</td><td class="num">${d.errors || ''}</td></tr>`).join('')}</table></div>
+    <div class="set-card"><h3>By agent</h3><table class="tbl"><tr><th>Agent</th><th class="num">Calls</th></tr>
+      ${Object.entries(u.clients).map(([c, n]) => `<tr><td>${esc(c)}</td><td class="num">${n.toLocaleString()}</td></tr>`).join('')}</table></div>
+    <div class="set-card"><h3>Recent calls</h3><table class="tbl u-recent"><tr><th>When</th><th>Agent</th><th>Tool</th><th>Asked for</th><th>Top result</th><th class="num">Time</th></tr>
+      ${u.recent.map(r => `<tr title="${esc(r.cwd || '')}"><td>${fmtWhen(r.ts)}</td><td>${esc(r.client || '')}</td><td><code>${esc(r.tool)}</code></td><td class="u-q">${esc(r.query)}</td>
+        <td class="u-q ${r.ok ? '' : 'warn'}" title="${esc(r.ok ? r.top.join('\n') : r.error || '')}">${r.ok ? (r.n_results === 0 ? '<span class="muted">no results</span>' : esc(r.top[0] ? String(r.top[0]).split('/').slice(-2).join('/') : '')) : '⚠ ' + esc(r.error || 'error')}</td><td class="num">${fmtMs(r.ms)}</td></tr>`).join('')}</table></div>`;
+  }
+  box.innerHTML = html;
+  $$('[data-udays]', box).forEach(b => b.onclick = () => { S.usageDays = +b.dataset.udays; store.set('usageDays', S.usageDays); bindUsage(); });
+  $$('[data-settab-link]', box).forEach(a => a.onclick = e => { e.preventDefault(); setTab(a.dataset.settabLink); });
+}
 const OLD_TABS = {appearance: 'general', advanced: 'general'};  // removed tabs, still in saved state and old links
 S.setTab = store.get('setTab', 'sources');
 S.setTab = OLD_TABS[S.setTab] || S.setTab;
@@ -2404,6 +2443,7 @@ async function renderSettings() {
     </div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
   else if (tab === 'ai') body = bar('AI & Insights', 'Optional: the engine that writes summaries, topic names and insights.') + aiSettingsHtml();
+  else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/usage.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
     <div class="set-card" id="set-Mac-app"><h3>Mac app</h3>${setRow('hotkey')}${setRow('editor')}
       <div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes. The search panel and the Map both use it.</div></div>
@@ -2426,6 +2466,7 @@ async function renderSettings() {
   if (tab === 'ai') bindAISettings($('#setmain'));
   if (tab === 'agents') loadIntegrations();
   if (tab === 'general') bindGeneral();
+  if (tab === 'usage') bindUsage();
   const upd = $('[data-upd]', el);
   if (upd) upd.onchange = async () => {
     const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({auto_update_check: upd.checked})});
