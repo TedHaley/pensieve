@@ -23,8 +23,9 @@ def catalog(store, repos, files) -> list[dict]:
         db = store.db
         per_root = dict(db.execute("SELECT root, COUNT(*) FROM files GROUP BY root").fetchall())
         per_repo = dict(db.execute("SELECT repo, COUNT(DISTINCT path) FROM code_chunks GROUP BY repo").fetchall())
-        wts = dict(db.execute("SELECT repo, COUNT(*) FROM worktrees GROUP BY repo").fetchall())
         repo_rows = db.execute("SELECT root, name FROM repos ORDER BY name").fetchall()
+        wt_rows = db.execute("SELECT path, repo, branch FROM worktrees ORDER BY path").fetchall()
+        per_wt = dict(db.execute("SELECT wt, COUNT(*) FROM checkout_files WHERE wt!='' GROUP BY wt").fetchall())
 
     agents = []
     for sid, k, root, _ in config.session_sources():
@@ -58,10 +59,21 @@ def catalog(store, repos, files) -> list[dict]:
 
     for root, name in repo_rows:
         a = added_by(root)
-        repo_items.append(dict(id=f"repos/{root}", label=name, detail=_home(root) + (f" · {wts[root]} worktrees" if wts.get(root) else ""),
+        note = " · not syncing" if repos.switched_off(root) else ""
+        repo_items.append(dict(id=f"repos/{root}", label=name, detail=_home(root) + note,
                                available=Path(root).is_dir(), enabled=on(f"repos/{root}"), count=per_repo.get(root, 0), unit="files",
                                parent=None if a else "repos/discover",
-                               remove=dict(kind="repos", path=a) if a and added[a] == root else None))
+                               remove=dict(kind="repos", path=a if a and added[a] == root else root)))
+        for wt, repo, branch in (w for w in wt_rows if w[1] == root):  # synced with their repo: no switch of their own
+            repo_items.append(dict(id=f"worktree/{wt}", kind="worktree", label=Path(wt).name,
+                                   detail=f"{branch or 'detached'} · {_home(wt)}", available=Path(wt).is_dir(),
+                                   enabled=on(f"repos/{root}"), count=per_wt.get(wt, 0), unit="changed files",
+                                   parent=f"repos/{root}"))
+    indexed = {r for r, _ in repo_rows}
+    for root, _ in repos.found:  # found by the sweep, waiting for their turn
+        if root not in indexed and not added_by(root):
+            repo_items.append(dict(id=f"repos/{root}", label=Path(root).name, detail=f"{_home(root)} · indexing soon",
+                                   available=True, enabled=on(f"repos/{root}"), count=0, unit="files", parent="repos/discover"))
     for a, p in added.items():  # a repo not indexed yet (switched off, or waiting for the sweep), or a folder of repos
         if not any(r == p for r, _ in repo_rows):
             is_repo, enabled = (Path(p) / ".git").exists(), on(f"repos/{p}")
@@ -90,10 +102,11 @@ def catalog(store, repos, files) -> list[dict]:
                               count=sum(n for r, n in per_root.items() if any(r == x or r.startswith(x + "/") for x in roots)), unit="items"))
 
     items = {"agents": agents, "files": folders, "repos": repo_items, "apps": app_items}
-    for it in (i for group in items.values() for i in group if i.get("kind") != "rule"):
+    for it in (i for group in items.values() for i in group if i.get("kind") not in ("rule", "worktree")):
         it["map"] = settings.on_map(it["id"])
     return [dict(id=c, label=label, description=desc, enabled=on(c), map=settings.on_map(c), items=items[c],
-                 count=sum(i.get("count", 0) for i in items[c] if i.get("kind") != "rule"), addable=c != "apps")
+                 count=sum(i.get("count", 0) for i in items[c] if i.get("kind") not in ("rule", "worktree")),
+                 addable=c != "apps")
             for c, label, desc in CATEGORIES]
 
 

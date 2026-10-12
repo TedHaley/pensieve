@@ -1896,28 +1896,30 @@ function srcItem(it, catOn, parentOff = false) {
   const detail = off ? 'Not found on this Mac' : it.detail;
   const shown = it.kind === 'rule' ? detail : midEllipsis(detail, 64);
   return `<div class="src-item ${it.kind === 'rule' ? 'rule' : ''} ${it.parent ? 'child' : ''} ${catOn && !parentOff ? '' : 'muted-all'} ${off ? 'na' : ''}">
-    <label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>
+    ${it.kind === 'worktree' ? '<span title="Synced with its repo"></span>' : `<label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>`}
     <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(it.error ? detail : shown)}</div></div>
     <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}</div>
     ${it.kind === 'rule' || it.map == null ? '<span></span>' : mapBtn(it.id, it.map, off || !catOn || !it.enabled)}
-    ${it.remove ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.remove.kind)}" data-src-rm-path="${esc(it.remove.path)}" title="Remove from Sources">✕</button>` : '<span></span>'}
+    ${it.remove ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.remove.kind)}" data-src-rm-path="${esc(it.remove.path)}" title="Remove from the index">✕</button>` : '<span></span>'}
   </div>`;
 }
 function sourcesHtml() {
   const cat = srcState.cat;
   if (!cat) return '<div class="set-card"><div class="shimmer" style="height:120px"></div></div>';
-  return `<div class="src-head"><h2>Sources</h2><p>What Pensieve indexes. Switching a source off removes its data from the index on the next sweep; switching it back on re-indexes it.</p>${srcState.err ? `<p class="err">${esc(srcState.err)}</p>` : ''}</div>
+  return `<div class="src-head"><h2>Sources</h2><p>What Pensieve indexes. Switching a source off removes its data from the index on the next sweep, and switching it back on indexes it again. A git repository switched off stops syncing but stays searchable; ✕ removes it from the index.</p>${srcState.err ? `<p class="err">${esc(srcState.err)}</p>` : ''}</div>
     <div class="src-grid">${cat.map(c => {
       const rules = c.items.filter(i => i.kind === 'rule' && !i.parent), rest = c.items.filter(i => i.kind !== 'rule' && !i.parent);
       const kids = id => c.items.filter(i => i.parent === id);
+      const tree = (i, parentOff = false) => srcItem(i, c.enabled, parentOff) + (kids(i.id).length
+        ? `<div class="src-kids">${kids(i.id).map(k => tree(k, parentOff || (i.kind === 'rule' && !i.enabled))).join('')}</div>` : '');
       return `<div class="set-card src-card ${c.enabled ? '' : 'off'}">
         <div class="src-top"><span class="src-ic"><svg viewBox="0 0 24 24" width="18" height="18">${SRC_ICON[c.id] || SRC_ICON.apps}</svg></span>
           <div class="src-tx"><h3>${esc(c.label)}${srcHint(c.id)}</h3><p>${esc(c.description)}</p></div>
           <div class="src-n big">${c.count != null ? srcCount(c.count, c.id === 'agents' ? 'sessions' : c.id === 'apps' ? 'items' : 'files') : ''}</div>
           ${mapBtn(c.id, c.map, !c.enabled)}
           <label class="tog" title="${c.enabled ? 'Switch off everything in ' + esc(c.label) : 'Switch on'}"><input type="checkbox" data-src-id="${esc(c.id)}" ${c.enabled ? 'checked' : ''}></label></div>
-        ${rules.length ? `<div class="src-rules">${rules.map(i => srcItem(i, c.enabled) + (kids(i.id).length ? `<div class="src-kids">${kids(i.id).map(k => srcItem(k, c.enabled, !i.enabled)).join('')}</div>` : '')).join('')}</div>` : ''}
-        ${rest.length ? `<div class="src-items">${rest.map(i => srcItem(i, c.enabled)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
+        ${rules.length ? `<div class="src-rules">${rules.map(i => tree(i)).join('')}</div>` : ''}
+        ${rest.length ? `<div class="src-items">${rest.map(i => tree(i)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
         ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="${SRC_ADD[c.id][0]}" data-src-add-in="${c.id}"><button class="btn" data-src-add="${c.id}">${SRC_ADD[c.id][1]}</button></div><div class="err" data-src-add-err="${c.id}">${esc(srcState.addErr[c.id] || '')}</div>` : ''}
         ${(SRC_OPTS[c.id] || []).some(k => S.set && k in S.set.draft) ? `<details class="src-opts" data-opts="${c.id}" ${srcState.opts.has(c.id) ? 'open' : ''}><summary>Options</summary>${SRC_OPTS[c.id].map(setRow).join('')}</details>` : ''}
       </div>`;

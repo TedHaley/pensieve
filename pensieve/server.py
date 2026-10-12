@@ -2,6 +2,7 @@ import asyncio
 from collections import Counter
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -1025,7 +1026,15 @@ def add_repos(req: FolderReq):
 
 @app.delete("/api/sources/repos")
 def remove_repos(path: str):
+    """✕ on a repo: remove it from the index and stop finding it. On a folder of repos added by hand: stop indexing
+    the folder (the sweep removes the repos in it that nothing else finds)."""
+    root = str(Path(path).expanduser())
     settings.update({"repos": [r for r in settings.get("repos") if r != path]})
+    with store.lock:
+        indexed = store.db.execute("SELECT 1 FROM repos WHERE root=?", (root,)).fetchone()
+    if indexed:
+        sources.set_source(f"repos/{root}", False)
+        threading.Thread(target=repos.remove, args=(root,), daemon=True).start()
     return sources.catalog(store, repos, files)
 
 
