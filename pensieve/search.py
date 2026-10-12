@@ -73,7 +73,7 @@ def parse(q: str) -> dict:
             if key == "kind":
                 val = _KINDS.get(val, val)
             filters[key] = val
-        elif word.startswith("-") and len(word) > 1:
+        elif re.match(r"-[A-Za-z_]", word):  # -word excludes; "--", "--flag" and "-1" are searched for as typed
             exclude.append(word[1:])
         elif word:
             words.append(word)
@@ -403,6 +403,40 @@ class Searcher:
         keep = [t for t in terms if self._df[t] <= COMMON_WORD * self._n_chunks]
         return keep or sorted(terms, key=self._df.get)[:2]
 
+    def _fragments(self, q):
+        """The fixed text of a message as it shows up at runtime ("company_id[20879] not found in directory"): the
+        query split at numbers and at words no code contains (the values filled into a format string), fragments of
+        8+ characters, and whether there was anything to split at. Call with self.lock held, after _rare_terms has
+        looked up the query's words."""
+        out = []
+        for part in re.split(r"\d+", q):
+            cur = ""
+            for tok in re.findall(r"\s+|\S+", part):
+                terms = code_words(tok).split()
+                if terms and all(self._df.get(t, 1) == 0 for t in terms):
+                    out.append(cur)
+                    cur = ""
+                else:
+                    cur += tok
+            out.append(cur)
+        holes = len(out) > 1
+        out = [f.strip() for f in out if len(f.strip()) >= 8]
+        # A value that is also a word in the code ("jdoe" in "Writing workers to jdoe") is not split out above, so
+        # also offer each fragment with one word removed: the words before it, and the words after it.
+        # Values are rare in code, so the words the fewest code chunks contain are removed first.
+        more = []
+        for f in out:
+            toks = re.findall(r"\S+", f)
+            for i, tok in enumerate(toks):
+                df = min((self._df.get(t, 0) for t in code_words(tok).split()), default=0)
+                more += [(df, -len(p), p) for p in (" ".join(toks[:i]), " ".join(toks[i + 1:]))]
+        seen, res = set(), []
+        for f in sorted(out, key=len, reverse=True) + [p for _, _, p in sorted(more)]:
+            if len(f) >= 8 and f != q and f not in seen:
+                seen.add(f)
+                res.append(f)
+        return res, holes
+
     def _code(self, q, allow, k=400, roots=None):
         """Code search tuned on bench/ (agent-style queries: descriptions, names, error strings, mixes of these).
 
@@ -443,6 +477,22 @@ class Searcher:
                 phrase = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
                                                         (_fts_query([ql]), 500 if allowed is None else 5000)) if ok(c)}
             names = code_names(ql)
+            frags, pieces = {}, []  # fragment -> chunks containing it
+            if len(ql) >= 8 and not phrase and names != [ql]:
+                pieces, holes = self._fragments(ql)
+                # A number or a word no code contains marks a message: probe the index for up to 3 fragments. A
+                # query without one is more likely a description, and its fragments are only looked for in the
+                # candidates below.
+                for f in pieces[:8] if holes else []:
+                    if any(f in g for g in frags):
+                        continue
+                    hits = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
+                                                          (_fts_query([f]), 500 if allowed is None else 5000)) if ok(c)}
+                    if hits:
+                        frags[f] = hits
+                        cand |= hits
+                        if len(frags) == 3:
+                            break
             by_name = {}
             for n in names:
                 if len(n) < 3:
@@ -457,15 +507,27 @@ class Searcher:
             cl = list(cand)
             for i in range(0, len(cl), 900):
                 part = cl[i:i + 900]
-                for cid, text, vec, path, repo in self.db.execute(
-                        f"SELECT id, text, vec, path, repo FROM code_chunks WHERE id IN ({','.join('?' * len(part))})", part):
-                    rows[cid] = (text, vec, f"{repo}:{path}", path)
-        files, best, sem, kwf = {}, {}, {}, {}
-        for cid, (text, vec, fkey, path) in rows.items():
+                for cid, text, vec, path, repo, wt in self.db.execute(
+                        f"SELECT id, text, vec, path, repo, wt FROM code_chunks WHERE id IN ({','.join('?' * len(part))})",
+                        part):
+                    rows[cid] = (text, vec, f"{repo}:{path}", path, wt)
+        if pieces and not frags:
+            low = {cid: r[0].lower() for cid, r in rows.items()}
+            for f in pieces:
+                if not any(f in g for g in frags):
+                    hits = {cid for cid, t in low.items() if f.lower() in t}
+                    if hits:
+                        frags[f] = hits
+                        if len(frags) == 3:
+                            break
+        files, best, sem, kwf, main = {}, {}, {}, {}, {}
+        for cid, (text, vec, fkey, path, wt) in rows.items():
             s_ = float(np.frombuffer(vec, np.float16).astype(np.float32) @ qv)
             files.setdefault(fkey, path)
-            if s_ > sem.get(fkey, -9):
-                sem[fkey], best[fkey] = s_, cid
+            # a linked worktree's copy shares the file's key: the main checkout's chunks stand for the file when
+            # any are candidates (the agent is shown worktree copies last)
+            if (not wt, s_) > (main.get(fkey, False), sem.get(fkey, -9)):
+                sem[fkey], best[fkey], main[fkey] = s_, cid, not wt
             kwf[fkey] = max(kwf.get(fkey, 0.0), kw.get(cid, 0.0))
         keys = list(files)
         S = np.array([sem[f] for f in keys], np.float32)
@@ -474,14 +536,33 @@ class Searcher:
         extra = 0.2 * z(K) - 0.5 * np.array([bool(_TESTY.search(files[f])) for f in keys], np.float32)
         pos = {f: i for i, f in enumerate(keys)}
         if phrase:
-            hit, cnt, cased = np.zeros(len(keys)), np.zeros(len(keys)), np.zeros(len(keys))
+            hit, cased = np.zeros(len(keys)), np.zeros(len(keys))
+            cnt = np.zeros((2, len(keys)))  # matches in the main checkout, in linked worktrees' copies
             for c in phrase:
                 if c in rows:
                     j = pos[rows[c][2]]
                     hit[j] = 1
-                    cnt[j] += rows[c][0].lower().count(ql.lower())
+                    cnt[int(bool(rows[c][4])), j] += rows[c][0].lower().count(ql.lower())
                     cased[j] = max(cased[j], float(ql in rows[c][0]))
+            cnt = np.where(cnt[0] > 0, cnt[0], cnt[1])  # a file's copies would count each match twice
             extra += 3 * hit + ((np.log1p(cnt) + cased) if names != [ql] else 0)
+        tier = hit if phrase else None  # what grep would find: files that contain the query's text
+        if any(frags.values()):
+            # A file counts when its fragments cover at least half of the query: a message with a few values
+            # filled in, not a description that shares a common phrase with the file.
+            spans, cnt = defaultdict(set), np.zeros(len(keys))
+            for f, cids in frags.items():
+                at = ql.lower().find(f.lower())
+                for j in {pos[rows[c][2]] for c in cids if c in rows}:
+                    spans[j].update(range(at, at + len(f)))
+                for c in cids:
+                    if c in rows and not rows[c][4]:
+                        cnt[pos[rows[c][2]]] += rows[c][0].lower().count(f.lower())
+            got = np.zeros(len(keys))
+            for j, s in spans.items():
+                got[j] = len(s) / len(ql) if len(s) >= len(ql) / 2 else 0
+            extra += 3 * got
+            tier = got
         for n, cids in by_name.items():
             rx = re.compile(r"(?<![\w])" + re.escape(n) + r"(?![\w])")
             has, defs = np.zeros(len(keys)), set()
@@ -495,6 +576,13 @@ class Searcher:
             if 0 < len(defs) <= 3:
                 extra[list(defs)] += 2
         total = S + S.std() * extra  # the tuned z-score order, kept on the cosine scale
+        if tier is not None and names != [ql] and tier.any():
+            # Files are sorted by how much of the query's text they contain, then by match count as grep ranks them,
+            # then by score. The existing scores are reassigned in that order, so the scale that merges code with
+            # other kinds of results does not change.
+            order = sorted(range(len(keys)), key=lambda i: (-tier[i], -cnt[i], -total[i]))
+            total = np.empty_like(total)
+            total[order] = np.sort(S + S.std() * extra)[::-1]
         return {best[f]: float(total[i]) for i, f in enumerate(keys)}
 
     # ---- folders, repos, people ----
