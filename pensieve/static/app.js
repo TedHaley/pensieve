@@ -390,8 +390,8 @@ function renderLabels() {
         if (idx.length < 3) return;
         const t = dataTopics().get(id), name = t?.name || `Topic ${id + 1}`;
         items.push({n: idx.length, text: w, pos: dataAnchor(idx), color: slotColor(D.authorSlot.get(w)),
-          title: `${w}: ${plural(idx.length, 'item')} in “${name}”, the topic here they worked on most\nclick to zoom in`,
-          onClick: () => selectLabel('topic', id)});
+          title: `${w}: ${plural(idx.length, 'item')} in “${name}”, the topic here they worked on most\nclick for their card`,
+          onClick: () => openPersonPanel(w)});
       });
       return gl.setLabels(items);
     }
