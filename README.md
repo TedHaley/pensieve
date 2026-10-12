@@ -139,6 +139,7 @@ pensieve integrate claude --remove    # removes exactly what was added
 - **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.
 - **`claude-hook`** (recommended): a `PostToolUse` hook in `~/.claude/settings.json`. After each Edit or Write, it sends the changed path to Pensieve. The agent's next search then always finds the new code, even when the file system event comes late. The hook adds about 50 ms to each edit.
 - **`claude-repo-check`** (recommended): a `SessionStart` hook. When a session starts in a repo that Pensieve does not index, Claude asks you once whether to index it. If you say yes, Claude runs `pensieve repo index`. If you say no, Claude runs `pensieve repo skip` and uses grep in that repo. Pensieve keeps the answer as the repo's switch in Settings → Sources, so Claude does not ask again. To change it, use that switch or `pensieve repo index`.
+- **`claude-prompt-search`**: a `UserPromptSubmit` hook. When you send a prompt in a repo that Pensieve indexes, Pensieve searches the prompt and adds its 5 best code matches to it, as the `search` tool shows them. Claude then often starts on the right file without a search of its own. The hook adds about 300 ms and 400 tokens to each prompt. Slash commands, prompts of 1 or 2 words and folders that Pensieve does not index get nothing.
 
 ### Does it help? The benchmark
 

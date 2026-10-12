@@ -153,6 +153,33 @@ def read(id: str, max_chars: int = 12000) -> dict:
     return actions.read(id, max_chars)
 
 
+def prompt_context(prompt: str, cwd: str) -> str:
+    """For Claude Code's UserPromptSubmit hook: Pensieve's best code matches for a prompt sent in an indexed repo, as
+    the search tool shows them, or "" (a slash command, a few words, or a folder Pensieve doesn't index)."""
+    import re
+    text = (prompt or "").strip()
+    if not cwd or text.startswith("/") or len(text.split()) < 3:
+        return ""
+    sc = scopes.resolve("auto", cwd, _c()["repos"])
+    if sc is None or getattr(sc, "unindexed", False) or not sc.repos:
+        return ""
+    q = re.sub(r"\s+", " ", text.replace('"', " "))[:400]  # a prompt's quotes aren't search syntax
+    t, tokens = time.perf_counter(), (scopes.current.set(sc), agent_cwd.set(cwd))
+    try:
+        res = [x for x in _c()["searcher"].find(q, 5, kinds=["code"], scope=sc)["results"] if x.get("kind") == "code"]
+        found = _lines(res)[:2500]
+    finally:
+        scopes.current.reset(tokens[0])
+        agent_cwd.reset(tokens[1])
+    usage.record(ts=time.time(), source="hook", tool="prompt_search", client="claude-code", cwd=cwd, scope=sc.name,
+                 args={"query": q[:200]}, ms=round((time.perf_counter() - t) * 1000, 2), ok=True, n_results=len(res),
+                 results=[[x.get("id"), x.get("path")] for x in res], out_chars=len(found))
+    if not found:
+        return ""
+    return (f"Pensieve searched this prompt in {sc.name} before you started (path:line, enclosing definition ▸ "
+            f"matched line). If a hit answers it, use it; search or read only for what is missing.\n{found}")
+
+
 @tool()
 def similar(id: str, limit: int = 8) -> str:
     """Items most similar in meaning to a search result id (e.g. other code that does the same thing)."""

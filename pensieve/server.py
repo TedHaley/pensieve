@@ -887,6 +887,19 @@ async def hook_repo_check(request: Request):
     return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": note}} if note else {}
 
 
+@app.post("/api/prompt-context")
+async def hook_prompt_context(request: Request):
+    """Claude Code's UserPromptSubmit hook posts its JSON here; the answer adds Pensieve's matches for the prompt."""
+    try:
+        body = await request.json()
+        text = await asyncio.to_thread(mcp_server.prompt_context, body.get("prompt") or "", body.get("cwd") or "")
+    except Exception:  # Claude Code adds whatever the hook prints to the prompt: never an error page
+        import traceback
+        traceback.print_exc()
+        return {}
+    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}} if text else {}
+
+
 class RepoChoiceReq(BaseModel):
     cwd: str
     index: bool

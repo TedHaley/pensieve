@@ -215,6 +215,13 @@ def styled(tasks):
 
 
 def arm_config(arm, root):
+    """A base arm (grep, pensieve, nudged, guided, only), optionally with "+inject": the claude-prompt-search hook's
+    matches added to the prompt."""
+    arm, *extra = arm.split("+")
+    if extra:
+        if extra != ["inject"]:
+            raise SystemExit(f"unknown addition {'+'.join(extra)}: only +inject")
+        return dict(arm_config(arm, root), inject=True)
     mcp = {"pensieve": {"type": "http", "url": f"{API}/mcp?" + urllib.parse.urlencode(dict(scope="auto", cwd=root))}}
     if arm == "grep":
         return dict(tools="Read,Grep,Glob", allowed="Read,Grep,Glob", mcp=None)
@@ -226,6 +233,16 @@ def arm_config(arm, root):
     if arm == "only":
         return dict(tools="Read", allowed=",".join(["Read", *PENSIEVE_TOOLS]), mcp=mcp)
     raise SystemExit(f"unknown arm {arm}")
+
+
+def injected(prompt, root):
+    """The prompt as Claude sees it with the claude-prompt-search hook: the hook's answer from /api/prompt-context
+    (the same endpoint and text) appended, as Claude Code adds a UserPromptSubmit hook's additionalContext."""
+    body = json.dumps({"prompt": prompt, "cwd": root, "hook_event_name": "UserPromptSubmit"}).encode()
+    r = urllib.request.Request(f"{API}/api/prompt-context", body, {"content-type": "application/json"})
+    with urllib.request.urlopen(r, timeout=60) as resp:
+        ctx = (json.load(resp).get("hookSpecificOutput") or {}).get("additionalContext")
+    return f"{prompt}\n\n{ctx}" if ctx else prompt
 
 
 def grade(answer_text, t, root):
@@ -260,8 +277,10 @@ def run(a):
     def one(job):
         t, arm, rep = job
         c = arm_config(arm, root)
-        r = claude(t.get("prompt") or PROMPT.format(desc=t["desc"]), root, a.model, c["tools"], c["allowed"], c["mcp"],
-                   a.budget, system=c.get("system"))
+        prompt = t.get("prompt") or PROMPT.format(desc=t["desc"])
+        if c.get("inject"):
+            prompt = injected(prompt, root)
+        r = claude(prompt, root, a.model, c["tools"], c["allowed"], c["mcp"], a.budget, system=c.get("system"))
         got, ok = grade(r["result"], t, root)
         rec = dict(task=t["id"], arm=arm, rep=rep, ok=ok, got=got, style=t.get("style", "desc"),
                    **{k: r[k] for k in ("cost", "turns", "secs", "tokens", "calls", "error")})
@@ -279,7 +298,8 @@ def report(a):
     root = str(Path(a.repo).expanduser().resolve())
     name = f"runs-{a.model}.jsonl" if a.tasks == "tasks.jsonl" else f"runs-{a.model}-{a.label}.jsonl"
     runs = [json.loads(l) for l in (out_dir(root) / name).read_text().splitlines()]
-    arms = sorted({r["arm"] for r in runs}, key=["grep", "pensieve", "nudged", "guided", "only"].index)
+    base = ["grep", "pensieve", "nudged", "guided", "only"]
+    arms = sorted({r["arm"] for r in runs}, key=lambda x: (base.index(x.split("+")[0]), x))
     med = lambda xs: sorted(xs)[len(xs) // 2] if xs else 0
     print(f"{Path(root).name}, {a.model}, {len({r['task'] for r in runs})} tasks\n")
     print(f"{'arm':<9}{'found':>8}{'cost/task':>11}{'med tokens':>12}{'med calls':>11}{'med secs':>10}  tools used")
