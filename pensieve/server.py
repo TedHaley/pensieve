@@ -431,9 +431,9 @@ def _status():
 
 
 @app.get("/api/usage")
-def get_usage(days: float = 7):
-    """MCP tool calls over the last `days` (the log is ~/.pensieve/usage.db)."""
-    return usage.summary(days)
+def get_usage(days: float = 7, recent: int = 0):
+    """MCP tool calls over the last `days` (the log is ~/.pensieve/usage.db); `recent`: also the latest calls."""
+    return usage.summary(days, min(recent, 200))
 
 
 @app.get("/api/syncing")
