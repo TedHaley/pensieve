@@ -112,7 +112,7 @@ class Scene3D {
           float k=aState<.25?.55:aState<.75?.8:aState>1.5?1.75:1.;
           gl_PointSize=max(2.,aSize*k*uPR*uScale/-mv.z);gl_Position=projectionMatrix*mv;}`,
       fragmentShader: `uniform vec3 uRing;varying vec3 vC;varying float vS;
-        void main(){float r=length(gl_PointCoord-.5);if(r>.5)discard;
+        void main(){float r=length(gl_PointCoord-.5);if(r>.5||vS<-.5)discard;
           float a=vS<.25?.07:vS<.75?.2:vS>1.5?1.:.9;
           vec3 c=mix(vC,uRing,smoothstep(.34,.44,r)*.9);
           gl_FragColor=vec4(c,a*(1.-smoothstep(.45,.5,r)));}`,
@@ -323,7 +323,8 @@ function refreshStates() {
   const a = gl.attr('aState'); if (!a) return;
   if (S.view === 'data') {
     const {highlight: hl, search: sr} = S.data;
-    mapPts.forEach((p, i) => { let v = dataPass(p) ? 1 : 0; if (v && (hl || sr)) v = (!hl || hl.has(p.id)) && (!sr || sr.has(p.id)) ? 2 : 0.5; a.array[i] = v; });
+    // -1: filtered out (another folder, type or author), not drawn at all
+    mapPts.forEach((p, i) => { let v = dataPass(p) ? 1 : -1; if (v > 0 && (hl || sr)) v = (!hl || hl.has(p.id)) && (!sr || sr.has(p.id)) ? 2 : 0.5; a.array[i] = v; });
     a.needsUpdate = true;
     if (dataContextSlots()) recolor(); else renderLegend();  // colors and legend follow what's in view
     return;
