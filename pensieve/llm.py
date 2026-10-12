@@ -2,8 +2,8 @@
 
     builtin  Qwen 3.5 9B run by Pensieve itself with MLX (Apple Silicon; ~5 GB download on first use)
     server   any OpenAI-compatible server, local (LM Studio, Ollama…) or hosted, at llm_url / llm_model (+ llm_key)
-    claude   the Claude Code CLI (`claude -p`): uses your Claude account; text leaves this Mac
-    codex    the Codex CLI (`codex exec`): uses your OpenAI account; text leaves this Mac
+    cli      an AI command-line tool (cli_command, e.g. `claude -p …`, `codex exec …`, `ollama run …`), run once per
+             job; text leaves this Mac unless the tool runs locally (cli_privacy)
     none     no AI: maps, search, activity, keyword topics and team commits still work
     auto     not chosen yet: use `server` if one is running, otherwise nothing (and the UI asks)
 """
@@ -121,12 +121,12 @@ def options():
                          "another computer, or a cloud provider. "
                          + ("Nothing leaves this Mac." if is_local(s["llm_url"]) else "Session and code text is sent to that server."),
              note=f"Connected to {s['llm_url']}." if up else f"Can't reach {s['llm_url']} right now."),
-        dict(id="claude", label="Claude Code", privacy="cloud", available=bool(shutil.which("claude") or _find("claude")),
-             description="Uses your Claude Code login (claude -p). Session and code text is sent to Anthropic.",
-             note="Installed." if (shutil.which("claude") or _find("claude")) else "Claude Code isn't installed."),
-        dict(id="codex", label="Codex", privacy="cloud", available=bool(shutil.which("codex") or _find("codex")),
-             description="Uses your Codex login (codex exec). Session and code text is sent to OpenAI.",
-             note="Installed." if (shutil.which("codex") or _find("codex")) else "Codex isn't installed."),
+        dict(id="cli", label="Command line", privacy=s["cli_privacy"], available=True, command=s["cli_command"],
+             templates=[dict(t, installed=bool(_exe(t["command"]))) for t in settings.CLI_TEMPLATES],
+             description="An AI command-line tool you already use, such as Claude Code, Codex, Qwen Code or Ollama. "
+                         "Pensieve runs the command once per job, in an empty folder, and reads its answer.",
+             note=(f"Runs {_exe(s['cli_command'])}." if _exe(s["cli_command"]) else
+                   f"Can't find {_argv(s['cli_command'])[0]}.") if s["cli_command"].strip() else "Pick a template or type a command."),
         dict(id="none", label="Off", privacy="local", available=True,
              description="No AI. Maps, search, activity, keyword topics and team commits still work.", note=""),
     ]
@@ -162,8 +162,8 @@ def status() -> dict:
             st, detail = ("ready", "Loads when there's work, and unloads after 10 minutes idle.") if _have_weights() \
                 else ("downloading", "Waiting to download…")
     else:
-        exe = shutil.which(p) or _find(p)
-        st, detail = ("ready", exe) if exe else ("error", f"{p} isn't installed")
+        cmd = settings.get("cli_command")
+        st, detail = ("ready", cmd) if _exe(cmd) else ("error", f"Can't find {_argv(cmd)[0]}" if cmd.strip() else "No command set")
     why = paused() if p != "none" else None
     return dict(setting=a, provider=p, configured=a != "auto", status=st, detail=detail, options=options(),
                 enabled=p != "none", paused=why, progress=_builtin["progress"] if p == "builtin" else None,
@@ -299,35 +299,50 @@ def _openai(url, model, msgs, max_tokens, temperature, schema, structured=True, 
     return _strip_think(r.json()["choices"][0]["message"].get("content") or "")
 
 
-def _cli(argv_fn, prompt, system, timeout=600):
-    """Run an agent CLI once, non-interactively, with no tools, and return its final text."""
+def _argv(command):
+    import shlex
+    try:
+        return shlex.split(command) or [""]
+    except ValueError:
+        return [command]
+
+
+def _exe(command):
+    """The command's program on this Mac (the app's PATH misses ~/.local/bin and the like), or None."""
+    name = _argv(command)[0]
+    return (shutil.which(name) or _find(name)) if name else None
+
+
+def run_command(command, prompt, system="", timeout=600):
+    """Run an AI command-line tool once and return its answer: the prompt goes on stdin, or in place of {prompt};
+    {out} is a file it can write the answer to instead of stdout."""
     full = (system + "\n\n" if system else "") + prompt
+    exe = _exe(command)
+    if not exe:
+        raise Offline(f"Can't find {_argv(command)[0]}" if command.strip() else "No command set")
     # an empty working dir: the agent has nothing to read or edit; the prefix lets the indexer skip the session the
     # CLI records for this call (it isn't the user's work)
     with tempfile.TemporaryDirectory(prefix=OWN_PREFIX) as tmp:
-        argv, out_file = argv_fn(full, tmp)
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=tmp, stdin=subprocess.DEVNULL)
+        out_file = os.path.join(tmp, "answer.txt")
+        argv = [exe] + [full if a == "{prompt}" else out_file if a == "{out}" else a for a in _argv(command)[1:]]
+        stdin = None if "{prompt}" in _argv(command) else full
+        r = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout, cwd=tmp,
+                           stdin=subprocess.DEVNULL if stdin is None else None)
         if r.returncode != 0:
-            raise RuntimeError(f"{argv[0]} failed: {(r.stderr or r.stdout).strip()[:300]}")
-        if out_file and os.path.exists(out_file):
+            raise RuntimeError(f"{_argv(command)[0]} failed: {(r.stderr or r.stdout).strip()[:300]}")
+        if "{out}" in _argv(command) and os.path.exists(out_file):
             return open(out_file).read().strip()
         return r.stdout.strip()
 
 
-def _claude_argv(text, tmp):
-    exe = shutil.which("claude") or _find("claude")
-    if not exe:
-        raise Offline("Claude Code isn't installed")
-    return [exe, "-p", text, "--model", settings.get("agent_model") or "haiku", "--output-format", "text",
-            "--disallowedTools", "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit", "--max-turns", "1"], None
-
-
-def _codex_argv(text, tmp):
-    exe = shutil.which("codex") or _find("codex")
-    if not exe:
-        raise Offline("Codex isn't installed")
-    out = os.path.join(tmp, "last.txt")
-    return [exe, "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--output-last-message", out, text], out
+def test_command(command):
+    """Send a one-word prompt through `command`: {ok, reply, ms, error}."""
+    t = time.time()
+    try:
+        reply = run_command(command, "Reply with the single word: ready", timeout=120)
+        return dict(ok=bool(reply), reply=reply[:300], ms=round((time.time() - t) * 1000), error=None if reply else "No answer")
+    except (Offline, RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+        return dict(ok=False, reply="", ms=round((time.time() - t) * 1000), error=str(e)[:300] or type(e).__name__)
 
 
 def complete(prompt: str, system: str = "", max_tokens: int = 200, temperature: float = 0.2, schema: dict | None = None):
@@ -336,8 +351,8 @@ def complete(prompt: str, system: str = "", max_tokens: int = 200, temperature: 
     p = provider()
     if p == "none":
         raise Offline("AI is off")
-    if p in ("claude", "codex"):
-        text = _cli(_claude_argv if p == "claude" else _codex_argv, prompt + (_schema_hint(schema) if schema else ""), system)
+    if p == "cli":
+        text = run_command(settings.get("cli_command"), prompt + (_schema_hint(schema) if schema else ""), system)
         return _json_from(text) if schema else _strip_think(text)
     msgs = ([{"role": "system", "content": system}] if system else [])
     if p == "builtin":

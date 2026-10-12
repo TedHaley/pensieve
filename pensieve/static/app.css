@@ -910,10 +910,11 @@ body:has(.modal:not([hidden])) #gl .labels,body:has(.menu:not([hidden])) #gl .la
 body[data-view=insights] .mapbtn,body[data-view=settings] .mapbtn{display:none}
 .iconbtn.mapbtn.on{color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 /* Settings → AI: the local-or-hosted server form */
-.ai-srv{cursor:default;text-align:left;grid-column:1/-1}
-.ai-srv .ai-f{display:block;margin-top:10px}
-.ai-srv .ai-f>span{display:block;font-size:12px;font-weight:500;color:var(--text-2);margin-bottom:4px}
-.ai-srv .ai-f .set-in{width:100%;box-sizing:border-box}
+.ai-srv,.ai-cli{cursor:default;text-align:left;grid-column:1/-1}
+:is(.ai-srv,.ai-cli) .ai-f{display:block;margin-top:10px}
+:is(.ai-srv,.ai-cli) .ai-f>span{display:block;font-size:12px;font-weight:500;color:var(--text-2);margin-bottom:4px}
+:is(.ai-srv,.ai-cli) .ai-f .set-in{width:100%;box-sizing:border-box}
+.ai-cli .set-in.mono{font-family:var(--mono);font-size:12px}
 .ai-srv-st{font-size:12px;margin-top:10px;color:var(--text-3)}
 .ai-srv-st.ok{color:var(--good)}
 .ai-srv-st.bad{color:var(--critical)}

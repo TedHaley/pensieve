@@ -2611,7 +2611,7 @@ function aiOffPage() {
     ${!prep ? `<div class="ai-alt"><div class="h4" style="margin-top:4px">Or use</div>${others.map(o => `<div class="ai-alt-row ${o.available ? '' : 'na'}">
         <div class="tx"><b>${esc(o.label)}</b> <span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span>
           <div class="muted">${esc(o.privacy === 'cloud' ? o.description.replace(/^.*?\)\.\s*/, '') : o.description)}${o.note ? ' · ' + esc(o.note) : ''}</div></div>
-        ${o.id === 'server' ? '<a class="btn" href="#ai">Set up</a>' : `<button class="btn" data-ai="${esc(o.id)}" ${o.available ? '' : 'disabled'}>${aiState.busy === o.id ? 'Saving…' : 'Use'}</button>`}</div>`).join('')}</div>` : ''}
+        ${['server', 'cli'].includes(o.id) ? '<a class="btn" href="#ai">Set up</a>' : `<button class="btn" data-ai="${esc(o.id)}" ${o.available ? '' : 'disabled'}>${aiState.busy === o.id ? 'Saving…' : 'Use'}</button>`}</div>`).join('')}</div>` : ''}
     ${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
   </div>`;
 }
@@ -2631,12 +2631,13 @@ function aiSettingsHtml() {
       <div class="ai-opts" role="radiogroup" aria-label="AI engine">${d.options.filter(o => o.id !== 'none').map(o => {
         const on = d.setting === o.id || (d.setting === 'auto' && d.provider === o.id);
         if (o.id === 'server') return aiServerCard(o, on, d.setting === 'auto');
+        if (o.id === 'cli') return aiCliCard(o, on);
         return `<button class="ai-opt ${on ? 'on' : ''}" data-ai="${esc(o.id)}" role="radio" aria-checked="${on}" ${o.available ? '' : 'disabled'}>
           <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
           <p>${esc(o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}
           ${on ? `<span class="ai-check">✓ ${d.setting === 'auto' ? 'In use (picked automatically)' : 'Selected'}</span>` : ''}</button>`;
       }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
-      <div class="cmd-l" style="margin-top:14px">Models</div>${setRow('builtin_model')}${setRow('agent_model')}</div>
+      <div class="cmd-l" style="margin-top:14px">Models</div>${setRow('builtin_model')}</div>
     <div class="set-card ai-set"><div class="set-row" style="border-top:0"><div><div class="k">Keep working on battery power</div><div class="d">Off by default: background insight work pauses until your Mac is plugged in.</div></div>
       <div><label class="tog"><input type="checkbox" data-aibat ${bat ? 'checked' : ''}></label></div></div>
     <div class="set-row"><div><div class="k">Refresh insights automatically</div><div class="d">When the sessions or topics behind them have changed a lot, insights are rewritten in the background, at most every 6 hours.</div></div>
@@ -2727,9 +2728,64 @@ function bindAIServer(root) {
   };
   $('[data-aidel]', card)?.addEventListener('click', () => send('DELETE', `/api/ai/connections?name=${enc(f.sel)}`, null, `Deleted “${f.sel}”`));
 }
+// The command-line option: an AI CLI the user already has, from a template or typed, tested before it is saved.
+const aiCliTemplate = (o, cmd) => (o.templates || []).find(t => t.command === cmd.trim());
+function aiCliCard(o, on) {
+  const f = aiState.cli || (aiState.cli = {command: o.command || '', privacy: o.privacy || 'cloud', test: null});
+  const t = aiCliTemplate(o, f.command), st = f.test === 'busy' ? ['', 'Sending a test prompt…']
+    : f.test ? (f.test.ok ? ['ok', `Answered “${f.test.reply.slice(0, 60)}” in ${(f.test.ms / 1000).toFixed(1)} s`] : ['bad', f.test.error])
+    : ['', f.command.trim() ? (f.command.trim() === (o.command || '').trim() ? o.note : 'Not tested yet') : 'Pick a template or type a command'];
+  return `<div class="ai-opt ai-cli ${on ? 'on' : ''}" role="radio" aria-checked="${on}">
+    <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${f.privacy}" data-aiclipriv>${f.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
+    <p>${esc(o.description)}</p>
+    <label class="ai-f"><span>Template</span><select class="set-in" data-aiclitpl>${(o.templates || []).map(x =>
+      `<option value="${esc(x.id)}" ${t?.id === x.id ? 'selected' : ''}>${esc(x.label)}${x.installed ? '' : ' (not installed)'}</option>`).join('')}
+      <option value="" ${t ? '' : 'selected'}>Custom</option></select></label>
+    <label class="ai-f"><span>Command <span class="muted">· gets the prompt on stdin, or in place of {prompt}; {out} is a file for the answer</span></span>
+      <input class="set-in mono" data-aiclicmd value="${esc(f.command)}" placeholder="e.g. claude -p --model haiku" spellcheck="false" autocomplete="off"></label>
+    <label class="ai-f"><span>Where the text goes</span><select class="set-in" data-aicliprivsel>
+      <option value="cloud" ${f.privacy === 'cloud' ? 'selected' : ''}>Off this Mac (a cloud model)</option>
+      <option value="local" ${f.privacy === 'local' ? 'selected' : ''}>Stays on this Mac (a local model)</option></select></label>
+    <p class="note">The command must answer without using tools. Pensieve runs it in an empty folder.</p>
+    <div class="ai-srv-st ${st[0]}" data-aiclist>${esc(st[1] || '')}</div>
+    <div class="ai-srv-btns"><button class="btn" data-aiclitest>Test</button><button class="btn primary" data-aiclisave>${aiState.busy === 'cli' ? 'Saving…' : on ? 'Save' : 'Use this command'}</button></div>
+    ${on ? '<span class="ai-check">✓ Selected</span>' : ''}</div>`;
+}
+function bindAICli(root) {
+  const card = $('.ai-cli', root); if (!card) return;
+  const o = aiState.data.options.find(x => x.id === 'cli'), f = aiState.cli;
+  $('[data-aiclitpl]', card).onchange = e => {
+    const x = (o.templates || []).find(t => t.id === e.target.value);
+    if (x) Object.assign(f, {command: x.command, privacy: x.privacy, test: null});
+    refreshAIViews();
+  };
+  $('[data-aiclicmd]', card).oninput = e => {  // update in place: re-rendering would lose the cursor
+    f.command = e.target.value; f.test = null;
+    const x = aiCliTemplate(o, f.command); $('[data-aiclitpl]', card).value = x ? x.id : '';
+    $('[data-aiclist]', card).className = 'ai-srv-st'; $('[data-aiclist]', card).textContent = f.command.trim() ? 'Not tested yet' : 'Pick a template or type a command';
+  };
+  $('[data-aicliprivsel]', card).onchange = e => {
+    f.privacy = e.target.value; const pv = $('[data-aiclipriv]', card);
+    pv.className = 'priv ' + f.privacy; pv.textContent = f.privacy === 'cloud' ? 'Cloud' : 'Local';
+  };
+  $('[data-aiclitest]', card).onclick = async () => {
+    if (!f.command.trim()) return;
+    f.test = 'busy'; refreshAIViews();
+    f.test = await fetch('/api/ai/cli/test', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({command: f.command})})
+      .then(r => r.json()).catch(e => ({ok: false, error: e.message}));
+    refreshAIViews();
+  };
+  $('[data-aiclisave]', card).onclick = () => {
+    if (!f.command.trim()) { aiState.err = 'Pick a template or type a command.'; refreshAIViews(); return; }
+    aiState.busy = 'cli';
+    setAI({ai: 'cli', cli_command: f.command.trim(), cli_privacy: f.privacy}, 'AI engine saved')
+      .then(() => { aiState.cli = null; refreshAIViews(); });  // the form again from what was saved
+  };
+}
 function bindAISettings(root) {
   bindAIButtons(root);
   bindAIServer(root);
+  bindAICli(root);
   const bat = $('[data-aibat]', root);
   const auto = $('[data-aiauto]', root);
   if (auto) auto.onchange = async () => { await setAI({insights_auto: auto.checked}, auto.checked ? 'Insights refresh when they’re out of date' : 'Insights refresh only when you ask'); await loadSettings(true); renderSettings(); };

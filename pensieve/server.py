@@ -299,8 +299,8 @@ async def enricher():
                 await asyncio.sleep(10)
                 continue
             sess, topics, chunks = summarize.pending(store)
-            if llm.provider() in ("claude", "codex"):
-                chunks = []  # one CLI call per conversation chunk would be thousands of cloud calls
+            if llm.provider() == "cli":
+                chunks = []  # one CLI call per conversation chunk would be thousands of calls
             data_topics = [t for t in await _run(datamap.pending_topics) if t["sig"] not in failed_topics]
             if data_topics:  # a handful of quick calls; first, so a session that keeps changing can't hold them up
                 res = await asyncio.gather(*[loop.run_in_executor(pool, summarize.name_data_topic, datamap, t) for t in data_topics[:3]],
@@ -831,6 +831,16 @@ def open_item(req: OpenReq):
 @app.get("/api/ai")
 async def ai_status():
     return await asyncio.get_running_loop().run_in_executor(None, llm.status)
+
+
+class CliTestReq(BaseModel):
+    command: str
+
+
+@app.post("/api/ai/cli/test")
+async def ai_cli_test(req: CliTestReq):
+    """Send a one-word prompt through a command before it is saved as the engine."""
+    return await asyncio.to_thread(llm.test_command, req.command)
 
 
 def _repo_check(cwd: str) -> dict:

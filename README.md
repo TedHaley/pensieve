@@ -216,7 +216,8 @@ Change them in the Map window (Settings), from an agent connected with `--all-to
 | `exclude_files` | filename globs never indexed (secrets) |
 | `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the panel's scope |
 | `appearance` | `system` (or `light`, `dark`) |
-| `ai`, `builtin_model`, `agent_model` | `auto` (not chosen yet), `mlx-community/Qwen3.5-9B-MLX-4bit`, `haiku` |
+| `ai`, `builtin_model` | `auto` (not chosen yet), `mlx-community/Qwen3.5-9B-MLX-4bit` |
+| `cli_command`, `cli_privacy` | the command for `ai: cli`, and `cloud` or `local` |
 | `hotkey` | `ctrl+shift` (or a combo like `cmd+shift+space`) |
 | `editor` | `default`, `vscode`, `cursor` or `zed` |
 | `llm_url`, `llm_model` | `http://localhost:1234/v1`, `qwen/qwen3.5-9b` |
@@ -229,8 +230,7 @@ Search, maps, activity, keyword topics, your footprint in each repo and teammate
 |---|---|---|
 | **Built-in: Qwen 3.5 9B** (`builtin`) | This Mac (MLX) | Apple Silicon, 16 GB memory. Downloads ~5 GB on first use, or reuses LM Studio's MLX copy if you have one. |
 | **LM Studio / local server** (`server`) | This Mac | Any OpenAI-compatible server at `llm_url` running `llm_model`. |
-| **Claude Code** (`claude`) | Anthropic's cloud | Uses your `claude` login; text is sent to Anthropic. No per-chunk summaries, to keep calls low. |
-| **Codex** (`codex`) | OpenAI's cloud | Uses your `codex` login; text is sent to OpenAI. |
+| **Command line** (`cli`) | Where the tool runs | An AI command-line tool you already use, set in `cli_command`. Templates: Claude Code, Codex, Qwen Code, Gemini CLI and Ollama. Pensieve runs the command once per job, in an empty folder. The prompt goes on stdin, or in place of `{prompt}`; `{out}` is a file for the answer. The command must answer without using tools. No per-chunk summaries, to keep calls low. |
 | **Off** (`none`) | | Everything except the AI-written parts. |
 
 ## Command line
