@@ -429,10 +429,15 @@ def main():
     ap.add_argument("--variant", default="stored", help="chunk embeddings: " + ", ".join(VARIANTS))
     ap.add_argument("--qmodel", default="", help="query embedding model, when the variant uses another model")
     ap.add_argument("--tok", default="camel", help="BM25 tokens: camel | plain (SQLite unicode61)")
+    ap.add_argument("--tasks", help="a query set instead (bench/out/validation.jsonl): every query, in every split")
+    ap.add_argument("--ranks", help="folder to write <instruct>-<method>.json: each query's rank, in --tasks order")
     a = ap.parse_args()
     global SPLIT
     SPLIT = a.tok
-    if a.split == "sessions":  # real first prompts; any file the session edited counts
+    if a.tasks:
+        tasks = [dict(id=t.get("task", str(i)), repo=t["repo"], files=t["answers"], _i=i, **{t["style"]: t["query"]})
+                 for i, t in enumerate(map(json.loads, open(a.tasks)))]
+    elif a.split == "sessions":  # real first prompts; any file the session edited counts
         tasks = [json.loads(l) for l in (OUT / "sessions.jsonl").read_text().splitlines()]
         a.style = "query"
     else:
@@ -442,6 +447,8 @@ def main():
         tasks = [t for t in tasks if Path(t["repo"]).name in a.repos.split(",")]
     want = set(a.methods.split(",")) if a.methods else None
     res = defaultdict(list)  # (instruct, style, method) -> ranks
+    n_all = 1 + max((t.get("_i", 0) for t in tasks), default=0)
+    per_query = defaultdict(lambda: [None] * n_all)  # (instruct, method) -> rank of each task (--ranks)
     by_repo = defaultdict(list)
     for t in tasks:
         by_repo[t["repo"]].append(t)
@@ -479,8 +486,14 @@ def main():
                             continue
                         r = min(file_rank(sc, x) for x in targets)
                         res[(ins, style, m)].append(r)
+                        if "_i" in t:
+                            per_query[(ins, m)][t["_i"]] = r
                         if a.show:
                             print(f"  {t['id']} {ins} {style} {m}: {r}")
+    if a.ranks:
+        Path(a.ranks).mkdir(parents=True, exist_ok=True)
+        for (ins, m), rs in per_query.items():
+            (Path(a.ranks) / f"{ins}-{m}.json").write_text(json.dumps(rs))
     print(f"\n{len(tasks)} tasks ({a.split})\n{'instruct':<9}{'style':<7}{'method':<12}{'R@1':>6}{'R@5':>6}{'R@10':>6}{'MRR':>7}{'n':>5}")
     for (ins, style, m), rs in sorted(res.items()):
         rs = np.array(rs)
