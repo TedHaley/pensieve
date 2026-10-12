@@ -126,12 +126,18 @@ BULK_SLICE = 8  # indexing texts per model call: 16 runs ~10% faster, but a sear
 
 
 def embed(texts, query=False) -> np.ndarray:
-    """`query`: True for the model's general search instruction, or an instruction string (e.g. CODE_QUERY).
+    """`query`: True for the model's general search instruction, an instruction string (e.g. CODE_QUERY), or a list
+    with one of those per text, so a search gets its differently-instructed vectors from one model call.
     Indexing embeds its texts BULK_SLICE at a time and steps aside between slices while a search waits, so a search
     during indexing waits for one slice (a quarter second at most), not for a whole batch of files."""
+    searching = bool(query)
+    if isinstance(query, list):
+        general = getattr(embedder(), "prompts", {}).get("query", "")
+        texts = [(p if isinstance(p, str) else general if p else "") + t for p, t in zip(query, texts)]
+        query = ""
     kw = dict(batch_size=16, normalize_embeddings=True, show_progress_bar=False,
               **({"prompt": query} if isinstance(query, str) else {"prompt_name": "query" if query else None}))
-    if query:
+    if searching:
         queries_waiting.add(1)
         try:
             with _embed_lock:

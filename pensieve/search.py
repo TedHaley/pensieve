@@ -222,7 +222,12 @@ class Searcher:
         by = f.get("by")
         if by:  # what that person wrote: code by blame, documents by author, sessions by agent
             kinds = [k for k in kinds if k != "session" or any(by in a for a in ("claude", "codex", "qwen"))]
-        qv = embed([pq["semantic"]], query=True)[0] if pq["semantic"] else None
+        qv = code_qv = None  # the query under the general instruction, and under CODE_QUERY (code, folders, people)
+        if pq["semantic"]:
+            if "code" in kinds or kf in (None, "folder", "repo", "person"):
+                qv, code_qv = embed([pq["semantic"]] * 2, query=[True, CODE_QUERY])
+            else:
+                qv = embed([pq["semantic"]], query=True)[0]
         lap("embed")
         code_ranked = {}  # (kind, chunk id) -> file-level score from _code
         hits = {}  # (kind, chunk id) -> score dict
@@ -260,7 +265,8 @@ class Searcher:
                     allow = self._by_allow(by, allow)
                     if not len(allow):
                         continue
-                for cid, sc in self._code(pq["semantic"], allow, roots=scope.repos if scope is not None else None).items():
+                for cid, sc in self._code(pq["semantic"], allow, roots=scope.repos if scope is not None else None,
+                                          qv=code_qv).items():
                     hits[(kind, cid)] = dict(exact=False, bm25=0, sem=sc)
                     code_ranked[(kind, cid)] = sc
             elif qv is not None:
@@ -301,9 +307,8 @@ class Searcher:
                 score = h["sem"] + (0.05 if any(w in r["title"].lower() for w in words) else 0)
             else:
                 score = h["bm25"]
-            snippet, hl = _snippet(r["text"], pq["exact"] or words)
             out.append(dict(id=r["id"], kind=key[0], title=r["title"], subtitle=r["subtitle"], path=r["path"],
-                            line=r["line"], snippet=snippet, highlights=hl, score=round(score, 4), ext=r["ext"],
+                            line=r["line"], row=key, score=round(score, 4), ext=r["ext"],
                             match="both" if pq["exact"] and qv is not None else "exact" if pq["exact"] else "semantic",
                             mtime=r.get("mtime"), key=r.get("key"), is_dir=r.get("is_dir", False), author=r.get("author")))
         out.sort(key=lambda x: (-x["score"], -_ts(x["mtime"])))
@@ -319,16 +324,19 @@ class Searcher:
         if not pq["semantic"] and kf == "repo":  # kind:repo alone: every repo, biggest first
             extra += self._folders("", scope, repos_only=True, limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
         if pq["semantic"] and kf in (None, "folder", "repo"):
-            extra += self._folders(pq["semantic"], scope, repos_only=kf == "repo", strong_only=kf is None,
+            extra += self._folders(pq["semantic"], scope, repos_only=kf == "repo", strong_only=kf is None, code_qv=code_qv,
                                    limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
         if pq["semantic"] and kf in (None, "person") and not by:
-            extra += self._people(pq["semantic"], scope, named_only=kf is None, limit=8)
+            extra += self._people(pq["semantic"], scope, named_only=kf is None, limit=8, code_qv=code_qv)
         if kf in ("folder", "repo", "person"):
             best = extra
         elif extra:  # a folder or person the query names outright goes first
             best = extra + [x for x in best if x["id"] not in {e["id"] for e in extra}]
         lap("folders+people")
         results, roots, paths = self._on_disk(best, rows, limit)
+        for x in results:  # snippets for what is shown only, not for every candidate
+            if "row" in x:
+                x["snippet"], x["highlights"] = _snippet(rows[x.pop("row")]["text"], pq["exact"] or words)
         lap("on-disk")
         if retry and (roots or paths):  # changed after it was indexed and the watcher hasn't caught it yet
             n = self._catch_up(roots, paths)
@@ -437,7 +445,7 @@ class Searcher:
                 res.append(f)
         return res, holes
 
-    def _code(self, q, allow, k=400, roots=None):
+    def _code(self, q, allow, k=400, roots=None, qv=None):
         """Code search tuned on bench/ (agent-style queries: descriptions, names, error strings, mixes of these).
 
         Candidates: the top-k chunks by meaning and by keywords (identifier-aware), plus chunks containing the
@@ -447,10 +455,11 @@ class Searcher:
             + 2 [contains a code name from the query] / log2(1 + files that do)
             + 2 [defines that name, and at most 3 files do]
         returned on the cosine scale (best chunk similarity + sigma * the rest) so it merges with other corpora.
-        Returns {chunk id: score} with the best chunk of each file."""
+        Returns {chunk id: score} with the best chunk of each file. `qv`: q already embedded under CODE_QUERY."""
         allowed = set(allow.tolist()) if allow is not None else None
         ok = (lambda c: c in allowed) if allowed is not None else (lambda c: True)
-        qv = embed([q], query=CODE_QUERY)[0]
+        if qv is None:
+            qv = embed([q], query=CODE_QUERY)[0]
         cand = set()
         idx = self.repos.index
         with self.lock:
@@ -681,7 +690,8 @@ class Searcher:
         below = len(segs) - 1 - last
         return cover, cover + (0.15 if below == 0 else 0) - 0.08 * below
 
-    def _folders(self, q, scope, repos_only=False, strong_only=False, limit=20, by=None, ext=None, within=None):
+    def _folders(self, q, scope, repos_only=False, strong_only=False, limit=20, by=None, ext=None, within=None,
+                 code_qv=None):
         """Folder (and repo) results: path words and what the folder holds both count. strong_only: only folders
         whose path names every word of the query (shown above files in a plain search)."""
         ix = self._folder_index()
@@ -728,7 +738,7 @@ class Searcher:
             if strong_only and (cover < 1 or path < 1):
                 continue
             if qv is None:  # embedded only once some folder is in the running
-                qv = embed([q], query=CODE_QUERY)[0]
+                qv = code_qv if code_qv is not None else embed([q], query=CODE_QUERY)[0]
             score = path + 0.8 * float(ix["C"][j] @ qv) + (0 if q.strip() else len(d["files"]) / 1e6)
             out.append((score, key, d, cover))
         out.sort(key=lambda x: -x[0])
@@ -760,7 +770,7 @@ class Searcher:
             return by in (r.get("author") or "").lower()
         return by in self._folder_index(wait=True)["authors"].get(("code", int(r["id"].split(":")[1])), "")
 
-    def _people(self, q, scope, named_only=False, limit=8):
+    def _people(self, q, scope, named_only=False, limit=8, code_qv=None):
         """People for a query: someone it names outright, or (kind:person) whoever wrote most of the matching code."""
         from pensieve import scopes
         names = self._folder_index()["people"]
@@ -777,7 +787,7 @@ class Searcher:
         if named_only:
             return []
         allow = scopes.allowlist(scope, "code", self.store, self.repos, self.repos.index) if scope else None
-        top = sorted(self._code(q, allow).items(), key=lambda x: -x[1])[:40]
+        top = sorted(self._code(q, allow, qv=code_qv).items(), key=lambda x: -x[1])[:40]
         for e in self.repos._experts_from([(cid, sc) for cid, sc in top])[:limit]:
             w = e["author"].split(" <")[0]
             out.append(dict(id=f"person:{w}", kind="person", title=w,
