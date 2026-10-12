@@ -64,24 +64,51 @@ async def _quiet(ev: asyncio.Event, quiet=0.15, cap=1.0):
             return
 
 
+MAP_IDLE_SECONDS = 45
+_last_indexed = [0.0]
+_layout_due = asyncio.Event()  # something was indexed since the last layout (set at start: lay out what's missing)
+_layout_due.set()
+
+
+def _indexed():
+    _last_indexed[0] = time.time()
+    _layout_due.set()
+
+
+async def map_worker():
+    """Map layouts (UMAP) of sessions, documents, code and the joint Data map, kept off the indexing path: they wait
+    until nothing has been indexed for MAP_IDLE_SECONDS. A first index of a big repo is searchable as it goes and is
+    laid out once, at the end, instead of being refit every time it grows by 15%."""
+    while True:
+        await _layout_due.wait()
+        while status.get("repo_busy") or time.time() - _last_indexed[0] < MAP_IDLE_SECONDS:
+            await asyncio.sleep(5)
+        _layout_due.clear()
+        status.update(layout=True)
+        broadcast({"type": "status", **status})
+        for corpus, event in ((store, "updated"), (files, "files"), (repos, "repos"), (datamap, "data")):
+            try:
+                if await _run(corpus.reproject):
+                    broadcast({"type": event})
+            except Exception:
+                import traceback
+                traceback.print_exc()
+        status.update(layout=False)
+        broadcast({"type": "status", **status})
+
+
 async def watcher():
     """Sessions and documents: re-indexed as soon as the file watcher reports a change (and polled every few
     seconds). Repos run in their own loop so a long first index of a big repo doesn't hold these up."""
     loop = asyncio.get_running_loop()
-    status.update(layout=True, message="building exact-match index")
+    status.update(message="building exact-match index")
     broadcast({"type": "status", **status})
     try:
         await _run(search_mod.ensure_fts, store.db, store.lock, store.meta)
-        status.update(message="laying out map")
-        broadcast({"type": "status", **status})
-        if await _run(store.reproject):
-            broadcast({"type": "updated"})
-        if await _run(repos.reproject):
-            broadcast({"type": "repos"})
     except Exception:
         import traceback
         traceback.print_exc()
-    status.update(layout=False)
+    asyncio.create_task(map_worker())
     # watching (and the repo sweep behind checkouts) reads the user's folders: not before they've chosen what to index,
     # so macOS asks for folder access at that step instead of at launch
     while not settings.get("setup_done"):
@@ -120,13 +147,8 @@ async def watcher():
             elif files.unsaved:  # a search indexed the change first
                 await _run(files.save)
                 broadcast({"type": "files"})
-            # self-heal: if an earlier layout attempt failed, points without positions would never appear
-            if await _run(store.needs_layout) and await _run(store.reproject):
-                broadcast({"type": "updated"})
-            if await _run(files.needs_layout) and await _run(files.reproject):
-                broadcast({"type": "files"})
-            if await _run(datamap.needs_layout) and await _run(datamap.reproject):  # the joint Data map
-                broadcast({"type": "data"})
+            if n or d["full_files"] or d["files"]:
+                _indexed()
             if status.get("repo_busy"):
                 status.update(message="indexing repos")
             else:
@@ -164,8 +186,7 @@ async def repo_watcher():
                 watch.configure(repos.checkouts())
                 if n:
                     broadcast({"type": "repos"})
-                if await _run(repos.needs_layout) and await _run(repos.reproject):
-                    broadcast({"type": "repos"})
+                    _indexed()
                 broadcast({"type": "status", **status})
         except Exception as e:
             import traceback
@@ -299,8 +320,8 @@ async def enricher():
                 await asyncio.sleep(10)
                 continue
             sess, topics, chunks = summarize.pending(store)
-            if llm.provider() in ("claude", "codex"):
-                chunks = []  # one CLI call per conversation chunk would be thousands of cloud calls
+            if llm.provider() == "cli":
+                chunks = []  # one CLI call per conversation chunk would be thousands of calls
             data_topics = [t for t in await _run(datamap.pending_topics) if t["sig"] not in failed_topics]
             if data_topics:  # a handful of quick calls; first, so a session that keeps changing can't hold them up
                 res = await asyncio.gather(*[loop.run_in_executor(pool, summarize.name_data_topic, datamap, t) for t in data_topics[:3]],
@@ -833,6 +854,16 @@ async def ai_status():
     return await asyncio.get_running_loop().run_in_executor(None, llm.status)
 
 
+class CliTestReq(BaseModel):
+    command: str
+
+
+@app.post("/api/ai/cli/test")
+async def ai_cli_test(req: CliTestReq):
+    """Send a one-word prompt through a command before it is saved as the engine."""
+    return await asyncio.to_thread(llm.test_command, req.command)
+
+
 def _repo_check(cwd: str) -> dict:
     with store.lock:
         indexed = dict(store.db.execute("SELECT root, remote FROM repos").fetchall())
@@ -854,6 +885,19 @@ async def hook_repo_check(request: Request):
         return {}
     note = integrations.repo_note(await asyncio.to_thread(_repo_check, cwd))
     return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": note}} if note else {}
+
+
+@app.post("/api/prompt-context")
+async def hook_prompt_context(request: Request):
+    """Claude Code's UserPromptSubmit hook posts its JSON here; the answer adds Pensieve's matches for the prompt."""
+    try:
+        body = await request.json()
+        text = await asyncio.to_thread(mcp_server.prompt_context, body.get("prompt") or "", body.get("cwd") or "")
+    except Exception:  # Claude Code adds whatever the hook prints to the prompt: never an error page
+        import traceback
+        traceback.print_exc()
+        return {}
+    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}} if text else {}
 
 
 class RepoChoiceReq(BaseModel):

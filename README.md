@@ -139,6 +139,7 @@ pensieve integrate claude --remove    # removes exactly what was added
 - **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.
 - **`claude-hook`** (recommended): a `PostToolUse` hook in `~/.claude/settings.json`. After each Edit or Write, it sends the changed path to Pensieve. The agent's next search then always finds the new code, even when the file system event comes late. The hook adds about 50 ms to each edit.
 - **`claude-repo-check`** (recommended): a `SessionStart` hook. When a session starts in a repo that Pensieve does not index, Claude asks you once whether to index it. If you say yes, Claude runs `pensieve repo index`. If you say no, Claude runs `pensieve repo skip` and uses grep in that repo. Pensieve keeps the answer as the repo's switch in Settings → Sources, so Claude does not ask again. To change it, use that switch or `pensieve repo index`.
+- **`claude-prompt-search`**: a `UserPromptSubmit` hook. When you send a prompt in a repo that Pensieve indexes, Pensieve searches the prompt and adds its 5 best code matches to it, as the `search` tool shows them. Claude then often starts on the right file without a search of its own. The hook adds about 300 ms and 400 tokens to each prompt. Slash commands, prompts of 1 or 2 words and folders that Pensieve does not index get nothing.
 
 ### Does it help? The benchmark
 
@@ -216,7 +217,8 @@ Change them in the Map window (Settings), from an agent connected with `--all-to
 | `exclude_files` | filename globs never indexed (secrets) |
 | `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the panel's scope |
 | `appearance` | `system` (or `light`, `dark`) |
-| `ai`, `builtin_model`, `agent_model` | `auto` (not chosen yet), `mlx-community/Qwen3.5-9B-MLX-4bit`, `haiku` |
+| `ai`, `builtin_model` | `auto` (not chosen yet), `mlx-community/Qwen3.5-9B-MLX-4bit` |
+| `cli_command`, `cli_privacy` | the command for `ai: cli`, and `cloud` or `local` |
 | `hotkey` | `ctrl+shift` (or a combo like `cmd+shift+space`) |
 | `editor` | `default`, `vscode`, `cursor` or `zed` |
 | `llm_url`, `llm_model` | `http://localhost:1234/v1`, `qwen/qwen3.5-9b` |
@@ -229,8 +231,7 @@ Search, maps, activity, keyword topics, your footprint in each repo and teammate
 |---|---|---|
 | **Built-in: Qwen 3.5 9B** (`builtin`) | This Mac (MLX) | Apple Silicon, 16 GB memory. Downloads ~5 GB on first use, or reuses LM Studio's MLX copy if you have one. |
 | **LM Studio / local server** (`server`) | This Mac | Any OpenAI-compatible server at `llm_url` running `llm_model`. |
-| **Claude Code** (`claude`) | Anthropic's cloud | Uses your `claude` login; text is sent to Anthropic. No per-chunk summaries, to keep calls low. |
-| **Codex** (`codex`) | OpenAI's cloud | Uses your `codex` login; text is sent to OpenAI. |
+| **Command line** (`cli`) | Where the tool runs | An AI command-line tool you already use, set in `cli_command`. Templates: Claude Code, Codex, Qwen Code, Gemini CLI and Ollama. Pensieve runs the command once per job, in an empty folder. The prompt goes on stdin, or in place of `{prompt}`; `{out}` is a file for the answer. The command must answer without using tools. No per-chunk summaries, to keep calls low. |
 | **Off** (`none`) | | Everything except the AI-written parts. |
 
 ## Command line

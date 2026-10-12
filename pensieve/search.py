@@ -73,7 +73,7 @@ def parse(q: str) -> dict:
             if key == "kind":
                 val = _KINDS.get(val, val)
             filters[key] = val
-        elif re.match(r"-[A-Za-z_]", word):  # -word excludes; "--", "--flag" and "-1" are searched for as typed
+        elif re.match(r"-[A-Za-z_]\w\w", word):  # -word (3+ letters) excludes; "-p", "-rf", "--flag", "-1" are text
             exclude.append(word[1:])
         elif word:
             words.append(word)

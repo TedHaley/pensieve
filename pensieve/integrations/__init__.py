@@ -45,10 +45,14 @@ HOOKS = {  # id -> (label, what it does, recommended)
     "claude-repo-check": ("Ask before indexing a new repo",
                           "When a session starts in a repo Pensieve doesn't index, Claude asks you once whether to "
                           "index it. If you say no, it uses grep there and doesn't ask again.", True),
+    "claude-prompt-search": ("Search each prompt first",
+                             "When you send Claude Code a prompt in an indexed repo, Pensieve searches it and adds the "
+                             "best matches to the prompt. Claude often starts on the right file without searching.", False),
 }
 HOOK_SPEC = {  # id -> (Claude Code hook event, matcher or None, the URL path the hook posts its JSON to)
     "claude-hook": ("PostToolUse", "Edit|MultiEdit|Write|NotebookEdit", "/api/touched"),
     "claude-repo-check": ("SessionStart", None, "/api/repo-check"),
+    "claude-prompt-search": ("UserPromptSubmit", None, "/api/prompt-context"),
 }
 
 
@@ -179,8 +183,8 @@ def repo_note(c: dict) -> str | None:
 def hook_command(hook: str, port: int) -> str:
     """curl posts the hook's JSON to the backend. If the backend isn't running, the hook does nothing."""
     event, _, url = HOOK_SPEC[hook]
-    if event == "SessionStart":  # its answer is the hook's output: a note for the session
-        return (f"curl -s -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- "
+    if event in ("SessionStart", "UserPromptSubmit"):  # its answer is the hook's output: context for Claude
+        return (f"curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- "
                 f"http://127.0.0.1:{port}{url} 2>/dev/null || true")
     return (f"curl -s -m 1 -X POST -H 'Content-Type: application/json' --data-binary @- "
             f"http://127.0.0.1:{port}{url} >/dev/null 2>&1 || true")

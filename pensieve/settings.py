@@ -43,10 +43,12 @@ DEFAULTS = {
     "editor": "default",       # how code results open: default | vscode | cursor | zed
     "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
     # What writes summaries, topic names and insights: auto (a local server if one is running; the UI asks) |
-    # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model/llm_key: local or hosted) | claude | codex | none
+    # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model/llm_key: local or hosted) | cli (cli_command) | none
     "ai": "auto",
     "builtin_model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-    "agent_model": "haiku",    # model passed to `claude -p --model` when ai = claude
+    "cli_command": "",         # an AI command-line tool, run once per job (templates: CLI_TEMPLATES)
+    "cli_privacy": "cloud",    # local | cloud: whether cli_command sends text off this Mac
+    "agent_model": "haiku",    # model of the engine `ai: claude` from before cli; it moves into cli_command
     "ai_on_battery": False,    # run background AI work (summaries, insights) on battery power
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "auto_update_check": True,  # the Mac app checks GitHub Releases daily and offers updates (never installs by itself)
@@ -82,7 +84,11 @@ DESCRIPTIONS = {
     "appearance": "System, light or dark. System follows macOS.",
     "ai": "What writes summaries and insights: builtin, server, claude, codex or none (auto = not chosen yet).",
     "builtin_model": "The MLX model the built-in engine runs.",
-    "agent_model": "Model for the Claude Code engine (claude -p --model).",
+    "agent_model": "Model of the old Claude Code engine; cli_command holds it now.",
+    "cli_command": "The AI command-line tool that writes summaries and insights when ai is cli. It gets the prompt on "
+                   "stdin, or in place of {prompt}; {out} is a file it can write its answer to. It must answer without "
+                   "using tools.",
+    "cli_privacy": "Whether cli_command sends text off this Mac: local or cloud.",
     "ai_on_battery": "Keep writing summaries and insights in the background while on battery power.",
     "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
     "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
@@ -92,6 +98,27 @@ DESCRIPTIONS = {
     "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
     "llm_connections": "Saved model servers, each with a name, URL, model and optional API key (manage in AI & Insights).",
 }
+
+_NO_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit"
+# Commands that answer one prompt without using tools. The prompt goes on stdin unless the command has {prompt}; {out}
+# is a file the command writes its answer to.
+CLI_TEMPLATES = [
+    dict(id="claude", label="Claude Code", privacy="cloud",
+         command=f"claude -p --model haiku --output-format text --max-turns 1 --disallowedTools {_NO_TOOLS}"),
+    dict(id="codex", label="Codex", privacy="cloud",
+         command="codex exec --skip-git-repo-check --sandbox read-only --output-last-message {out} -"),
+    dict(id="qwen", label="Qwen Code", privacy="cloud", command="qwen --approval-mode plan --output-format text {prompt}"),
+    dict(id="gemini", label="Gemini CLI", privacy="cloud", command="gemini --output-format text --prompt {prompt}"),
+    dict(id="ollama", label="Ollama", privacy="local", command="ollama run llama3.2"),
+]
+
+
+def cli_template(id, model=None):
+    t = dict(next(x for x in CLI_TEMPLATES if x["id"] == id))
+    if model and id == "claude":
+        t["command"] = t["command"].replace("--model haiku", f"--model {model}")
+    return t
+
 
 _lock = threading.Lock()
 _data: dict | None = None
@@ -122,6 +149,9 @@ def load() -> dict:
             _data = {**DEFAULTS, **{k: v for k, v in saved.items() if k in DEFAULTS}}
             if saved and "setup_done" not in saved:  # set up by a version from before the setup step
                 _data["setup_done"] = True
+            if _data["ai"] in ("claude", "codex"):  # the engines before cli: the same CLI through its template
+                t = cli_template(_data["ai"], _data["agent_model"])
+                _data.update(ai="cli", cli_command=t["command"], cli_privacy=t["privacy"])
             off = _data["disabled"]  # the two repo-discovery rules became one
             if "repos/sessions" in off or "repos/sweep" in off:
                 _data["disabled"] = [d for d in off if d not in ("repos/sessions", "repos/sweep")] + \
@@ -192,8 +222,14 @@ def update(changes: dict) -> dict:
             raise ValueError("chunk_chars must be between 200 and 20000")
         if k == "appearance" and v not in ("system", "light", "dark"):
             raise ValueError("appearance must be system, light or dark")
-        if k == "ai" and v not in ("auto", "builtin", "server", "claude", "codex", "none"):
-            raise ValueError("ai must be auto, builtin, server, claude, codex or none")
+        if k == "ai" and v in ("claude", "codex"):  # the engines before cli: the same CLI through its template
+            t = cli_template(v, cur["agent_model"])
+            clean.update(cli_command=t["command"], cli_privacy=t["privacy"])
+            v = "cli"
+        if k == "ai" and v not in ("auto", "builtin", "server", "cli", "none"):
+            raise ValueError("ai must be auto, builtin, server, cli or none")
+        if k == "cli_privacy" and v not in ("local", "cloud"):
+            raise ValueError("cli_privacy must be local or cloud")
         if k == "llm_url" and not v.startswith(("http://", "https://")):
             raise ValueError("llm_url must start with http:// or https://, e.g. http://localhost:1234/v1")
         if k == "editor" and v not in ("default", "vscode", "cursor", "zed"):
