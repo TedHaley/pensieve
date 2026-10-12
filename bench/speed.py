@@ -158,9 +158,13 @@ def cmd_index(a):
         with store.lock:
             chunks = store.db.execute("SELECT COUNT(*) FROM code_chunks WHERE repo=?", (root,)).fetchone()[0]
         t2 = time.perf_counter()
-        repos.save()  # map layout (UMAP) + write code.tv
+        repos.save()  # write code.tv
         save = time.perf_counter() - t2
+        t3 = time.perf_counter()
+        repos.reproject()  # the map layout, which the app runs later, once indexing is quiet
+        layout = time.perf_counter() - t3
         print(json.dumps(dict(repo=root, files=n, chunks=chunks, wall_s=round(wall, 1), save_s=round(save, 1),
+                              layout_s=round(layout, 1),
                               files_per_min=round(n / wall * 60), chunks_per_s=round(chunks / wall, 1),
                               phases={k: round(v, 2) for k, v in sorted(T.items())}, calls=dict(N))))
 

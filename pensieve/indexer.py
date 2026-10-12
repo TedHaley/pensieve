@@ -273,13 +273,11 @@ class Store:
                 if touched >= 5:  # a first index or a batch of new sessions, not one live session's new turns
                     self.progress = dict(name=source, root=str(path.parent), done=touched, total=None)
                 if on_progress and touched % 8 == 0:
-                    self.reproject()
                     on_progress(touched)
             except Exception as e:  # one bad file shouldn't stop the sweep
                 log(f"skip {path}: {e!r}")
         self.progress = None
-        if touched:
-            self.reproject()
+        if touched:  # the map catches up later (server.map_worker)
             with self.lock:
                 self.index.sync(str(config.INDEX_PATH))
         return touched

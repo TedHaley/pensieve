@@ -24,8 +24,10 @@ def fit3d(X: np.ndarray, n_neighbors=15, min_dist=0.12) -> np.ndarray:
         from sklearn.decomposition import PCA
         return normalize(PCA(n_components=min(3, n), random_state=0).fit_transform(X)) if n >= 3 else np.zeros((n, 3))
     import umap
+    # no random_state: a fixed seed makes UMAP run on one thread (about 4x slower on 20,000 chunks), and a refit
+    # moves the points anyway
     red = umap.UMAP(n_components=3, metric="cosine", n_neighbors=min(n_neighbors, n - 1),
-                    min_dist=min_dist, random_state=42, low_memory=True)
+                    min_dist=min_dist, low_memory=True)
     with _umap_lock:
         return normalize(red.fit_transform(X))
 

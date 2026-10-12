@@ -294,9 +294,8 @@ class Files:
             self.sync_lock.release()
 
     def save(self):
-        """After `refresh`: place the new chunks on the map and write the vector index to disk."""
+        """After `refresh`: write the vector index to disk. The map catches up later (server.map_worker)."""
         self.unsaved = False
-        self.reproject()
         with self.lock:
             self.index.sync(str(FILES_INDEX_PATH))
 
