@@ -595,6 +595,7 @@ function renderSidebar() {
   if (S.view === 'files') return renderFilesSidebar(side);
   if (S.view === 'data') return renderDataSidebar(side);
   if (S.view === 'settings') { side.innerHTML = settingsNav(); bindSettingsNav(side); return; }
+  if (S.view === 'insights') { side.innerHTML = ''; return; }  // no panel there; the sessions list below is the old map's
   const all = S.sessions, fs = filtered();
   const parts = [];
   // active filters summary
@@ -1489,7 +1490,12 @@ function focusedRepo() {
   return null;
 }
 function renderDataSidebar(side) {
-  const D = S.data, T = dataTree(), all = D.points, vis = all.filter(p => dataPass(p));
+  const D = S.data;
+  if (!D.points.length && !$('#loading').classList.contains('gone')) {  // still loading: no "0 items" or "nothing indexed"
+    side.innerHTML = '<div class="empty" style="padding:16px"><div class="spinner" style="margin:0 auto 8px"></div>Loading…</div>';
+    return;
+  }
+  const T = dataTree(), all = D.points, vis = all.filter(p => dataPass(p));
   const cnt = new Map();
   all.filter(p => dataPass(p, 'folders')).forEach(p => { const parts = p.dir.split('/').filter(Boolean); for (let i = 1; i <= parts.length; i++) { const k = parts.slice(0, i).join('/'); cnt.set(k, (cnt.get(k) || 0) + 1); } });
   const tc = {}; all.filter(p => dataPass(p, 'types')).forEach(p => tc[p.type] = (tc[p.type] || 0) + 1);
@@ -2829,6 +2835,7 @@ async function setView(v, repo) {
   document.body.dataset.view = v;  // the map stays as the backdrop; CSS shows the right floating panels
   $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
+  renderSidebar();  // now, not after the loads below: the panel would show the previous view's until then
   if (v === 'code') {
     if (!S.code.repos.length) await loadRepos();
     if (repo && repo !== S.code.repo || !S.code.points.length) await loadRepo(repo || S.code.repo);
