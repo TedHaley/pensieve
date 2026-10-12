@@ -73,7 +73,7 @@ def parse(q: str) -> dict:
             if key == "kind":
                 val = _KINDS.get(val, val)
             filters[key] = val
-        elif word.startswith("-") and len(word) > 1:
+        elif re.match(r"-[A-Za-z_]", word):  # -word excludes; "--", "--flag" and "-1" are searched for as typed
             exclude.append(word[1:])
         elif word:
             words.append(word)
@@ -222,7 +222,12 @@ class Searcher:
         by = f.get("by")
         if by:  # what that person wrote: code by blame, documents by author, sessions by agent
             kinds = [k for k in kinds if k != "session" or any(by in a for a in ("claude", "codex", "qwen"))]
-        qv = embed([pq["semantic"]], query=True)[0] if pq["semantic"] else None
+        qv = code_qv = None  # the query under the general instruction, and under CODE_QUERY (code, folders, people)
+        if pq["semantic"]:
+            if "code" in kinds or kf in (None, "folder", "repo", "person"):
+                qv, code_qv = embed([pq["semantic"]] * 2, query=[True, CODE_QUERY])
+            else:
+                qv = embed([pq["semantic"]], query=True)[0]
         lap("embed")
         code_ranked = {}  # (kind, chunk id) -> file-level score from _code
         hits = {}  # (kind, chunk id) -> score dict
@@ -260,7 +265,8 @@ class Searcher:
                     allow = self._by_allow(by, allow)
                     if not len(allow):
                         continue
-                for cid, sc in self._code(pq["semantic"], allow, roots=scope.repos if scope is not None else None).items():
+                for cid, sc in self._code(pq["semantic"], allow, roots=scope.repos if scope is not None else None,
+                                          qv=code_qv).items():
                     hits[(kind, cid)] = dict(exact=False, bm25=0, sem=sc)
                     code_ranked[(kind, cid)] = sc
             elif qv is not None:
@@ -301,9 +307,8 @@ class Searcher:
                 score = h["sem"] + (0.05 if any(w in r["title"].lower() for w in words) else 0)
             else:
                 score = h["bm25"]
-            snippet, hl = _snippet(r["text"], pq["exact"] or words)
             out.append(dict(id=r["id"], kind=key[0], title=r["title"], subtitle=r["subtitle"], path=r["path"],
-                            line=r["line"], snippet=snippet, highlights=hl, score=round(score, 4), ext=r["ext"],
+                            line=r["line"], row=key, score=round(score, 4), ext=r["ext"],
                             match="both" if pq["exact"] and qv is not None else "exact" if pq["exact"] else "semantic",
                             mtime=r.get("mtime"), key=r.get("key"), is_dir=r.get("is_dir", False), author=r.get("author")))
         out.sort(key=lambda x: (-x["score"], -_ts(x["mtime"])))
@@ -319,16 +324,19 @@ class Searcher:
         if not pq["semantic"] and kf == "repo":  # kind:repo alone: every repo, biggest first
             extra += self._folders("", scope, repos_only=True, limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
         if pq["semantic"] and kf in (None, "folder", "repo"):
-            extra += self._folders(pq["semantic"], scope, repos_only=kf == "repo", strong_only=kf is None,
+            extra += self._folders(pq["semantic"], scope, repos_only=kf == "repo", strong_only=kf is None, code_qv=code_qv,
                                    limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
         if pq["semantic"] and kf in (None, "person") and not by:
-            extra += self._people(pq["semantic"], scope, named_only=kf is None, limit=8)
+            extra += self._people(pq["semantic"], scope, named_only=kf is None, limit=8, code_qv=code_qv)
         if kf in ("folder", "repo", "person"):
             best = extra
         elif extra:  # a folder or person the query names outright goes first
             best = extra + [x for x in best if x["id"] not in {e["id"] for e in extra}]
         lap("folders+people")
         results, roots, paths = self._on_disk(best, rows, limit)
+        for x in results:  # snippets for what is shown only, not for every candidate
+            if "row" in x:
+                x["snippet"], x["highlights"] = _snippet(rows[x.pop("row")]["text"], pq["exact"] or words)
         lap("on-disk")
         if retry and (roots or paths):  # changed after it was indexed and the watcher hasn't caught it yet
             n = self._catch_up(roots, paths)
@@ -403,7 +411,41 @@ class Searcher:
         keep = [t for t in terms if self._df[t] <= COMMON_WORD * self._n_chunks]
         return keep or sorted(terms, key=self._df.get)[:2]
 
-    def _code(self, q, allow, k=400, roots=None):
+    def _fragments(self, q):
+        """The fixed text of a message as it shows up at runtime ("company_id[20879] not found in directory"): the
+        query split at numbers and at words no code contains (the values filled into a format string), fragments of
+        8+ characters, and whether there was anything to split at. Call with self.lock held, after _rare_terms has
+        looked up the query's words."""
+        out = []
+        for part in re.split(r"\d+", q):
+            cur = ""
+            for tok in re.findall(r"\s+|\S+", part):
+                terms = code_words(tok).split()
+                if terms and all(self._df.get(t, 1) == 0 for t in terms):
+                    out.append(cur)
+                    cur = ""
+                else:
+                    cur += tok
+            out.append(cur)
+        holes = len(out) > 1
+        out = [f.strip() for f in out if len(f.strip()) >= 8]
+        # A value that is also a word in the code ("jdoe" in "Writing workers to jdoe") is not split out above, so
+        # also offer each fragment with one word removed: the words before it, and the words after it.
+        # Values are rare in code, so the words the fewest code chunks contain are removed first.
+        more = []
+        for f in out:
+            toks = re.findall(r"\S+", f)
+            for i, tok in enumerate(toks):
+                df = min((self._df.get(t, 0) for t in code_words(tok).split()), default=0)
+                more += [(df, -len(p), p) for p in (" ".join(toks[:i]), " ".join(toks[i + 1:]))]
+        seen, res = set(), []
+        for f in sorted(out, key=len, reverse=True) + [p for _, _, p in sorted(more)]:
+            if len(f) >= 8 and f != q and f not in seen:
+                seen.add(f)
+                res.append(f)
+        return res, holes
+
+    def _code(self, q, allow, k=400, roots=None, qv=None):
         """Code search tuned on bench/ (agent-style queries: descriptions, names, error strings, mixes of these).
 
         Candidates: the top-k chunks by meaning and by keywords (identifier-aware), plus chunks containing the
@@ -413,10 +455,11 @@ class Searcher:
             + 2 [contains a code name from the query] / log2(1 + files that do)
             + 2 [defines that name, and at most 3 files do]
         returned on the cosine scale (best chunk similarity + sigma * the rest) so it merges with other corpora.
-        Returns {chunk id: score} with the best chunk of each file."""
+        Returns {chunk id: score} with the best chunk of each file. `qv`: q already embedded under CODE_QUERY."""
         allowed = set(allow.tolist()) if allow is not None else None
         ok = (lambda c: c in allowed) if allowed is not None else (lambda c: True)
-        qv = embed([q], query=CODE_QUERY)[0]
+        if qv is None:
+            qv = embed([q], query=CODE_QUERY)[0]
         cand = set()
         idx = self.repos.index
         with self.lock:
@@ -443,6 +486,22 @@ class Searcher:
                 phrase = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
                                                         (_fts_query([ql]), 500 if allowed is None else 5000)) if ok(c)}
             names = code_names(ql)
+            frags, pieces = {}, []  # fragment -> chunks containing it
+            if len(ql) >= 8 and not phrase and names != [ql]:
+                pieces, holes = self._fragments(ql)
+                # A number or a word no code contains marks a message: probe the index for up to 3 fragments. A
+                # query without one is more likely a description, and its fragments are only looked for in the
+                # candidates below.
+                for f in pieces[:8] if holes else []:
+                    if any(f in g for g in frags):
+                        continue
+                    hits = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
+                                                          (_fts_query([f]), 500 if allowed is None else 5000)) if ok(c)}
+                    if hits:
+                        frags[f] = hits
+                        cand |= hits
+                        if len(frags) == 3:
+                            break
             by_name = {}
             for n in names:
                 if len(n) < 3:
@@ -457,15 +516,27 @@ class Searcher:
             cl = list(cand)
             for i in range(0, len(cl), 900):
                 part = cl[i:i + 900]
-                for cid, text, vec, path, repo in self.db.execute(
-                        f"SELECT id, text, vec, path, repo FROM code_chunks WHERE id IN ({','.join('?' * len(part))})", part):
-                    rows[cid] = (text, vec, f"{repo}:{path}", path)
-        files, best, sem, kwf = {}, {}, {}, {}
-        for cid, (text, vec, fkey, path) in rows.items():
+                for cid, text, vec, path, repo, wt in self.db.execute(
+                        f"SELECT id, text, vec, path, repo, wt FROM code_chunks WHERE id IN ({','.join('?' * len(part))})",
+                        part):
+                    rows[cid] = (text, vec, f"{repo}:{path}", path, wt)
+        if pieces and not frags:
+            low = {cid: r[0].lower() for cid, r in rows.items()}
+            for f in pieces:
+                if not any(f in g for g in frags):
+                    hits = {cid for cid, t in low.items() if f.lower() in t}
+                    if hits:
+                        frags[f] = hits
+                        if len(frags) == 3:
+                            break
+        files, best, sem, kwf, main = {}, {}, {}, {}, {}
+        for cid, (text, vec, fkey, path, wt) in rows.items():
             s_ = float(np.frombuffer(vec, np.float16).astype(np.float32) @ qv)
             files.setdefault(fkey, path)
-            if s_ > sem.get(fkey, -9):
-                sem[fkey], best[fkey] = s_, cid
+            # a linked worktree's copy shares the file's key: the main checkout's chunks stand for the file when
+            # any are candidates (the agent is shown worktree copies last)
+            if (not wt, s_) > (main.get(fkey, False), sem.get(fkey, -9)):
+                sem[fkey], best[fkey], main[fkey] = s_, cid, not wt
             kwf[fkey] = max(kwf.get(fkey, 0.0), kw.get(cid, 0.0))
         keys = list(files)
         S = np.array([sem[f] for f in keys], np.float32)
@@ -474,14 +545,33 @@ class Searcher:
         extra = 0.2 * z(K) - 0.5 * np.array([bool(_TESTY.search(files[f])) for f in keys], np.float32)
         pos = {f: i for i, f in enumerate(keys)}
         if phrase:
-            hit, cnt, cased = np.zeros(len(keys)), np.zeros(len(keys)), np.zeros(len(keys))
+            hit, cased = np.zeros(len(keys)), np.zeros(len(keys))
+            cnt = np.zeros((2, len(keys)))  # matches in the main checkout, in linked worktrees' copies
             for c in phrase:
                 if c in rows:
                     j = pos[rows[c][2]]
                     hit[j] = 1
-                    cnt[j] += rows[c][0].lower().count(ql.lower())
+                    cnt[int(bool(rows[c][4])), j] += rows[c][0].lower().count(ql.lower())
                     cased[j] = max(cased[j], float(ql in rows[c][0]))
+            cnt = np.where(cnt[0] > 0, cnt[0], cnt[1])  # a file's copies would count each match twice
             extra += 3 * hit + ((np.log1p(cnt) + cased) if names != [ql] else 0)
+        tier = hit if phrase else None  # what grep would find: files that contain the query's text
+        if any(frags.values()):
+            # A file counts when its fragments cover at least half of the query: a message with a few values
+            # filled in, not a description that shares a common phrase with the file.
+            spans, cnt = defaultdict(set), np.zeros(len(keys))
+            for f, cids in frags.items():
+                at = ql.lower().find(f.lower())
+                for j in {pos[rows[c][2]] for c in cids if c in rows}:
+                    spans[j].update(range(at, at + len(f)))
+                for c in cids:
+                    if c in rows and not rows[c][4]:
+                        cnt[pos[rows[c][2]]] += rows[c][0].lower().count(f.lower())
+            got = np.zeros(len(keys))
+            for j, s in spans.items():
+                got[j] = len(s) / len(ql) if len(s) >= len(ql) / 2 else 0
+            extra += 3 * got
+            tier = got
         for n, cids in by_name.items():
             rx = re.compile(r"(?<![\w])" + re.escape(n) + r"(?![\w])")
             has, defs = np.zeros(len(keys)), set()
@@ -495,6 +585,13 @@ class Searcher:
             if 0 < len(defs) <= 3:
                 extra[list(defs)] += 2
         total = S + S.std() * extra  # the tuned z-score order, kept on the cosine scale
+        if tier is not None and names != [ql] and tier.any():
+            # Files are sorted by how much of the query's text they contain, then by match count as grep ranks them,
+            # then by score. The existing scores are reassigned in that order, so the scale that merges code with
+            # other kinds of results does not change.
+            order = sorted(range(len(keys)), key=lambda i: (-tier[i], -cnt[i], -total[i]))
+            total = np.empty_like(total)
+            total[order] = np.sort(S + S.std() * extra)[::-1]
         return {best[f]: float(total[i]) for i, f in enumerate(keys)}
 
     # ---- folders, repos, people ----
@@ -593,7 +690,8 @@ class Searcher:
         below = len(segs) - 1 - last
         return cover, cover + (0.15 if below == 0 else 0) - 0.08 * below
 
-    def _folders(self, q, scope, repos_only=False, strong_only=False, limit=20, by=None, ext=None, within=None):
+    def _folders(self, q, scope, repos_only=False, strong_only=False, limit=20, by=None, ext=None, within=None,
+                 code_qv=None):
         """Folder (and repo) results: path words and what the folder holds both count. strong_only: only folders
         whose path names every word of the query (shown above files in a plain search)."""
         ix = self._folder_index()
@@ -640,7 +738,7 @@ class Searcher:
             if strong_only and (cover < 1 or path < 1):
                 continue
             if qv is None:  # embedded only once some folder is in the running
-                qv = embed([q], query=CODE_QUERY)[0]
+                qv = code_qv if code_qv is not None else embed([q], query=CODE_QUERY)[0]
             score = path + 0.8 * float(ix["C"][j] @ qv) + (0 if q.strip() else len(d["files"]) / 1e6)
             out.append((score, key, d, cover))
         out.sort(key=lambda x: -x[0])
@@ -672,7 +770,7 @@ class Searcher:
             return by in (r.get("author") or "").lower()
         return by in self._folder_index(wait=True)["authors"].get(("code", int(r["id"].split(":")[1])), "")
 
-    def _people(self, q, scope, named_only=False, limit=8):
+    def _people(self, q, scope, named_only=False, limit=8, code_qv=None):
         """People for a query: someone it names outright, or (kind:person) whoever wrote most of the matching code."""
         from pensieve import scopes
         names = self._folder_index()["people"]
@@ -689,7 +787,7 @@ class Searcher:
         if named_only:
             return []
         allow = scopes.allowlist(scope, "code", self.store, self.repos, self.repos.index) if scope else None
-        top = sorted(self._code(q, allow).items(), key=lambda x: -x[1])[:40]
+        top = sorted(self._code(q, allow, qv=code_qv).items(), key=lambda x: -x[1])[:40]
         for e in self.repos._experts_from([(cid, sc) for cid, sc in top])[:limit]:
             w = e["author"].split(" <")[0]
             out.append(dict(id=f"person:{w}", kind="person", title=w,
