@@ -380,6 +380,13 @@ function renderLabels() {
         title: `${plural(idx.length, 'item')} · click to step back out`, onClick: () => deselectLabel()});
     }
     mapPts.forEach((p, i) => { const c = dataTopicOf(p); if (dataInView(p) && c != null && (!basis || basis.has(i))) { if (!by.has(c)) by.set(c, []); by.get(c).push(i); } });
+    if (D.colorBy === 'risk') {  // only the topics at risk get a label, with how much of their code lost its authors
+      loadRiskTopics();  // clusters the at-risk files when they changed, then draws again
+      riskTopics().forEach(t => items.push({n: t.n, text: `${t.name} · ${Math.round(t.risk * 100)}% at risk`, pos: dataAnchor(t.idx),
+        color: seqColor(t.risk), title: `${Math.round(t.risk * 100)}% of this code is by people with no recent commits here\n${plural(t.n, 'code file')} · click to show them`,
+        onClick: () => focusRiskTopic(t)}));
+      return gl.setLabels(items);
+    }
     if (D.colorBy === 'author') {  // each author in the legend once, on the topic they have the most items in
       const best = new Map();  // author -> [topic, their items in it]
       by.forEach((idx, id) => {
@@ -542,7 +549,7 @@ function renderToolbar() {
     $$('#dcolor button', tb).forEach(b => b.onclick = async () => {
       D.colorBy = b.dataset.v; if (D.colorBy !== 'risk') store.set('dataColor', D.colorBy);
       if (D.colorBy === 'risk') await loadGaps(focusedRepo()?.name);
-      renderToolbar(); recolor();
+      renderToolbar(); recolor(); renderSidebar();
     });
   } else if (S.view === 'files') {
     tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Folders</button>
@@ -1503,6 +1510,7 @@ function renderDataSidebar(side) {
   side.innerHTML = `
     <div class="sec"><div class="chips type-chips" role="group" aria-label="Types">${Object.keys(TYPE_SLOT).map(t => `<button class="chip ${D.types.has(t) ? 'on' : ''}" data-type="${t}" aria-pressed="${D.types.has(t)}"><i class="sw" style="background:${slotColor(TYPE_SLOT[t])}"></i>${TYPE_NAME[t]}<span class="n">${(tc[t] || 0).toLocaleString()}</span></button>`).join('')}</div>
       <div class="sec-note" style="margin-top:8px">${vis.length.toLocaleString()} of ${plural(all.length, 'item')}${D.folders.size ? ` in <b>${esc([...D.folders].join(', '))}</b> <button class="linkbtn" data-dclearf>Clear</button>` : ''}</div></div>
+    ${D.colorBy === 'risk' ? riskTopicsHtml() : ''}
     <div class="sec"><div class="sec-h"><span>People</span>${D.authors.size ? `<button class="linkbtn" data-dclearp>Clear</button>` : ''}</div>
       ${people.length ? `<div class="rows">${people.map(x => `<div class="prow-w ${D.drawerPerson === x.who ? 'open' : ''}"><button class="row prow ${D.authors.has(x.who) ? 'on' : ''}" data-who="${esc(x.who)}" aria-pressed="${D.authors.has(x.who)}" title="${D.authors.has(x.who) ? 'Click again to stop filtering by ' + esc(x.who) : 'Show only work by ' + esc(x.who) + ' (pick several to compare)'}"><span class="check"></span><span class="sw" style="background:${slotColor(D.authorSlot.get(x.who) ?? -1)}"></span><span class="name">${esc(x.who)}</span><span class="n">${x.n.toLocaleString()}</span></button><button class="parrow" data-pwho="${esc(x.who)}" title="What ${esc(x.who)} knows about, in what's shown" aria-label="About ${esc(x.who)}"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>` : '<div class="sec-note">No authors known for what is shown.</div>'}</div>
     <div class="sec"><div class="sec-h"><span>Sources</span></div>
@@ -1515,6 +1523,15 @@ function renderDataSidebar(side) {
     if (D.drawerPerson === b.dataset.pwho) { closeDrawer(); renderSidebar(); } else openPersonPanel(b.dataset.pwho);
   });
   $('[data-dclearp]', side)?.addEventListener('click', () => { D.authors.clear(); if (D.drawerPerson) closeDrawer(); dataChanged(); });
+  $$('[data-risktopic]', side).forEach(b => b.onclick = () => { const t = riskTopics().find(x => x.id === +b.dataset.risktopic); if (t) focusRiskTopic(t); });
+}
+function riskTopicsHtml() {
+  const ts = riskTopics(), loading = S.data.risk?.loading;
+  return `<div class="sec"><div class="sec-h"><span>Topics at risk</span>${loading ? '<span class="spinner" style="width:11px;height:11px;border-width:2px"></span>' : ''}</div>
+    ${ts.length ? `<div class="rows">${ts.slice(0, 10).map(t => `<button class="row" data-risktopic="${t.id}" title="${Math.round(t.risk * 100)}% of this code is by people with no recent commits here · click to show it">
+      <span class="sw" style="background:${seqColor(t.risk)}"></span><span class="name">${esc(t.name)}</span><span class="n">${Math.round(t.risk * 100)}% · ${t.n.toLocaleString()}</span></button>`).join('')}</div>
+      <div class="sec-note">What the code in areas mostly written by people with no commits here in 180 days is about: share by inactive authors · files.</div>`
+    : loading ? '' : `<div class="sec-note">No area here has ${Math.round(RISK_FILE * 100)}% or more of its code by inactive authors.</div>`}</div>`;
 }
 // People in view (ignoring the author filter itself, so more can be added), selected ones always listed.
 function dataPeople(max = 8) {
@@ -1668,6 +1685,36 @@ function bindGapLinks(root) {
   $$('[data-gap-area]', root).forEach(b => b.onclick = () => gotoArea(b.dataset.repo, b.dataset.gapArea));
   $$('[data-gap-person]', root).forEach(b => b.onclick = async () => { await setView('data'); await ensureRepo(b.dataset.repo); openPerson(b.dataset.gapPerson); });
   $$('[data-gaps]', root).forEach(b => b.onclick = () => openGaps(b.dataset.gaps));
+}
+// A code file is at risk when inactive authors wrote at least this much of its area. Whole-repo topics are too broad
+// to show risk (on affinity, 2–27% each), so the at-risk files get topics of their own: what knowledge is at risk.
+const RISK_FILE = 0.5;
+async function loadRiskTopics() {
+  const D = S.data;
+  if (S.view !== 'data' || D.colorBy !== 'risk') return;
+  // dataPass, not dataInView: clicking a topic highlights its files, and the topics must not shrink to that selection
+  const idx = []; mapPts.forEach((p, i) => { const r = riskOf(p); if (r != null && r >= RISK_FILE && dataPass(p)) idx.push(i); });
+  const key = `${D.rev}:${idx.length}:${idx[0]}:${idx.at(-1)}`;
+  if (D.risk?.key === key) return;
+  D.risk = {key, topics: new Map(), of: new Map(), loading: idx.length >= 10};
+  if (idx.length >= 10) {
+    const r = await fetch('/api/data/view_topics', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({rev: D.rev, idx, name: true})})
+      .then(x => x.ok ? x.json() : null).catch(() => null);
+    if (D.risk?.key !== key) return;  // the view changed while this one was clustered
+    D.risk = {key, topics: new Map((r?.topics || []).map(t => [t.id, t])), of: new Map(Object.entries(r?.of || {}).map(([i, t]) => [+i, t])), loading: false};
+  }
+  renderLabels(); renderSidebar();
+}
+function focusRiskTopic(t) {  // highlight its files and fly to them; "Clear highlight" in the toolbar undoes it
+  S.data.highlight = new Set(t.idx.map(i => mapPts[i].id));
+  refreshStates(); renderToolbar(); gl.fit(t.idx);
+}
+// The topics among the at-risk files, riskiest first: [{id, name, risk (0–1), n (code files), idx (map indices)}].
+function riskTopics() {
+  const by = new Map();
+  (S.data.risk?.of || new Map()).forEach((t, i) => { if (!by.has(t)) by.set(t, []); by.get(t).push(i); });
+  return [...by].filter(([, idx]) => idx.length >= 3).map(([id, idx]) => ({id, name: S.data.risk.topics.get(id)?.name || `Topic ${id + 1}`,
+    risk: idx.reduce((s, i) => s + riskOf(mapPts[i]), 0) / idx.length, n: idx.length, idx})).sort((a, b) => b.risk * b.n - a.risk * a.n);
 }
 // share of a code point's area written by inactive authors (longest matching gap area), for the "Knowledge risk" colouring
 function riskOf(p) {
