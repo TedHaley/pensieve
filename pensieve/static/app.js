@@ -2310,7 +2310,7 @@ const fmtWhen = ts => { const s = Date.now() / 1000 - ts; return s < 60 ? 'just 
 async function bindUsage() {
   const box = $('#usagebox'); if (!box) return;
   let u;
-  try { u = await api(`/api/usage?days=${S.usageDays}&recent=50`); } catch { box.innerHTML = '<p class="sc-p">Could not load usage.</p>'; return; }
+  try { u = await api(`/api/usage?days=${S.usageDays}&recent=10`); } catch { box.innerHTML = '<p class="sc-p">Could not load usage.</p>'; return; }
   if (!$('#usagebox')) return;
   const seg = `<div class="seg" role="radiogroup" aria-label="Period">${[[1, 'Day'], [7, 'Week'], [30, 'Month']].map(([d, l]) => `<button data-udays="${d}" class="${S.usageDays === d ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   const kpi = (l, v, d = '') => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${d ? `<div class="d">${d}</div>` : ''}</div>`;
