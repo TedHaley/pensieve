@@ -363,7 +363,7 @@ async def lifespan(app):
     files = Files(store)
     datamap = DataMap(store, repos, files)
     searcher = search_mod.Searcher(store, repos, files)
-    actions.bind(store=store, repos=repos, files=files, searcher=searcher, status=status, port=config.PORT)
+    actions.bind(store=store, repos=repos, files=files, searcher=searcher, datamap=datamap, status=status, port=config.PORT)
     loop = asyncio.get_running_loop()
 
     def changed(keys):  # settings edited from the UI or MCP: re-sweep promptly, tell the Mac app and the UI
