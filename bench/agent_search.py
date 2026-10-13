@@ -55,9 +55,11 @@ def claude(prompt, cwd, model, tools, allowed, mcp=None, budget=1.0, timeout=600
     cmd = ["claude", "-p", prompt, "--model", model, "--no-session-persistence", "--output-format", "stream-json",
            "--verbose", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": mcp or {}}),
            "--tools", tools, "--allowedTools", allowed, "--disallowedTools", ALWAYS_OFF,
+           # the repo's settings only: the user's own hooks (e.g. one that asks before indexing) stay out of the runs
+           "--setting-sources", "project,local",
            "--max-budget-usd", str(budget)] + (["--append-system-prompt", system] if system else [])
     t = time.time()
-    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
     calls, final = [], {}
     for line in p.stdout.splitlines():
         try:
@@ -69,10 +71,16 @@ def claude(prompt, cwd, model, tools, allowed, mcp=None, budget=1.0, timeout=600
         elif e.get("type") == "result":
             final = e
     mu = final.get("modelUsage") or {}
-    return dict(result=final.get("result") or "", error=None if final else (p.stderr[-500:] or "no result"),
+    error = (p.stderr[-500:] or "no result") if not final else \
+        (f"{final.get('subtype')}: {(final.get('result') or '')[:300]}" if final.get("is_error") else None)
+    return dict(result=final.get("result") or "", error=error,
                 cost=final.get("total_cost_usd"), turns=final.get("num_turns"), secs=round(time.time() - t, 1),
                 tokens=sum(m.get("inputTokens", 0) + m.get("cacheReadInputTokens", 0) +
                            m.get("cacheCreationInputTokens", 0) + m.get("outputTokens", 0) for m in mu.values()),
+                # what the cost is made of: cache writes are billed above plain input, cache reads far below it
+                usage={k: sum(m.get(f, 0) for m in mu.values()) for k, f in (
+                    ("input", "inputTokens"), ("cache_write", "cacheCreationInputTokens"),
+                    ("cache_read", "cacheReadInputTokens"), ("output", "outputTokens"))},
                 calls=calls)
 
 
@@ -283,7 +291,8 @@ def run(a):
         r = claude(prompt, root, a.model, c["tools"], c["allowed"], c["mcp"], a.budget, system=c.get("system"))
         got, ok = grade(r["result"], t, root)
         rec = dict(task=t["id"], arm=arm, rep=rep, ok=ok, got=got, style=t.get("style", "desc"),
-                   **{k: r[k] for k in ("cost", "turns", "secs", "tokens", "calls", "error")})
+                   **{k: r[k] for k in ("cost", "turns", "secs", "tokens", "usage", "calls", "error")},
+                   tail=r["result"][-200:])  # the end of the answer: why a run without ANSWER: failed
         print(f"{t['id']} {t.get('style', 'desc'):<7} {arm:<8} {'OK ' if ok else 'MISS'} ${rec['cost'] or 0:.3f} {rec['turns']} turns "
               f"{rec['secs']}s {len(rec['calls'])} calls  got={got}", file=sys.stderr)
         return rec

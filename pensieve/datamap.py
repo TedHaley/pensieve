@@ -233,12 +233,12 @@ class DataMap:
                 words.append(w)
         return " · ".join(w.title() for w in words[:2]) or f"Topic {c + 1}"
 
-    def _cluster_items(self, sub, ids, C, pos):
+    def _cluster_items(self, sub, ids, C, pos, k=None):
         """Topics among the items `sub` (ids): k-means on their vectors, keyword names, AI names cached by membership."""
         out, cents, tids = dict(topics=[], of={}), None, []
         if len(sub) >= 10:
             X = C[[pos[i] for i in sub]]
-            k = max(2, min(8, round(math.sqrt(len(sub)) / 4)))
+            k = min(k, len(sub) // 3) if k else max(2, min(8, round(math.sqrt(len(sub)) / 4)))
             lab = cluster(X, kmin=k, kmax=k)
             by = defaultdict(list)
             for j, c in enumerate(lab):
@@ -283,17 +283,17 @@ class DataMap:
         out = self._fill_names(hit)
         return dict(topics=out["topics"], of={at[k]: v for k, v in out["of"].items() if k in at}, n=len(sub))
 
-    def scoped_topics(self, folders):
+    def scoped_topics(self, folders, k=None):
         """Topics among just the items under `folders` (absolute paths): what the map is about once it's filtered
         to a repo or folder. Kept while the folder's items change by less than a tenth (new ones join the nearest
         topic), so names stay put while indexing carries on. Keyword names at once; AI names are cached by
-        membership (meta 'dscope:<sig>')."""
+        membership (meta 'dscope:<sig>'). `k`: how many topics (default: as many as the map can color)."""
         ids, C = self._cached_vectors()
         pos = {i: k for k, i in enumerate(ids)}
         path = {p["id"]: p.get("path") or "" for p in self.points()["points"]}
         pre = [f.rstrip("/") + "/" for f in folders]
         sub = [i for i in ids if any(path.get(i, "").startswith(f) for f in pre)]
-        key = tuple(sorted(folders))
+        key = (tuple(sorted(folders)), k)
         hit = self._scoped.get(key)
         if hit and abs(len(sub) - hit["n"]) <= max(5, 0.1 * hit["n"]):
             out = hit["out"]
@@ -302,7 +302,7 @@ class DataMap:
                 near = (C[[pos[i] for i in new]] @ hit["cents"].T).argmax(1)
                 out["of"].update({i: int(hit["tids"][j]) for i, j in zip(new, near)})
             return self._fill_names(out)
-        out, cents, tids = self._cluster_items(sub, ids, C, pos)
+        out, cents, tids = self._cluster_items(sub, ids, C, pos, k)
         if len(self._scoped) > 32:
             self._scoped.clear()
         self._scoped[key] = dict(out=out, n=len(sub), cents=cents, tids=tids)

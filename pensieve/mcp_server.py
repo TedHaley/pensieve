@@ -13,7 +13,7 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
-AGENT_TOOLS = {"search", "read", "similar", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
+AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
                "current_scope", "open", "index_path"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
@@ -106,8 +106,16 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     sc = _scope()
     r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc)
     cwd = (agent_cwd.get() or "").rstrip("/")
-    # hits in linked worktrees (other branches' copies) rank below the checkout the agent runs in
-    elsewhere = lambda x: " @ " in (x.get("subtitle") or "") and not (cwd and (x.get("path") or "").startswith(cwd + "/"))
+    s = _c()["searcher"]
+    with s.lock:
+        wts = [p for (p,) in s.db.execute("SELECT path FROM worktrees")]
+
+    def elsewhere(x):  # a linked worktree's copy (another branch) that the agent isn't working in: ranked last
+        if " @ " not in (x.get("subtitle") or ""):
+            return False
+        wt = next((w for w in wts if (x.get("path") or "").startswith(w + "/")), None)
+        # by its worktree, not by cwd: agent worktrees can sit inside the repo (.claude/worktrees/…)
+        return not (cwd and wt and (cwd == wt or cwd.startswith(wt + "/")))
     res = [x for x in r["results"] if not elsewhere(x)] + [x for x in r["results"] if elsewhere(x)]
     usage.note(n_results=len(res), results=[[x.get("id"), x.get("path")] for x in res], laps=r.get("timing"))
     found = _lines(res)
@@ -221,6 +229,108 @@ def who_knows(topic: str, repo: str | None = None) -> dict:
 def list_repos() -> list[dict]:
     """Indexed git repos (in this connection's scope) with their size and how many agent sessions ran in each."""
     return [r for r in _c()["repos"].list() if scopes.repo_allowed(_scope(), r["root"])]
+
+
+SMALL_REPO = 150  # files: up to this many, the overview lists every file under its topic
+
+
+def _dependencies(manifests: dict) -> list[str]:
+    """Package names from a repo's manifests (pyproject.toml, package.json, go.mod, Cargo.toml, Gemfile): enough to
+    say what it is built with."""
+    import re
+    out = []
+    t = manifests.get("pyproject.toml", "")
+    m = re.search(r"(?ms)^dependencies\s*=\s*\[(.*?)^\]", t)
+    if m:  # one requirement per line: the package name opens its string ("mlx-lm>=0.2; sys_platform == 'darwin'")
+        out += re.findall(r"(?m)^\s*['\"]([A-Za-z0-9][A-Za-z0-9_.\-]*)", m.group(1))
+    t = manifests.get("package.json", "")
+    m = re.search(r'(?s)"dependencies"\s*:\s*\{(.*?)\}', t)
+    if m:
+        out += re.findall(r'"([^"]+)"\s*:', m.group(1))
+    out += re.findall(r"(?m)^\s*(?:require\s+)?([\w.\-]+/[\w.\-/]+)\s+v[\d.]", manifests.get("go.mod", ""))
+    m = re.search(r"(?ms)^\[dependencies\](.*?)(?:^\[|\Z)", manifests.get("Cargo.toml", ""))
+    if m:
+        out += re.findall(r"(?m)^([\w\-]+)\s*=", m.group(1))
+    out += re.findall(r"(?m)^\s*gem\s+['\"]([^'\"]+)", manifests.get("Gemfile", ""))
+    return list(dict.fromkeys(x for x in out if x))
+
+
+@tool()
+def overview(repo: str | None = None) -> str:
+    """Where things are in a repo, in one call: size, languages, top folders, the README's start, dependencies, the
+    largest files, then topics (files grouped by meaning, from Pensieve's index) with their files and authors. It does
+    not say what the code does or how the parts work: read a topic's main files before you describe it. repo: the
+    one you are in by default. Files indexed in the last minute can be missing until the map catches up."""
+    from collections import Counter
+    from pathlib import Path
+    sc = _scope()
+    if repo:
+        _check_repo(repo)
+        root = _c()["repos"]._root(repo)
+    elif sc is not None and sc.repos and len(sc.repos) == 1:
+        root = next(iter(sc.repos))
+    else:
+        names = [r["name"] for r in _c()["repos"].list() if scopes.repo_allowed(sc, r["root"])]
+        raise ValueError(f"name a repo: {', '.join(names[:20]) or 'none indexed'}")
+    dm = _c()["datamap"]
+    pts = {p["id"]: p for p in dm.points()["points"] if (p.get("repo_root") or "") == root}
+    code = [p for p in pts.values() if p["type"] == "code"]
+    rel = lambda p: p["path"][len(root) + 1:] if p["path"].startswith(root + "/") else p["path"]
+    langs = Counter(p["ext"] or "(none)" for p in code).most_common(6)
+    tops = Counter(rel(p).split("/")[0] + ("/" if "/" in rel(p) else "") for p in code).most_common(8)
+    readmes = sorted((rel(p) for p in code if p["title"].lower().startswith("readme")), key=lambda r: (r.count("/"), r))[:5]
+    authors = Counter(p["author"] for p in code if p.get("author")).most_common(5)
+    out = [f"{Path(root).name}: {len(code):,} files, {sum(p['type'] == 'session' for p in pts.values())} agent sessions",
+           "languages: " + ", ".join(f"{e} {n}" for e, n in langs),
+           "top folders: " + ", ".join(f"{d} {n}" for d, n in tops),
+           "most lines by: " + ", ".join(f"{a} ({n} files)" for a, n in authors)]
+    if readmes:
+        out.append("READMEs: " + ", ".join(readmes))
+    big = sorted(code, key=lambda p: -(p.get("chunks") or 0))[:6]  # topics count files: a big one weighs as much as a small one
+    out.append("largest files: " + ", ".join(f"{rel(p)} ({p['chunks']} chunks)" for p in big))
+    s = _c()["searcher"]
+    first = {}
+    with s.lock:  # what it is and what it's built with, from the index (the README's start, the manifests' dependencies)
+        for path, text in s.db.execute(
+                "SELECT path, text FROM code_chunks WHERE repo=? AND wt='' AND path IN (?,?,?,?,?,?) ORDER BY path, start",
+                (root, "README.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "Gemfile")):
+            first[path] = first.get(path, "") + text + "\n"
+    if first.get("README.md"):
+        out.append("README starts: " + " ".join(first["README.md"].split())[:600])
+    deps = _dependencies(first)
+    if deps:
+        out.append("dependencies: " + ", ".join(deps[:25]))
+    def holds(d):  # subfolders of d with their file counts, biggest first
+        return Counter(rel(p)[len(d):].split("/")[0] + "/" for p in code if rel(p).startswith(d) and "/" in rel(p)[len(d):])
+    for d, _ in tops[:4]:  # the biggest folders, two levels down
+        if d.endswith("/") and (subs := holds(d)):
+            out.append(f"{d} holds: " + ", ".join(f"{s} {n}" for s, n in subs.most_common(10)))
+            for s, _ in subs.most_common(4):
+                if inner := holds(d + s):
+                    out.append(f"  {d}{s} holds: " + ", ".join(f"{x} {n}" for x, n in inner.most_common(10)))
+    # more topics than the map shows (it has 8 colors): a small repo still splits into parts worth naming
+    res = dm.scoped_topics([root], k=max(4, min(10, round(len(pts) ** 0.5 / 2))))
+    members = Counter(res["of"].values())
+    out.append(f"\n{len(res['topics'])} topics, biggest first. A topic groups files that are about the same thing; "
+               f"its name comes from keywords. Read its main files to learn what it does.")
+    for t in sorted(res["topics"], key=lambda t: -members[t["id"]]):
+        ids = [i for i, c in res["of"].items() if c == t["id"] and i in pts]
+        if len(code) <= SMALL_REPO:  # every file, so no part can be left out unseen
+            reps = {i: k for k, i in enumerate(t["reps"])}
+            files = [rel(pts[i]) for i in sorted((i for i in ids if pts[i]["type"] == "code"), key=lambda i: reps.get(i, 1e9))]
+        else:
+            files = [rel(pts[i]) for i in t["reps"] if i in pts and pts[i]["type"] == "code"][:8]
+        sess = [pts[i]["title"][:60] for i in t["reps"] if i in pts and pts[i]["type"] == "session"][:2]
+        who = Counter(pts[i]["author"] for i in ids if pts[i]["type"] == "code" and pts[i].get("author")).most_common(3)
+        out.append(f"- {t['name']} ({len(ids)} items)" + (f": {t['description']}" if t.get("description") else ""))
+        out.append(f"  keywords: {t['keywords']}")
+        if files:
+            out.append(("  files, main first: " if len(code) <= SMALL_REPO else "  main files: ") + ", ".join(files))
+        if sess:
+            out.append("  sessions: " + "; ".join(sess))
+        if who:
+            out.append("  authors: " + ", ".join(f"{a} ({n})" for a, n in who))
+    return "\n".join(out)
 
 
 @tool()

@@ -12,3 +12,5 @@ agent sessions, scoped to the repo you started in.
 - **Before writing new code,** search for code that already does something similar and call `similar(id)` on the
   best hit: reuse its patterns rather than add a second copy.
 - **"What did we decide / try before?"** Search `kind:session`. **Who knows this area?** `who_knows("<topic>")`.
+- **For an overview of a repo that has no CLAUDE.md,** call `overview` first. It shows where things are, not what they
+  do: read a part's main files before you describe it, and name only paths that it lists or that you opened.
