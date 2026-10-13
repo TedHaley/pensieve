@@ -172,6 +172,56 @@ rates are a little low. `agent_search.py` now loads only the repo's settings (`-
 | v5d | "if two hits fit, read both" | fixed early wrong answers on tasks with two candidates |
 | v5test | all of v5, held-out tasks | 131/144 against 123/144 for grep, 43% fewer calls, 18% cheaper, 21% faster |
 
+### Repo overviews: the `overview` tool
+
+The task: "Give me a high-level overview of this repository" in each of the five repos. `overview` shows where things
+are in a repo, from the index: size, languages, folders two levels deep, the README's start, dependencies, the largest
+files, and topics (files grouped by meaning) with their files and authors. It answers in about 1 s.
+
+- **grep:** Read, Grep and Glob only.
+- **overview tool:** the agent calls `overview`, and its instructions say to read a part's main files before it
+  describes the part, and to name only paths that it saw.
+- **overview at start:** the same overview, given in the prompt before the agent starts (as a SessionStart hook
+  would). The time to get it counts.
+
+A first judge listed the claims it thought false. A second Claude run checked each one in the code, and only
+confirmed claims count. The second run rejected about half of them, so a single judge is not enough. 3 runs per repo
+and setup.
+
+**Repos with their CLAUDE.md** (4 of the 5 have one, 136–394 lines; Claude Code loads it into every session):
+
+| Setup | Wrong claims (15 answers) | Coverage | Seconds (median) | Calls | Tokens | Cost |
+|---|---:|---:|---:|---:|---:|---:|
+| grep | 3 | 3.7 / 5 | 10.0 | 1.5 | 25.5k | $0.035 |
+| overview tool | 2 | 5.0 / 5 | 11.9 | 1.2 | 36.6k | $0.044 |
+| overview at start | 2 | 4.6 / 5 | 11.0 | 0.7 | 27.7k | $0.042 |
+
+**The same repos without any CLAUDE.md** (the agent works in a copy of the tracked files; Pensieve uses the index of
+the original):
+
+| Setup | Wrong claims (15 answers) | Coverage | Seconds (median) | Calls | Tokens | Cost |
+|---|---:|---:|---:|---:|---:|---:|
+| grep | 10 | 4.3 / 5 | 13.0 | 4.1 | 35.1k | $0.056 |
+| **overview tool** | **4** | **4.6 / 5** | **12.0** | **1.4** | **28.1k** | **$0.034** |
+| overview at start | 6 | 4.3 / 5 | 13.2 | 1.9 | 30.2k | $0.044 |
+
+- **With a CLAUDE.md, grep needs no tool:** the agent rewrites the notes, often with 0 calls. `overview` only adds
+  text to read, so it is 1–2 s slower.
+- **Without one, the overview tool is more accurate and faster:** 60% fewer wrong claims, 1 s faster, a third of the
+  calls, and 39% cheaper. It was faster in three of the five repos.
+- **Stale notes cause errors that the overview prevents.** Affinity's CLAUDE.md says `workspaces/apps/` holds the CRM
+  app, but it does not. Grep repeated that in 4 of 6 answers. The overview lists what `workspaces/apps/` holds, and
+  no overview run repeated it.
+- **Some errors happen in every setup:** "PySpark 3.5" (the repo pins 4.1.0) and "a bronze/silver/gold layout" (the
+  notes say core/ has none). They come from the model's own assumptions.
+- **What shipped:** `overview` as a default tool, and an instructions line to call it for a repo with no CLAUDE.md.
+- Earlier versions of the tool were less accurate. Each version is a separate fix:
+  - with only 2 topics for a 73-file repo, the agent left out the indexer and the web UI
+  - small repos (150 files or fewer) now list every file
+  - the largest files are listed, so one big file cannot hide in a topic
+  - the README's start and the dependencies say what the repo is
+  - two folder levels let the agent check the notes against the code
+
 ## Suggestions for agentic use
 
 These are the changes that we expect to save an agent the most calls, in order:
