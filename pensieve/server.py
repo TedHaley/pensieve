@@ -116,6 +116,7 @@ async def watcher():
         await _wait(wake_files, config.POLL_SECONDS)
     watch.configure(repos.checkouts())
     asyncio.create_task(repo_watcher())
+    asyncio.create_task(upstream_watcher())
     last_full = 0
     while True:
         if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
@@ -160,6 +161,23 @@ async def watcher():
             status.update(indexing=False, layout=False, message=f"error: {e!r}")
         await _wait(wake_files, config.POLL_SECONDS)
         await _quiet(wake_files)
+
+
+UPSTREAM_SECONDS = 1800
+
+
+async def upstream_watcher():
+    """Fetch origin's default branch of each repo every UPSTREAM_SECONDS, to show which repos are behind."""
+    fetch = False  # the first pass reads the last fetch, so the arrows show without waiting for the network
+    while True:
+        try:
+            await _run(repos.check_upstream, fetch)
+            broadcast({"type": "upstream"})
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        await asyncio.sleep(UPSTREAM_SECONDS if fetch else 5)
+        fetch = True
 
 
 async def repo_watcher():
@@ -632,6 +650,22 @@ async def events():
 @app.get("/api/repos")
 def list_repos():
     return repos.list()
+
+
+@app.get("/api/repos/upstream")
+def repos_upstream():
+    return repos.upstream
+
+
+@app.post("/api/repos/pull")
+async def repos_pull(body: dict):
+    root = body.get("root")
+    if root not in repos.checkouts().values():
+        raise HTTPException(404)
+    r = await _run(repos.pull, root)
+    broadcast({"type": "upstream"})
+    wake_repos.set()
+    return r
 
 
 @app.get("/api/repo/{name}/points")

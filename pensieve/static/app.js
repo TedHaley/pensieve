@@ -60,7 +60,7 @@ const AGENT_NAME = {claude: 'Claude Code', qwen: 'Qwen Code', codex: 'Codex'};
 
 /* ============================== state ============================== */
 const S = {
-  view: 'data', level: 'session', colorBy: store.get('mapColor', 'area'), areaSlot: new Map(),
+  view: 'data', level: 'session', colorBy: store.get('mapColor', 'area'), areaSlot: new Map(), upstream: {},
   sessions: [], byId: new Map(), chunks: null, topics: [], topicById: new Map(), projects: [], projectSlot: new Map(),
   f: {projects: new Set(), sources: new Set(), range: null, topic: null},
   highlight: null, pulse: new Set(), selected: null, status: {},
@@ -686,7 +686,8 @@ function treeCounts(list) {
 }
 function treeRow(k, label, depth, n, kids, kind, sub = '', open = false) {
   const selSet = kind === 'proj' ? S.f.projects : kind === 'fdir' ? S.files.folders : kind === 'ddir' ? S.data.folders : S.code.treeSel;
-  if (kind === 'ddir' && S.data.repoKeys.has(k)) label = `${label}<span class="cbadge" title="Git repository">code</span>`;
+  if (kind === 'ddir' && S.data.repoKeys.has(k))
+    label = `${label}<span class="cbadge" title="Git repository">code</span>${pullBtn(S.data.repos.find(r => relHome(r.root) === k)?.root, 'span')}`;
   const on = selSet.has(k), part = !on && [...selSet].some(x => x.startsWith(k + '/'));
   return `<div class="trow ${on ? 'on' : part ? 'part' : ''}" style="--d:${depth}">
     ${kids.length ? `<button class="tw ${open ? 'open' : ''}" data-tw="${esc(k)}" title="${open ? 'Collapse' : 'Expand'}">▶</button>` : '<span class="tw"></span>'}
@@ -1899,6 +1900,29 @@ const MAP_IC = '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M9 4 3 
 function mapBtn(id, on, disabled) {
   return `<button class="src-map ${on ? 'on' : ''}" data-src-map="${esc(id)}" data-on="${on ? 1 : 0}" ${disabled ? 'disabled' : ''} title="${on ? 'On the map. Click to leave it off the map (it stays searchable).' : 'Off the map, still searchable. Click to show it on the map.'}">${MAP_IC}</button>`;
 }
+// A green ↓ on a repo whose default branch is behind origin (as of the server's last fetch); a click pulls it.
+const PULL_IC = '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 4v15m-6-6 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+async function loadUpstream() {
+  try { S.upstream = await api('/api/repos/upstream'); } catch { return; }
+  if (S.view === 'data') renderSidebar();
+  if (S.view === 'settings') renderSources();
+}
+function pullBtn(root, tag = 'button') {
+  const u = root && S.upstream[root];
+  if (!u?.behind) return '';
+  return `<${tag} class="pullbtn" data-pull="${esc(root)}" title="${esc(u.branch)} is ${u.behind.toLocaleString()} ${u.behind === 1 ? 'commit' : 'commits'} behind origin. Click to pull">${PULL_IC}</${tag}>`;
+}
+document.addEventListener('click', async e => {  // capture: the ↓ on the Map sits inside the folder's button
+  const b = e.target.closest('[data-pull]'); if (!b) return;
+  e.stopPropagation(); e.preventDefault();
+  if (b.classList.contains('busy')) return;
+  b.classList.add('busy');
+  try {
+    const r = await api('/api/repos/pull', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({root: b.dataset.pull})});
+    toast(r.message);
+  } catch (err) { toast('Could not pull: ' + err.message); }
+  await loadUpstream();
+}, true);
 const PAGE_CHARS = 3000;  // a rough printed page, to say how long a document is
 const pagesLabel = c => { const p = c / PAGE_CHARS; return p < 1 ? '½' : p >= 1000 ? `${+(p / 1000).toFixed(1)}K` : `${+p.toFixed(p < 10 ? 1 : 0)}`; };
 function sizeChart(ft, bins) {
@@ -1952,7 +1976,7 @@ function srcItem(it, catOn, parentOff = false) {
   return `<div class="src-item ${it.kind === 'rule' ? 'rule' : ''} ${it.parent ? 'child' : ''} ${catOn && !parentOff ? '' : 'muted-all'} ${off ? 'na' : ''}">
     ${it.kind === 'worktree' ? '<span title="Synced with its repo"></span>' : `<label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>`}
     <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(it.error ? detail : shown)}</div></div>
-    <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}</div>
+    <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}${it.id.startsWith('repos/') ? pullBtn(it.id.slice(6)) : ''}</div>
     ${it.kind === 'rule' || it.map == null ? '<span></span>' : mapBtn(it.id, it.map, off || !catOn || !it.enabled)}
     ${it.remove ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.remove.kind)}" data-src-rm-path="${esc(it.remove.path)}" title="Remove from the index">✕</button>` : '<span></span>'}
   </div>`;
@@ -3370,6 +3394,7 @@ async function handleEvent(m) {
     else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { await loadSettings(true); if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
     else if (m.type === 'toast') toast(m.message);
+    else if (m.type === 'upstream') loadUpstream();
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
@@ -3399,6 +3424,7 @@ async function init() {
   setTimeout(() => $('#hint').classList.add('gone'), 9000);
   connect();
   await loadRepos().catch(() => {});
+  loadUpstream();
   let v = store.get('view', 'data'); if (LEGACY_TYPE[v]) v = 'data';
   loadScopes(); loadAppearance(); syncThemeLabel(); loadAI().then(() => S.view === 'insights' && renderInsights());
   if (location.hash.length > 1) await route();

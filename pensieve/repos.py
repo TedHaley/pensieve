@@ -1,6 +1,7 @@
 """Git repo indexing: code chunks + blame, session<->code links, and 'who knows this area' experts."""
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -57,6 +58,61 @@ ALL = "__all__"  # pseudo-repo: every indexed repo in one joint layout, paths pr
 def git(root, *args, check=False) -> str:
     r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, errors="replace")
     return r.stdout
+
+
+# git that never waits for a password or a passphrase: a fetch in the background fails instead of hanging
+_QUIET_GIT = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=10"}
+
+
+def default_branch(root) -> str | None:
+    """The branch origin's HEAD points to (main, master…), from the last fetch; None without an origin."""
+    ref = git(root, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD").strip()
+    if ref:
+        return ref.rsplit("/", 1)[-1]
+    for b in ("main", "master"):
+        if git(root, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{b}").strip():
+            return b
+    return None
+
+
+def upstream(root) -> dict | None:
+    """How far the local default branch is behind origin's, as of the last fetch: {branch, behind, current}."""
+    b = default_branch(root)
+    if not b or not git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{b}").strip():
+        return None
+    n = git(root, "rev-list", "--count", f"{b}..origin/{b}").strip()
+    return dict(branch=b, behind=int(n) if n.isdigit() else 0, current=git(root, "branch", "--show-current").strip())
+
+
+def fetch_default(root, timeout=30) -> bool:
+    """Fetch only origin's default branch (refs/remotes/origin/<branch>); the working tree is not touched."""
+    b = default_branch(root)
+    if not b:
+        return False
+    try:
+        return subprocess.run(["git", "-C", root, "fetch", "--quiet", "--no-tags", "origin", b], env=_QUIET_GIT,
+                              capture_output=True, timeout=timeout).returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def pull_default(root) -> tuple[bool, str]:
+    """Bring the local default branch up to origin's, fast-forward only. On that branch: git pull --ff-only. On
+    another branch: git fetch origin <b>:<b>, which moves the branch without touching the checkout. Never merges."""
+    u = upstream(root)
+    if not u:
+        return False, "no origin branch to pull from"
+    b = u["branch"]
+    if git(root, "rev-list", "--count", f"origin/{b}..{b}").strip() not in ("", "0"):
+        return False, f"{b} has commits that origin doesn't have: merge or rebase it yourself"
+    args = ["pull", "--ff-only", "--quiet", "origin", b] if u["current"] == b else ["fetch", "--quiet", "origin", f"{b}:{b}"]
+    try:
+        r = subprocess.run(["git", "-C", root, *args], env=_QUIET_GIT, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return False, "git timed out"
+    if r.returncode:
+        return False, (r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else "git failed"
+    return True, f"{b} is up to date with origin" + ("" if u["current"] == b else f" (you stay on {u['current'] or 'a detached HEAD'})")
 
 
 def norm_remote(url: str) -> str:
@@ -289,6 +345,7 @@ class Repos:
         self._recheck = set()
         self._removing = set()  # repos to remove from the index (✕ in Sources) once no sweep holds them
         self.found = []  # (root, remote) of the repos the last sweep found to sync
+        self.upstream = {}  # root -> {branch, behind, current}, from check_upstream
         self._last = 0
         self._scope = (None, None)
         self._team = {}
@@ -557,6 +614,27 @@ class Repos:
             out = {r[0]: r[0] for r in self.db.execute("SELECT root FROM repos")}
             out.update({r[0]: r[1] for r in self.db.execute("SELECT path, repo FROM worktrees")})
         return out
+
+    def check_upstream(self, fetch=True) -> dict:
+        """Fetch origin's default branch of every indexed repo, then record how far each local one is behind."""
+        with self.lock:
+            roots = [r[0] for r in self.db.execute("SELECT root FROM repos")]
+        out = {}
+        for root in roots:
+            if not Path(root).is_dir():
+                continue
+            if fetch:
+                fetch_default(root)
+            if u := upstream(root):
+                out[root] = u
+        self.upstream = out
+        return out
+
+    def pull(self, root) -> dict:
+        ok, message = pull_default(root)
+        if u := upstream(root):
+            self.upstream = {**self.upstream, root: u}
+        return dict(ok=ok, message=message, behind=(u or {}).get("behind", 0))
 
     def _sync_repo(self, root, remote, log):
         name = Path(root).name
