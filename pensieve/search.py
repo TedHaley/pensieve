@@ -221,7 +221,7 @@ class Searcher:
             kinds = [k for k in kinds if k != "session"]
         by = f.get("by")
         if by:  # what that person wrote: code by blame, documents by author, sessions by agent
-            kinds = [k for k in kinds if k != "session" or any(by in a for a in ("claude", "codex", "qwen"))]
+            kinds = [k for k in kinds if k != "session" or any(by in a for a in ("claude", "codex", "qwen", "opencode"))]
         qv = code_qv = None  # the query under the general instruction, and under CODE_QUERY (code, folders, people)
         if pq["semantic"]:
             if "code" in kinds or kf in (None, "folder", "repo", "person"):

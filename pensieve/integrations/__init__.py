@@ -21,6 +21,7 @@ MARK = ".pensieve"  # inside an installed skill folder: Pensieve put it there
 TARGETS = {  # id -> (label, memory file the instructions go in)
     "claude": ("Claude Code", Path.home() / ".claude" / "CLAUDE.md"),
     "codex": ("Codex", Path.home() / ".codex" / "AGENTS.md"),
+    "opencode": ("OpenCode", Path.home() / ".config" / "opencode" / "AGENTS.md"),
     "gemini": ("Gemini CLI", Path.home() / ".gemini" / "GEMINI.md"),
     "qwen": ("Qwen Code", Path.home() / ".qwen" / "QWEN.md"),
 }

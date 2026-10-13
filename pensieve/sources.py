@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pensieve import apps, config, settings
 
-AGENTS = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
+AGENTS = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code", "opencode": "OpenCode"}
 CATEGORIES = [
     ("agents", "AI agent sessions", "Your conversations with coding agents, linked to the code they touched."),
     ("files", "Files & folders", "Documents in these folders: text, Markdown, code, PDF, Word, PowerPoint. Git repos inside them are indexed as repos."),

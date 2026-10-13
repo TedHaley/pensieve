@@ -74,7 +74,7 @@ DESCRIPTIONS = {
     "off_map": "Sources that are searchable but do not show on the map.",
     "chunk_chars": "Characters in each piece of a document. Larger pieces keep more context together in one result.",
     "max_chunks": "Pieces read from each document (0 = all). Text after this limit is not searchable.",
-    "session_folders": "More folders of agent sessions, as agent:path (claude, codex or qwen). Easier to add from Sources.",
+    "session_folders": "More folders of agent sessions, as agent:path (claude, codex, opencode or qwen). Easier to add from Sources.",
     "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
     "default_scope": "Scope used by the search panel and Map search; empty means everything.",

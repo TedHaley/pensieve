@@ -11,11 +11,17 @@ PORT = int(os.environ.get("PENSIEVE_PORT", 8765))
 URL = f"http://127.0.0.1:{PORT}"
 
 # Where each agent keeps its transcripts, and their file pattern below that folder. Add more agents here.
-SESSION_GLOB = {"claude": "*/*.jsonl", "qwen": "*/chats/*.jsonl", "codex": "**/rollout-*.jsonl"}
+SESSION_GLOB = {"claude": "*/*.jsonl", "qwen": "*/chats/*.jsonl", "codex": "**/rollout-*.jsonl",
+                "opencode": "opencode.db"}
+_XDG_DATA = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local" / "share")).expanduser()
+_OPENCODE_DB = Path(os.environ.get("OPENCODE_DB", "opencode.db")).expanduser()
+if not _OPENCODE_DB.is_absolute():
+    _OPENCODE_DB = _XDG_DATA / "opencode" / _OPENCODE_DB
 SOURCES = [
     ("claude", HOME / ".claude" / "projects", SESSION_GLOB["claude"]),
     ("qwen", HOME / ".qwen" / "projects", SESSION_GLOB["qwen"]),
     ("codex", HOME / ".codex" / "sessions", SESSION_GLOB["codex"]),
+    ("opencode", _OPENCODE_DB.parent, _OPENCODE_DB.name),
 ]
 
 
@@ -34,7 +40,8 @@ def session_sources() -> list[tuple[str, str, Path, str]]:
 def detect_sessions(folder: Path) -> tuple[str, Path] | None:
     """Which agent's transcripts a folder holds, and the folder the glob starts from (a config folder like ~/.claude
     holds them in projects/, ~/.codex in sessions/)."""
-    for name, sub in (("codex", "sessions"), ("qwen", "projects"), ("claude", "projects")):
+    for name, sub in (("opencode", "opencode"), ("codex", "sessions"), ("qwen", "projects"),
+                      ("claude", "projects")):
         for root in (folder / sub, folder):
             if root.is_dir() and next(root.glob(SESSION_GLOB[name]), None):
                 return name, root

@@ -1077,7 +1077,7 @@ def add_session_folder(req: FolderReq):
         raise HTTPException(400, f"not a folder: {req.path}")
     found = config.detect_sessions(p)
     if not found:
-        raise HTTPException(400, f"No Claude Code, Codex or Qwen Code sessions found in {req.path}")
+        raise HTTPException(400, f"No Claude Code, Codex, OpenCode or Qwen Code sessions found in {req.path}")
     name, root = found
     entry = f"{name}:{_tilde(root)}"
     known = {(n, str(r)) for _, n, r, _ in config.session_sources()}

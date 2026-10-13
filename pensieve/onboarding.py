@@ -7,7 +7,7 @@ asks for folder access when the user has chosen to look, not when the app starts
 import time
 from pathlib import Path
 
-from pensieve import actions, apps, config, llm, settings, sources
+from pensieve import actions, apps, config, llm, parsers, settings, sources
 
 ABOUT = [
     "Pensieve searches everything on this Mac by meaning: documents, git repos and your AI agent sessions.",
@@ -21,7 +21,7 @@ PROFILES = [
     dict(id="developer", label="Software development", categories=["repos", "agents"],
          description="Code in git repos, with its history and who wrote what."),
     dict(id="agents", label="AI coding agents", categories=["agents", "repos"],
-         description="Your Claude Code, Codex or Qwen Code conversations, linked to the code they changed."),
+         description="Your Claude Code, Codex, OpenCode or Qwen Code conversations, linked to the code they changed."),
     dict(id="office", label="Documents and office work", categories=["files"],
          description="Word, PDF, PowerPoint, spreadsheets and text in Documents, Desktop and Downloads."),
     dict(id="notes", label="Research and notes", categories=["files", "apps"],
@@ -83,8 +83,9 @@ def scan(categories=None, fresh=False) -> list[dict]:
         for sid, name, root, pattern in config.session_sources():
             # a project folder is named after the session's working folder; parsing thousands of transcripts to read
             # their cwd would make this list slow, and sessions in temp folders are skipped at indexing anyway
-            n = sum(1 for p in root.glob(pattern) if "subagents" not in p.parts
-                    and not p.relative_to(root).parts[0].startswith(temp)) if root.is_dir() else 0
+            found = parsers.discover_source(name, root, pattern) if root.is_dir() else ()
+            n = sum(1 for item in found if name == "opencode" or
+                    not item.path.relative_to(root).parts[0].startswith(temp))
             items["agents"].append(dict(id=sid, label=sources.AGENTS.get(name, name), detail=_tilde(root), size=n,
                                         unit="sessions", available=n > 0, checked=n > 0 and on(sid)))
     if "files" in cats:
@@ -144,7 +145,7 @@ def add(kind: str, path: str) -> str:
     elif kind == "agents":
         found = config.detect_sessions(p)
         if not found:
-            raise ValueError(f"No Claude Code, Codex or Qwen Code sessions found in {path}")
+            raise ValueError(f"No Claude Code, Codex, OpenCode or Qwen Code sessions found in {path}")
         name, root = found
         if (name, str(root)) not in {(n, str(r)) for _, n, r, _ in config.session_sources()}:
             settings.update({"session_folders": settings.get("session_folders") + [f"{name}:{_tilde(root)}"]})

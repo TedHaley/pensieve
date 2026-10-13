@@ -29,7 +29,7 @@ sessions session src lib libs py js ts tsx jsx md txt json yaml yml toml cfg ini
 jpeg init index main test tests spec utils util helpers helper common core misc tmp temp private var file files new old copy
 readme license changelog dist build module modules package packages app apps makefile dockerfile dockerignore gitignore
 variables outputs locals inputs title page meta""".split())
-AGENT = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
+AGENT = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code", "opencode": "OpenCode"}
 
 
 class DataMap:

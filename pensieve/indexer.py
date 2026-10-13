@@ -253,20 +253,20 @@ class Store:
         touched = self._purge_disabled(log) + self._purge_own(log)
         with self.lock:
             known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
-        for source, path in parsers.discover():
-            st = path.stat()
-            if known.get(str(path)) == (st.st_mtime, st.st_size):
+        for transcript in parsers.discover():
+            source, path = transcript.source, transcript.path
+            if known.get(str(path)) == (transcript.mtime, transcript.size):
                 continue
             # transcripts are append-only JSONL (a half-written last line is skipped), so no need to wait for quiet;
             # a session that's still being written re-indexes at most every ACTIVE_SECONDS (new turns only)
             if str(path) in known and time.time() - self._indexed_at.get(str(path), 0) < ACTIVE_SECONDS:
                 continue
             self._indexed_at[str(path)] = time.time()
-            if self._ignored.get(str(path)) == (st.st_mtime, st.st_size):
+            if self._ignored.get(str(path)) == (transcript.mtime, transcript.size):
                 continue
             try:
-                if not self._index_session(source, path, st):
-                    self._ignored[str(path)] = (st.st_mtime, st.st_size)
+                if not self._index_session(source, path, transcript.mtime, transcript.size):
+                    self._ignored[str(path)] = (transcript.mtime, transcript.size)
                     continue
                 touched += 1
                 log(f"indexed {source}:{path.stem[:8]}")
@@ -336,7 +336,7 @@ class Store:
             self.db.executemany("INSERT OR REPLACE INTO session_files VALUES(?,?,?)", rows)
             self.db.commit()
 
-    def _index_session(self, source, path: Path, st):
+    def _index_session(self, source, path: Path, mtime: float, size: int):
         """Index one transcript; returns False for one that ran in a temp folder (not the user's work)."""
         s = parsers.parse(source, path)
         if in_temp(s.project):
@@ -368,7 +368,7 @@ class Store:
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET source=excluded.source, "
                 "project=excluded.project, project_name=excluded.project_name, title=excluded.title, path=excluded.path, mtime=excluded.mtime, "
                 "size=excluded.size, started=excluded.started, updated=excluded.updated, n_chunks=excluded.n_chunks",
-                (s.id, source, s.project, project_name(s.project), s.title, str(path), st.st_mtime, st.st_size,
+                (s.id, source, s.project, project_name(s.project), s.title, str(path), mtime, size,
                  s.started, s.updated, len(chunks)))
             if new or stale:
                 self.db.execute("UPDATE sessions SET summary=NULL, tags=NULL WHERE id=?", (s.id,))
