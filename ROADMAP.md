@@ -24,6 +24,10 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | B4 | Tell the agent how sure a hit is | Agents | idea |
 | B5 | A `pensieve search` shell command | Agents | idea |
 | B6 | Hit rate of real searches | Agents | idea |
+| B7 | Index agent memory files | Agents | investigating |
+| B8 | Show hits in the agent's own checkout | Agents | idea |
+| B9 | Leave out the agent's own session | Agents | idea |
+| B10 | `read` several hits in one call | Agents | idea |
 | C1 | Test the two-step install in auto mode | Install | idea |
 | C2 | Claude Code plugin | Install | idea |
 | C3 | Confirm that agents load `~/.agents/skills` | Install | idea |
@@ -141,6 +145,40 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 
 - **Try:** match each logged search with the files that the agent read or edited next.
 - **Measure:** the share of searches whose top hits contain the file that the agent used.
+- **Status:** idea
+- **Notes:**
+
+### B7. Index agent memory files
+
+- **Evidence:** in a session on 2026-10-13 (`d48348bb`, databricks-bfp), the deciding fact ("a globally unique name is
+  not sufficient match evidence") was only in a Claude Code memory file, `project_crm_link_scored.md`. The session
+  that found it was deleted. Pensieve indexes none of the 172 memory files in `~/.claude/projects/*/memory/`.
+- **Try:** index each memory file with its project, as its own kind, and show it in session searches.
+- **Measure:** the share of session searches that return a memory file in the top 3, and agent answers on questions
+  about earlier decisions.
+- **Status:** investigating
+- **Notes:**
+
+### B8. Show hits in the agent's own checkout
+
+- **Evidence:** in the same session, the agent worked in the worktree `databricks-bfp-placeholders`, but every hit
+  showed a path in `~/Desktop/databricks-bfp`. The agent then read the files in its own checkout with `sed`.
+- **Try:** when the agent works in a worktree and the file is the same there, show the worktree path.
+- **Status:** idea
+- **Notes:**
+
+### B9. Leave out the agent's own session
+
+- **Evidence:** in the same session, its own conversation was the first session hit, and the fourth code hit.
+- **Open question:** how the MCP server knows which session calls it.
+- **Status:** idea
+- **Notes:**
+
+### B10. `read` several hits in one call
+
+- **Evidence:** in the same session, the agent put several reads, a grep and a `cat` in one Bash call. The output was
+  cut, so it needed one more call.
+- **Risk:** new tools did not cut calls in the benchmark (batch 1). Test before shipping.
 - **Status:** idea
 - **Notes:**
 
