@@ -7,7 +7,9 @@ import time
 from pensieve import llm
 
 SESSION_SYS = ("You summarize transcripts between a developer and an AI coding agent. Write a 2-sentence summary of "
-               "what was worked on and the outcome, plus 3-5 short lowercase topic tags.")
+               "what was worked on and the outcome, plus 3-5 short lowercase topic tags. Treat later corrections as "
+               "the final state. Report only outcomes shown in the transcript; if none is shown, say so rather than "
+               "assuming the work was completed.")
 SESSION_SCHEMA = {"type": "object", "properties": {
     "summary": {"type": "string"},
     "tags": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 6}},
@@ -50,14 +52,25 @@ INSIGHT_SCHEMA = {"type": "object", "properties": {
 
 
 def _transcript(turns, budget=7000):
-    out, n = [], 0
-    for role, text in turns:
-        t = (text if role == "user" else text[:500])[:900]
-        out.append(f"{role.upper()}: {t}")
-        n += len(t)
-        if n > budget:
+    lines = [f"{role.upper()}: {text[:900 if role == 'user' else 500]}" for role, text in turns]
+    if len("\n\n".join(lines)) <= budget:
+        return "\n\n".join(lines)
+
+    # Keep enough of the opening to establish the task, then spend the larger share on the latest state and outcome.
+    head = []
+    for line in lines:
+        if head and len("\n\n".join(head + [line])) > budget // 3:
             break
-    return "\n\n".join(out)
+        head.append(line)
+
+    omitted = "[... middle turns omitted to stay within the context budget ...]"
+    tail = []
+    for line in reversed(lines[len(head):]):
+        tail.insert(0, line)
+        if len("\n\n".join(head + [omitted] + tail)) > budget:
+            tail.pop(0)
+            break
+    return "\n\n".join(head + [omitted] + tail)
 
 
 def summarize_session(store, sid):
