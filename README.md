@@ -125,8 +125,8 @@ Agents grep by habit, even with Pensieve connected. Optional add-ons fix that (S
 
 ```bash
 pensieve integrate                    # what's available and what's installed
-pensieve integrate recommended        # for each agent on this Mac: the MCP server and the instructions block;
-                                      # for Claude Code also the pensieve-search skill and both hooks
+pensieve integrate recommended        # for each agent on this Mac: the MCP server, the instructions block and
+                                      # the pensieve-search skill; for Claude Code also both hooks
 pensieve integrate cursor-mcp codex   # only these
 pensieve integrate pensieve-teammates pensieve-plan
 pensieve integrate claude --remove    # removes exactly what was added
@@ -134,6 +134,7 @@ pensieve integrate claude --remove    # removes exactly what was added
 
 - **MCP server** (`claude-mcp`, `codex-mcp`, `cursor-mcp`, `gemini-mcp`, `qwen-mcp`, `windsurf-mcp`, `claude-desktop-mcp`, `vscode-mcp`): adds Pensieve to the agent's MCP config for every project. For Claude Code, it runs `claude mcp add --scope user`. In other config files, Pensieve changes only its own entry. Restart an open agent to load the server.
 - **Instructions block** ([`instructions.md`](pensieve/integrations/instructions.md)): a short "search before you grep" section in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md` or `~/.qwen/QWEN.md`, kept between `<!-- pensieve:start -->` markers. For other agents (Cursor, Windsurf, …), paste it into the agent's rules.
+- **Skills** go once into `~/.agents/skills`, the user-level skills folder that Codex, Gemini CLI, Cursor, VS Code, Windsurf and other agents read. Claude Code and Qwen Code read only their own folder, so they get a link to that copy in `~/.claude/skills` or `~/.qwen/skills`. Pensieve makes no folder for an agent that is not installed. If an agent's skills folder is a link to a folder that does not exist, Pensieve leaves it and tells you.
 - **`pensieve-search` skill** (recommended): query styles, when to fall back to grep, finding similar code before writing new code, recalling past sessions.
 - **`pensieve-teammates`**: suggests who knows an area from git blame and drafts the question for you. It never messages anyone.
 - **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.

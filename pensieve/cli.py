@@ -4,7 +4,7 @@
     pensieve mcp       MCP over stdio for agents that don't speak HTTP; starts the server if it isn't running
     pensieve integrate [all | recommended | claude-mcp claude codex pensieve-search claude-hook ...] [--remove]
                        agent add-ons: Pensieve as Claude Code's MCP server, an instructions block for CLAUDE.md /
-                       AGENTS.md, Claude Code skills, and Claude Code hooks (report edits; ask before indexing a repo)
+                       AGENTS.md, skills (shared by the agents), and Claude Code hooks (report edits; ask before indexing a repo)
     pensieve repo [status | index | skip] [path]
                        whether Pensieve indexes the git repo at path (default: here); index it, or never ask again
     pensieve setup [recommended | <source id> ...]
@@ -85,21 +85,21 @@ def integrate(items, remove=False):
         print("Instructions block (tells the agent to search with Pensieve before grepping):")
         for t in st["instructions"]:
             print(f"  {t['id']:<20} {t['state']:<6} {t['path']}")
-        print("Claude Code skills:")
+        print(f"Skills (in {ig._tilde(ig.SKILLS_DIR)}, with a link for Claude Code and Qwen Code):")
         for k in st["skills"]:
             print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
         print(f"Claude Code hooks (in {st['hooks'][0]['path']}):")
         for k in st["hooks"]:
             print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
-        print("\npensieve integrate recommended        # every agent on this Mac: the MCP server and the instructions block;")
-        print("                                      # for Claude Code also pensieve-search and both hooks")
+        print("\npensieve integrate recommended        # every agent on this Mac: the MCP server, the instructions block")
+        print("                                      # and pensieve-search; for Claude Code also both hooks")
         print("pensieve integrate <id>... [--remove]")
         return
     targets = {t["id"] for t in st["instructions"]}
     found = [k["id"] for k in st["mcp"] if k["available"]]
     claude = "claude-mcp" in found
     if items == ["all"]:
-        items = [*found, *(t["id"] for t in st["instructions"] if t["present"]), *(ig.SKILLS if claude else ()),
+        items = [*found, *(t["id"] for t in st["instructions"] if t["present"]), *(ig.SKILLS if found else ()),
                  *(ig.HOOKS if claude else ())]
     elif items == ["recommended"]:
         if not found:
@@ -107,7 +107,7 @@ def integrate(items, remove=False):
                   f"`{ig._pensieve_bin()} mcp` (stdio), or http://127.0.0.1:{config.PORT}/mcp over HTTP.")
             return
         items = [*found, *(t["id"] for t in st["instructions"] if t["present"]),
-                 *(n for n, v in {**ig.SKILLS, **ig.HOOKS}.items() if v[2] and claude)]
+                 *(n for n, v in ig.SKILLS.items() if v[2]), *(n for n, v in ig.HOOKS.items() if v[2] and claude)]
     for it in items:
         try:
             if it in targets:

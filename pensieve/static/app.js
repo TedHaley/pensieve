@@ -2478,7 +2478,7 @@ async function loadIntegrations() {
     ${st.mcp.filter(k => k.available || k.state === 'on').map(k => row(esc(k.label), `Adds Pensieve to <code>${esc(k.path)}</code>`, 'mcp', k.id, k.state, k.state === 'theirs')).join('') || '<p class="sc-p">No agents found on this Mac.</p>'}
     <div class="cmd-l" style="margin-top:10px">Instructions block: “search before you grep”</div>
     ${st.instructions.map(t => row(esc(t.label), `Adds a marked section to <code>${esc(t.path)}</code>`, 'ins', t.id, t.state)).join('')}
-    <div class="cmd-l" style="margin-top:10px">Claude Code skills (in <code>~/.claude/skills</code>)</div>
+    <div class="cmd-l" style="margin-top:10px">Skills (in <code>~/.agents/skills</code>, the folder most agents share, with a link for Claude Code and Qwen Code)</div>
     ${st.skills.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'skill', k.id, k.state, k.state === 'theirs')).join('')}
     <div class="cmd-l" style="margin-top:10px">Claude Code hooks (in <code>${esc(st.hooks[0].path)}</code>)</div>
     ${st.hooks.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'hook', k.id, k.state)).join('')}
