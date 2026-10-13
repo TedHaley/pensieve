@@ -1,27 +1,25 @@
 #!/bin/sh
-# Publish a new version: bumps the version, builds the DMG, tags it and creates the GitHub release that the
-# app's update check (and tedhaley.ca/pensieve's Download button) picks up.
-#   mac/release.sh 0.3.0 "What changed, in a sentence or two"
-# Needs: a clean working tree, gh logged in to an account that can publish to TedHaley/pensieve.
+# Publish the version that main has: build the DMG, tag main and create the GitHub release. It makes no commit:
+# mac/bump.sh sets the version as part of the release PR, before the merge.
+#   mac/release.sh "What changed, in a sentence or two"
+# Needs: main, clean and the same as origin/main; gh logged in to an account that can publish to TedHaley/pensieve.
 set -eu
 cd "$(dirname "$0")/.."
-VERSION="${1:?usage: mac/release.sh <version> [notes]}"
-NOTES="${2:-Pensieve $VERSION}"
-case "$VERSION" in *[!0-9.]*|"") echo "version must look like 0.3.0"; exit 1;; esac
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+NOTES="${1:-Pensieve $VERSION}"
+case "$NOTES" in [0-9]*.[0-9]*) case "$NOTES" in *" "*) ;; *) echo "pass the notes only: the version comes from main ($VERSION)"; exit 1;; esac;; esac
+[ "$(git branch --show-current)" = main ] || { echo "release from main: git checkout main && git pull"; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "commit or stash your changes first"; exit 1; }
-git rev-parse "v$VERSION" >/dev/null 2>&1 && { echo "v$VERSION already exists"; exit 1; }
-
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" mac/Resources/Info.plist
-BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" mac/Resources/Info.plist)
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $((BUILD + 1))" mac/Resources/Info.plist
-sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-uv lock -q
-git commit -qam "Release $VERSION"
+git fetch -q origin main
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main is not the same as origin/main: git pull"; exit 1; }
+git rev-parse "v$VERSION" >/dev/null 2>&1 && { echo "v$VERSION already exists: run mac/bump.sh in the release PR first"; exit 1; }
+APP=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" mac/Resources/Info.plist)
+[ "$APP" = "$VERSION" ] || { echo "Info.plist says $APP, pyproject.toml says $VERSION: run mac/bump.sh $VERSION"; exit 1; }
 
 sh mac/dmg.sh
 cp "mac/build/Pensieve-$VERSION.dmg" mac/build/Pensieve.dmg
 git tag "v$VERSION"
-git push -q origin HEAD "v$VERSION"
+git push -q origin "v$VERSION"
 gh release create "v$VERSION" mac/build/Pensieve.dmg --repo TedHaley/pensieve --title "Pensieve $VERSION for Mac" \
   --notes "$NOTES
 
