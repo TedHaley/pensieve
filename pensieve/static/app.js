@@ -3268,7 +3268,7 @@ function applyAppearance(mode, persist = false) {
 // T flips between light and dark from whatever is showing now
 const toggleTheme = () => applyAppearance(theme() === 'dark' ? 'light' : 'dark', true);
 const syncThemeLabel = () => $$('[data-app]').forEach(b => b.classList.toggle('on', b.dataset.app === appearance));
-$$('#appseg [data-app]').forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
+$$('#appseg [data-app], #themeseg [data-app]').forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
 async function loadAppearance() {
   try { const r = await api('/api/settings'); if (APPEARANCES.includes(r.settings.appearance) && r.settings.appearance !== appearance) applyAppearance(r.settings.appearance); } catch {}
 }
@@ -3290,6 +3290,7 @@ $$('#gearmenu [data-go]').forEach(b => b.onclick = () => {
   S.view === 'settings' ? renderSettings() : setView('settings');
 });
 function toggleSide(open) {
+  if (open == null && S.view === 'settings') return;  // Settings has no filter panel
   const on = open ?? !document.body.classList.contains('side-open');
   document.body.classList.toggle('side-open', on); store.set('sideOpen', on);
   setTimeout(() => { if (S.view === 'map') renderTimeline(); }, 260);

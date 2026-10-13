@@ -33,6 +33,11 @@
     <div class="top-l">
       <span class="brand" title="Pensieve"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg></span>
       <button id="sidetoggle" class="iconbtn round glass" title="Show or hide the filter panel" aria-label="Toggle filter panel"><svg viewBox="0 0 24 24" width="17" height="17"><rect x="3.5" y="5" width="17" height="14" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 5v14" stroke="currentColor" stroke-width="1.7"/></svg></button>
+      <div id="themeseg" class="seg theme-seg glass" role="radiogroup" aria-label="Appearance">
+        <button data-app="system" title="Appearance: same as the Mac" aria-label="System"><svg viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor"/></svg></button>
+        <button data-app="light" title="Appearance: light" aria-label="Light"><svg viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="3.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+        <button data-app="dark" title="Appearance: dark" aria-label="Dark"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
+      </div>
     </div>
     <nav id="tabs" role="tablist" class="glass">
       <button role="tab" data-view="data" class="on" title="Code, files and agent sessions on one map (1)">Map</button>

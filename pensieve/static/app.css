@@ -503,6 +503,9 @@ body.native .brand{display:none}
 .iconbtn.round.glass:hover{background:var(--glass-strong)}
 .iconbtn:active{transform:scale(.96)}
 body.side-open #sidetoggle{color:var(--accent)}
+body[data-view=settings] #sidetoggle{color:var(--text-3);opacity:.45;pointer-events:none}
+.seg.theme-seg{height:36px;align-items:center;padding:0 3px;gap:1px;border-radius:999px;background:var(--glass);box-shadow:inset 0 0 0 1px var(--glass-edge),var(--shadow-sm)}
+.seg.theme-seg button{width:30px;height:30px;padding:0;display:grid;place-items:center}
 
 #tabs{display:flex;gap:2px;padding:3px;border-radius:999px;border:0}
 #tabs button{border:0;background:none;padding:6px 16px;border-radius:999px;color:var(--text);opacity:.72;font-weight:500;font-size:13px;transition:background .2s var(--ease),opacity .2s,color .2s}
