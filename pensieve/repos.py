@@ -46,6 +46,10 @@ SHADOW_MIN_FILES = 20  # files to (re)index before blame goes through the commit
 PROGRESS_MIN_FILES = 20  # checkouts with at least this many files to index report their progress (Sources, status)
 GENERATED_DIRS = {"dist", "build", "vendor", "third_party", "node_modules", "out", "target", ".venv"}
 CODE_CHUNK_CHARS = 1500
+CHARS_PER_CHUNK = 1000  # chunk_code's average size: counting a repo's chunks from file sizes came within 10% of the
+                        # real count on affinity, databricks-bfp and pensieve
+EMBED_RATE = 30  # chunks per second of a first index on an M4 Max, until this Mac has measured its own (embed_rate)
+RATE_MIN_CHUNKS = 2000  # an index this big measures the Mac's speed
 
 
 class SwitchedOff(Exception):
@@ -679,6 +683,39 @@ class Repos:
             self._team.clear()
         return n
 
+    def embed_rate(self) -> float:
+        """Chunks this Mac embeds per second during an index: the last big index measured it, else EMBED_RATE."""
+        try:
+            return float(self.store.meta("embed_rate") or EMBED_RATE)
+        except ValueError:
+            return EMBED_RATE
+
+    def estimate_chunks(self, root) -> dict:
+        """What indexing the main checkout of `root` still has to do, from file sizes (only the start of a file not yet
+        indexed is read, to leave out binary files):
+        {files (tracked), indexed (files already indexed with their current content), chunks (still to embed)}."""
+        state = tree_state(root)
+        with self.lock:
+            have = dict(self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=''", (root,)))
+        secrets, chunks = settings.get("exclude_files"), 0
+        for path, blob in state.items():
+            p = Path(path)
+            if (have.get(path) == blob or p.suffix.lower() in SKIP_EXT or p.name in SKIP_NAMES or ".min." in p.name
+                    or secret(p.name, secrets)):
+                continue
+            try:
+                f = Path(root) / path
+                size = f.stat().st_size
+                if not size or not (size <= MAX_BYTES or (size <= MAX_SOURCE_BYTES and p.suffix.lower() in SOURCE_EXT)):
+                    continue
+                with open(f, "rb") as fh:
+                    if b"\x00" in fh.read(2000):  # binary: not indexed
+                        continue
+            except OSError:
+                continue
+            chunks += -(-size // CHARS_PER_CHUNK)
+        return dict(files=len(state), indexed=sum(have.get(p) == b for p, b in state.items()), chunks=chunks)
+
     def _index_checkout(self, root, wt, state, base, log, branch=""):
         """Index one checkout. For a linked worktree (`wt`), only files that differ from the main checkout (`base`)."""
         target = state if base is None else {p: b for p, b in state.items() if base.get(p) != b}
@@ -739,10 +776,13 @@ class Repos:
                 if n_new % 100 == 0:
                     log(f"  {label}: {n_new} files")
 
+        embedded, t0 = 0, time.time()
+
         def flush():
-            nonlocal writing
+            nonlocal writing, embedded
             if not group:
                 return
+            embedded += sum(len(g[2]) for g in group)
             vecs = embed([f"{path}\n{c[2]}" for path, _, chunks, _ in group for c in chunks])
             if writing:
                 writing.result()  # in order, and an error surfaces here
@@ -768,7 +808,8 @@ class Repos:
                     r = fut.result()
                     done += 1
                     if big:
-                        self.progress = dict(name=label, root=root, done=done, total=len(todo))
+                        left = (time.time() - t0) / done * (len(todo) - done)
+                        self.progress = dict(name=label, root=root, done=done, total=len(todo), seconds_left=round(left))
                     if r:
                         group.append(r)
                         if sum(len(g[2]) for g in group) >= EMBED_GROUP:
@@ -776,6 +817,8 @@ class Repos:
                 flush()
                 if writing:
                     writing.result()
+                if embedded >= RATE_MIN_CHUNKS:
+                    self.store.meta("embed_rate", round(embedded / (time.time() - t0), 1))
             finally:
                 if big:
                     self.progress = None

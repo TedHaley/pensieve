@@ -166,6 +166,10 @@ def setup(port, items):
                     size = f"{i['size']:,} {i['unit']}" if i.get("size") is not None else ""
                     mark = "x" if i["checked"] else (" " if i["available"] else "-")
                     note = " (big: slow to index)" if i.get("big") else "" if i["available"] else " (not found on this Mac)"
+                    if i.get("indexed"):
+                        note += f", {i['indexed']:,} already indexed"
+                    if i.get("seconds") is not None and i["available"]:
+                        note += f", {_duration(i['seconds'])} to index" if i["seconds"] >= 30 else ", up to date"
                     print(f"  [{mark}] {i['id']:<48} {i['label']}  {size}{note}")
             print(f"\n[x] = recommended. {d['energy']}")
             print("\nNext: `pensieve setup recommended`, or `pensieve setup <id> <id> ...` with exactly the ids to index.")
@@ -179,9 +183,18 @@ def setup(port, items):
     d = r.json()
     print("Pensieve is indexing: " + (", ".join(d["indexing"]) or "nothing"))
     if d["repo_files"]:
-        print(f"Code: {d['repo_files']:,} files, about {max(1, d['minutes'])} minutes for the first index.")
-    print(d["energy"])
-    print("Change this any time in Settings > Sources.")
+        print(f"Code: {d['repo_files']:,} files, {d.get('indexed_files', 0):,} of them already indexed.")
+    left = "about " + _duration(d["minutes"] * 60) if d["minutes"] > 1 else "about a minute" if d["minutes"] else "nothing"
+    print(f"Time left: {left}" + (", plus your documents (not estimated)." if d.get("documents") else "."))
+    if d["minutes"] > 1:
+        print(d["energy"])
+    print(d.get("next", ""))
+    print("Change what Pensieve indexes any time in Settings > Sources.")
+
+
+def _duration(secs) -> str:
+    m = round(secs / 60)
+    return "under a minute" if m < 1 else f"{m} minute{'s' if m > 1 else ''}" if m < 90 else f"{m / 60:.1f} hours"
 
 
 def _start_server(base, port):

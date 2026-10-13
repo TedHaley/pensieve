@@ -28,9 +28,20 @@ PROFILES = [
          description="Notes apps such as Obsidian and Apple Notes, and folders of Markdown."),
 ]
 
-ENERGY_NOTE = ("Indexing runs the embedding model on your Mac until it finishes, so the Mac gets warm and uses more battery. "
-               "Plug it in if you can. Search works while it indexes, and later changes are quick to index.")
-REPO_FILES_PER_MINUTE = 500  # first index on Apple Silicon, limited by the embedding model
+ENERGY_NOTE = ("Indexing uses a lot of power: it runs the embedding model on your Mac's GPU until it finishes, so the Mac "
+               "gets warm and the battery drains faster. Plug it in if you can. When the first index is done, energy use "
+               "drops back to normal: later changes take seconds to index. Search works while it indexes.")
+REPO_FILES_PER_MINUTE = 500  # a rough guide before the scan; `start` estimates from file sizes and this Mac's speed
+SESSION_CHUNKS = 35  # chunks in an average indexed agent session
+KEY_NAMES = {"ctrl": "Control", "control": "Control", "shift": "Shift", "cmd": "Command", "command": "Command",
+             "alt": "Option", "opt": "Option", "option": "Option", "space": "Space"}
+
+
+def next_steps() -> str:
+    keys = "+".join(KEY_NAMES.get(k, k.upper()) for k in settings.get("hotkey").lower().split("+"))
+    return (f"{'Tap' if keys in ('Control+Shift', 'Shift+Control') else 'Press'} {keys} anywhere to search with "
+            f"Pensieve. To explore what it indexed, choose Open Map in the Pensieve menu bar icon, or go to "
+            f"http://localhost:{config.PORT}.")
 _cache = {}  # categories -> (time, candidates): repo discovery walks the disk
 _scanned = set()  # categories the user has let Pensieve look in; `start` never reads any other
 
@@ -85,8 +96,10 @@ def scan(categories=None, fresh=False) -> list[dict]:
             # their cwd would make this list slow, and sessions in temp folders are skipped at indexing anyway
             n = sum(1 for p in root.glob(pattern) if "subagents" not in p.parts
                     and not p.relative_to(root).parts[0].startswith(temp)) if root.is_dir() else 0
+            done = _indexed_sessions(root)
             items["agents"].append(dict(id=sid, label=sources.AGENTS.get(name, name), detail=_tilde(root), size=n,
-                                        unit="sessions", available=n > 0, checked=n > 0 and on(sid)))
+                                        unit="sessions", available=n > 0, checked=n > 0 and on(sid), indexed=min(done, n),
+                                        seconds=_seconds(max(0, n - done) * SESSION_CHUNKS)))
     if "files" in cats:
         items["files"] = [dict(id=f"files/{f}", label=Path(f).name or f, detail=_tilde(Path(f).expanduser()), size=None,
                                unit="", available=Path(f).expanduser().is_dir(),
@@ -117,12 +130,24 @@ def _repos(s, on):
     for r in sorted(set(found) | set(big), key=lambda r: (len(Path(r).name), Path(r).name.lower())):
         clones.setdefault(norm_remote(git(r, "config", "--get", "remote.origin.url")) or r, []).append(r)
     for r, *others in sorted(clones.values(), key=lambda c: Path(c[0]).name.lower()):
-        n = big.get(r) or git(r, "ls-files").count("\n")
+        est = repos.estimate_chunks(r)
         also = f" · also {len(others)} other clone{'s' if len(others) > 1 else ''}" if others else ""
-        out.append(dict(id=f"repos/{r}", label=Path(r).name, detail=_tilde(Path(r)) + also, size=n, unit="files",
-                        available=True, checked=r not in big and on(f"repos/{r}"), big=r in big,
-                        clones=[f"repos/{o}" for o in others]))
+        out.append(dict(id=f"repos/{r}", label=Path(r).name, detail=_tilde(Path(r)) + also, size=big.get(r) or est["files"],
+                        unit="files", available=True, checked=r not in big and on(f"repos/{r}"), big=r in big,
+                        clones=[f"repos/{o}" for o in others], indexed=est["indexed"], seconds=_seconds(est["chunks"])))
     return out
+
+
+def _indexed_sessions(root) -> int:
+    store = actions.ctx["store"]
+    with store.lock:
+        return store.db.execute("SELECT COUNT(*) FROM sessions WHERE n_chunks>0 AND path LIKE ?",
+                                (str(root) + "/%",)).fetchone()[0]
+
+
+def _seconds(chunks) -> int:
+    """How long embedding this many chunks takes on this Mac."""
+    return round(chunks / actions.ctx["repos"].embed_rate())
 
 
 def add(kind: str, path: str) -> str:
@@ -226,5 +251,8 @@ def start(chosen=None, recommended=False, ai=None) -> dict:
     _scanned.clear()
     picked = [i for i in items if i["id"] in chosen and not i.get("rule")]
     files = sum(i["size"] or 0 for i in picked if i["unit"] == "files")
+    secs = sum(i.get("seconds") or 0 for i in picked)
     return {"done": True, "indexing": [i["label"] for i in picked], "repo_files": files,
-            "minutes": round(files / REPO_FILES_PER_MINUTE), "energy": ENERGY_NOTE}
+            "indexed_files": sum(i.get("indexed") or 0 for i in picked if i["unit"] == "files"),
+            "minutes": -(-secs // 60), "documents": any(i["id"].startswith(("files/", "apps/")) for i in picked),
+            "energy": ENERGY_NOTE, "next": next_steps()}
