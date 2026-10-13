@@ -23,7 +23,20 @@ CODE_INDEX_PATH = config.DATA_DIR / "code.tv"
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip", ".gz", ".lock", ".woff", ".woff2",
             ".ttf", ".mp4", ".mov", ".parquet", ".pkl", ".csv", ".ipynb", ".map", ".snap"}
 SKIP_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock", "Cargo.lock"}
-MAX_BYTES = 200_000
+MAX_BYTES = 200_000  # bigger files are indexed only when they look written by hand (written_source)
+MAX_SOURCE_BYTES = 2_000_000
+SOURCE_EXT = {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".rb", ".go", ".rs", ".java", ".kt", ".swift", ".c",
+              ".cc", ".cpp", ".h", ".hpp", ".cs", ".php", ".scala", ".tf", ".sh", ".vue", ".svelte", ".css", ".scss",
+              ".m", ".mm"}
+
+
+def written_source(raw: bytes, path: str) -> bool:
+    """A big file worth indexing: source code with lines of normal length. Generated and minified files have long
+    lines; data files (JSON, CSV, word lists) don't have a source extension."""
+    if len(raw) > MAX_SOURCE_BYTES or Path(path).suffix.lower() not in SOURCE_EXT:
+        return False
+    lines = raw.split(b"\n")
+    return len(raw) / len(lines) <= 120 and sum(len(ln) > 500 for ln in lines) <= 0.01 * len(lines)
 INDEX_WORKERS = 4   # threads reading, chunking and git-blaming files ahead of the embedder (blame is the slow part on
                     # a repo with long history; 6 indexes faster still but doubles search time during indexing)
 INDEX_AHEAD = 32    # files prepared ahead at most (bounds the memory held by blame results)
@@ -613,7 +626,7 @@ class Repos:
                 raw = (Path(checkout) / path).read_bytes()
             except OSError:
                 return None
-            if len(raw) > MAX_BYTES or b"\x00" in raw[:2000] or not raw.strip():
+            if b"\x00" in raw[:2000] or not raw.strip() or (len(raw) > MAX_BYTES and not written_source(raw, path)):
                 return None
             chunks = chunk_code(raw.decode("utf8", "replace"))
             return (path, blob, chunks, blame_lines(checkout, path, me, shadow)) if chunks else None
