@@ -73,6 +73,11 @@ For each change in this section, measure on the validation set (`bench/validatio
 - **Measure:** as A2.
 - **Status:** idea
 - **Notes:**
+  - Candidate: `google/embeddinggemma-2` (2026-10-06, Apache 2.0). Text and code use only its 270M text part,
+    against 600M for Qwen3-Embedding-0.6B. Vectors have 768 dimensions (Matryoshka to 512, 256 or 128), against
+    1024 now. Context is 8,192 tokens. Not checked: its code-search quality (one secondary source says 78.68 on MTEB
+    Code) and an MLX path (`MLXEmbedder` runs only Qwen3 models). First test it through sentence-transformers on the
+    validation set (`bench/retrieval.py`). A new model needs a full re-index.
 
 ### A4. Settings that fit the hardware
 
