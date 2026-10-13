@@ -161,7 +161,7 @@ def chunk_session(turns):
         if role == "user" and cur:
             exchanges.append(cur)
             cur = []
-        cur.append(f"{'User' if role == 'user' else 'Assistant'}: {text}")
+        cur.append(f"{'User' if role == 'user' else 'Memory' if role == 'memory' else 'Assistant'}: {text}")
     if cur:
         exchanges.append(cur)
     out = []
@@ -250,7 +250,7 @@ class Store:
     def sync_files(self, log=lambda m: print(m, flush=True), on_progress=None) -> int:
         """Index new/changed transcript files. Returns number of sessions touched."""
         import time
-        touched = self._purge_disabled(log) + self._purge_own(log)
+        touched = self._purge_disabled(log) + self._purge_own(log) + self._purge_memories(log)
         with self.lock:
             known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
         for source, path in parsers.discover():
@@ -310,6 +310,17 @@ class Store:
             n = self._delete_sessions(own)
         if n:
             log(f"removed {n} sessions that ran in temp folders")
+        return n
+
+    def _purge_memories(self, log):
+        """Drop memory files that were deleted. Transcripts stay after their file goes, but a deleted memory was
+        usually wrong or out of date."""
+        with self.lock:
+            gone = [sid for sid, path in self.db.execute("SELECT id, path FROM sessions WHERE id LIKE 'claude:memory/%'")
+                    if not Path(path).exists()]
+        n = self._delete_sessions(gone)
+        if n:
+            log(f"removed {n} deleted memory files")
         return n
 
     def _delete_sessions(self, sids):

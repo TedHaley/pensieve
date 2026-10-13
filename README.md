@@ -171,7 +171,7 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 
 | Category | Items | Default |
 |---|---|---|
-| **AI agent sessions** | Claude Code (`~/.claude/projects`), Codex (`~/.codex/sessions`), Qwen Code (`~/.qwen/projects`) | on |
+| **AI agent sessions** | Claude Code (`~/.claude/projects`, with its memory files), Codex (`~/.codex/sessions`), Qwen Code (`~/.qwen/projects`) | on |
 | **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Content of text, Markdown, RTF, Word, PowerPoint, Excel, Pages, Keynote, Numbers, PDF, mail (`.eml`), subtitles, data files and code; images, audio, video and other files by name; folders by name and what they contain. Each document's author comes from its metadata (PDF, Office, Spotlight) or its owner. | on |
 | **Git repositories** | Repos your agents worked in; repos found under your home folder (4 levels deep) and inside your folders; each repo on its own | on |
 | **Apps** | Obsidian vaults; Apple Notes (exported to Markdown in `~/.pensieve`, asks for permission) | Obsidian on, Notes off |

@@ -24,7 +24,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | B4 | Tell the agent how sure a hit is | Agents | idea |
 | B5 | A `pensieve search` shell command | Agents | idea |
 | B6 | Hit rate of real searches | Agents | idea |
-| B7 | Index agent memory files | Agents | investigating |
+| B7 | Index agent memory files | Agents | testing |
 | B8 | Show hits in the agent's own checkout | Agents | idea |
 | B9 | Leave out the agent's own session | Agents | idea |
 | B10 | `read` several hits in one call | Agents | idea |
@@ -156,8 +156,15 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Try:** index each memory file with its project, as its own kind, and show it in session searches.
 - **Measure:** the share of session searches that return a memory file in the top 3, and agent answers on questions
   about earlier decisions.
-- **Status:** investigating
+- **Status:** testing
 - **Notes:**
+  - 2026-10-13: each memory file (not `MEMORY.md`) is indexed as a one-turn session with the title "Memory: …" and
+    the project of its transcripts. A deleted memory file leaves the index; a deleted transcript stays. Indexing 161
+    files took 19 s.
+  - On a copy of the index on this Mac, the file with the finding ranks 3rd for the traced query, and 5th for two
+    questions in plain words. Before, it was not in the index.
+  - Open: in a long memory file (21 chunks), the passage that the hit shows is not the one with the finding. `read`
+    returns the whole file, so the agent still gets it.
 
 ### B8. Show hits in the agent's own checkout
 
