@@ -2110,7 +2110,7 @@ function renderSetup() {
     <button class="btn primary" data-setup-next="${next}" ${ok && !st.busy ? '' : 'disabled'}>${esc(label)}</button></div>`;
   const items = (st.cands || []).flatMap(c => c.items), picked = items.filter(i => st.chosen.has(i.id));
   const files = picked.filter(i => i.unit === 'files').reduce((a, i) => a + (i.size || 0), 0);
-  const mins = Math.max(1, Math.round(files / g.files_per_minute));
+  const secs = picked.reduce((a, i) => a + (i.seconds || 0), 0), mins = Math.max(1, Math.round(secs / 60));
   let body;
   if (step === 'about') {
     body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg>
@@ -2144,7 +2144,7 @@ function renderSetup() {
       ${btns('start', 'Next', !!st.ai)}`;
   } else {
     body = `<h1>Ready to index</h1><p class="sub">Pensieve will index ${esc(plural(picked.filter(i => !i.rule).length, 'source'))}${files ? `, including ${files.toLocaleString()} code files` : ''}.</p>
-      <div class="setup-energy">${ENERGY_IC}<div><b>This takes a while and uses a lot of energy</b><span>${files ? `The code alone takes about ${mins} minute${mins === 1 ? '' : 's'}; documents and sessions add to that. ` : ''}If this is a laptop, plug it in before you start. Search works while Pensieve indexes, and the dots in the menu bar turn until it is done.</span></div></div>
+      <div class="setup-energy">${ENERGY_IC}<div><b>${secs < 60 ? 'Almost everything is indexed already' : 'This takes a while and uses a lot of energy'}</b><span>${secs >= 60 ? `About ${mins < 90 ? `${mins} minute${mins === 1 ? '' : 's'}` : `${(mins / 60).toFixed(1)} hours`} on this Mac, counting only what isn't indexed yet${picked.some(i => /^(files|apps)\//.test(i.id)) ? ', plus your documents' : ''}. Indexing runs the embedding model on the GPU, so the Mac gets warm and uses more battery. If this is a laptop, plug it in. When the first index is done, energy use drops back to normal. ` : ''}Search works while Pensieve indexes, and the dots in the menu bar turn until it is done.</span></div></div>
       ${btns('go', st.busy ? 'Starting…' : 'Start indexing')}`;
   }
   el.innerHTML = `<div class="setup-card">${dots}${body}</div>`;
@@ -2196,7 +2196,7 @@ function syncingHtml() {
   if (S.status?.setup_done === false) return `<div class="sync-strip warn">${ENERGY_IC}<div><b>Nothing is indexed yet</b><span>Choose the sources to start.</span></div><button class="btn primary" data-open-setup>Choose sources</button></div>`;
   if (!jobs.length) return '';
   const what = j => j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
-  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} files`
+  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} files${j.seconds_left >= 60 && j.done >= 50 ? ` · about ${Math.round(j.seconds_left / 60).toLocaleString()} min left` : ''}`
     : `${j.done.toLocaleString()} ${j.kind === 'sessions' ? 'sessions' : 'files'} so far`;
   return `<div class="sync-strip">${ENERGY_IC}<div><b>Syncing now</b>${jobs.map(j => `<span class="job">${what(j)} · ${prog(j)}</span>`).join('')}
     <span class="muted">Indexing uses a lot of energy: plug in your Mac if you can. Search works meanwhile.</span></div></div>`;
@@ -2478,7 +2478,7 @@ async function loadIntegrations() {
     ${st.mcp.filter(k => k.available || k.state === 'on').map(k => row(esc(k.label), `Adds Pensieve to <code>${esc(k.path)}</code>`, 'mcp', k.id, k.state, k.state === 'theirs')).join('') || '<p class="sc-p">No agents found on this Mac.</p>'}
     <div class="cmd-l" style="margin-top:10px">Instructions block: “search before you grep”</div>
     ${st.instructions.map(t => row(esc(t.label), `Adds a marked section to <code>${esc(t.path)}</code>`, 'ins', t.id, t.state)).join('')}
-    <div class="cmd-l" style="margin-top:10px">Claude Code skills (in <code>~/.claude/skills</code>)</div>
+    <div class="cmd-l" style="margin-top:10px">Skills (in <code>~/.agents/skills</code>, the folder most agents share, with a link for Claude Code and Qwen Code)</div>
     ${st.skills.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'skill', k.id, k.state, k.state === 'theirs')).join('')}
     <div class="cmd-l" style="margin-top:10px">Claude Code hooks (in <code>${esc(st.hooks[0].path)}</code>)</div>
     ${st.hooks.map(k => row(esc(k.label) + (k.recommended ? ' <span class="ig-rec">Recommended</span>' : ''), esc(k.description), 'hook', k.id, k.state)).join('')}

@@ -539,7 +539,8 @@ def setup_add_source(kind: str, path: str) -> dict:
 def setup_start(sources: list[str] | None = None, recommended: bool = False, ai: str | None = None) -> dict:
     """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
     ones); everything else is switched off. `ai` sets the insights engine (an id from setup_guide's `ai`, or "none").
-    Indexing starts at once and can take a while; search works meanwhile."""
+    Indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left, counting only what isn't
+    indexed yet), the `energy` note when minutes > 1, and `next` (how to search and see the map)."""
     res = onboarding.start(sources, recommended, ai)
     from pensieve import server
     server.watch.force_full()

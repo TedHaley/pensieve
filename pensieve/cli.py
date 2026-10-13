@@ -4,7 +4,7 @@
     pensieve mcp       MCP over stdio for agents that don't speak HTTP; starts the server if it isn't running
     pensieve integrate [all | recommended | claude-mcp claude codex pensieve-search claude-hook ...] [--remove]
                        agent add-ons: Pensieve as Claude Code's MCP server, an instructions block for CLAUDE.md /
-                       AGENTS.md, Claude Code skills, and Claude Code hooks (report edits; ask before indexing a repo)
+                       AGENTS.md, skills (shared by the agents), and Claude Code hooks (report edits; ask before indexing a repo)
     pensieve repo [status | index | skip] [path]
                        whether Pensieve indexes the git repo at path (default: here); index it, or never ask again
     pensieve setup [recommended | <source id> ...]
@@ -85,21 +85,21 @@ def integrate(items, remove=False):
         print("Instructions block (tells the agent to search with Pensieve before grepping):")
         for t in st["instructions"]:
             print(f"  {t['id']:<20} {t['state']:<6} {t['path']}")
-        print("Claude Code skills:")
+        print(f"Skills (in {ig._tilde(ig.SKILLS_DIR)}, with a link for Claude Code and Qwen Code):")
         for k in st["skills"]:
             print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
         print(f"Claude Code hooks (in {st['hooks'][0]['path']}):")
         for k in st["hooks"]:
             print(f"  {k['id']:<20} {k['state']:<6} {k['label']}{' (recommended)' if k['recommended'] else ''}: {k['description']}")
-        print("\npensieve integrate recommended        # every agent on this Mac: the MCP server and the instructions block;")
-        print("                                      # for Claude Code also pensieve-search and both hooks")
+        print("\npensieve integrate recommended        # every agent on this Mac: the MCP server, the instructions block")
+        print("                                      # and pensieve-search; for Claude Code also both hooks")
         print("pensieve integrate <id>... [--remove]")
         return
     targets = {t["id"] for t in st["instructions"]}
     found = [k["id"] for k in st["mcp"] if k["available"]]
     claude = "claude-mcp" in found
     if items == ["all"]:
-        items = [*found, *(t["id"] for t in st["instructions"] if t["present"]), *(ig.SKILLS if claude else ()),
+        items = [*found, *(t["id"] for t in st["instructions"] if t["present"]), *(ig.SKILLS if found else ()),
                  *(ig.HOOKS if claude else ())]
     elif items == ["recommended"]:
         if not found:
@@ -107,7 +107,7 @@ def integrate(items, remove=False):
                   f"`{ig._pensieve_bin()} mcp` (stdio), or http://127.0.0.1:{config.PORT}/mcp over HTTP.")
             return
         items = [*found, *(t["id"] for t in st["instructions"] if t["present"]),
-                 *(n for n, v in {**ig.SKILLS, **ig.HOOKS}.items() if v[2] and claude)]
+                 *(n for n, v in ig.SKILLS.items() if v[2]), *(n for n, v in ig.HOOKS.items() if v[2] and claude)]
     for it in items:
         try:
             if it in targets:
@@ -166,6 +166,10 @@ def setup(port, items):
                     size = f"{i['size']:,} {i['unit']}" if i.get("size") is not None else ""
                     mark = "x" if i["checked"] else (" " if i["available"] else "-")
                     note = " (big: slow to index)" if i.get("big") else "" if i["available"] else " (not found on this Mac)"
+                    if i.get("indexed"):
+                        note += f", {i['indexed']:,} already indexed"
+                    if i.get("seconds") is not None and i["available"]:
+                        note += f", {_duration(i['seconds'])} to index" if i["seconds"] >= 30 else ", up to date"
                     print(f"  [{mark}] {i['id']:<48} {i['label']}  {size}{note}")
             print(f"\n[x] = recommended. {d['energy']}")
             print("\nNext: `pensieve setup recommended`, or `pensieve setup <id> <id> ...` with exactly the ids to index.")
@@ -179,9 +183,18 @@ def setup(port, items):
     d = r.json()
     print("Pensieve is indexing: " + (", ".join(d["indexing"]) or "nothing"))
     if d["repo_files"]:
-        print(f"Code: {d['repo_files']:,} files, about {max(1, d['minutes'])} minutes for the first index.")
-    print(d["energy"])
-    print("Change this any time in Settings > Sources.")
+        print(f"Code: {d['repo_files']:,} files, {d.get('indexed_files', 0):,} of them already indexed.")
+    left = "about " + _duration(d["minutes"] * 60) if d["minutes"] > 1 else "about a minute" if d["minutes"] else "nothing"
+    print(f"Time left: {left}" + (", plus your documents (not estimated)." if d.get("documents") else "."))
+    if d["minutes"] > 1:
+        print(d["energy"])
+    print(d.get("next", ""))
+    print("Change what Pensieve indexes any time in Settings > Sources.")
+
+
+def _duration(secs) -> str:
+    m = round(secs / 60)
+    return "under a minute" if m < 1 else f"{m} minute{'s' if m > 1 else ''}" if m < 90 else f"{m / 60:.1f} hours"
 
 
 def _start_server(base, port):

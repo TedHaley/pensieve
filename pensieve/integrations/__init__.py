@@ -24,7 +24,11 @@ TARGETS = {  # id -> (label, memory file the instructions go in)
     "gemini": ("Gemini CLI", Path.home() / ".gemini" / "GEMINI.md"),
     "qwen": ("Qwen Code", Path.home() / ".qwen" / "QWEN.md"),
 }
-SKILLS_DIR = Path.home() / ".claude" / "skills"
+SKILLS_DIR = Path.home() / ".agents" / "skills"  # the user-level skills folder of the open Agent Skills standard
+SKILL_LINKS = {  # agents that read only their own skills folder: it gets a link to the copy in SKILLS_DIR
+    "Claude Code": Path.home() / ".claude" / "skills",
+    "Qwen Code": Path.home() / ".qwen" / "skills",
+}
 SKILLS = {  # id -> (label, what it does, recommended)
     "pensieve-search": ("Search before grep",
                         "When and how to search: query styles, reading the top hit, similar code, past sessions.", True),
@@ -276,34 +280,72 @@ def set_instructions(target: str, on: bool) -> str:
     return instructions_state(target)
 
 
+def _our_skill(p: Path) -> bool:
+    """A skill folder Pensieve put there: its own copy, or a link to the shared copy."""
+    return p.is_symlink() and p.resolve().parent == SKILLS_DIR.resolve() or (p / MARK).exists()
+
+
+def _links(name: str):
+    """(agent, link path, problem or None) for each installed agent that reads only its own skills folder."""
+    for agent, base in SKILL_LINKS.items():
+        if not base.parent.is_dir():
+            continue  # the agent isn't installed
+        if base.is_symlink() and not base.exists():
+            yield agent, base / name, f"{_tilde(base)} links to {os.readlink(base)}, which doesn't exist"
+        elif (base / name).exists() and not _our_skill(base / name):
+            yield agent, base / name, f"{_tilde(base / name)} exists and wasn't installed by Pensieve"
+        else:
+            yield agent, base / name, None
+
+
 def skill_state(name: str) -> str:
-    """'off', 'on', 'stale' (an older Pensieve copy) or 'theirs' (a folder by that name that Pensieve didn't make)."""
+    """'off', 'on', 'stale' (an older Pensieve copy, or an agent's link is missing) or 'theirs' (a folder by that
+    name that Pensieve didn't make)."""
     d = SKILLS_DIR / name
     if not d.exists():
-        return "off"
+        return "stale" if any(_our_skill(p) for _, p, _ in _links(name)) else "off"  # a copy from before the shared folder
     if not (d / MARK).exists():
         return "theirs"
     src = HERE / "skills" / name / "SKILL.md"
-    return "on" if (d / "SKILL.md").exists() and (d / "SKILL.md").read_text() == src.read_text() else "stale"
+    if not (d / "SKILL.md").exists() or (d / "SKILL.md").read_text() != src.read_text():
+        return "stale"
+    return "on" if all(p.is_symlink() for _, p, problem in _links(name) if not problem) else "stale"
 
 
 def set_skill(name: str, on: bool) -> str:
+    """Install the skill once in the shared folder, and link it into the folders of Claude Code and Qwen Code, which
+    read only their own. Never creates a folder for an agent that isn't installed."""
     if name not in SKILLS:
         raise ValueError(f"unknown skill {name!r}")
     d, state = SKILLS_DIR / name, skill_state(name)
     if state == "theirs":
-        raise ValueError(f"{d} exists and wasn't installed by Pensieve; leaving it alone")
-    if on:
-        if SKILLS_DIR.is_symlink() and not SKILLS_DIR.exists():
-            raise ValueError(f"{SKILLS_DIR} links to {os.readlink(SKILLS_DIR)}, which doesn't exist; "
-                             "fix or remove that link, then try again")
-        if d.exists():
-            shutil.rmtree(d)
-        shutil.copytree(HERE / "skills" / name, d)
-        (d / MARK).write_text("Installed by Pensieve; turning the skill off in Pensieve removes this folder.\n")
-    elif state != "off":
+        raise ValueError(f"{_tilde(d)} exists and wasn't installed by Pensieve; leaving it alone")
+    problems = []
+    for agent, link, problem in _links(name):
+        if problem:
+            problems.append(f"{agent} can't see it: {problem}")
+        elif link.is_symlink():
+            link.unlink()
+        elif link.exists():
+            shutil.rmtree(link)  # Pensieve's own copy from before the shared folder
+    if d.exists():
         shutil.rmtree(d)
+    if not on:
+        return skill_state(name)
+    d.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(HERE / "skills" / name, d)
+    (d / MARK).write_text("Installed by Pensieve; turning the skill off in Pensieve removes this folder.\n")
+    for agent, link, problem in _links(name):
+        if not problem:
+            link.parent.mkdir(exist_ok=True)
+            link.symlink_to(d)
+    if problems:
+        raise ValueError(f"installed in {_tilde(d)}, but " + "; ".join(problems) + ". Fix or remove that, then try again")
     return skill_state(name)
+
+
+def _tilde(p: Path) -> str:
+    return str(p).replace(str(Path.home()), "~", 1)
 
 
 def status(port: int) -> dict:
