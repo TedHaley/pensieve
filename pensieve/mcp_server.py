@@ -106,8 +106,16 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     sc = _scope()
     r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc)
     cwd = (agent_cwd.get() or "").rstrip("/")
-    # hits in linked worktrees (other branches' copies) rank below the checkout the agent runs in
-    elsewhere = lambda x: " @ " in (x.get("subtitle") or "") and not (cwd and (x.get("path") or "").startswith(cwd + "/"))
+    s = _c()["searcher"]
+    with s.lock:
+        wts = [p for (p,) in s.db.execute("SELECT path FROM worktrees")]
+
+    def elsewhere(x):  # a linked worktree's copy (another branch) that the agent isn't working in: ranked last
+        if " @ " not in (x.get("subtitle") or ""):
+            return False
+        wt = next((w for w in wts if (x.get("path") or "").startswith(w + "/")), None)
+        # by its worktree, not by cwd: agent worktrees can sit inside the repo (.claude/worktrees/…)
+        return not (cwd and wt and (cwd == wt or cwd.startswith(wt + "/")))
     res = [x for x in r["results"] if not elsewhere(x)] + [x for x in r["results"] if elsewhere(x)]
     usage.note(n_results=len(res), results=[[x.get("id"), x.get("path")] for x in res], laps=r.get("timing"))
     found = _lines(res)
