@@ -503,6 +503,9 @@ body.native .brand{display:none}
 .iconbtn.round.glass:hover{background:var(--glass-strong)}
 .iconbtn:active{transform:scale(.96)}
 body.side-open #sidetoggle{color:var(--accent)}
+body[data-view=settings] #sidetoggle{color:var(--text-3);opacity:.45;pointer-events:none}
+.seg.theme-seg{height:36px;align-items:center;padding:0 3px;gap:1px;border-radius:999px;background:var(--glass);box-shadow:inset 0 0 0 1px var(--glass-edge),var(--shadow-sm)}
+.seg.theme-seg button{width:30px;height:30px;padding:0;display:grid;place-items:center}
 
 #tabs{display:flex;gap:2px;padding:3px;border-radius:999px;border:0}
 #tabs button{border:0;background:none;padding:6px 16px;border-radius:999px;color:var(--text);opacity:.72;font-weight:500;font-size:13px;transition:background .2s var(--ease),opacity .2s,color .2s}
@@ -880,6 +883,10 @@ body:has(.modal:not([hidden])) #gl .labels,body:has(.menu:not([hidden])) #gl .la
 /* ---- unified data view ---- */
 .type-chips .chip{font-size:12.5px}
 .cbadge{display:inline-block;margin-left:6px;font:600 9.5px var(--sans);text-transform:uppercase;letter-spacing:.04em;padding:0 5px;border-radius:5px;background:var(--accent-soft);color:var(--accent);vertical-align:1px}
+.pullbtn{display:inline-grid;place-items:center;width:18px;height:18px;margin-left:4px;border:0;border-radius:5px;background:none;color:var(--good);padding:0;cursor:pointer;vertical-align:-4px}
+.pullbtn:hover{background:color-mix(in srgb,var(--good) 16%,transparent)}
+.pullbtn.busy{opacity:.4;cursor:progress;animation:pullbob .8s ease-in-out infinite alternate}
+@keyframes pullbob{to{transform:translateY(2px)}}
 .linkbtn{border:0;background:none;color:var(--accent);padding:0;font-size:inherit}
 .repo-x{background:var(--card-2);border-radius:14px;padding:10px 8px 8px}
 .repo-x .sec-h{margin:0 4px 8px}
