@@ -2,8 +2,8 @@
 # Builds Pensieve-<version>.dmg: the app with its backend installer inside (uv + the pensieve wheel).
 # On first launch the app installs the backend (Python 3.12 + dependencies, ~1 GB download) into ~/.local.
 #   mac/dmg.sh            -> mac/build/Pensieve-<version>.dmg
-# Signed with the "Pensieve Code Signing" certificate when the keychain has it (sign.sh), else ad hoc. Neither is a
-# Developer ID: on other Macs, approve the app once in System Settings → Privacy & Security.
+# Signed ad hoc, or with PENSIEVE_SIGN_IDENTITY (sign.sh). An ad-hoc app is not a Developer ID app: on other Macs,
+# approve it once in System Settings → Privacy & Security.
 set -eu
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
