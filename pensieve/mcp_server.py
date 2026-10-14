@@ -15,7 +15,7 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
-               "current_scope", "open", "index_path"}
+               "current_scope", "open", "index_path", "report_feedback"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -119,12 +119,38 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
         return not (cwd and wt and (cwd == wt or cwd.startswith(wt + "/")))
     res = [x for x in r["results"] if not elsewhere(x)] + [x for x in r["results"] if elsewhere(x)]
     usage.note(n_results=len(res), results=[[x.get("id"), x.get("path")] for x in res], laps=r.get("timing"))
+    res = _without_live_sessions(res, s, cwd)
     _mark_near_copies(res, s)
     _to_own_checkout(res, s, cwd)
     found = _lines(res)
     if getattr(sc, "unindexed", False):  # only past sessions in this repo can match; its code isn't indexed
         return (f"{sc.description}. `pensieve repo index` indexes it." + (f"\n{found}" if found else ""))
     return found or "No matches."
+
+
+LIVE_SECONDS = 300  # a session in the agent's folder written to this recently is the agent's own conversation
+
+
+def _without_live_sessions(results, searcher, cwd):
+    """Leave out sessions still being written in the agent's folder: the calling agent's own conversation matches
+    its own question best, but holds nothing it doesn't already know. MCP doesn't say which session calls, so a
+    second live session in the same folder is left out too."""
+    sids = [x["id"][8:] for x in results if str(x.get("id", "")).startswith("session:")]
+    if not cwd or not sids:
+        return results
+    with searcher.lock:
+        rows = searcher.db.execute(f"SELECT id, project, path FROM sessions WHERE id IN ({','.join('?' * len(sids))})",
+                                   sids).fetchall()
+    now, live = time.time(), set()
+    for sid, project, path in rows:
+        p = (project or "").rstrip("/")
+        if p and (cwd == p or cwd.startswith(p + "/") or p.startswith(cwd + "/")):
+            try:
+                if now - Path(path).stat().st_mtime < LIVE_SECONDS:
+                    live.add(sid)
+            except OSError:
+                pass
+    return [x for x in results if not (str(x.get("id", "")).startswith("session:") and x["id"][8:] in live)]
 
 
 def _to_own_checkout(results, searcher, cwd):
@@ -209,9 +235,23 @@ def _lines(results):
 
 @tool()
 def read(id: str, max_chars: int = 12000) -> dict:
-    """Full text of a search result id: code with its owners and recent commits, a document, or a session."""
-    _check(id)
-    return actions.read(id, max_chars)
+    """Full text of a search result id: code with its owners and recent commits, a document, or a session. Several
+    ids, separated by spaces, are read in one call ("code:12 code:40 session:…"), sharing max_chars."""
+    ids = [i for i in id.replace(",", " ").split() if i]
+    if len(ids) <= 1:
+        _check(id.strip())
+        return actions.read(id.strip(), max_chars)
+    each = max(2000, max_chars // len(ids))
+    out = []
+    for i in ids[:8]:
+        try:
+            _check(i)
+            out.append(actions.read(i, each))
+        except KeyError:
+            out.append({"id": i, "error": "not found"})
+        except ValueError as e:  # outside the connection's scope
+            out.append({"id": i, "error": str(e)})
+    return {"items": out, **({"skipped": ids[8:]} if len(ids) > 8 else {})}
 
 
 def prompt_context(prompt: str, cwd: str) -> str:
@@ -419,6 +459,17 @@ def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
     return r
 
 
+@tool()
+def report_feedback(kind: str, summary: str, details: str = "") -> dict:
+    """Report a problem with Pensieve, or an improvement, when you meet one: a tool error, a search that missed
+    code you then found another way, a wrong or stale result, something slow, or a tool that would have saved you
+    calls. kind: "bug" or "idea". summary: one line. details: what you did (the query or tool call), what you got,
+    what you expected. Keep secrets and private code out. The report stays on this Mac until the user sends it."""
+    from pensieve import feedback
+    x = feedback.add(kind, summary, details, source=agent_client.get() or "agent", context={"cwd": agent_cwd.get()})
+    return {"saved": x["id"], "note": "Saved on this Mac. The user can review and send it in Settings → Feedback."}
+
+
 @tool(name="open")
 def open_item(id: str, action: str = "open") -> dict:
     """Open an item on the user's Mac. action: 'open' (code opens in the editor at the line), 'reveal' (Finder) or
@@ -520,9 +571,9 @@ def set_source(id: str, enabled: bool | None = None, map: bool | None = None) ->
 
 @tool()
 def file_types() -> dict:
-    """Each file type in Files & folders (text, pdf, office, data, code, media, other): whether its content is read
-    (index: content | name | off), whether it shows on the map, how many files it has, and a histogram of their text
-    length. Change one with update_settings({"file_types": {"pdf": {"index": "name", "map": false}}}); the chunk
+    """Each file type in Files & folders (text, pdf, office, data, code, images, video, audio, other): whether its
+    content is read (index: content | name | off), whether it shows on the map, how many files it has, and a histogram
+    of their text length. Images, video and audio set to content download their model part first. Change one with update_settings({"file_types": {"pdf": {"index": "name", "map": false}}}); the chunk
     size and limit are the chunk_chars and max_chunks settings."""
     return _c()["files"].types()
 
@@ -567,8 +618,10 @@ def setup_guide() -> dict:
        allow access. When they agree, call setup_scan with those profiles.
     4. Show what the scan found, pre-checked items first, and ask what to index. Offer setup_add_source for folders
        or repos it missed.
-    5. Ask which insights engine to use (`ai`; "none" is fine, it can change later in Settings).
-    6. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
+    5. Ask which of images, video and audio to read by what they show or say (`content`: each entry's note says
+       what it costs). All three are off by default: then those files are found by name.
+    6. Ask which insights engine to use (`ai`; "none" is fine, it can change later in Settings).
+    7. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
     return onboarding.guide()
 
 
@@ -589,12 +642,15 @@ def setup_add_source(kind: str, path: str) -> dict:
 
 
 @tool()
-def setup_start(sources: list[str] | None = None, recommended: bool = False, ai: str | None = None) -> dict:
+def setup_start(sources: list[str] | None = None, recommended: bool = False, ai: str | None = None,
+                content: list[str] | None = None) -> dict:
     """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
     ones); everything else is switched off. `ai` sets the insights engine (an id from setup_guide's `ai`, or "none").
+    `content`: which of "images", "video" and "audio" to read by what they show or say (this selects the
+    EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by name.
     Indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left, counting only what isn't
     indexed yet), the `energy` note when minutes > 1, and `next` (how to search and see the map)."""
-    res = onboarding.start(sources, recommended, ai)
+    res = onboarding.start(sources, recommended, ai, kinds=content)
     from pensieve import server
     server.watch.force_full()
     return res

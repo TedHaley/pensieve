@@ -31,8 +31,9 @@ Then set up Pensieve. Pensieve indexes nothing until you finish setup, also afte
 2. Choose how you use your Mac: software development, AI coding agents, documents and office work, or research and notes.
 3. Let Pensieve look for sources in the folders that those choices need. macOS can ask you to allow access to some folders. Pensieve reads no folder before this step.
 4. Choose what to index from what it found. Add folders or repos that it did not find.
-5. Choose an engine for insights, or turn insights on later.
-6. Start indexing.
+5. Choose whether Pensieve reads images, video and audio by what they show or say. These are off by default. Then Pensieve finds those files by name.
+6. Choose an engine for insights, or turn insights on later.
+7. Start indexing.
 
 An agent can do the same setup in its chat. Until setup is done, every MCP connection also gets the `setup_guide`, `setup_scan`, `setup_add_source` and `setup_start` tools. `setup_guide` tells the agent which questions to ask, in order. From a terminal:
 
@@ -40,6 +41,7 @@ An agent can do the same setup in its chat. Until setup is done, every MCP conne
 pensieve setup                  # list the agent sessions, folders, repos and apps found, with their sizes
 pensieve setup recommended      # index the ones marked [x]
 pensieve setup agents/claude repos//Users/me/code/app   # or exactly these
+pensieve setup recommended images audio                 # and read images and sound by content
 ```
 
 The first index uses a lot of energy: the embedding model runs until it finishes, about 500 code files a minute on Apple Silicon. Settings → Sources shows what is syncing now.
@@ -172,7 +174,7 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 | Category | Items | Default |
 |---|---|---|
 | **AI agent sessions** | Claude Code (`~/.claude/projects`, with its memory files), Codex (`~/.codex/sessions`), Qwen Code (`~/.qwen/projects`) | on |
-| **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Content of text, Markdown, RTF, Word, PowerPoint, Excel, Pages, Keynote, Numbers, PDF, mail (`.eml`), subtitles, data files and code; images, audio, video and other files by name; folders by name and what they contain. Each document's author comes from its metadata (PDF, Office, Spotlight) or its owner. | on |
+| **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Content of text, Markdown, RTF, Word, PowerPoint, Excel, Pages, Keynote, Numbers, PDF, mail (`.eml`), subtitles, data files and code; images, video and audio by what they show or say (if you switch them on) or by name; other files by name; folders by name and what they contain. Each document's author comes from its metadata (PDF, Office, Spotlight) or its owner. | on |
 | **Git repositories** | Repos your agents worked in; repos found under your home folder (4 levels deep) and inside your folders; each repo on its own | on |
 | **Apps** | Obsidian vaults; Apple Notes (exported to Markdown in `~/.pensieve`, asks for permission) | Obsidian on, Notes off |
 
@@ -192,7 +194,17 @@ A session that is still being written updates every 30 seconds. A full sweep eve
 - **Read content**, **Name only** or **Skip**.
 - Whether files of this type show on the map.
 
-Images, audio, video and other files that have no text are found by name only and never show on the map. Folders never show on the map.
+**Images, video and audio** can be read by what they show or say. Switch them on in Settings → Models → **What the search model reads**. They need the EmbeddingGemma 2 search model. When you switch one on, Pensieve downloads its part of the model and shows the progress. Until the download is done, those files are found by name.
+
+| Kind | What Pensieve reads | Download | Speed on an M4 Max |
+|---|---|---|---|
+| Images | PNG, JPEG, GIF, WebP, BMP, TIFF and HEIC, in your folders and git repos | 335 MB | about 8 images a second |
+| Video | What it shows, 32 seconds at a time. With audio on, also what is said in it. | 335 MB (the same as images) | about 6 minutes for an hour of video |
+| Audio | What is said or heard, 30 seconds at a time | 611 MB | about 30 seconds for an hour of sound |
+
+Each 30- or 32-second window of a video or a recording is a search hit with its time, for example `meeting.m4a 12:30-13:00`. The Mac app decodes video and sound with macOS (AVFoundation). A backend without the app needs PyAV (`pip install av`).
+
+Other files that have no text are found by name only and never show on the map. Folders never show on the map.
 
 **Long documents** are split into pieces of `chunk_chars` characters (1,500 by default). Pensieve reads at most `max_chunks` pieces of each document (2,000 by default, about 1,000 pages; 0 reads all). The Sources page shows a chart of how long your documents are, and how many are longer than the limit. When you change either setting, Pensieve reads your documents again.
 
@@ -265,6 +277,10 @@ Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for t
 
 On Apple Silicon, the embedding model runs on MLX. On other machines, it runs on sentence-transformers and PyTorch (CUDA or CPU), which makes the install about 650 MB larger. The backend and the Map work on Linux too; the search panel app is macOS only.
 
+## Feedback
+
+Report a bug or an idea in Settings → Feedback, or on [GitHub issues](https://github.com/TedHaley/pensieve/issues/new/choose). Agents report too: when a Pensieve tool fails or a search misses code that the agent then finds another way, the agent calls the MCP tool `report_feedback`. Reports stay on your Mac, in `~/.pensieve/feedback.jsonl`. Settings → Feedback lists them, and Send to GitHub opens a filled-in issue that you read before you post it.
+
 ## Development
 
 ```bash
@@ -274,3 +290,25 @@ mac/build.sh && open mac/build/Pensieve.app
 ```
 
 To support another agent's transcripts, add a parser in `pensieve/parsers.py` and a line in `SOURCES` in `pensieve/config.py`.
+
+### Signing the app (optional)
+
+Signing is your choice, and the app works either way. It decides whether macOS remembers the folder access you gave Pensieve after you install a new build:
+
+- **Not signed (ad hoc, the default):** macOS identifies the app by a hash of that exact build. Each new build is a new app to macOS, so it asks again for access to Desktop, Documents and the other folders that the earlier build could already read.
+- **Signed with your own certificate:** macOS identifies the app by its bundle ID and the certificate. Every build signed with the same certificate is the same app, so macOS keeps the access it gave before and does not ask again.
+
+To sign your builds, create a certificate once:
+
+```bash
+mac/signing-cert.sh      # a self-signed "Pensieve Code Signing" certificate in your login keychain, and a backup .p12
+```
+
+After that, `mac/build.sh` and `mac/dmg.sh` sign with it automatically (see `mac/sign.sh`). To use another identity, such as an Apple Developer ID, set `PENSIEVE_SIGN_IDENTITY` to its name. The first time, macOS asks whether `codesign` can use the key: choose Always Allow.
+
+Notes:
+
+- A self-signed certificate does not make the app trusted by Gatekeeper. Only an Apple Developer ID with notarization removes the "unidentified developer" warning.
+- The first build that you sign asks for folder access one more time, because macOS has only seen the ad-hoc builds.
+- Keep the backup `.p12`. An app signed with a certificate installs only updates that are signed with the same certificate. If you lose the key, apps that already have your signed build cannot update themselves.
+- `mac/release.sh` publishes only signed builds, so that a release cannot reset everyone's folder access. Set `PENSIEVE_ALLOW_ADHOC=1` to publish an ad-hoc build anyway.

@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, llm, mcp_server, onboarding, reembed, scopes, search as search_mod, settings, sources, summarize, usage
+from pensieve import actions, config, content, llm, mcp_server, onboarding, reembed, scopes, search as search_mod, settings, sources, summarize, usage
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -391,6 +391,8 @@ async def lifespan(app):
                 llm.start_download()  # in the background; the app stays usable
             else:
                 llm.stop_builtin()
+        if "file_types" in keys or "embed_model" in keys:  # images, video or audio switched on: install their parts
+            content.resume()
         repos._extra = None  # re-run the repo sweep with the new folders/roots
         watch.force_full()
         loop.call_soon_threadsafe(broadcast, {"type": "settings", "keys": sorted(keys)})
@@ -401,6 +403,13 @@ async def lifespan(app):
         loop.call_soon_threadsafe(wake_repos.set)
     global watch
     watch = Watch(wake)
+
+    def installed():  # a model part is here: read the files that waited for it
+        watch.force_full()
+        wake()
+        loop.call_soon_threadsafe(broadcast, {"type": "settings", "keys": ["content"]})
+    content.on_installed.append(installed)
+    content.resume()
     repos.pending = watch.take_changed_repos
     repos.requeue = watch.requeue_repos
     files.pending = watch.take_files
@@ -526,6 +535,37 @@ def embed_models():
     return {"current": config.EMBED_MODEL, "wanted": reembed.wanted(), "chunks": n, "progress": reembed.progress,
             "models": [dict(id=k, label=m["label"], about=m["about"], dim=m["dim"],
                             switch_seconds=round(n / repos.embed_rate(k))) for k, m in config.EMBED_MODELS.items()]}
+
+
+@app.get("/api/content")
+def get_content():
+    """What the search model reads: text always; images, video and audio when switched on, with their install."""
+    return {"kinds": content.status(), "model": config.EMBED_MODEL, "needs_model": config.GEMMA}
+
+
+class ContentReq(BaseModel):
+    kind: str  # images | video | audio
+    on: bool
+
+
+@app.put("/api/content")
+def put_content(req: ContentReq):
+    """Switch a kind on (its model part downloads, then its files are read) or off (found by name again)."""
+    try:
+        content.switch(req.kind, req.on)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return get_content()
+
+
+@app.delete("/api/content/{part}")
+def delete_part(part: str):
+    """Delete a downloaded model part (vision or audio) that no switched-on kind uses."""
+    try:
+        content.remove(part)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e))
+    return get_content()
 
 
 @app.get("/api/projects")
@@ -1073,13 +1113,14 @@ class SetupReq(BaseModel):
     recommended: bool = False
     ai: str | None = None  # the insights engine
     embed_model: str | None = None  # the search model (config.EMBED_MODELS)
+    content: list[str] | None = None  # images, video, audio: read by content (needs EmbeddingGemma 2)
 
 
 @app.post("/api/setup")
 async def post_setup(req: SetupReq):
     """Index exactly the chosen sources: every other candidate is switched off, then indexing starts."""
     try:
-        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.ai, req.embed_model))
+        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.ai, req.embed_model, req.content))
     except ValueError as e:
         raise HTTPException(400, str(e))
     wake_files.set()
@@ -1170,6 +1211,40 @@ VERSION = _read_version()
 
 def _version():
     return VERSION
+
+
+class FeedbackReq(BaseModel):
+    kind: str
+    summary: str
+    details: str = ""
+
+
+@app.get("/api/feedback")
+def get_feedback():
+    from pensieve import feedback
+    return {"items": feedback.items(), "new_issue": f"{feedback.REPO}/issues/new/choose"}
+
+
+@app.post("/api/feedback")
+def post_feedback(req: FeedbackReq):
+    from pensieve import feedback
+    try:
+        x = feedback.add(req.kind, req.summary, req.details, source="user")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    broadcast({"type": "feedback"})
+    return dict(x, issue_url=feedback.issue_url(x))
+
+
+@app.put("/api/feedback/{fid}")
+def put_feedback(fid: str, body: dict):
+    from pensieve import feedback
+    try:
+        return feedback.set_status(fid, body.get("status", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except KeyError:
+        raise HTTPException(404)
 
 
 @app.get("/api/about")

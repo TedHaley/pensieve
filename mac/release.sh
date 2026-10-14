@@ -17,6 +17,10 @@ APP=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" mac/Resourc
 [ "$APP" = "$VERSION" ] || { echo "Info.plist says $APP, pyproject.toml says $VERSION: run mac/bump.sh $VERSION"; exit 1; }
 
 sh mac/dmg.sh
+. mac/sign.sh
+# an ad-hoc release is a new app to macOS: every user would be asked for folder access again, and then once more
+signed_with_certificate mac/build/Pensieve.app || [ -n "${PENSIEVE_ALLOW_ADHOC:-}" ] || {
+  echo "The app is signed ad hoc: run mac/signing-cert.sh (or restore its backup) first"; exit 1; }
 cp "mac/build/Pensieve-$VERSION.dmg" mac/build/Pensieve.dmg
 git tag "v$VERSION"
 git push -q origin "v$VERSION"

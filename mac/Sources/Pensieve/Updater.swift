@@ -1,9 +1,10 @@
 import AppKit
 
-/// Updates the user chooses to install. Checks GitHub's latest release ~30 s after launch and then daily (unless
-/// the `auto_update_check` setting is off); a newer version shows up in the menu and the search panel. Nothing is
-/// downloaded or installed until the user asks. Installing downloads Pensieve.dmg, checks the app inside (version
-/// and signature), swaps it in place of this app's bundle, and relaunches.
+/// Updates the user chooses to install. Checks GitHub's latest release ~5 s after launch and then daily (unless
+/// the `auto_update_check` setting is off); a newer version shows up in the menu and the search panel, and stays
+/// there across relaunches until it is installed. Nothing is downloaded or installed until the user asks.
+/// Installing downloads Pensieve.dmg, checks the app inside (version and signature), swaps it in place of this
+/// app's bundle, and relaunches.
 @MainActor
 final class Updater: ObservableObject {
     static let shared = Updater()
@@ -62,7 +63,8 @@ final class Updater: ObservableObject {
 
     func start() {
         timer?.cancel()
-        let delay = Double(ProcessInfo.processInfo.environment["PENSIEVE_UPDATE_DELAY"] ?? "") ?? 30
+        restorePending()
+        let delay = Double(ProcessInfo.processInfo.environment["PENSIEVE_UPDATE_DELAY"] ?? "") ?? 5
         timer = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             while !Task.isCancelled {
@@ -97,11 +99,33 @@ final class Updater: ObservableObject {
             let skipped = Prefs.store.string(forKey: Self.skipKey) == rel.version
             log("check: latest \(rel.version), running \(currentVersion)\(newer ? " (newer)" : "")\(skipped ? " (skipped)" : "")")
             available = newer && (manual || !skipped) ? rel : nil
+            savePending(newer ? rel : nil)
             if manual && available != nil { dismissed = false }
             return .success(available)
         } catch {
             log("check failed: \(error.localizedDescription)")
             return .failure(error)
+        }
+    }
+
+    private static let pendingKey = "pendingUpdate"  // [version, dmg, page] of the newer release the last check found
+
+    /// The newer release found by a check before this launch shows at once: a relaunch must not hide it until the
+    /// next check answers. Once this version runs, or a check finds nothing newer, it is forgotten.
+    private func restorePending() {
+        guard let p = Prefs.store.stringArray(forKey: Self.pendingKey), p.count == 3, let dmg = URL(string: p[1]),
+              Self.compare(p[0], currentVersion) > 0, Prefs.store.string(forKey: Self.skipKey) != p[0] else {
+            Prefs.store.removeObject(forKey: Self.pendingKey)
+            return
+        }
+        available = Release(version: p[0], dmg: dmg, page: URL(string: p[2]))
+    }
+
+    private func savePending(_ rel: Release?) {
+        if let rel {
+            Prefs.store.set([rel.version, rel.dmg.absoluteString, rel.page?.absoluteString ?? ""], forKey: Self.pendingKey)
+        } else {
+            Prefs.store.removeObject(forKey: Self.pendingKey)
         }
     }
 
@@ -194,6 +218,12 @@ final class Updater: ObservableObject {
         }
         try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", newApp.path],
                 "The downloaded app's signature didn't verify.")
+        // Signed with a certificate (mac/sign.sh), this app accepts only an update signed with the same one. An ad-hoc
+        // build's requirement is its own hash, which no new version can meet, so it has nothing to hold the update to.
+        if let req = Self.designatedRequirement(bundlePath), req.contains("certificate leaf") || req.contains("anchor apple") {
+            try run("/usr/bin/codesign", ["--verify", "--deep", "-R=" + req, newApp.path],
+                    "The downloaded app isn't signed by the same developer as this one.")
+        }
 
         let dest = URL(fileURLWithPath: bundlePath)
         let parent = dest.deletingLastPathComponent()
@@ -213,6 +243,15 @@ final class Updater: ObservableObject {
     }
 
     @discardableResult
+    /// The app's designated requirement as codesign prints it ("identifier … and certificate leaf = H…").
+    nonisolated private static func designatedRequirement(_ path: String) -> String? {
+        guard let out = try? run("/usr/bin/codesign", ["-d", "-r-", path], "") else { return nil }
+        return out.split(separator: "\n").compactMap { line -> String? in
+            guard let r = line.range(of: "designated => ") else { return nil }
+            return String(line[r.upperBound...])
+        }.first
+    }
+
     nonisolated private static func run(_ tool: String, _ args: [String], _ failure: String) throws -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)

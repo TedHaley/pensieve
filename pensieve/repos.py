@@ -15,8 +15,8 @@ from pathlib import Path
 import numpy as np
 
 from pensieve import config, settings
-from pensieve.files import secret
-from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, reconcile, yield_to_searches
+from pensieve.files import IMAGE_MAX_BYTES, READ_IMAGE_EXT, images_on, secret
+from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, embed_images, reconcile, yield_to_searches
 from pensieve.layout import fit3d, place_new, unit
 from pensieve.projects import project_root
 
@@ -652,7 +652,7 @@ class Repos:
             self._load_commits(root)
         state = tree_state(root)
         n = 0
-        main_sig = _sig(state)
+        main_sig = _sig(state) + ("+images" if images_on() else "")  # switching images on or off redoes the tree
         main_changed = self.store.meta(f"tree:{root}") != main_sig
         if main_changed:
             n += self._index_checkout(root, "", state, None, log)
@@ -731,6 +731,9 @@ class Repos:
     def _index_checkout(self, root, wt, state, base, log, branch=""):
         """Index one checkout. For a linked worktree (`wt`), only files that differ from the main checkout (`base`)."""
         target = state if base is None else {p: b for p, b in state.items() if base.get(p) != b}
+        imgs = images_on()
+        if not imgs:  # images indexed while the switch was on are dropped below, as changed files
+            target = {p: b for p, b in target.items() if Path(p).suffix.lower() not in READ_IMAGE_EXT}
         with self.lock:
             have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
         changed = [p for p in have if target.get(p) != have[p]]
@@ -742,15 +745,27 @@ class Repos:
         me = git(checkout, "config", "user.name").strip(), git(checkout, "config", "user.email").strip()
         secrets = settings.get("exclude_files")
         label = f"{Path(root).name}" + (f" @ {branch or Path(wt).name}" if wt else "")
-        todo = [(path, blob) for path, blob in target.items() if have.get(path) != blob and not (
+        def image(path):
+            return imgs and Path(path).suffix.lower() in READ_IMAGE_EXT
+
+        todo = [(path, blob) for path, blob in target.items() if have.get(path) != blob and (image(path) or not (
             Path(path).suffix.lower() in SKIP_EXT or Path(path).name in SKIP_NAMES or ".min." in path.rsplit("/", 1)[-1]
-            or secret(Path(path).name, secrets))]
+            or secret(Path(path).name, secrets)))]
 
         shadow = blame_shadow(root, checkout) if len(todo) >= SHADOW_MIN_FILES else None
 
         def prepare(item):  # in a worker thread: everything but the model and the database
             path, blob = item
             yield_to_searches()
+            if image(path):  # one chunk; its vector comes from the pixels (flush), its text names the file
+                try:
+                    if not 0 < (Path(checkout) / path).stat().st_size <= IMAGE_MAX_BYTES:
+                        return None
+                except OSError:
+                    return None
+                last = git(checkout, "log", "-1", "--format=%an <%ae>%x00%at", "--", path).strip().split("\0")
+                bl = {1: (last[0], int(last[1]))} if len(last) == 2 else {}
+                return path, blob, [(1, 1, f"Image: {path}")], bl
             try:
                 raw = (Path(checkout) / path).read_bytes()
             except OSError:
@@ -802,13 +817,19 @@ class Repos:
             # the same vector: copy it instead of embedding it again
             known = {**prior, **self._known_vectors(root, {p for p, *_ in group})}
             vecs = np.zeros((len(texts), config.EMBED_DIM), np.float32)
-            todo_i = [i for i, (p, t) in enumerate(zip(titles, texts)) if (p, t) not in known]
+            # an image's text is only its path, so its vector is never copied: the picture may have changed
+            todo_i = [i for i, (p, t) in enumerate(zip(titles, texts)) if (p, t) not in known or image(p)]
             for i in set(range(len(texts))) - set(todo_i):
                 vecs[i] = np.frombuffer(known[(titles[i], texts[i])], np.float16).astype(np.float32)
-            if todo_i:
-                vecs[todo_i] = embed([texts[i] for i in todo_i], titles=[titles[i] for i in todo_i])
             embedded += len(todo_i)
             self.reused += len(texts) - len(todo_i)
+            pics = [i for i in todo_i if image(titles[i])]
+            for i, v in zip(pics, embed_images([Path(checkout) / titles[i] for i in pics]) if pics else []):
+                if v is not None:
+                    vecs[i] = v
+                    todo_i.remove(i)
+            if todo_i:  # an image that could not be decoded is found by its name
+                vecs[todo_i] = embed([texts[i] for i in todo_i], titles=[titles[i] for i in todo_i])
             if writing:
                 writing.result()  # in order, and an error surfaces here
             writing = writer.submit(write, list(group), vecs)

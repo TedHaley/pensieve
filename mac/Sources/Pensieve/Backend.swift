@@ -284,6 +284,8 @@ final class Backend: ObservableObject {
         p.arguments = ["serve", "--no-open", "--port", String(port)]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        // the video and sound decoder that this app carries (pensieve/media.py)
+        env["PENSIEVE_MEDIA_TOOL"] = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/pensieve-media").path
         p.environment = env
         let dir = "\(home)/.pensieve"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)

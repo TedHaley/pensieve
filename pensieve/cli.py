@@ -7,7 +7,7 @@
                        AGENTS.md, skills (shared by the agents), and Claude Code hooks (report edits; ask before indexing a repo)
     pensieve repo [status | index | skip] [path]
                        whether Pensieve indexes the git repo at path (default: here); index it, or never ask again
-    pensieve setup [recommended | <source id> ...]
+    pensieve setup [recommended | <source id> ...] [images] [video] [audio]
                        choose what to index on first run or after a reset (no items: list the sources)
     pensieve search <query> [--kind code|doc|session|...] [--limit 8] [--scope auto]
                        search as an agent does over MCP, scoped to the repo you run it in; prints the same lines
@@ -181,9 +181,16 @@ def setup(port, items):
                         note += f", {_duration(i['seconds'])} to index" if i["seconds"] >= 30 else ", up to date"
                     print(f"  [{mark}] {i['id']:<48} {i['label']}  {size}{note}")
             print(f"\n[x] = recommended. {d['energy']}")
+            print("\nAlso read by content (off: found by name). Add the word to switch it on:")
+            for c in d["content"]:
+                if c["id"] != "text":
+                    print(f"  {c['id']:<8} {'on ' if c['on'] else 'off'}  {c['description']} {c.get('note', '')}")
             print("\nNext: `pensieve setup recommended`, or `pensieve setup <id> <id> ...` with exactly the ids to index.")
             return
+        kinds = [i for i in items if i in ("images", "video", "audio")]  # content.KINDS
+        items = [i for i in items if i not in kinds]
         body = {"recommended": True} if items == ["recommended"] else {"sources": items}
+        body["content"] = kinds or None
         r = httpx.post(f"{base}/api/setup", json=body, timeout=300)
     except httpx.HTTPError as e:
         sys.exit(f"Couldn't reach Pensieve ({e}). Open the Pensieve app, then try again.")

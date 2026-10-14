@@ -1,6 +1,6 @@
 [project]
 name = "pensieve"
-version = "0.7.0"
+version = "0.7.1"
 description = "Spotlight-style semantic and exact search over your documents, git repos and AI agent sessions, with a 3D map and an MCP server for agents."
 readme = "README.md"
 license = "MIT"
@@ -11,6 +11,7 @@ dependencies = [
     "mcp>=1.12",
     "mlx-lm>=0.32 ; platform_machine == 'arm64' and sys_platform == 'darwin'",
     "numpy>=2.5.3",
+    "pillow>=11",
     "pypdf>=6.19.0",
     "scikit-learn>=1.9.1",
     "sentence-transformers>=6.1.0 ; platform_machine != 'arm64' or sys_platform != 'darwin'",

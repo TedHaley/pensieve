@@ -2,7 +2,8 @@
 # Builds Pensieve-<version>.dmg: the app with its backend installer inside (uv + the pensieve wheel).
 # On first launch the app installs the backend (Python 3.12 + dependencies, ~1 GB download) into ~/.local.
 #   mac/dmg.sh            -> mac/build/Pensieve-<version>.dmg
-# Signed ad hoc (no Developer ID): on other Macs, approve it once in System Settings → Privacy & Security.
+# Signed with the "Pensieve Code Signing" certificate when the keychain has it (sign.sh), else ad hoc. Neither is a
+# Developer ID: on other Macs, approve the app once in System Settings → Privacy & Security.
 set -eu
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
@@ -18,7 +19,8 @@ mkdir -p "$APP/Contents/Resources/backend"
 cp build/wheel/*.whl "$APP/Contents/Resources/backend/"
 UV="${PENSIEVE_UV:-$(command -v uv)}"
 cp "$(realpath "$UV")" "$APP/Contents/Resources/backend/uv"
-codesign --force --deep -s - "$APP"
+. ./sign.sh
+sign_app "$APP"
 
 if [ ! -f build/dmg-background.tiff ] || [ scripts/make_dmg_background.swift -nt build/dmg-background.tiff ]; then
   swiftc -O scripts/make_dmg_background.swift -o build/make_dmg_background
