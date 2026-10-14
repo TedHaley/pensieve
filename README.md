@@ -258,6 +258,7 @@ pensieve                 # backend + Map in the browser (http://localhost:8765)
 pensieve --no-open       # backend only (what the Mac app runs)
 pensieve mcp             # MCP over stdio (--all-tools to include the settings tools)
 pensieve integrate       # agent add-ons: instructions block, skills and the edit hook
+pensieve search "retry failed webhook delivery" --kind code   # what an agent's search returns, scoped to this repo
 ```
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
