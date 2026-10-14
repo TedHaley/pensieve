@@ -242,7 +242,6 @@ def start(chosen=None, recommended=False, ai=None) -> dict:
     if ai is not None:
         changes["ai"] = ai
         if ai == "cli" and not settings.get("cli_command").strip():  # the first template whose CLI is installed
-            from pensieve import llm
             t = next((t for t in settings.CLI_TEMPLATES if llm._exe(t["command"])), None)
             if t:
                 changes.update(cli_command=t["command"], cli_privacy=t["privacy"])
