@@ -1,6 +1,6 @@
 #!/bin/sh
-# Pensieve installer — https://tedhaley.ca/pensieve
-#   curl -fsSL https://tedhaley.ca/pensieve/install.sh | sh
+# Pensieve installer — https://pensieve.tools
+#   curl -fsSL https://pensieve.tools/install.sh | sh
 # On a Mac: downloads the latest Pensieve.dmg, copies the app to Applications, and installs the `pensieve` backend
 # from the wheel inside the app with the app's own uv. Nothing else is needed: no git, Xcode tools or Python.
 # Elsewhere, or with PENSIEVE_REF=main: installs uv if needed and the backend from source (git), and on a Mac with

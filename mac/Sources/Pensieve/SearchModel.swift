@@ -110,7 +110,7 @@ final class SearchModel: ObservableObject {
         switch Backend.shared.state {
         case .checking, .starting: return "Starting Pensieve…"
         case .installing(let msg): return msg
-        case .missing: return "Pensieve isn't installed. In Terminal: curl -fsSL https://tedhaley.ca/pensieve/install.sh | sh"
+        case .missing: return "Pensieve isn't installed. In Terminal: curl -fsSL https://pensieve.tools/install.sh | sh"
         case .failed(let msg): return msg
         case .up:
             if let error { return error }

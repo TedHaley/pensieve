@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pensieve: local code search and MCP context for AI coding agents</title>
+<meta name="description" content="Free Mac app: search files, git repos and Claude Code or Codex sessions by meaning or exact words. MCP context that helps AI agents find code in fewer calls.">
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="keywords" content="semantic code search, MCP server, Claude Code, Codex, AI coding agents, local search Mac, code search tool, git blame ownership, knowledge gaps">
+<link rel="canonical" href="https://pensieve.tools/">
+<meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Pensieve: local code search and MCP context for AI coding agents">
+<meta property="og:description" content="Search everything on your Mac by meaning. Give your agents the best context in one search instead of a disk-wide grep. See who owns what, and find knowledge gaps. Free and local.">
+<meta property="og:url" content="https://pensieve.tools/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Pensieve: one search across your files, repos and agent sessions, on your Mac">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pensieve: local code search and MCP context for AI coding agents">
+<meta name="twitter:description" content="Search everything locally, give your agents the right context in fewer tool calls, and know who to ask. Free for Mac.">
+<meta name="twitter:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:image:alt" content="Pensieve: one search across your files, repos and agent sessions, on your Mac">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23121211'/%3E%3Ccircle cx='12' cy='12' r='8.2' fill='none' stroke='%23f4f3ee' stroke-width='1.6'/%3E%3Ccircle cx='9.5' cy='10.4' r='1.4' fill='%23f4f3ee'/%3E%3Ccircle cx='14.4' cy='9.6' r='1.05' fill='%23f4f3ee'/%3E%3Ccircle cx='12.8' cy='14.6' r='1.65' fill='%23f4f3ee'/%3E%3C/svg%3E">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@type": "SoftwareApplication",
+ "name": "Pensieve",
+ "applicationCategory": "DeveloperApplication",
+ "operatingSystem": "macOS 14 or later (Apple Silicon)",
+ "description": "Local search across your files, git repositories and AI agent sessions, by meaning or exact words. An MCP server that helps coding agents find the right code in fewer tool calls: in benchmarks, more tasks solved with 43% fewer tool calls and 18% lower cost per lookup than grep. Code ownership from git blame, and knowledge gaps where the people who wrote the code are no longer active.",
+ "featureList": [
+  "Local semantic and exact search over files, folders, git repositories and AI agent sessions",
+  "Spotlight-style search panel on Control+Shift",
+  "MCP server that points coding agents to the most relevant passages, scoped to the repo they work in",
+  "Code ownership and domain knowledge from git blame and team activity",
+  "Knowledge gaps: code mostly written by people no longer active in the repo",
+  "Live indexing of uncommitted changes and git worktrees",
+  "Runs entirely on your Mac; AI insights optional",
+  "One command connects every agent on your Mac: Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Claude Desktop and VS Code",
+  "Agent add-ons: a 'search before you grep' instructions block and Claude Code skills, including teammate and planning skills",
+  "Open-source benchmark comparing agents with and without Pensieve"
+ ],
+ "url": "https://pensieve.tools/",
+ "installUrl": "https://pensieve.tools/install.sh",
+ "codeRepository": "https://github.com/TedHaley/pensieve",
+ "license": "https://opensource.org/licenses/MIT",
+ "offers": {
+  "@type": "Offer",
+  "price": "0",
+  "priceCurrency": "USD"
+ },
+ "author": {
+  "@type": "Person",
+  "name": "Ted Haley",
+  "url": "https://tedhaley.ca"
+ },
+ "dateModified": "2026-10-11",
+ "screenshot": "https://pensieve.tools/og.png",
+ "keywords": "semantic code search, MCP server, Claude Code, Codex, AI coding agents, git blame, knowledge gaps"
+}
+</script>
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@type": "FAQPage",
+ "mainEntity": [
+  {
+   "@type": "Question",
+   "name": "What does Pensieve search?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Your files and folders (Documents, Desktop, Downloads and any folder you add), your git repositories including uncommitted changes and worktrees, and your Claude Code, Codex and Qwen Code sessions. Obsidian vaults too, and optionally Apple Notes. Everything is indexed and searched on your Mac."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "How does Pensieve help my agent?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Without it, a coding agent often greps the repo and reads many whole files to find what matters, and every file it reads costs tokens. With Pensieve connected over MCP, the agent asks one question and gets back the most relevant passages with their file and line, so it starts on the right code in fewer tool calls. In our benchmark that made each lookup 18% cheaper and 21% faster. The numbers are below."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Does Pensieve make Claude Code cheaper?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "In our benchmark, Claude Code with Pensieve found the right file in 131 of 144 runs, against 123 with grep alone, with 43% fewer tool calls. Each lookup cost 18% less overall, and 6–28% less in each of four repos from 504 to 34,847 files. The benchmark scripts are open source, so you can run them on your own code."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "How do I get my agent to use Pensieve instead of grep?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Agents grep by habit. The agent prompt runs pensieve integrate recommended, which adds a short “search before you grep” section to the instructions files of Claude Code, Codex and Gemini CLI, plus a search skill and two hooks for Claude Code. You can also switch these on in Settings → Agents. With it, the agent used Pensieve in 144 and 143 of 144 runs, in the two benchmark batches that ran without our own Claude Code settings."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Which agents work with Pensieve?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Any MCP client. pensieve integrate recommended connects Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Claude Desktop and VS Code for you. Other agents can use pensieve mcp over stdio, or HTTP. Optional skills also suggest which teammates know an area and help plan new code around what already exists."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "How does it find knowledge gaps?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Pensieve reads git blame and recent commit history for each area of a repo. Areas where most lines were written by people with no recent commits there are flagged, along with how many active people know the area and who among them knows it best."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Does anything leave my Mac?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Your files, code and sessions don't. Indexing and search run on your Mac. Pensieve only downloads its models and checks GitHub for updates, which you can turn off. The exception is if you choose Claude Code or Codex to write optional AI insights; those are labelled Cloud. The built-in model, a local server like LM Studio, or no AI at all keep everything local."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Do I need an AI model?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "No. Search, agent context, ownership and knowledge gaps all work without one. AI insights are optional: choose the built-in Qwen 3.5 9B, LM Studio, Claude Code, Codex, or leave it off."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Is Pensieve free?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Yes. It's free and open source under the MIT license. The code is on GitHub."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Why does macOS ask before opening it?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "The app isn't notarized yet. If macOS blocks it, open System Settings → Privacy & Security and click Open Anyway. You only do this once."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Does it work on Intel Macs or Linux?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "The app needs Apple Silicon. On Linux and Intel Macs, the same install command installs the backend and the browser visualizer. An Intel Mac also gets the search panel if the Xcode command-line tools are installed."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "How do I uninstall it?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "First run pensieve integrate all --remove to disconnect your agents. Then quit Pensieve, drag it to the Trash, and delete ~/.pensieve, ~/.local/share/uv/tools/pensieve and ~/.local/bin/pensieve. Its models are in ~/.cache/huggingface."
+   }
+  }
+ ]
+}
+</script>
+<style>
+:root{
+  --bg:#ffffff;--bg-alt:#f5f5f7;--ink:#1d1d1f;--ink-2:#6e6e73;--ink-3:#86868b;--line:rgba(0,0,0,.08);
+  --blue:#0071e3;--blue-hover:#0077ed;--link:#0066cc;--card:#ffffff;
+  --glass-strong:rgba(250,250,252,.82);--glass-edge:rgba(255,255,255,.7);
+  --shadow:0 30px 80px -20px rgba(0,0,0,.25),0 10px 30px -10px rgba(0,0,0,.12);
+  --band-dark:#000000;--band-dark-ink:#f5f5f7;--band-dark-ink-2:#a1a1a6;--band-dark-card:#1d1d1f;
+  --sel:#0a84ff;--good:#1f7a43;--warn:#a34700;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#000000;--bg-alt:#101012;--ink:#f5f5f7;--ink-2:#a1a1a6;--ink-3:#86868b;--line:rgba(255,255,255,.12);
+    --blue:#0071e3;--blue-hover:#147ce5;--link:#2997ff;--card:#1c1c1e;
+    --glass-strong:rgba(32,32,36,.82);--glass-edge:rgba(255,255,255,.12);
+    --shadow:0 30px 80px -20px rgba(0,0,0,.8),0 10px 30px -10px rgba(0,0,0,.6);
+    --band-dark:#101012;--band-dark-card:#1c1c1e;--good:#30d158;--warn:#ff9f0a;
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:-.022em;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+code,kbd{font-family:ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:0;font-size:.9em}
+.wrap{max-width:1024px;margin:0 auto;padding:0 22px}
+.wide{max-width:1180px;margin:0 auto;padding:0 22px}
+h1,h2,h3{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",sans-serif;margin:0}
+
+/* nav */
+nav.top{position:sticky;top:0;z-index:20;height:52px;background:rgba(251,251,253,.72);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid var(--line)}
+@media (prefers-color-scheme:dark){nav.top{background:rgba(22,22,23,.72)}}
+nav.top .wide{display:flex;align-items:center;gap:22px;height:100%}
+.brand{display:flex;align-items:center;gap:8px;color:var(--ink);font-weight:600;font-size:19px;letter-spacing:-.02em}
+.brand:hover{text-decoration:none}
+.brand svg{width:22px;height:22px}
+nav.top .links{display:flex;gap:26px;margin-left:auto;font-size:12.5px;letter-spacing:-.01em}
+nav.top .links a{color:var(--ink);opacity:.8}
+nav.top .links a:hover{opacity:1;text-decoration:none}
+.pill{display:inline-flex;align-items:center;gap:6px;background:var(--blue);color:#fff;border-radius:980px;font-size:12.5px;font-weight:500;padding:5px 13px;white-space:nowrap}
+.pill:hover{background:var(--blue-hover);text-decoration:none}
+@media (max-width:760px){nav.top .links{display:none}nav.top .pill{margin-left:auto}}
+
+/* hero */
+.hero{text-align:center;padding:84px 0 0;overflow:hidden}
+.eyebrow{font-size:21px;font-weight:600;color:var(--ink);letter-spacing:.004em;margin-bottom:10px;display:inline-flex;align-items:center;gap:8px}
+.eyebrow svg{width:24px;height:24px}
+.hero h1{font-size:clamp(44px,8.4vw,96px);line-height:1.04;letter-spacing:-.045em;font-weight:700}
+.hero .sub{font-size:clamp(19px,2.4vw,28px);line-height:1.25;font-weight:500;color:var(--ink-2);max-width:760px;margin:20px auto 0;letter-spacing:-.02em}
+.cta{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:34px}
+.btn{display:inline-flex;align-items:center;gap:10px;background:var(--blue);color:#fff;border-radius:980px;font-size:17px;font-weight:500;padding:14px 26px;letter-spacing:-.01em;transition:background .2s}
+.btn:hover{background:var(--blue-hover);text-decoration:none}
+.btn svg{width:18px;height:18px}
+.fine{font-size:12.5px;color:var(--ink-3);letter-spacing:-.005em}
+.morelinks{display:flex;gap:10px 28px;justify-content:center;flex-wrap:wrap;font-size:17px;margin-top:4px}
+.morelinks a::after{content:" ›"}
+
+.stage{position:relative;margin:56px auto 0;max-width:1180px;height:min(640px,72vw);min-height:440px}
+.stage canvas{position:absolute;inset:0;width:100%;height:100%}
+.stage .panel{position:absolute;left:50%;top:7%;transform:translateX(-50%);width:min(680px,calc(100% - 32px))}
+.stage::after{content:"";position:absolute;left:0;right:0;bottom:0;height:120px;background:linear-gradient(to bottom,transparent,var(--bg));pointer-events:none}
+
+/* glass search panel mock */
+.panel{background:var(--glass-strong);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);border-radius:26px;box-shadow:var(--shadow),inset 0 0 0 1px var(--glass-edge);text-align:left}
+.panel .bar{display:flex;align-items:center;gap:12px;padding:16px 18px 8px}
+.panel .bar>svg{flex:none;width:22px;height:22px;color:var(--ink-2)}
+.panel .q{flex:1;min-width:0;font-size:clamp(17px,2.4vw,23px);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.panel .q .caret{display:inline-block;width:2px;height:1.05em;background:var(--sel);vertical-align:-3px;margin-left:1px;animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.panel .q .caret{animation:none}}
+.panel .icons{display:flex;gap:12px;color:var(--ink-2)}
+.panel .icons svg{width:19px;height:19px}
+.panel .hint{padding:0 18px 10px 52px;font-size:12px;color:var(--ink-3)}
+.panel .hint b{color:var(--ink-2);font-weight:600}
+.panel .res{border-top:1px solid var(--line);padding:6px 8px 10px;position:relative}
+.panel .grp{font-size:11px;font-weight:600;color:var(--ink-3);padding:8px 10px 4px;letter-spacing:.01em}
+.row{display:flex;gap:12px;align-items:center;padding:8px 10px;border-radius:12px;min-width:0}
+.row .ic{flex:none;width:32px;height:32px;border-radius:8px;display:grid;place-items:center}
+.row .ic svg{width:22px;height:22px}
+.row .ic.code svg,.row .ic.chat svg{width:18px;height:18px}
+.row .t{min-width:0;flex:1}
+.row .t b{display:block;font-size:14px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t span{display:block;font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t i{font-style:normal;font-weight:600;color:var(--ink)}
+.row.sel{background:var(--sel)}
+.row.sel .t b,.row.sel .t span,.row.sel .t i{color:#fff}
+.row .badge{flex:none;font-size:10.5px;font-weight:600;border:1px solid currentColor;border-radius:6px;padding:1px 6px;color:var(--ink-2)}
+.row.sel .badge{color:#fff}
+.ic.code{background:rgba(48,176,199,.16);color:#1f8fa3}
+.ic.chat{background:rgba(175,82,222,.16);color:#9a3fc8}
+@media (prefers-color-scheme:dark){.ic.code{color:#5ac8dc}.ic.chat{color:#c47de8}}
+.row.sel .ic.code{background:rgba(255,255,255,.22);color:#fff}
+.actions{position:absolute;right:-18px;top:46px;width:214px;background:var(--glass-strong);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);border-radius:16px;box-shadow:var(--shadow),inset 0 0 0 1px var(--glass-edge);padding:6px}
+.actions div{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;font-size:13.5px;color:var(--ink);white-space:nowrap}
+.actions div svg{width:16px;height:16px;flex:none;color:var(--ink-2)}
+.actions div kbd{margin-left:auto;font-size:11px;color:var(--ink-3)}
+.actions div.on{background:var(--sel);color:#fff}
+.actions div.on svg,.actions div.on kbd{color:#fff}
+@media (min-width:1120px){.showcase .actions{right:-226px;top:38px}}
+@media (max-width:700px){.actions{position:relative;right:auto;top:auto;width:auto;margin:8px 4px 0;box-shadow:inset 0 0 0 1px var(--line)}}
+
+/* sections */
+section{padding:110px 0}
+@media (max-width:700px){section{padding:80px 0}}
+.band-alt{background:var(--bg-alt)}
+.band-dark{background:var(--band-dark);color:var(--band-dark-ink);--ink:var(--band-dark-ink);--ink-2:var(--band-dark-ink-2);--ink-3:#86868b;--card:var(--band-dark-card);--line:rgba(255,255,255,.12);--link:#2997ff;--bg-alt:#1c1c1e;--glass-strong:rgba(36,36,40,.86);--glass-edge:rgba(255,255,255,.12);--warn:#ff9f0a;--good:#30d158}
+.band-dark .ba .side{background:#1c1c1e;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.head{text-align:center;max-width:820px;margin:0 auto}
+.kicker{font-size:17px;font-weight:600;color:var(--ink-2);margin-bottom:8px}
+.head h2{font-size:clamp(36px,6vw,64px);line-height:1.06;letter-spacing:-.04em;font-weight:700}
+.head h2,.hero h1,.hero .sub,.head p,.tile h3{text-wrap:balance}
+.head p{font-size:clamp(17px,2vw,21px);line-height:1.38;color:var(--ink-2);margin:18px auto 0;max-width:680px;letter-spacing:-.016em}
+.showcase{margin-top:60px;display:flex;justify-content:center}
+.showcase .panel{width:min(720px,100%)}
+
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:20px;margin-top:56px}
+.tiles.three{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+@media (min-width:900px){.tiles.three{grid-template-columns:repeat(3,1fr)}}
+.tile{background:var(--bg-alt);border-radius:22px;padding:28px 26px;min-width:0}
+.band-alt .tile{background:var(--bg)}
+.band-dark .tile{background:var(--card)}
+.tile h3{font-size:21px;line-height:1.2;letter-spacing:-.02em;font-weight:600;margin-bottom:8px}
+.tile p{margin:0;font-size:15px;line-height:1.45;color:var(--ink-2);letter-spacing:-.012em}
+.tile .ex{display:inline-block;margin-bottom:14px;font-size:14px;padding:5px 10px;border-radius:9px;background:rgba(0,113,227,.1);color:var(--link);font-family:ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:0;max-width:100%;overflow-wrap:anywhere}
+.tile .glyph{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;margin-bottom:16px;color:#fff}
+.tile .glyph svg{width:22px;height:22px}
+
+/* map */
+.mapstage{position:relative;margin-top:50px;height:min(560px,70vw);min-height:380px;border-radius:30px;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#17171b,#000 72%)}
+.mapstage canvas{position:absolute;inset:0;width:100%;height:100%}
+.who{position:absolute;right:22px;bottom:22px;width:min(310px,calc(100% - 44px));background:rgba(30,30,34,.72);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border-radius:18px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);padding:14px 16px;color:#f5f5f7;font-size:13px}
+.who .ttl{font-size:11px;font-weight:600;color:#a1a1a6;margin-bottom:8px;letter-spacing:.02em}
+.who .p{display:flex;align-items:center;gap:10px;margin:7px 0}
+.who .av{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff;flex:none}
+.who .meter{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
+.who .meter i{display:block;height:100%;border-radius:3px}
+.who .n{width:96px;white-space:nowrap}
+@media (max-width:560px){.who{left:12px;right:12px;bottom:12px;width:auto}}
+
+/* terminal */
+.term{margin:56px auto 0;max-width:760px;background:#1d1d1f;border-radius:18px;box-shadow:var(--shadow);overflow:hidden;color:#f5f5f7;text-align:left}
+.term .chrome{display:flex;gap:8px;padding:12px 14px;background:#2a2a2d}
+.term .chrome i{width:12px;height:12px;border-radius:50%;background:#ff5f57}
+.term .chrome i:nth-child(2){background:#febc2e}.term .chrome i:nth-child(3){background:#28c840}
+.term pre{margin:0;padding:18px 20px 22px;font:13.5px/1.65 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;letter-spacing:0}
+@media (max-width:560px){.term pre{font-size:12px;padding:14px 14px 18px}}
+.term .c{color:#8e8e93}.term .p{color:#64d2ff}.term .g{color:#30d158}.term .y{color:#ffd60a}.term .w{color:#f5f5f7;font-weight:600}
+
+/* always current feed */
+.feed{margin:56px auto 0;max-width:640px;display:flex;flex-direction:column;gap:10px}
+.ev{display:flex;align-items:center;gap:14px;background:var(--bg-alt);border-radius:16px;padding:14px 16px;min-width:0}
+.ev .dot{flex:none;width:10px;height:10px;border-radius:50%}
+.ev .t{flex:1;min-width:0}
+.ev .t b{display:block;font-size:15px;font-weight:600;overflow-wrap:anywhere}
+.ev .t span{display:block;font-size:13px;color:var(--ink-2);overflow-wrap:anywhere}
+.ev .when{flex:none;font-size:12.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+/* privacy */
+.tile.span{grid-column:1/-1}
+.engines{margin-top:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.engines div{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:14px;background:var(--bg-alt);border-radius:12px;padding:12px 14px}
+.band-alt .engines div{background:var(--bg-alt)}
+.tag{font-size:11px;font-weight:600;border-radius:6px;padding:2px 7px;white-space:nowrap}
+.tag.local{background:rgba(48,209,88,.16);color:var(--good)}
+.tag.cloud{background:rgba(255,159,10,.16);color:var(--warn)}
+
+/* get */
+.get{display:grid;grid-template-columns:1.05fr 1fr;gap:20px;margin-top:56px;align-items:stretch}
+@media (max-width:860px){.get{grid-template-columns:1fr}}
+.card{background:var(--bg-alt);border-radius:22px;padding:32px 30px;min-width:0}
+@media (max-width:560px){.card{padding:26px 22px}}
+.card h3{font-size:24px;letter-spacing:-.02em;font-weight:600;margin-bottom:8px}
+.card h4{font-size:19px;letter-spacing:-.02em;font-weight:600;margin:26px 0 6px}
+.card p{color:var(--ink-2);font-size:15px;margin:0 0 16px}
+.card .btn{margin:6px 0 12px}
+.cmd{display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:12px;padding:10px 10px 10px 14px;margin-bottom:12px;min-width:0}
+.cmd code{flex:1;min-width:0;font-size:13px;overflow-wrap:break-word;color:var(--ink)}
+.copy{flex:none;border:0;border-radius:980px;padding:6px 14px;font:500 13px -apple-system,BlinkMacSystemFont,sans-serif;background:var(--blue);color:#fff;cursor:pointer}
+.copy:hover{background:var(--blue-hover)}
+.copy:focus-visible,.btn:focus-visible,.pill:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid rgba(0,113,227,.45);outline-offset:3px}
+.prompt{background:var(--bg);border-radius:12px;padding:12px 14px;font-size:13.5px;line-height:1.55;color:var(--ink);margin-bottom:12px;overflow-wrap:anywhere}
+.note{display:flex;gap:12px;margin-top:18px;padding:16px 18px;border-radius:16px;background:var(--bg);font-size:14px;color:var(--ink-2);text-align:left}
+.note svg{flex:none;width:20px;height:20px;color:var(--ink-2);margin-top:1px}
+.note b{color:var(--ink);font-weight:600}
+
+/* faq */
+.faq{max-width:760px;margin:50px auto 0}
+.faq details{border-bottom:1px solid var(--line)}
+.faq summary{cursor:pointer;list-style:none;font-size:19px;font-weight:600;letter-spacing:-.02em;padding:20px 40px 20px 0;position:relative}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";position:absolute;right:4px;top:14px;font-size:26px;font-weight:300;color:var(--ink-2);transition:transform .25s}
+.faq details[open] summary::after{transform:rotate(45deg)}
+.faq details p{margin:0 0 22px;color:var(--ink-2);font-size:16px}
+.faq details.closing summary::after{transform:none}
+.faq .nums{padding-bottom:26px}
+.faq .nums>p{margin:0 0 18px;color:var(--ink-2);font-size:16px}
+.faq .stats{grid-template-columns:1fr 1fr;margin-top:0}
+.faq .bench{grid-template-columns:1fr;margin-top:20px}
+.faq .chart svg{max-width:500px;display:block}
+.faq .method{text-align:left;margin-left:0}
+
+footer{background:var(--bg-alt);color:var(--ink-3);font-size:12px;padding:28px 0 40px;border-top:1px solid var(--line)}
+footer .wide{display:flex;flex-wrap:wrap;gap:12px 24px;justify-content:space-between}
+footer a{color:var(--ink-2)}
+
+/* reveal */
+/* measured: benchmark charts and savings calculator */
+.bench{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:56px}
+@media (max-width:860px){.bench{grid-template-columns:1fr}}
+.chart{background:var(--bg-alt);border-radius:22px;padding:24px 22px 18px;min-width:0}
+.chart h3{font-size:19px;letter-spacing:-.02em;font-weight:600;margin-bottom:4px}
+.chart .sub{font-size:14px;color:var(--ink-2);margin:0 0 14px;line-height:1.4}
+.chart svg{width:100%;height:auto;display:block;overflow:visible}
+.chart svg text{font:12px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;fill:var(--ink-2)}
+.chart svg .lab{fill:var(--ink);font-weight:500}
+.chart svg .axis{stroke:var(--line);stroke-width:1}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--ink-2);margin-top:10px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;margin-top:20px}
+.stat{background:var(--bg-alt);border-radius:22px;padding:22px 24px}
+.stat b{display:block;font-size:clamp(30px,4vw,40px);letter-spacing:-.03em;line-height:1.1;font-weight:700}
+.stat span{font-size:14px;color:var(--ink-2);line-height:1.4;display:block;margin-top:6px}
+.newstats{margin-top:20px}
+.newstats .stat b{font-size:clamp(24px,3vw,30px)}
+.newstats .stat:nth-child(3) b{background-image:linear-gradient(92deg,#2997ff,#bf5af2)}
+.calc{background:var(--bg-alt);border-radius:22px;padding:26px;margin-top:20px;display:grid;grid-template-columns:1.2fr 1fr;gap:26px;align-items:center}
+@media (max-width:760px){.calc{grid-template-columns:1fr}}
+.calc label{display:block;font-size:14px;color:var(--ink-2);margin:0 0 14px}
+.calc label b{color:var(--ink);font-weight:600}
+.calc input[type=range]{width:100%;margin-top:6px;accent-color:var(--blue)}
+.calc .out b{display:block;font-size:clamp(34px,5vw,48px);letter-spacing:-.03em;font-weight:700;line-height:1.05}
+.calc .out span{display:block;font-size:14px;color:var(--ink-2);line-height:1.45;margin-top:6px}
+.calc .out .neg{color:var(--warn)}
+.method{font-size:13px;line-height:1.5;color:var(--ink-3);max-width:820px;margin:22px auto 0;text-align:center}
+ul.method{text-align:left;max-width:760px;padding-left:20px}
+ul.method li{margin:4px 0}
+.rv{opacity:0;transform:translateY(28px);transition:opacity .9s cubic-bezier(.2,.7,.2,1),transform .9s cubic-bezier(.2,.7,.2,1)}
+.rv.in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){.rv{opacity:1;transform:none;transition:none}}
+/* before / after */
+.ba{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:56px}
+@media (max-width:820px){.ba{grid-template-columns:1fr}}
+.ba .side{background:#1d1d1f;color:#f5f5f7;border-radius:20px;overflow:hidden;box-shadow:var(--shadow);display:flex;flex-direction:column;min-width:0}
+.ba .side header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;background:#2a2a2d;font-size:13px;font-weight:600}
+.ba .side header span{font-weight:500;color:#a1a1a6}
+.ba pre{margin:0;padding:16px 18px;font:12.5px/1.65 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;letter-spacing:0;flex:1}
+.ba .c{color:#8e8e93}.ba .p{color:#64d2ff}.ba .y{color:#ffd60a}.ba .g{color:#30d158}.ba .r{color:#ff6961}.ba .w{color:#f5f5f7;font-weight:600}
+.ba .meter{padding:14px 18px 18px;border-top:1px solid rgba(255,255,255,.1)}
+.ba .meter .lbl{display:flex;justify-content:space-between;font-size:12.5px;color:#a1a1a6;margin-bottom:8px}
+.ba .meter .lbl b{color:#f5f5f7;font-weight:600}
+.ba .track{height:8px;border-radius:4px;background:rgba(255,255,255,.1);overflow:hidden}
+.ba .track i{display:block;height:100%;border-radius:4px}
+@media (max-width:560px){.ba pre{font-size:11.5px;padding:14px}.ba .g{display:none}}
+.illus{text-align:center;font-size:12.5px;color:var(--ink-3);margin-top:16px}
+/* knowledge gaps */
+.gapwrap{display:grid;grid-template-columns:1.15fr 1fr;gap:20px;margin-top:56px;align-items:start}
+@media (max-width:860px){.gapwrap{grid-template-columns:1fr}}
+.gap{background:var(--glass-strong);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);border-radius:24px;box-shadow:var(--shadow),inset 0 0 0 1px var(--glass-edge);padding:22px 22px 18px;min-width:0}
+.gap .top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:6px}
+.gap .area{font:600 15px ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:0;overflow-wrap:anywhere}
+.gap .risk{flex:none;font-size:11px;font-weight:700;border-radius:999px;padding:3px 9px;background:rgba(255,159,10,.16);color:var(--warn)}
+.gap .sub{font-size:13px;color:var(--ink-2);margin-bottom:16px}
+.gap .stack{display:flex;height:12px;border-radius:6px;overflow:hidden;margin:6px 0 8px;gap:2px}
+.gap .stack i{display:block;height:100%}
+.gap .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--ink-2);margin-bottom:16px}
+.gap .legend span{display:inline-flex;align-items:center;gap:6px}
+.gap .legend span::before{content:"";width:9px;height:9px;border-radius:3px;background:var(--c)}
+.gap .ppl{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--line);padding-top:10px}
+.gap .person{display:flex;align-items:center;gap:12px;padding:7px 2px;font-size:13.5px;min-width:0}
+.gap .person .av{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:10.5px;font-weight:700;color:#fff;flex:none}
+.gap .person .pw{flex:1;min-width:0}
+.gap .person .pw b{display:block;font-weight:600}
+.gap .person .pw span{display:block;font-size:12px;color:var(--ink-2)}
+.gap .person .pct{flex:none;font-size:12.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.gap .person.gone{opacity:.62}
+.gap .tip{margin-top:12px;font-size:13px;background:rgba(10,132,255,.1);color:var(--ink);border-radius:12px;padding:10px 12px}
+.gap .tip b{color:var(--link)}
+.gapfacts{display:flex;flex-direction:column;gap:20px}
+.gapfacts .tile{margin:0}
+
+.hero h1.h1-long{font-size:clamp(40px,7vw,80px);max-width:980px;margin:0 auto}
+
+/* ---------- 0.5 refresh: light, motion and depth ---------- */
+@property --spin{syntax:"<angle>";inherits:false;initial-value:0deg}
+.grad{background:linear-gradient(92deg,#2997ff 0%,#7a5cff 38%,#bf5af2 62%,#ff375f 100%);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+.kicker{background:linear-gradient(90deg,#2997ff,#bf5af2);-webkit-background-clip:text;background-clip:text;color:transparent;display:inline-block}
+
+.hero{position:relative;isolation:isolate;padding-top:110px}
+.hero::before{content:"";position:absolute;left:50%;top:-180px;width:min(1400px,160vw);height:980px;transform:translateX(-50%);z-index:-1;pointer-events:none;
+  background:radial-gradient(38% 34% at 28% 34%,rgba(41,151,255,.34),transparent 70%),radial-gradient(34% 30% at 72% 30%,rgba(191,90,242,.30),transparent 70%),radial-gradient(28% 26% at 52% 62%,rgba(48,176,199,.22),transparent 70%),radial-gradient(22% 20% at 82% 70%,rgba(255,55,95,.16),transparent 70%);
+  filter:blur(30px);animation:aurora 22s ease-in-out infinite alternate}
+@media (prefers-color-scheme:light){.hero::before{opacity:.55}}
+@keyframes aurora{0%{transform:translateX(-50%) rotate(0) scale(1)}50%{transform:translateX(-48%) rotate(3deg) scale(1.06)}100%{transform:translateX(-52%) rotate(-2deg) scale(1.02)}}
+.hero h1{font-size:clamp(48px,9.4vw,112px);letter-spacing:-.05em;line-height:1}
+.hero .eyebrow{font-size:19px;padding:7px 16px 7px 12px;border-radius:999px;background:rgba(127,127,140,.12);box-shadow:inset 0 0 0 1px var(--line);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);margin-bottom:22px}
+.cta{flex-direction:row;flex-wrap:wrap;justify-content:center;gap:14px 26px}
+.cta .fine{flex-basis:100%;text-align:center}
+.btn{box-shadow:0 10px 30px -8px rgba(0,113,227,.6),inset 0 1px 0 rgba(255,255,255,.22);transition:background .2s,transform .2s,box-shadow .2s}
+.btn:hover{transform:translateY(-1px);box-shadow:0 16px 40px -10px rgba(0,113,227,.75),inset 0 1px 0 rgba(255,255,255,.22)}
+.link-more{font-size:17px;align-self:center}
+.link-more::after{content:" ›"}
+.stage{perspective:1400px;margin-top:70px}
+.stage .panel{transform-origin:50% 0;transform:translateX(-50%) rotateX(calc((1 - var(--p,1)) * 16deg)) scale(calc(.92 + var(--p,1) * .08));will-change:transform}
+@media (prefers-reduced-motion:reduce){.hero::before{animation:none}.stage .panel{transform:translateX(-50%)}}
+
+.works{margin:8px auto 0;padding:0 22px;max-width:1024px;text-align:center}
+.works .lbl{font-size:13px;font-weight:600;color:var(--ink-3);letter-spacing:.06em;text-transform:uppercase}
+.works ul{list-style:none;padding:0;margin:16px 0 0;display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+.works li{font-size:15px;font-weight:500;padding:9px 16px;border-radius:999px;background:var(--bg-alt);box-shadow:inset 0 0 0 1px var(--line);color:var(--ink)}
+.works li b{font-weight:600}
+
+.tile,.chart,.stat,.calc,.ev{box-shadow:inset 0 0 0 1px var(--line)}
+.tile{transition:transform .5s cubic-bezier(.2,.7,.2,1),box-shadow .5s}
+.tile:hover{transform:translateY(-4px);box-shadow:inset 0 0 0 1px var(--line),0 24px 50px -24px rgba(0,0,0,.45)}
+.stat b{background:linear-gradient(120deg,var(--ink) 30%,var(--ink-2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat:first-child b,.stat:nth-child(2) b{background-image:linear-gradient(92deg,#2997ff,#bf5af2)}
+.head h2{letter-spacing:-.045em}
+
+/* the search panel does more: bento */
+.bento{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:60px}
+.bento>div{position:relative;overflow:hidden;background:var(--bg-alt);border-radius:28px;padding:30px 28px;min-width:0;box-shadow:inset 0 0 0 1px var(--line)}
+.bento .w2{grid-column:span 2}
+@media (max-width:860px){.bento{grid-template-columns:1fr}.bento .w2{grid-column:auto}}
+.bento h3{font-size:24px;letter-spacing:-.025em;font-weight:600;margin-bottom:8px}
+.bento p{margin:0;font-size:15px;line-height:1.45;color:var(--ink-2)}
+.bento .mini{margin-top:22px;width:100%;max-width:520px}
+.bento .mini .bar{padding:12px 16px 10px}
+.bento .mini .q{font-size:19px}
+.bento .big{font-size:clamp(56px,7vw,84px);font-weight:700;letter-spacing:-.05em;line-height:1;margin:26px 0 6px}
+.bento .eq{font:500 19px ui-monospace,"SF Mono",Menlo,monospace;color:var(--ink-2);letter-spacing:0}
+.keys{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+.key{display:inline-flex;align-items:center;justify-content:center;min-width:52px;height:52px;padding:0 14px;border-radius:12px;font:600 20px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--ink);
+  background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,.04));box-shadow:inset 0 0 0 1px var(--line),0 1px 0 rgba(255,255,255,.12) inset,0 6px 14px -6px rgba(0,0,0,.5)}
+.key.wide{min-width:120px}
+.keymap{display:grid;grid-template-columns:auto 1fr;gap:10px 14px;align-items:center;margin-top:20px;font-size:14px;color:var(--ink-2)}
+.keymap .key{min-width:44px;height:36px;font-size:15px;border-radius:9px}
+.glowdot{position:absolute;width:260px;height:260px;border-radius:50%;filter:blur(60px);opacity:.35;pointer-events:none;right:-60px;top:-60px}
+
+/* get: one glowing card */
+.getcard{position:relative;max-width:760px;margin:60px auto 0;padding:46px 44px 40px;border-radius:32px;background:var(--bg-alt);isolation:isolate;text-align:left}
+.getcard::before,.getcard::after{content:"";position:absolute;inset:-1.5px;border-radius:33.5px;background:conic-gradient(from var(--spin),#2997ff,#7a5cff,#bf5af2,#ff375f,#ff9f0a,#30d158,#2997ff);animation:spin 8s linear infinite;z-index:-1}
+.getcard::after{inset:-30px;filter:blur(50px);opacity:.28;z-index:-2}
+.getcard>.fill{position:absolute;inset:0;border-radius:32px;background:var(--bg-alt);z-index:-1}
+@keyframes spin{to{--spin:360deg}}
+@media (prefers-reduced-motion:reduce){.getcard::before,.getcard::after{animation:none}}
+@media (max-width:560px){.getcard{padding:30px 22px 26px}}
+.getcard h3{font-size:28px;letter-spacing:-.03em;font-weight:700;margin-bottom:8px}
+.getcard>p{color:var(--ink-2);font-size:16px;margin:0 0 22px}
+.getcard .prompt{font:14.5px/1.6 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:0;padding:18px 20px;border-radius:16px;box-shadow:inset 0 0 0 1px var(--line);margin-bottom:16px}
+.getcard .copy{font-size:15px;padding:11px 22px}
+.getcard h3.step2{margin-top:36px}
+.steps{list-style:none;margin:30px 0 0;padding:24px 0 0;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+@media (max-width:860px){.steps{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:640px){.steps{grid-template-columns:1fr}}
+.steps li{font-size:14px;color:var(--ink-2);line-height:1.4}
+.steps li b{display:block;color:var(--ink);font-size:15px;margin-bottom:2px}
+.steps li i{font-style:normal;display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;margin-bottom:10px;font-size:13px;font-weight:700;color:#fff;background:linear-gradient(135deg,#2997ff,#bf5af2)}
+</style>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></symbol>
+  <symbol id="mag" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="apple" viewBox="0 0 24 24"><path fill="currentColor" d="M16.4 12.7c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8 0 0-2.5-1-2.5-3.9zM14 5.6c.7-.8 1.1-1.9 1-3-1 0-2.1.6-2.8 1.4-.6.7-1.2 1.8-1 2.9 1.1.1 2.1-.5 2.8-1.3z"/></symbol>
+  <symbol id="hex" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="6" r="2.2"/><circle cx="6.5" cy="15" r="2.2"/><circle cx="17.5" cy="15" r="2.2"/><path d="M11 8 7.6 13M13 8l3.4 5M8.7 15h6.6"/></g></symbol>
+  <symbol id="gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></g></symbol>
+  <symbol id="folder" viewBox="0 0 32 32"><path d="M3 8.5A2.5 2.5 0 0 1 5.5 6h7l2.5 3h11.5A2.5 2.5 0 0 1 29 11.5v12A2.5 2.5 0 0 1 26.5 26h-21A2.5 2.5 0 0 1 3 23.5z" fill="#1e9bf0"/><path d="M3 12h26v11.5a2.5 2.5 0 0 1-2.5 2.5h-21A2.5 2.5 0 0 1 3 23.5z" fill="#5ab8f7"/></symbol>
+  <symbol id="docic" viewBox="0 0 32 32"><path d="M9 4h10l6 6v17a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 8 27V5.5A1.5 1.5 0 0 1 9 4z" fill="#fff" stroke="#c7c7cc"/><path d="M19 4v6h6" fill="#e5e5ea" stroke="#c7c7cc"/><path d="M11.5 15h9M11.5 18h9M11.5 21h6" stroke="#aeaeb2" stroke-width="1.2"/></symbol>
+  <symbol id="pdfic" viewBox="0 0 32 32"><path d="M9 4h10l6 6v17a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 8 27V5.5A1.5 1.5 0 0 1 9 4z" fill="#fff" stroke="#c7c7cc"/><path d="M19 4v6h6" fill="#e5e5ea" stroke="#c7c7cc"/><rect x="10" y="17" width="12" height="6" rx="1.5" fill="#ff3b30"/><text x="16" y="21.6" font-size="4.6" font-family="-apple-system,sans-serif" font-weight="700" fill="#fff" text-anchor="middle">PDF</text></symbol>
+  <symbol id="codeic" viewBox="0 0 24 24"><path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5M13.5 5l-3 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="chatic" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4A2.5 2.5 0 0 1 4 12.5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></symbol>
+  <symbol id="open" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="finder" viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="copyic" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+</svg>
+
+<nav class="top" aria-label="Main">
+  <div class="wide">
+    <a class="brand" href="/"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve</a>
+    <div class="links"><a href="#search">Search</a><a href="#agents">Agents</a><a href="#owners">Owners</a><a href="#gaps">Gaps</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a><a href="https://github.com/TedHaley/pensieve">GitHub</a></div>
+    <a class="pill" href="#get">Install</a>
+  </div>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve for Mac</div>
+    <h1>Supercharges you<br>and <span class="grad">your agents.</span></h1>
+    <p class="sub">Search your files, repos and agent sessions, locally, and give your agents the best context for the job. One search points them to the few passages that matter, instead of grepping the whole disk. Fewer tool calls, lower cost.</p>
+    <div class="cta">
+      <a class="btn" href="#get"><svg aria-hidden="true"><use href="#apple"/></svg>Install with your agent</a>
+      <a class="link-more" href="#search">See how it works</a>
+      <div class="fine">Apple Silicon · macOS 14 or later · free and open source</div>
+    </div>
+  </div>
+  <div class="stage" aria-hidden="true">
+    <canvas id="cloud1"></canvas>
+    <div class="panel">
+      <div class="bar"><svg><use href="#mag"/></svg><div class="q">notes from the pricing review<span class="caret"></span></div><div class="icons"><svg><use href="#hex"/></svg><svg><use href="#gear"/></svg></div></div>
+      <div class="hint"><b>Meaning</b> notes from the pricing review</div>
+      <div class="res">
+        <div class="grp">Files</div>
+        <div class="row sel"><div class="ic"><svg><use href="#pdfic"/></svg></div><div class="t"><b>Q3 planning.pdf</b><span>~/Documents/Planning · <i>Pricing</i> tiers and discounts for annual plans</span></div></div>
+        <div class="row"><div class="ic"><svg><use href="#folder"/></svg></div><div class="t"><b>Pricing review</b><span>Folder in ~/Documents · notes.md, deck.pptx</span></div></div>
+        <div class="grp">Code</div>
+        <div class="row"><div class="ic code"><svg><use href="#codeic"/></svg></div><div class="t"><b>billing/invoices.py</b><span>acme-app/billing · def apply_discount(plan, seats)</span></div></div>
+        <div class="grp">Agent sessions</div>
+        <div class="row"><div class="ic chat"><svg><use href="#chatic"/></svg></div><div class="t"><b>Price the annual plan correctly</b><span>Claude Code · acme-app · Sep 24</span></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="works rv">
+    <div class="lbl">Connects to the agents you already use</div>
+    <ul><li>Claude Code</li><li>Codex</li><li>Cursor</li><li>Gemini CLI</li><li>Windsurf</li><li>Claude Desktop</li><li>VS Code</li><li>any MCP client</li></ul>
+  </div>
+</header>
+
+<section id="search">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="kicker">Search everything, locally</div>
+      <h2>One search. Every file, repo and session.</h2>
+      <p>Press Control+Shift for a glass panel over your documents, folders, git repositories and conversations with coding agents. Search by meaning or by the exact words. Pick a result, tap Control, and choose what to do with it without touching the mouse.</p>
+    </div>
+    <div class="showcase rv">
+      <div class="panel">
+        <div class="bar"><svg><use href="#mag"/></svg><div class="q">"retry" payments -draft<span class="caret"></span></div><div class="icons"><svg><use href="#hex"/></svg><svg><use href="#gear"/></svg></div></div>
+        <div class="hint"><b>Exact</b> "retry" &nbsp; <b>Meaning</b> payments &nbsp; <b>Without</b> draft</div>
+        <div class="res">
+          <div class="grp">Code</div>
+          <div class="row sel"><div class="ic code"><svg><use href="#codeic"/></svg></div><div class="t"><b>payments/retry.py</b><span>acme-app/payments · max_<i>retry</i>_attempts = 5</span></div><span class="badge">exact</span></div>
+          <div class="row"><div class="ic"><svg><use href="#docic"/></svg></div><div class="t"><b>Incident review.md</b><span>~/Documents/Ops · card declines, <i>retry</i> with backoff</span></div><span class="badge">exact</span></div>
+          <div class="row"><div class="ic"><svg><use href="#folder"/></svg></div><div class="t"><b>Receipts</b><span>Folder in ~/Downloads</span></div></div>
+          <div class="row"><div class="ic chat"><svg><use href="#chatic"/></svg></div><div class="t"><b>Refactor the auth flow</b><span>Codex · acme-app · Oct 2</span></div></div>
+          <div class="actions">
+            <div class="on"><svg><use href="#open"/></svg>Open<kbd>↩</kbd></div>
+            <div><svg><use href="#finder"/></svg>Show in Finder<kbd>⌘↩</kbd></div>
+            <div><svg><use href="#hex"/></svg>Show on map<kbd>⌥↩</kbd></div>
+            <div><svg><use href="#copyic"/></svg>Copy path<kbd>⌘C</kbd></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="tiles">
+      <div class="tile rv"><span class="ex">pricing model</span><h3>By meaning</h3><p>Plain words find what you meant, even when the file never uses them.</p></div>
+      <div class="tile rv"><span class="ex">"rate limit"</span><h3>Exact words</h3><p>Quotes match the phrase exactly. Mix both to rank exact hits by meaning.</p></div>
+      <div class="tile rv"><span class="ex">-draft</span><h3>Leave things out</h3><p>A minus sign excludes a word or a quoted phrase.</p></div>
+      <div class="tile rv"><span class="ex">kind:code ext:pdf</span><h3>Narrow it down</h3><p>Filter to files, code or sessions, a file type, or a folder or repo with <code>in:</code>.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="agents" class="band-dark">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="kicker">Superpowers for your agents</div>
+      <h2>The right context. Not the whole disk.</h2>
+      <p>Agents are only as good as the context they're given. Connected over MCP, your coding agent asks Pensieve one question and gets back the few passages that matter, with file and line. It starts on the right code in fewer tool calls.</p>
+    </div>
+    <div class="ba">
+      <div class="side rv" role="img" aria-label="Illustration: without Pensieve the agent greps the repo and reads many whole files">
+        <header>Without Pensieve <span>grep and read</span></header>
+<pre><span class="p">›</span> Why do card retries stop after a decline?
+<span class="y">● Grep</span> "retry" in acme-app   <span class="c">212 matches</span>
+<span class="y">● Read</span> payments/retry.py
+<span class="y">● Read</span> payments/gateway.py
+<span class="y">● Read</span> billing/invoices.py
+<span class="y">● Read</span> tests/test_payments.py
+<span class="c">  … 36 more files</span>
+<span class="r">  Still looking for the backoff rule…</span></pre>
+        <div class="meter"><div class="lbl"><span>Tool calls</span><b>1 grep · 40 reads and counting</b></div><div class="track"><i style="width:100%;background:#ff9f0a"></i></div></div>
+      </div>
+      <div class="side rv" role="img" aria-label="Illustration: with Pensieve the agent runs one search and reads three relevant passages">
+        <header>With Pensieve <span>one search</span></header>
+<pre><span class="p">›</span> Why do card retries stop after a decline?
+<span class="y">● pensieve · search</span> "card retry after decline"
+  payments/retry.py:42      <span class="g">stop on hard_decline</span>
+  payments/gateway.py:118   <span class="g">decline codes</span>
+  Incident review.md        <span class="g">why we changed it</span>
+<span class="y">● pensieve · read</span> payments/retry.py:42
+<span class="w">Hard declines skip the retry queue.</span>
+<span class="w">Maya Rivera owns this; see the Mar 4 review.</span></pre>
+        <div class="meter"><div class="lbl"><span>Tool calls</span><b>1 search · 1 read</b></div><div class="track"><i style="width:6%;background:#30d158"></i></div></div>
+      </div>
+    </div>
+    <p class="illus">Illustrative example. In the benchmark below, agents with Pensieve averaged 2.0 tool calls per lookup against 3.4 with grep, and answered after a single call in 82 of 144 runs.</p>
+    <div class="term rv" role="img" aria-label="Terminal: pensieve integrate recommended connects Claude Code, Codex and Cursor">
+      <div class="chrome"><i></i><i></i><i></i></div>
+<pre><span class="c">~</span> <span class="p">$</span> <span class="w">pensieve integrate recommended</span>
+claude-mcp: <span class="g">on</span>
+codex-mcp: <span class="g">on</span>
+cursor-mcp: <span class="g">on</span>
+claude: <span class="g">on</span>          <span class="c"># "search before you grep" in ~/.claude/CLAUDE.md</span>
+pensieve-search: <span class="g">on</span>
+claude-hook: <span class="g">on</span>
+claude-repo-check: <span class="g">on</span>
+Agents load MCP servers when they start: restart any that are open to give them Pensieve.</pre>
+    </div>
+    <div class="tiles">
+      <div class="tile rv"><h3>Scoped to the job</h3><p>An agent started in a repo sees that repo, its worktrees and its sessions. Name a scope to give it a few repos and a folder of specs.</p></div>
+      <div class="tile rv"><h3>Exact or by meaning</h3><p>Agents use the same search you do: by meaning, by the exact identifier, or both, across code, docs and past sessions.</p></div>
+      <div class="tile rv"><h3>Works with your agent</h3><p>Claude Code, Codex, Cursor or any MCP client, over stdio with <code>pensieve mcp</code> or over HTTP. <code>pensieve integrate</code> connects the agents on your Mac and adds a “search before you grep” block and skills, including optional ones that point you to teammates who know the code.</p></div>
+    </div>
+    <div class="stats newstats">
+      <div class="stat rv"><b>30% cheaper</b><span>$0.033 per answer instead of $0.047 with grep. 18–31% cheaper in each of four test batches.</span></div>
+      <div class="stat rv"><b>32% faster</b><span>9.1 seconds per answer instead of 13.4 with grep. 21–32% faster in each of four test batches.</span></div>
+      <div class="stat rv"><b>17% more accurate</b><span>Found the right file 17% more often than grep: in 123 of 144 runs instead of 105. More accurate in each of four test batches.</span></div>
+    </div>
+    <p class="illus">Claude Sonnet in Claude Code, Pensieve with the recommended install, against Claude Code with grep only. 72 tasks in four real repos (504 to 34,847 files), each task twice per setup. <a href="https://github.com/TedHaley/pensieve/blob/main/bench/STRATEGIES.md">The method and every strategy we tried</a>.</p>
+  </div>
+</section>
+
+<section id="owners" class="band-alt">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="kicker">Know who to ask</div>
+      <h2>See who owns what.</h2>
+      <p>Every repo as a map, with git blame for every line. Ask about any topic and get the people with the most domain knowledge, plus what each teammate has been working on lately. The fastest answer is often a conversation.</p>
+    </div>
+  </div>
+  <div class="wide">
+    <div class="mapstage rv" aria-hidden="true">
+      <canvas id="cloud2"></canvas>
+      <div class="who">
+        <div class="ttl">WHO KNOWS ABOUT “BILLING RETRIES”</div>
+        <div class="p"><span class="av" style="background:#0a84ff">MR</span><span class="n">Maya Rivera</span><span class="meter"><i style="width:72%;background:#0a84ff"></i></span></div>
+        <div class="p"><span class="av" style="background:#1f8fa3">JO</span><span class="n">Jonah Okafor</span><span class="meter"><i style="width:41%;background:#30b0c7"></i></span></div>
+        <div class="p"><span class="av" style="background:#9a3fc8">YOU</span><span class="n">You</span><span class="meter"><i style="width:18%;background:#af52de"></i></span></div>
+      </div>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="tiles">
+      <div class="tile rv"><div class="glyph" style="background:#0a84ff"><svg><use href="#codeic"/></svg></div><h3>Ownership from blame</h3><p>Who wrote each area, weighted by the lines that are still there today.</p></div>
+      <div class="tile rv"><div class="glyph" style="background:#1f8fa3"><svg><use href="#chatic"/></svg></div><h3>Domain knowledge</h3><p>Ask about a topic, not a file, and get the people whose code is most about it.</p></div>
+      <div class="tile rv"><div class="glyph" style="background:#9a3fc8"><svg><use href="#hex"/></svg></div><h3>Team activity</h3><p>What each teammate shipped in the last 90 days, and the areas next to your work you haven't explored.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="gaps" class="band-dark">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="kicker">Find knowledge gaps</div>
+      <h2>Know where the knowledge left.</h2>
+      <p>When the people who wrote a part of the codebase are no longer active in it, that knowledge is at risk. Pensieve flags those areas, shows how few people still know them, and who knows them best today.</p>
+    </div>
+    <div class="gapwrap">
+      <div class="gap rv" role="img" aria-label="Example knowledge gap card for a fictional billing area">
+        <div class="top"><div class="area">acme-app / billing/tax</div><span class="risk">1 active expert</span></div>
+        <div class="sub">2,140 lines · last major change 7 months ago</div>
+        <div class="stack"><i style="flex:58;background:#636366"></i><i style="flex:20;background:#8e8e93"></i><i style="flex:14;background:#0a84ff"></i><i style="flex:8;background:#30b0c7"></i></div>
+        <div class="legend"><span style="--c:#636366">Not active here · 78%</span><span style="--c:#0a84ff">Priya Nair · 14%</span><span style="--c:#30b0c7">Others · 8%</span></div>
+        <div class="ppl">
+          <div class="person gone"><span class="av" style="background:#636366">DK</span><div class="pw"><b>Daniel Kim</b><span>Not active here since March</span></div><span class="pct">58%</span></div>
+          <div class="person gone"><span class="av" style="background:#8e8e93">LS</span><div class="pw"><b>Lena Schultz</b><span>Not active here since last year</span></div><span class="pct">20%</span></div>
+          <div class="person"><span class="av" style="background:#0a84ff">PN</span><div class="pw"><b>Priya Nair</b><span>Active this month · knows it best today</span></div><span class="pct">14%</span></div>
+        </div>
+        <div class="tip"><b>Suggestion:</b> pair with Priya before changing tax rules, and document the rounding logic in <code>vat.py</code>.</div>
+      </div>
+      <div class="gapfacts">
+        <div class="tile rv"><h3>Bus factor at a glance</h3><p>For every area of a repo: how much of the code was written by people still active there, and how many of them there are.</p></div>
+        <div class="tile rv"><h3>Who still knows it</h3><p>The active people with the most lines in that area, so you know who to pull in before you change it.</p></div>
+        <div class="tile rv"><h3>Plan the handover</h3><p>Spot gaps before an incident does. Point your agent at the area to draft the missing docs.</p></div>
+      </div>
+    </div>
+    <p class="illus">Example with fictional names and numbers.</p>
+  </div>
+</section>
+
+<section id="current">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="kicker">Always current</div>
+      <h2>Edit a file. Search it seconds later.</h2>
+      <p>Pensieve watches your folders, repos and agent sessions and re-indexes what changed. Uncommitted edits count, and every worktree is tracked by branch, so your agents never work from stale context.</p>
+    </div>
+    <div class="feed" role="list" aria-label="Example of live indexing">
+      <div class="ev rv" role="listitem"><span class="dot" style="background:#30b0c7"></span><div class="t"><b>payments/retry.py</b><span>Uncommitted change in acme-app</span></div><span class="when">now</span></div>
+      <div class="ev rv" role="listitem"><span class="dot" style="background:#af52de"></span><div class="t"><b>New worktree: fix-backoff</b><span>Files that differ from main, tagged with their branch</span></div><span class="when">12 s ago</span></div>
+      <div class="ev rv" role="listitem"><span class="dot" style="background:#0a84ff"></span><div class="t"><b>Q3 planning.pdf</b><span>Saved to ~/Documents/Planning</span></div><span class="when">1 min ago</span></div>
+      <div class="ev rv" role="listitem"><span class="dot" style="background:#ff9f0a"></span><div class="t"><b>Price the annual plan correctly</b><span>New turns in a running Claude Code session</span></div><span class="when">2 min ago</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="privacy" class="band-alt">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="kicker">Private by design</div>
+      <h2>Your work stays on your Mac.</h2>
+      <p>Indexing and search run locally. You decide what gets indexed, and AI is entirely optional.</p>
+    </div>
+    <div class="tiles three">
+      <div class="tile rv"><h3>Runs locally</h3><p>An on-device embedding model and a local index in <code>~/.pensieve</code>. Its server answers only this Mac, not your network or other websites. No account, no cloud service.</p></div>
+      <div class="tile rv"><h3>Switch any source off</h3><p>Agents, folders, repos and apps each have a switch. Turning one off removes what it indexed.</p></div>
+      <div class="tile rv"><h3>Secrets skipped</h3><p>Password-manager exports, keys, <code>.env</code> files and credentials are never indexed.</p></div>
+      <div class="tile rv span"><h3>AI if you want it</h3><p>Summaries and insights are optional. Pick who writes them, or leave it off:</p>
+        <div class="engines">
+          <div>Built-in Qwen 3.5 9B <span class="tag local">Local</span></div>
+          <div>LM Studio or local server <span class="tag local">Local</span></div>
+          <div>Claude Code or Codex <span class="tag cloud">Cloud</span></div>
+          <div>Off <span class="tag local">Local</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="get">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>Get Pensieve.</h2>
+      <p>Free and open source. One command installs it, and your coding agent does the rest.</p>
+    </div>
+    <div class="getcard rv">
+      <span class="fill"></span>
+      <h3>1. Install the app.</h3>
+      <p>Run this in Terminal. It installs Pensieve and opens it.</p>
+      <div class="prompt" id="cmd-install">curl -fsSL https://pensieve.tools/install.sh | sh</div>
+      <button class="copy" data-copy-from="cmd-install" aria-label="Copy the install command">Copy command</button>
+      <h3 class="step2">2. Ask your coding agent to connect it.</h3>
+      <p>Paste this into Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf or VS Code.</p>
+      <div class="prompt" id="cmd-agent">Pensieve is installed on my Mac. Run pensieve integrate recommended to connect my coding agents. Then run pensieve setup, show me what it found and how long each source takes to index, ask me which sources to index, and run pensieve setup with my choices. Tell me how long indexing takes and how to search and open the map.</div>
+      <button class="copy" data-copy-from="cmd-agent" aria-label="Copy the agent prompt">Copy prompt</button>
+      <ol class="steps">
+        <li><i>1</i><b>Run the command</b>It installs the app. You don't need git, Python or Xcode.</li>
+        <li><i>2</i><b>Paste the prompt</b>Your agent connects Pensieve to every agent on your Mac.</li>
+        <li><i>3</i><b>Choose what to index</b>Your agent asks, and tells you how long it takes. Indexing uses a lot of energy, so plug in.</li>
+        <li><i>4</i><b>Tap Control+Shift</b>Search from anywhere, also while it indexes. Choose Open Map in the menu bar to explore.</li>
+      </ol>
+      <div class="fine" style="margin-top:22px"><span id="relver"></span>Apple Silicon · macOS 14 or later · <a href="https://github.com/TedHaley/pensieve/releases/latest/download/Pensieve.dmg">Download the app</a> instead</div>
+    </div>
+  </div>
+</section>
+
+<section id="faq" class="band-alt">
+  <div class="wrap">
+    <div class="head rv"><h2>Questions.</h2></div>
+    <div class="faq">
+      <details><summary>What does Pensieve search?</summary><p>Your files and folders (Documents, Desktop, Downloads and any folder you add), your git repositories including uncommitted changes and worktrees, and your Claude Code, Codex and Qwen Code sessions. Obsidian vaults too, and optionally Apple Notes. Everything is indexed and searched on your Mac.</p></details>
+      <details><summary>How does Pensieve help my agent?</summary><p>Without it, a coding agent often greps the repo and reads many whole files to find what matters, and every file it reads costs tokens. With Pensieve connected over MCP, the agent asks one question and gets back the most relevant passages with their file and line, so it starts on the right code in fewer tool calls. In our benchmark that made each lookup 18% cheaper and 21% faster. The numbers are below.</p></details>
+      <details><summary>Does Pensieve make Claude Code cheaper?</summary><p>In our benchmark, Claude Code with Pensieve found the right file in 131 of 144 runs, against 123 with grep alone, with 43% fewer tool calls. Each lookup cost 18% less overall, and 6–28% less in each of four repos from 504 to 34,847 files. The benchmark scripts are open source, so you can run them on your own code.</p></details>
+      <details class="numbers"><summary>How well does it work? The numbers</summary><div class="nums"><p>We ran two tests in four real repos, from 500 to 35,000 files: Claude Code finding code with and without Pensieve, and Pensieve searching on its own.</p>
+<div class="stats">
+      <div class="stat"><b>131 / 144</b><span>runs that found the right file with Pensieve, against 123 / 144 with grep alone</span></div>
+      <div class="stat"><b>43% fewer</b><span>tool calls per lookup: 2.0 instead of 3.4</span></div>
+      <div class="stat"><b>18% cheaper</b><span>per lookup: $0.041 instead of $0.050, and cheaper in all four repos</span></div>
+      <div class="stat"><b>21% faster</b><span>per lookup: 8.6 seconds instead of 10.9</span></div>
+    </div>
+    <div class="bench">
+      <div class="chart">
+        <h3>Right file, first result</h3>
+        <p class="sub">One search, before any agent: how often the answer is the top result, over 1,000 test queries of four kinds.</p>
+        <svg id="ch-first" viewBox="0 0 440 200" role="img" aria-label="Bar chart: share of tasks where the right file is the first result, grep versus Pensieve, by query style"></svg>
+        <div class="legend"><span><i style="background:#8e8e93"></i>One grep</span><span><i style="background:var(--blue)"></i>Pensieve search</span></div>
+      </div>
+      <div class="chart">
+        <h3>Agent cost per code lookup</h3>
+        <p class="sub">Claude Sonnet in Claude Code, measured in four real repos. Pensieve costs less in every repo, and saves the most in the biggest one.</p>
+        <svg id="ch-cost" viewBox="0 0 440 250" role="img" aria-label="Bar chart: agent cost per lookup in four repos, grep versus Pensieve. Pensieve costs 15% less in a 504-file repo, 6% less at 1,783 files, 14% less at 2,383 files and 28% less at 34,847 files."></svg>
+        <div class="legend"><span><i style="background:#8e8e93"></i>Grep, Glob and Read</span><span><i style="background:var(--blue)"></i>With Pensieve</span></div>
+      </div>
+    </div>
+    <p class="method"><b>How we measured.</b> We ran two tests in four real repos, from 500 to 35,000 files.</p>
+    <p class="method"><b>Test 1: Claude Code with and without Pensieve.</b> Claude Code had to find the right file for 72 tasks. It did each task twice with its normal tools (grep, glob and read), and twice with Pensieve added. With Pensieve, it found the right file more often, with fewer tool calls and at a lower cost. We did not use these tasks to tune Pensieve.</p>
+    <p class="method"><b>Test 2: one search, no agent.</b> We gave Pensieve 1,000 searches and checked if the right file came first. The searches were of three kinds:</p>
+    <ul class="method">
+      <li><b>A question in plain words</b>, for example “email sent once when free trial ends”. The right file was first 44% of the time, and in the top 10 results 80% of the time.</li>
+      <li><b>An exact name or error message</b>, for example <code>batch_update</code>. The right file was first 88% of the time.</li>
+      <li><b>A name and a few words</b>, for example “pg_inherits check whether table is a partition”. The right file was first 70% of the time, and in the top 3 results 94% of the time.</li>
+    </ul>
+    <p class="method">Grep finds only text that is in the code word for word. It cannot answer a question in plain words. Over all 1,000 searches, the right file was first 67% of the time with Pensieve, and 22% of the time with grep. One search takes about 80 ms. We measured on an Apple M4 Max. The test scripts are in <a href="https://github.com/TedHaley/pensieve/tree/main/bench">bench/</a>, so you can run them on your own code.</p>
+</div></details>
+      <details><summary>How do I get my agent to use Pensieve instead of grep?</summary><p>Agents grep by habit. The agent prompt runs <code>pensieve integrate recommended</code>, which adds a short “search before you grep” section to the instructions files of Claude Code, Codex and Gemini CLI, plus a search skill and two hooks for Claude Code. You can also switch these on in Settings → Agents. With it, the agent used Pensieve in 144 and 143 of 144 runs, in the two benchmark batches that ran without our own Claude Code settings.</p></details>
+      <details><summary>Which agents work with Pensieve?</summary><p>Any MCP client. <code>pensieve integrate recommended</code> connects Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Claude Desktop and VS Code for you. Other agents can use <code>pensieve mcp</code> over stdio, or HTTP. Optional skills also suggest which teammates know an area and help plan new code around what already exists.</p></details>
+      <details><summary>How does it find knowledge gaps?</summary><p>Pensieve reads git blame and recent commit history for each area of a repo. Areas where most lines were written by people with no recent commits there are flagged, along with how many active people know the area and who among them knows it best.</p></details>
+      <details><summary>Does anything leave my Mac?</summary><p>Your files, code and sessions don't. Indexing and search run on your Mac. Pensieve only downloads its models and checks GitHub for updates, which you can turn off. The exception is if you choose Claude Code or Codex to write optional AI insights; those are labelled Cloud. The built-in model, a local server like LM Studio, or no AI at all keep everything local.</p></details>
+      <details><summary>Do I need an AI model?</summary><p>No. Search, agent context, ownership and knowledge gaps all work without one. AI insights are optional: choose the built-in Qwen 3.5 9B, LM Studio, Claude Code, Codex, or leave it off.</p></details>
+      <details><summary>Is Pensieve free?</summary><p>Yes. It's free and open source under the MIT license. The code is on <a href="https://github.com/TedHaley/pensieve">GitHub</a>.</p></details>
+      <details><summary>Why does macOS ask before opening it?</summary><p>The app isn't notarized yet. If macOS blocks it, open System Settings → Privacy &amp; Security and click Open Anyway. You only do this once.</p></details>
+      <details><summary>Does it work on Intel Macs or Linux?</summary><p>The app needs Apple Silicon. On Linux and Intel Macs, the same install command installs the backend and the browser visualizer. An Intel Mac also gets the search panel if the Xcode command-line tools are installed.</p></details>
+      <details><summary>How do I uninstall it?</summary><p>First run <code>pensieve integrate all --remove</code> to disconnect your agents. Then quit Pensieve, drag it to the Trash, and delete <code>~/.pensieve</code>, <code>~/.local/share/uv/tools/pensieve</code> and <code>~/.local/bin/pensieve</code>. Its models are in <code>~/.cache/huggingface</code>.</p></details>
+    </div>
+  </div>
+</section>
+</main>
+
+
+<footer>
+  <div class="wide">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <span><a href="https://github.com/TedHaley/pensieve">GitHub</a> · <a href="https://github.com/TedHaley/pensieve/releases">Releases</a> · <a href="https://tedhaley.ca">tedhaley.ca</a></span>
+  </div>
+</footer>
+
+<script>
+function legacyCopy(text) {
+  const t = document.createElement('textarea'); t.value = text; t.setAttribute('readonly', ''); t.style.cssText = 'position:fixed;opacity:0';
+  document.body.appendChild(t); t.select(); let ok = false; try { ok = document.execCommand('copy'); } catch {} t.remove(); return ok;
+}
+// the version of the latest release, from GitHub: this page lives in another repo, so it cannot name it
+fetch('https://api.github.com/repos/TedHaley/pensieve/releases/latest').then(r => r.ok ? r.json() : null).then(j => {
+  if (j && j.tag_name) document.getElementById('relver').textContent = 'Version ' + j.tag_name.replace(/^v/, '') + ' · ';
+}).catch(() => {});
+document.querySelectorAll('.copy').forEach(b => b.addEventListener('click', async () => {
+  const label = b.dataset.label || (b.dataset.label = b.textContent), text = document.getElementById(b.dataset.copyFrom).textContent.trim();
+  let ok = false;
+  try { ok = await Promise.race([navigator.clipboard.writeText(text).then(() => true), new Promise(r => setTimeout(() => r(false), 800))]); } catch {}
+  if (!ok) ok = legacyCopy(text);
+  b.textContent = ok ? 'Copied' : 'Select and copy';
+  setTimeout(() => (b.textContent = label), 1600);
+}));
+
+// scroll reveal
+const io = 'IntersectionObserver' in window ? new IntersectionObserver(es => es.forEach(e => {
+  if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+}), {rootMargin: '0px 0px -8% 0px'}) : null;
+document.querySelectorAll('.rv').forEach(el => io ? io.observe(el) : el.classList.add('in'));
+
+// the hero panel starts tilted back and settles flat as it scrolls into view
+(() => {
+  const hp = document.querySelector('.stage .panel');
+  if (!hp || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  let raf = 0;
+  const tilt = () => {
+    raf = 0;
+    const top = hp.parentElement.getBoundingClientRect().top;
+    hp.style.setProperty('--p', Math.min(1, Math.max(0, 1 - (top - innerHeight * .2) / (innerHeight * .55))).toFixed(3));
+  };
+  addEventListener('scroll', () => raf || (raf = requestAnimationFrame(tilt)), {passive: true});
+  addEventListener('resize', tilt);
+  tilt();
+})();
+
+// measured: charts and savings calculator (data from bench/out/agent_summary.json)
+(() => {
+  // costs: mean per lookup, grep arm vs Pensieve 0.5.6 ("guided"), from bench/out/<repo>/runs-sonnet-v5test.jsonl
+  // retrieval: hit@1 by query style over bench/out/queries-1000.jsonl, Pensieve 0.6.3 vs one grep for the whole query
+  const D = {"retrieval": {"grep": {"query": 0, "mixed": 0, "ident": 0.521, "literal": 0.886}, "pensieve": {"query": 0.437, "mixed": 0.70, "ident": 0.913, "literal": 0.825}}, "points": [{"name": "Small app", "files": 504, "grep": 0.02926, "pensieve": 0.02478}, {"name": "Data pipelines", "files": 1783, "grep": 0.05543, "pensieve": 0.05198}, {"name": "Infrastructure", "files": 2383, "grep": 0.02862, "pensieve": 0.02474}, {"name": "Web monorepo", "files": 34847, "grep": 0.06771, "pensieve": 0.04905}]};
+  const NS = 'http://www.w3.org/2000/svg', css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const el = (p, tag, at, text) => { const e = document.createElementNS(NS, tag); for (const k in at) e.setAttribute(k, at[k]); if (text != null) e.textContent = text; p.appendChild(e); return e; };
+  const blue = css('--blue') || '#0071e3', grey = '#8e8e93';
+  // 1. right file first, by query style
+  const f = document.getElementById('ch-first');
+  if (f) {
+    const styles = [['literal', 'Error message'], ['ident', 'Function name'], ['mixed', 'Name + words'], ['query', 'Short question']];
+    const x0 = 112, w = 300, rowH = 46;
+    styles.forEach(([k, label], i) => {
+      const y = 10 + i * rowH;
+      el(f, 'text', {x: 0, y: y + 17, class: 'lab'}, label);
+      [['grep', grey], ['pensieve', blue]].forEach(([arm, col], j) => {
+        const v = D.retrieval[arm][k], yy = y + j * 17;
+        el(f, 'rect', {x: x0, y: yy + 2, width: Math.max(2, v * w), height: 13, rx: 3, fill: col});
+        el(f, 'text', {x: x0 + Math.max(2, v * w) + 6, y: yy + 13}, Math.round(v * 100) + '%');
+      });
+    });
+  }
+  // 2. cost per lookup in each measured repo
+  const c = document.getElementById('ch-cost');
+  if (c) {
+    const L = 48, R = 430, T = 14, B = 200, ymax = 0.08, Y = v => B - v / ymax * (B - T), slot = (R - L) / D.points.length;
+    for (const v of [0, .02, .04, .06, .08]) { el(c, 'line', {x1: L, x2: R, y1: Y(v), y2: Y(v), class: 'axis'}); el(c, 'text', {x: L - 8, y: Y(v) + 4, 'text-anchor': 'end'}, '$' + v.toFixed(2)); }
+    D.points.forEach((p, i) => {
+      const x = L + i * slot + slot / 2, bw = 26, pct = Math.round((p.grep - p.pensieve) / p.grep * 100);
+      [[p.grep, grey, -bw - 2], [p.pensieve, blue, 2]].forEach(([v, col, dx]) => el(c, 'rect', {x: x + dx, y: Y(v), width: bw, height: B - Y(v), rx: 4, fill: col}));
+      el(c, 'text', {x, y: Math.min(Y(p.grep), Y(p.pensieve)) - 6, 'text-anchor': 'middle', class: 'lab'}, pct > 0 ? `−${pct}%` : `+${-pct}%`);
+      el(c, 'text', {x, y: B + 18, 'text-anchor': 'middle'}, p.files.toLocaleString() + ' files');
+      el(c, 'text', {x, y: B + 34, 'text-anchor': 'middle'}, p.name);
+    });
+  }
+})();
+
+
+// decorative rotating point clouds of fictional code areas
+function cloud(id, opts) {
+  const cv = document.getElementById(id); if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const cols = ['#0a84ff', '#30b0c7', '#af52de', '#ff9f0a', '#ff375f', '#30d158'];
+  const names = opts.names;
+  let seed = opts.seed || 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-9)) * Math.cos(6.2832 * rnd());
+  const centers = cols.map((_, i) => { const a = i / cols.length * 6.2832; return [Math.cos(a) * .66, (rnd() - .5) * .7, Math.sin(a) * .66]; });
+  const pts = [];
+  centers.forEach((c, k) => { for (let i = 0; i < opts.n; i++) pts.push([c[0] + gauss() * .15, c[1] + gauss() * .15, c[2] + gauss() * .15, k]); });
+  for (let i = 0; i < 80; i++) { const k = Math.floor(rnd() * 6), j = (k + 1) % 6, t = rnd(); pts.push([centers[k][0] * (1 - t) + centers[j][0] * t, centers[k][1] * (1 - t) + centers[j][1] * t, centers[k][2] * (1 - t) + centers[j][2] * t, k]); }
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let W = 0, H = 0, dpr = 1, visible = true, running = false;
+  function size() { dpr = Math.min(2, devicePixelRatio || 1); const r = cv.getBoundingClientRect(); W = r.width; H = r.height; cv.width = W * dpr; cv.height = H * dpr; draw(); }
+  let ang = opts.ang || .6;
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    const s = Math.min(W, H * 1.4) * opts.scale, cx = W / 2, cy = H * (opts.cy || .5), ca = Math.cos(ang), sa = Math.sin(ang), tilt = .38, ct = Math.cos(tilt), st = Math.sin(tilt);
+    const proj = p => { const x = p[0] * ca - p[2] * sa, z0 = p[0] * sa + p[2] * ca, y = p[1] * ct - z0 * st, z = p[1] * st + z0 * ct, f = 2.6 / (2.6 + z); return [cx + x * s * f, cy + y * s * f, z, f]; };
+    const P = pts.map(p => [...proj(p), p[3]]).sort((a, b) => b[2] - a[2]);
+    for (const [x, y, z, f, k] of P) { ctx.globalAlpha = opts.alpha * (.35 + (1 - (z + 1) / 2) * .65); ctx.fillStyle = cols[k]; ctx.beginPath(); ctx.arc(x, y, opts.r * f, 0, 6.2832); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    if (names) {
+      ctx.font = '600 12px -apple-system, BlinkMacSystemFont, sans-serif';
+      centers.forEach((c, k) => {
+        const [x, y] = proj(c), w = ctx.measureText(names[k]).width + 30;
+        ctx.fillStyle = 'rgba(36,36,40,.8)'; ctx.strokeStyle = 'rgba(255,255,255,.14)';
+        ctx.beginPath(); ctx.roundRect(x - w / 2, y - 12, w, 24, 12); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = cols[k]; ctx.beginPath(); ctx.arc(x - w / 2 + 12, y, 3.5, 0, 6.2832); ctx.fill();
+        ctx.fillStyle = '#f5f5f7'; ctx.fillText(names[k], x - w / 2 + 20, y + 4);
+      });
+    }
+  }
+  function loop() { if (!visible) { running = false; return; } draw(); ang += .0022; requestAnimationFrame(loop); }
+  function start() { if (!reduce && visible && !running) { running = true; requestAnimationFrame(loop); } }
+  new ResizeObserver(size).observe(cv);
+  if ('IntersectionObserver' in window) new IntersectionObserver(es => { visible = es[0].isIntersecting; start(); }).observe(cv);
+  size(); start();
+}
+cloud('cloud1', {n: 220, scale: .5, r: 2.2, alpha: .55, cy: .64, seed: 11});
+cloud('cloud2', {n: 300, scale: .46, r: 2.3, alpha: 1, seed: 7, ang: 1.2,
+  names: ['billing', 'auth', 'payments', 'search api', 'infra', 'web app']});
+
+// FAQ answers slide open and closed
+document.querySelectorAll('.faq details').forEach(d => {
+  const s = d.querySelector('summary');
+  s.addEventListener('click', e => {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    e.preventDefault();
+    const start = d.offsetHeight, wasClosing = d._closing;
+    if (d._anim) d._anim.cancel();
+    const opening = !d.open || wasClosing;
+    d._closing = !opening; d.classList.toggle('closing', d._closing);
+    d.open = true;
+    const end = opening ? d.offsetHeight : s.offsetHeight;
+    d.style.overflow = 'hidden';
+    d._anim = d.animate({height: [start + 'px', end + 'px']}, {duration: 300, easing: 'cubic-bezier(.2,.7,.2,1)'});
+    d._anim.onfinish = () => {
+      d._anim = null; d.style.overflow = '';
+      if (d._closing) { d.open = false; d._closing = false; d.classList.remove('closing'); }
+    };
+  });
+});
+</script>
+</body>
+</html>
