@@ -2504,6 +2504,28 @@ async function renderModels() {
   });
   if (switching) setTimeout(() => { if ($('#modelbox') === box && !$('#modelconfirm', box)?.innerHTML) renderModels(); }, 5000);
 }
+// Where your agents work (/api/places): the repos and folders of their sessions, busiest first. The ones Pensieve
+// doesn't index are offered with an Index button; the indexed ones are summed up in one line.
+async function renderPlaces(fresh = false) {
+  const box = $('#placesbox'); if (!box) return;
+  let d;
+  try { d = await api('/api/places' + (fresh ? '?fresh=1' : '')); } catch { box.innerHTML = ''; return; }
+  const todo = d.places.filter(p => p.state !== 'indexed').slice(0, 8), done = d.places.filter(p => p.state === 'indexed');
+  if (!todo.length) { box.innerHTML = ''; return; }
+  const use = p => `${plural(p.sessions, 'session')}${p.files ? `, ${plural(p.files, 'file')} read or edited` : ''}${p.last ? ` · last ${rel(Date.parse(p.last))}` : ''}`;
+  box.innerHTML = `<div class="set-card" id="set-Where-agents-work"><h3>Where your agents work</h3>
+    <p class="sc-p">Your agents' sessions ran in these places, or read and edited files in them, and Pensieve doesn't index them yet. Indexing them lets search find that code and those notes.${done.length ? ` Indexed already: ${esc(done.slice(0, 4).map(p => p.name).join(', '))}${done.length > 4 ? ` and ${done.length - 4} more` : ''}.` : ''}</p>
+    ${todo.map(p => `<div class="set-row ct-row"><div><div class="k">${esc(p.name)} <span class="muted">${p.kind === 'repo' ? 'git repo' : 'folder'}</span></div>
+      <div class="d">${esc(p.root.replace(d.home || '', '~'))}</div><div class="d">${esc(use(p))}${p.state === 'declined' ? ' · switched off in Sources' : ''}</div></div>
+      <div>${p.state === 'pending' ? '<span class="muted">Indexing soon</span>' : `<button class="btn" data-place="${esc(p.root)}" data-kind="${p.kind}">Index</button>`}</div></div>`).join('')}</div>`;
+  $$('[data-place]', box).forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Adding…';
+    const r = await fetch('/api/places/index', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({root: b.dataset.place, kind: b.dataset.kind})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(typeof j.detail === 'string' ? j.detail : 'Could not add it'); b.disabled = false; b.textContent = 'Index'; return; }
+    toast('Indexing it now'); renderPlaces(true); refetchSourcesSoon();
+  });
+}
 // What the search model reads: text always; images, video and audio when switched on. Switching one on downloads its
 // part of the model first (the install), with progress; its files are found by name until it is done.
 async function renderContent() {
@@ -2638,7 +2660,7 @@ async function renderSettings() {
   const kpi = (l, v) => `<div class="kpi"><div class="l">${l}</div><div class="v">${(v || 0).toLocaleString()}</div></div>`;
   const bar = (title, sub) => `<div class="set-bar"><div><h1>${esc(title)}</h1><div class="msg ${S.set.err && !S.set.errKey ? 'bad' : ''}">${S.set.err && !S.set.errKey ? esc(S.set.err) : esc(sub)}</div></div></div>`;
   let body = '';
-  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes, and the options for each. Switching a source off removes its data on the next sweep.') + `<div id="syncbox"></div><div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
+  if (tab === 'sources') body = bar('Sources', 'What Pensieve indexes, and the options for each. Switching a source off removes its data on the next sweep.') + `<div id="syncbox"></div><div id="placesbox"></div><div id="set-Sources"><div id="srcbox">${sourcesHtml()}</div></div>`;
   else if (tab === 'scopes') body = bar('Scopes', 'Bundles of sources. Pick the one to search in.') + `<div id="set-Scopes"><div id="scopebox">${scopesHtml()}</div></div>`;
   else if (tab === 'agents') body = bar('Agents', 'Connect your coding agents, and help them search with Pensieve first.') + `
     <div class="set-card" id="set-Connect-an-agent"><h3>Connect an agent</h3>
@@ -2675,6 +2697,7 @@ async function renderSettings() {
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
   if (tab === 'ai') { bindAISettings($('#setmain')); renderModels(); renderContent(); }
   if (tab === 'agents') loadIntegrations();
+  if (tab === 'sources') renderPlaces();
   if (tab === 'general') bindGeneral();
   if (tab === 'usage') bindUsage();
   if (tab === 'feedback') renderFeedback();

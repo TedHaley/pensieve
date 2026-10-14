@@ -184,6 +184,17 @@ def repo_note(c: dict) -> str | None:
     return None
 
 
+def stale_note(name: str, items: list[dict]) -> str | None:
+    """What the SessionStart hook adds when worktrees of the repo look abandoned (stale.py), or None."""
+    if not items:
+        return None
+    n, chunks = len(items), sum(w["chunks"] for w in items)
+    return (f"{n} git worktree{'s' if n != 1 else ''} of {name} look abandoned: no commit or agent session in 14 days"
+            f"{f', {chunks:,} chunks in the Pensieve index' if chunks else ''}. Don't interrupt the task for this. At a "
+            f"natural pause, offer the user a cleanup: call Pensieve's `stale` tool and show its list. Remove nothing "
+            f"without their yes.")
+
+
 def hook_command(hook: str, port: int) -> str:
     """curl posts the hook's JSON to the backend. If the backend isn't running, the hook does nothing."""
     event, _, url = HOOK_SPEC[hook]

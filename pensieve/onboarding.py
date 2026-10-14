@@ -143,10 +143,15 @@ def scan(categories=None, fresh=False) -> list[dict]:
 
 def _repos(s, on):
     from pensieve.repos import git, norm_remote
+    from pensieve import places
     repos = actions.ctx["repos"]
     repos._extra = None
     found = repos._extra_roots()
     big = {sk["root"]: sk["files"] for sk in getattr(repos, "skipped", [])}
+    # the repos the user's agents work in, from their transcripts: offered first, and checked even when big
+    used = {o["root"]: o["sessions"] for o in places.compute(places.transcript_rows(), lambda r, k: {"state": "unknown"})
+            if o["kind"] == "repo"}
+    found = list(dict.fromkeys([*sorted(used, key=used.get, reverse=True), *found]))
     out = [dict(id="repos/discover", label="Find new repos automatically",
                 detail=f"Repos under {', '.join(s['sweep_roots'])} and your folders, and repos your agents work in, "
                        f"up to {s['max_repo_files']:,} files each", size=None, unit="", available=True,
@@ -154,11 +159,15 @@ def _repos(s, on):
     clones = {}  # one row per remote: Pensieve indexes a single clone of each (Repos.discover)
     for r in sorted(set(found) | set(big), key=lambda r: (len(Path(r).name), Path(r).name.lower())):
         clones.setdefault(norm_remote(git(r, "config", "--get", "remote.origin.url")) or r, []).append(r)
-    for r, *others in sorted(clones.values(), key=lambda c: Path(c[0]).name.lower()):
+    agent_n = lambda c: max(used.get(x, 0) for x in c)
+    for r, *others in sorted(clones.values(), key=lambda c: (-agent_n(c), Path(c[0]).name.lower())):
         est = repos.estimate_chunks(r)
         also = f" · also {len(others)} other clone{'s' if len(others) > 1 else ''}" if others else ""
-        out.append(dict(id=f"repos/{r}", label=Path(r).name, detail=_tilde(Path(r)) + also, size=big.get(r) or est["files"],
-                        unit="files", available=True, checked=r not in big and on(f"repos/{r}"), big=r in big,
+        n = agent_n([r, *others])
+        work = f" · your agents worked here in {n} session{'s' if n > 1 else ''}" if n else ""
+        out.append(dict(id=f"repos/{r}", label=Path(r).name, detail=_tilde(Path(r)) + also + work,
+                        size=big.get(r) or est["files"], unit="files", available=True, agents=n,
+                        checked=(r not in big or n > 0) and on(f"repos/{r}"), big=r in big,
                         clones=[f"repos/{o}" for o in others], indexed=est["indexed"], seconds=_seconds(est["chunks"])))
     return out
 
@@ -283,7 +292,8 @@ def start(chosen=None, recommended=False, ai=None, embed_model=None, kinds=None)
     off += [c for i in items if i["id"] not in chosen for c in i.get("clones", [])]  # else another clone stands in
     off = [d for d in off if d not in {c for i in items if i["id"] in chosen for c in i.get("clones", [])}]
     off += [c for c in all_cats if not any(i in chosen and i.startswith(c + "/") for i in known)]  # incl. never scanned
-    big = [i["id"][6:] for i in items if i.get("big") and i["id"] in chosen]
+    # added to the repos setting: big repos, which discovery skips, and repos found only in agent transcripts
+    big = [i["id"][6:] for i in items if (i.get("big") or i.get("agents")) and i["id"] in chosen]
     changes = {"disabled": off, "repos": list(dict.fromkeys(settings.get("repos") + big)), "setup_done": True}
     if ai is not None:
         changes["ai"] = ai

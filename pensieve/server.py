@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, content, llm, mcp_server, onboarding, reembed, scopes, search as search_mod, settings, sources, summarize, usage
+from pensieve import actions, config, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, usage
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -984,6 +984,51 @@ def get_repo_check(cwd: str):
     return _repo_check(cwd)
 
 
+def _place_state(root: str, kind: str) -> dict:
+    """indexed | pending | declined | unknown for a place the agents work in: a repo as repo-check sees it; a folder
+    by whether an enabled folder source covers it."""
+    if kind == "repo":
+        return _repo_check(root)
+    p = Path(root)
+    on = settings.enabled("files")
+    for f, fp in zip(settings.get("folders"), settings.paths("folders")):
+        if p == fp or fp in p.parents:
+            return {"state": "indexed" if on and settings.enabled(f"files/{f}") else "declined"}
+    return {"state": "unknown"}
+
+
+@app.get("/api/places")
+def get_places(fresh: bool = False):
+    """Where the agents work, busiest first: the repos and folders of their sessions and of the files they read and
+    edited, with whether each one is indexed (ROADMAP B11)."""
+    return {"places": places_mod.places(_place_rows, _place_state, fresh), "home": str(Path.home())}
+
+
+def _place_rows():
+    with store.lock:
+        return store.db.execute(places_mod.ROWS).fetchall()
+
+
+class PlaceReq(BaseModel):
+    root: str
+    kind: str  # repo | folder
+
+
+@app.post("/api/places/index")
+def index_place(req: PlaceReq):
+    """Index a place the agents work in: a repo as `pensieve repo index` does, a folder as a new document folder."""
+    if req.kind == "repo":
+        repo_choice(RepoChoiceReq(cwd=req.root, index=True))
+    else:
+        try:
+            sid = onboarding.add("files", req.root)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        settings.set_enabled("files", True)
+        settings.set_enabled(sid, True)
+    return get_places(fresh=True)
+
+
 @app.post("/api/repo-check")
 async def hook_repo_check(request: Request):
     """Claude Code's SessionStart hook posts its JSON here; the answer adds a note about the repo to the session."""
@@ -992,7 +1037,15 @@ async def hook_repo_check(request: Request):
         cwd = (await request.json()).get("cwd") or ""
     except ValueError:
         return {}
-    note = integrations.repo_note(await asyncio.to_thread(_repo_check, cwd))
+    c = await asyncio.to_thread(_repo_check, cwd)
+    notes = [integrations.repo_note(c)]
+    if c.get("state") == "indexed":  # a cleanup hint, from the last stale report only: the hook may wait 3 s at most
+        items = stale_mod.cached(c["root"])
+        if items is None:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, lambda: stale_mod.from_store(store, roots=[c["root"]]))
+        notes.append(integrations.stale_note(c["name"], items or []))
+    note = "\n\n".join(n for n in notes if n)
     return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": note}} if note else {}
 
 
