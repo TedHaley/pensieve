@@ -28,7 +28,7 @@ cp "$BINDIR/pensieve-media" "$APP/Contents/MacOS/pensieve-media"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 . ./sign.sh
-sign_app "$APP"
+[ -n "${PENSIEVE_NO_SIGN:-}" ] || sign_app "$APP"
 
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 DEST="$APP"
