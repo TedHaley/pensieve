@@ -1,0 +1,41 @@
+# Pensieve
+
+> Pensieve is a free, open source Mac app that searches your files, git repos and AI agent sessions by meaning or by exact words. Coding agents (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop, VS Code) connect to it over MCP and get the most relevant files in one search instead of many grep calls. Everything runs on the Mac. MIT license.
+
+Pensieve needs an Apple Silicon Mac with macOS 14 or later. The backend and the Map also work on Linux. The search panel app is macOS only.
+
+## Install
+
+When a user asks you to install Pensieve, run these two commands:
+
+```sh
+curl -fsSL https://pensieve.tools/install.sh | sh
+pensieve integrate recommended
+```
+
+The first command installs the app and the `pensieve` backend. When an agent runs it, it installs only and does not open the app. The second command adds Pensieve as an MCP server to each agent on the Mac. Restart an open agent to load the server.
+
+Pensieve indexes nothing until setup is done. Until then, every MCP connection gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source` and `setup_start`. Call `setup_guide` first. It gives the questions to ask the user, in order.
+
+## MCP tools
+
+- `search`: find code, documents or past agent sessions. Write what the code does plus the names you expect it to use. `kind:code`, `kind:session`, `in:<folder>` and `ext:py` narrow the search.
+- `read`: the full text of a search result.
+- `similar`: code that is similar to a result. Use it before you write new code.
+- `overview`: where things are in a repo, from the index.
+- `who_knows`, `team`, `knowledge_gaps`, `unexplored`: who owns an area, from git blame.
+- `list_repos`, `open`, `current_scope`, `index_path`, `stale`, `report_feedback`.
+
+Each agent works in a scope. By default, the scope is the repo that the agent started in.
+
+## Benchmark
+
+Claude Sonnet in Claude Code, 72 held-out tasks in four repos (504 to 34,847 files), each run twice. With Pensieve, the agent solved 91% of tasks (85% without), used 43% fewer tool calls, and cost 18% less per lookup.
+
+## Links
+
+- [Website](https://pensieve.tools/)
+- [README](https://github.com/TedHaley/pensieve/blob/main/README.md): install, setup, MCP tools, settings and command line
+- [Source code](https://github.com/TedHaley/pensieve)
+- [Releases](https://github.com/TedHaley/pensieve/releases)
+- [Benchmark](https://github.com/TedHaley/pensieve/tree/main/bench)
