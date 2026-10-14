@@ -571,9 +571,9 @@ def set_source(id: str, enabled: bool | None = None, map: bool | None = None) ->
 
 @tool()
 def file_types() -> dict:
-    """Each file type in Files & folders (text, pdf, office, data, code, media, other): whether its content is read
-    (index: content | name | off), whether it shows on the map, how many files it has, and a histogram of their text
-    length. Change one with update_settings({"file_types": {"pdf": {"index": "name", "map": false}}}); the chunk
+    """Each file type in Files & folders (text, pdf, office, data, code, images, video, audio, other): whether its
+    content is read (index: content | name | off), whether it shows on the map, how many files it has, and a histogram
+    of their text length. Images, video and audio set to content download their model part first. Change one with update_settings({"file_types": {"pdf": {"index": "name", "map": false}}}); the chunk
     size and limit are the chunk_chars and max_chunks settings."""
     return _c()["files"].types()
 
@@ -618,8 +618,10 @@ def setup_guide() -> dict:
        allow access. When they agree, call setup_scan with those profiles.
     4. Show what the scan found, pre-checked items first, and ask what to index. Offer setup_add_source for folders
        or repos it missed.
-    5. Ask which insights engine to use (`ai`; "none" is fine, it can change later in Settings).
-    6. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
+    5. Ask which of images, video and audio to read by what they show or say (`content`: each entry's note says
+       what it costs). All three are off by default: then those files are found by name.
+    6. Ask which insights engine to use (`ai`; "none" is fine, it can change later in Settings).
+    7. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
     return onboarding.guide()
 
 
@@ -640,12 +642,15 @@ def setup_add_source(kind: str, path: str) -> dict:
 
 
 @tool()
-def setup_start(sources: list[str] | None = None, recommended: bool = False, ai: str | None = None) -> dict:
+def setup_start(sources: list[str] | None = None, recommended: bool = False, ai: str | None = None,
+                content: list[str] | None = None) -> dict:
     """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
     ones); everything else is switched off. `ai` sets the insights engine (an id from setup_guide's `ai`, or "none").
+    `content`: which of "images", "video" and "audio" to read by what they show or say (this selects the
+    EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by name.
     Indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left, counting only what isn't
     indexed yet), the `energy` note when minutes > 1, and `next` (how to search and see the map)."""
-    res = onboarding.start(sources, recommended, ai)
+    res = onboarding.start(sources, recommended, ai, kinds=content)
     from pensieve import server
     server.watch.force_full()
     return res

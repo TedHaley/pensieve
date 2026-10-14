@@ -219,6 +219,47 @@ def embed(texts, query=False, titles=None, model=None) -> np.ndarray:
     return out
 
 
+def embed_images(paths) -> list:
+    """One vector per image file, in the same space as the text vectors, or None for a file that can't be decoded.
+    The model's image part must be downloaded (content.install). Steps aside for a waiting search between images."""
+    m = embedder()
+    out = []
+    for p in paths:
+        _wait_while(queries_waiting)
+        try:
+            with _embed_lock:
+                out.append(m.encode_images([p])[0])
+        except Exception as e:  # truncated, damaged or huge images, and a HEIC that sips can't convert
+            print(f"image {p}: not read ({e!r})", flush=True)
+            out.append(None)
+    return out
+
+
+def embed_media(path, video: bool, sound: bool) -> list:
+    """A video or sound file as [(start, seconds, kind, vector)]: one vector per window of what it shows (video) and
+    one per window of its sound (sound), each window as media.segments cuts it. Decodes a window, then embeds it, so
+    a search waits for one window at most. Raises OSError when the file can't be decoded."""
+    from pensieve import media
+    m = embedder()
+    have = media.info(path)
+    out = []
+    if video and have["video"]:
+        for start, secs in media.segments(have["duration"], media.VIDEO_SEGMENT):
+            frames = media.frames(path, start, secs)
+            if frames:
+                _wait_while(queries_waiting)
+                with _embed_lock:
+                    out.append((start, secs, "video", m.encode_video(frames)))
+    if sound and have["audio"]:
+        for start, secs in media.segments(have["duration"], media.AUDIO_SEGMENT):
+            s = media.samples(path, start, secs)
+            if s.size >= media.AUDIO_RATE // 10:  # a tenth of a second at least
+                _wait_while(queries_waiting)
+                with _embed_lock:
+                    out.append((start, secs, "audio", m.encode_audio(s)))
+    return out
+
+
 def chunk_session(turns):
     """Group into user->assistant exchanges, splitting long ones on paragraph boundaries."""
     exchanges, cur = [], []

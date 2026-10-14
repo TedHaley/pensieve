@@ -15,8 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, config, settings
-from pensieve.indexer import LAYOUT_VERSION, embed, reconcile
+from pensieve import apps, config, content, media, settings
+from pensieve.indexer import LAYOUT_VERSION, embed, embed_images, embed_media, reconcile
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 
 FILES_INDEX_PATH = config.DATA_DIR / "files.tv"
@@ -34,9 +34,12 @@ KIND = {**{e: "doc" for e in (".md", ".markdown", ".rst", ".org", ".txt", ".tex"
                               ".eml", ".srt", ".vtt", ".docx")},
         ".pdf": "pdf", ".pptx": "slides", ".key": "slides", ".csv": "data", ".tsv": "data", ".json": "data",
         ".xlsx": "data", ".numbers": "data", ".ipynb": "notebook"}
-MEDIA_EXT = {".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".webp", ".tif", ".tiff", ".bmp", ".svg", ".psd",
-             ".raw", ".cr2", ".nef", ".dng", ".mp3", ".m4a", ".wav", ".aiff", ".aif", ".flac", ".ogg", ".mp4", ".mov",
-             ".m4v", ".avi", ".mkv", ".webm"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".webp", ".tif", ".tiff", ".bmp", ".svg", ".psd",
+             ".raw", ".cr2", ".nef", ".dng"}
+READ_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".webp", ".tif", ".tiff", ".bmp"}  # decodable
+VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
+AUDIO_EXT = {".mp3", ".m4a", ".wav", ".aiff", ".aif", ".flac", ".ogg", ".caf", ".aac"}
+IMAGE_MAX_BYTES = 50_000_000  # larger images are indexed by name
 # id -> (label, what it covers, extensions). Order is the order shown in Settings.
 TYPES = {
     "text": ("Text and notes", "Plain text, Markdown, RTF, Word 97, OpenDocument, mail, subtitles",
@@ -46,7 +49,10 @@ TYPES = {
                {".docx", ".pptx", ".xlsx", ".pages", ".key", ".numbers"}),
     "data": ("Data", "CSV, TSV, JSON, notebooks", {".csv", ".tsv", ".json", ".ipynb"}),
     "code": ("Code and config", "Source and config files outside git repos (repos are indexed as repos)", set()),
-    "media": ("Images, audio, video", "Found by name only; their content is not read", MEDIA_EXT),
+    "images": ("Images", "Photos, screenshots and diagrams, by what they show (Settings → Models)", IMAGE_EXT),
+    "video": ("Video", "Screen recordings and videos, by what they show (Settings → Models)", VIDEO_EXT),
+    "audio": ("Audio", "Voice notes, meetings and other sound, by what is said or heard (Settings → Models)",
+              AUDIO_EXT),
     "other": ("Other files", "Archives, apps, installers and everything else, by name only", set()),
 }
 _TYPE_OF = {e: t for t, (_, _, exts) in TYPES.items() for e in exts}
@@ -74,13 +80,33 @@ def level_of(path: Path) -> str:
     """content | name | off for this file under the current `file_types` settings."""
     t = type_of(path)
     lv = settings.file_type(t)["index"]
-    return "name" if lv == "content" and t in ("media", "other") else lv
+    if lv == "content" and t in content.KINDS:  # read once its install is done; until then, by name
+        decodable = t != "images" or Path(path).suffix.lower() in READ_IMAGE_EXT
+        return "content" if decodable and content.ready(t) else "name"
+    return "name" if lv == "content" and t == "other" else lv
 
 
-def mode_of(level: str) -> str:
+def readable(t) -> bool:
+    """Whether files of type t can be read for content: images, video and sound only with a model that embeds them."""
+    return t != "other" and (t not in content.KINDS or content.gemma())
+
+
+def images_on() -> bool:
+    """Whether images are read by what they show now."""
+    return content.ready("images")
+
+
+def mode_of(level: str, path=None) -> str:
     """What a file was indexed with; a file whose stored mode differs is indexed again."""
     if level != "content":
         return level
+    t = type_of(path) if path is not None else None
+    if t == "images":
+        return f"image/{config.EMBED_MODEL}"
+    if t == "video":  # its sound too when audio is on
+        return f"video/{config.EMBED_MODEL}/{media.VERSION}" + ("+audio" if content.ready("audio") else "")
+    if t == "audio":
+        return f"audio/{config.EMBED_MODEL}/{media.VERSION}"
     return f"content/{settings.get('chunk_chars')}/{settings.get('max_chunks')}/{FILES_VERSION}"
 
 
@@ -344,7 +370,7 @@ class Files:
                         continue
                 sp = str(p)
                 seen.add(sp)
-                same = known.get(sp) == (st.st_mtime, st.st_size) and modes.get(sp) == mode_of(lv)
+                same = known.get(sp) == (st.st_mtime, st.st_size) and modes.get(sp) == mode_of(lv, p)
                 if (not stale and same) or time.time() - st.st_mtime < config.SETTLE_SECONDS:
                     continue
                 try:
@@ -422,7 +448,7 @@ class Files:
                     self._drop(sp)
                     changed += 1
                 continue
-            if row == (st.st_mtime, st.st_size, mode_of(lv)):
+            if row == (st.st_mtime, st.st_size, mode_of(lv, p)):
                 continue
             try:
                 self._index_file(p, root, st, kind_of(p), max_bytes, lv)
@@ -480,11 +506,29 @@ class Files:
 
     def _index_file(self, p: Path, root: Path, st, kind, max_bytes, level="content"):
         rel = p.relative_to(root.parent) if root.parent != p else p
-        text = extract(p, max_bytes) if level == "content" and st.st_size <= max_bytes else ""
+        t = type_of(p)
+        pictures = level == "content" and t in content.KINDS  # read by what it shows or says, not as text
+        text = extract(p, max_bytes) if level == "content" and not pictures and st.st_size <= max_bytes else ""
         chunks = chunk_text(text, settings.get("chunk_chars"), settings.get("max_chunks")) if text.strip() else []
         if not chunks:  # name-only entry: still findable by name and folder
             chunks = [(0, 0, f"{p.name}\n{p.parent}")]
-        vecs = embed([c[2] for c in chunks], titles=[str(rel)] * len(chunks))
+        vecs = None
+        if pictures and t == "images" and st.st_size <= IMAGE_MAX_BYTES:  # one vector; its text stays its name
+            v = embed_images([p])[0]
+            vecs = v[None].astype(np.float32) if v is not None else None
+        elif pictures and t in ("video", "audio"):  # a chunk per window: start and end are its seconds
+            try:
+                parts = embed_media(p, video=t == "video", sound=t == "audio" or content.ready("audio"))
+            except Exception as e:  # a format macOS can't open, a damaged file, a decoder that failed
+                print(f"{t} {p}: not read ({e!r})", flush=True)
+                parts = []
+            if parts:
+                said = {"video": "shows", "audio": "sound"}
+                chunks = [(int(a), int(a + s), f"{p.name} {media.label(a, s)} ({said[k]})\n{p.parent}")
+                          for a, s, k, _ in parts]
+                vecs = np.stack([v for *_, v in parts]).astype(np.float32)
+        if vecs is None:
+            vecs = embed([c[2] for c in chunks], titles=[str(rel)] * len(chunks))
         with self.lock:
             self._drop(str(p))
             ids = []
@@ -496,7 +540,7 @@ class Files:
             self.db.execute("INSERT OR REPLACE INTO files(path, root, name, ext, kind, mtime, size, n_chunks, chars, mode) "
                             "VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (str(p), str(root), p.name, p.suffix.lower().lstrip("."), kind, st.st_mtime, st.st_size,
-                             len(chunks), len(text) if text.strip() else None, mode_of(level)))
+                             len(chunks), len(text) if text.strip() else None, mode_of(level, p)))
             self.db.commit()
 
     def _drop(self, path):
@@ -520,8 +564,8 @@ class Files:
     def map_filter(self):
         """(path, root) -> whether the file is a map point: its type has content and is switched onto the map, and
         its folder (or app) is not in `off_map`. Folders and name-only files are searchable but never points."""
-        shown = {t: settings.file_type(t)["map"] and settings.file_type(t)["index"] == "content"
-                 and t not in ("media", "other") for t in TYPES}
+        shown = {t: settings.file_type(t)["map"] and settings.file_type(t)["index"] == "content" and readable(t)
+                 for t in TYPES}
         folders = {str(p.resolve()): f"files/{f}" for f, p in zip(settings.get("folders"), settings.paths("folders"))}
         for k, a in apps.APPS.items():
             try:
@@ -628,7 +672,7 @@ class Files:
         return dict(id=f"file:{r[0]}", path=r[0], root=r[1], name=r[2], ext=r[3], kind=r[4], mtime=r[5], size=r[6],
                     n=r[7], display=r[0].replace(str(Path.home()), "~", 1), author=r[8],
                     author_source=r[9] if r[9] != "none" else None, is_dir=r[4] == "folder",
-                    chunks=[dict(idx=c[0], start=c[1], end=c[2], text=c[3]) for c in chunks if c[1]])
+                    chunks=[dict(idx=c[0], start=c[1], end=c[2], text=c[3]) for c in chunks if c[2]])  # (0, 0): by name
 
     def similar(self, path, k=8):
         paths, C = self.centroids()
@@ -650,7 +694,7 @@ class Files:
             rows = self.db.execute("SELECT path, chars FROM files WHERE kind!='folder'").fetchall()
         size = settings.get("chunk_chars")
         out = {t: dict(id=t, label=label, description=desc, exts=sorted(e.lstrip(".") for e in exts)[:12],
-                       readable=t not in ("media", "other"), **settings.file_type(t), files=0, read=0,
+                       readable=readable(t), **settings.file_type(t), files=0, read=0,
                        bins=[0] * (len(self.SIZE_BINS) + 1), cut=0)
                for t, (label, desc, exts) in TYPES.items()}
         cap = settings.get("max_chunks")

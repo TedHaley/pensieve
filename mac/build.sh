@@ -9,7 +9,8 @@ cd "$(dirname "$0")"
 # iCloud syncs (Desktop and Documents often are).
 SCRATCH="${PENSIEVE_BUILD_DIR:-$HOME/Library/Caches/pensieve-mac-build}"
 swift build -c release --scratch-path "$SCRATCH"
-BIN="$(swift build -c release --scratch-path "$SCRATCH" --show-bin-path)/Pensieve"
+BINDIR="$(swift build -c release --scratch-path "$SCRATCH" --show-bin-path)"
+BIN="$BINDIR/Pensieve"
 
 mkdir -p build
 if [ ! -f build/AppIcon.icns ] || [ scripts/make_icon.swift -nt build/AppIcon.icns ]; then
@@ -23,6 +24,7 @@ APP=build/Pensieve.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Pensieve"
+cp "$BINDIR/pensieve-media" "$APP/Contents/MacOS/pensieve-media"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 . ./sign.sh

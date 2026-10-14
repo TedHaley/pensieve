@@ -1017,3 +1017,9 @@ body.native #top{pointer-events:auto}  /* the whole top bar drags the window, li
 .u-recent td.u-q{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .u-recent td.warn{color:var(--critical)}
 .tbl th.num{text-align:right}
+.ct-row .ct-state{margin-top:3px}
+.ct-row .ct-state.err{color:var(--danger,#e5484d)}
+.ct-bar{height:4px;border-radius:2px;background:var(--surface-3);margin-top:6px;overflow:hidden;max-width:320px}
+.ct-bar i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.setup-row .tx span.note{white-space:normal}
+.set-row.ct-row{grid-template-columns:minmax(0,1fr) auto}

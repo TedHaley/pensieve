@@ -26,10 +26,11 @@ DEFAULTS = {
     "disabled": ["apps/apple_notes"],
     "max_file_mb": 20,
     # Per file type in Files & folders (see files.TYPES): index = content | name | off, map = shown on the map.
-    # Types whose content can't be read (media, other) are indexed by name and never placed on the map.
+    # "other" can't be set to content. The images setting covers images in git repos too.
     "file_types": {"text": {"index": "content", "map": True}, "pdf": {"index": "content", "map": True},
                    "office": {"index": "content", "map": True}, "data": {"index": "content", "map": True},
-                   "code": {"index": "content", "map": True}, "media": {"index": "name", "map": False},
+                   "code": {"index": "content", "map": True}, "images": {"index": "name", "map": False},
+                   "video": {"index": "name", "map": False}, "audio": {"index": "name", "map": False},
                    "other": {"index": "name", "map": False}},
     "off_map": [],             # sources indexed for search but left off the map, by id like `disabled`
     "chunk_chars": 1500,       # characters per document chunk (one search hit, one embedding)
@@ -216,7 +217,7 @@ def update(changes: dict) -> dict:
                 if x.get("index", "content") not in ("content", "name", "off") or not isinstance(x.get("map", True), bool):
                     raise ValueError(f"file_types.{t}: index is content, name or off; map is true or false")
                 merged[t] = {**merged.get(t, d[t]), **x}
-                if t in ("media", "other") and merged[t]["index"] == "content":
+                if t == "other" and merged[t]["index"] == "content":
                     raise ValueError(f"{t} files have no text to read: index them by name or switch them off")
             v = merged
         elif isinstance(d, dict):
@@ -282,7 +283,10 @@ def set_on_map(source_id: str, on: bool) -> dict:
 
 
 def file_type(t: str) -> dict:
-    return {**DEFAULTS["file_types"].get(t, {"index": "name", "map": False}), **get("file_types").get(t, {})}
+    mine = get("file_types")
+    if t in ("images", "video", "audio") and t not in mine and "media" in mine:  # before 0.7.1: one "media" type
+        return {**DEFAULTS["file_types"][t], **mine["media"]}
+    return {**DEFAULTS["file_types"].get(t, {"index": "name", "map": False}), **mine.get(t, {})}
 
 
 def set_enabled(source_id: str, on: bool) -> dict:

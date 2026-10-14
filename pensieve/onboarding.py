@@ -7,7 +7,7 @@ asks for folder access when the user has chosen to look, not when the app starts
 import time
 from pathlib import Path
 
-from pensieve import actions, apps, config, llm, settings, sources
+from pensieve import actions, apps, config, content, llm, settings, sources
 
 ABOUT = [
     "Pensieve searches everything on this Mac by meaning: documents, git repos and your AI agent sessions.",
@@ -72,7 +72,30 @@ def guide() -> dict:
                    for o in llm.options()],
             "energy": ENERGY_NOTE, "files_per_minute": REPO_FILES_PER_MINUTE,
             "embed_model": config.EMBED_MODEL,
-            "embed_models": [dict(id=k, label=m["label"], about=m["about"]) for k, m in config.EMBED_MODELS.items()]}
+            "embed_models": [dict(id=k, label=m["label"], about=m["about"]) for k, m in config.EMBED_MODELS.items()],
+            "content": content_types()}
+
+
+CONTENT_NOTES = {  # what switching a kind on costs; speeds measured on an M4 Max
+    "images": "Downloads 335 MB. Reads about 8 images a second.",
+    "video": "Downloads 335 MB (the same download as images). Reads an hour of video in about 6 minutes.",
+    "audio": "Downloads 611 MB. Reads an hour of sound in about 30 seconds.",
+}
+
+
+def content_types() -> list[dict]:
+    """What Pensieve reads in the chosen sources. Text is always read; images, video and audio are choices (start's
+    `content`), off by default: then those files are found by name."""
+    out = []
+    for k in content.status():
+        o = dict(id=k["id"], label=k["label"], on=k["on"], description=k["description"],
+                 available=k["id"] == "text" or k.get("needs") != "decoder")
+        if k["id"] != "text":
+            o.update(needs_model=k["needs_model"], note=CONTENT_NOTES[k["id"]])
+        if k.get("needs") == "decoder":
+            o["note"] = "Needs the Pensieve app (its video and sound decoder), or PyAV: pip install av."
+        out.append(o)
+    return out
 
 
 def categories_for(profiles) -> list[str]:
@@ -213,13 +236,26 @@ def index(path: str, cwd=None) -> dict:
             else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
 
 
-def start(chosen=None, recommended=False, ai=None, embed_model=None) -> dict:
+def start(chosen=None, recommended=False, ai=None, embed_model=None, kinds=None) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
     switched off, then indexing starts. Categories that were never scanned are switched off whole. `ai` picks the
     insights engine (an id from guide()["ai"], or "none"); `embed_model` the search model (guide()["embed_models"]).
-    On an empty index the search model changes at once; otherwise the switch runs in the background (reembed)."""
+    On an empty index the search model changes at once; otherwise the switch runs in the background (reembed).
+    `kinds`: which of images, video and audio to read by content (content.KINDS); the others are found by name. None
+    leaves them as they are. They need the EmbeddingGemma 2 search model: with kinds and no `embed_model`, that
+    model is chosen. Their model parts download in the background."""
     if chosen is None and not recommended:
         raise ValueError("Send the source ids to index, or recommended: true")
+    unknown = set(kinds or ()) - set(content.KINDS)
+    if unknown:
+        raise ValueError(f"unknown content {', '.join(sorted(unknown))}; one of: {', '.join(content.KINDS)}")
+    if kinds and (embed_model or config.EMBED_MODEL) != config.GEMMA:
+        if embed_model:
+            raise ValueError(f"{', '.join(kinds)} need the {config.GEMMA} search model, not {embed_model}")
+        embed_model = config.GEMMA
+    if kinds is not None:
+        settings.update({"file_types": {k: {"index": "content" if k in kinds else "name", "map": k in kinds}
+                                        for k in content.KINDS}})
     if embed_model:
         if embed_model not in config.EMBED_MODELS:
             raise ValueError(f"unknown search model {embed_model!r}; one of: {', '.join(config.EMBED_MODELS)}")

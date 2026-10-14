@@ -1950,7 +1950,7 @@ function fileTypesHtml() {
       <div class="src-n">${srcCount(t.files, 'files')}</div>
     </div>`).join('');
   return `<div class="set-card ft-card ${filesOn ? '' : 'off'}">
-    <div class="src-top"><div class="src-tx"><h3>File types</h3><p>For files in Files &amp; folders: read each type's content, index only its name, or skip it, and choose which types show on the map. Images, audio and video are found by name; their content is not read.</p></div></div>
+    <div class="src-top"><div class="src-tx"><h3>File types</h3><p>For files in Files &amp; folders: read each type's content, index only its name, or skip it, and choose which types show on the map. Images, video and audio are read by what they show or say once their part of the model is installed (Settings → Models); until then, by name.</p></div></div>
     <div class="ft-rows">${rows}</div>
     <div class="ft-chunks">
       <div><h3>Long documents</h3><p>Documents are split into pieces of about the same length. Each piece is one search result. Larger pieces keep more context together; the limit keeps very long documents from filling the index.</p>
@@ -2090,6 +2090,7 @@ async function openSetup() {
   const ai = setupState.guide.ai;
   setupState.ai = ai.find(o => o.id === 'builtin' && o.available) ? 'builtin' : 'none';
   setupState.embed = setupState.guide.embed_model;
+  setupState.kinds = new Set((setupState.guide.content || []).filter(c => c.id !== 'text' && c.on).map(c => c.id));
   renderSetup();
 }
 const setupCats = () => { const want = new Set(setupState.guide.profiles.filter(p => setupState.profiles.has(p.id)).flatMap(p => p.categories));
@@ -2133,9 +2134,12 @@ function renderSetup() {
       ? `<div class="set-add setup-add"><input class="set-in" data-setup-addin="${kind}" placeholder="${kind === 'repos' ? '~/code/my-repo' : '~/folder'}"><button class="btn" data-setup-addgo="${kind}">Add</button></div>`
       : `<button class="linkbtn setup-addbtn" data-setup-add="${kind}">${esc(SETUP_ADD[kind])}</button>`) : '';
     const more = Object.keys(SETUP_ADD).filter(k => !st.cands.some(c => c.id === k));
+    const reads = c => `<label class="setup-row ${c.available ? '' : 'na'}"><input type="checkbox" data-setup-content="${esc(c.id)}" ${c.id === 'text' || st.kinds.has(c.id) ? 'checked' : ''} ${c.available && c.id !== 'text' ? '' : 'disabled'}>
+      <span class="tx"><b>${esc(c.label)}</b><span class="note">${esc(c.description)}</span>${c.note ? `<span class="note">${esc(c.note)}</span>` : ''}</span><span class="n"></span></label>`;
     body = `<h1>Choose what Pensieve indexes</h1><p class="sub">This is what Pensieve found. Add anything it missed. You can change this later in Settings → Sources.</p>
       ${st.cands.map(c => `<div class="setup-cat"><h3>${esc(c.label)}</h3><p>${esc(c.description)}</p>${c.items.map(row).join('') || '<p class="muted">Nothing found.</p>'}${add(c.id)}</div>`).join('')}
       ${more.length ? `<div class="setup-cat"><h3>Something else?</h3>${more.map(add).join(' · ')}</div>` : ''}
+      ${(g.content || []).length ? `<div class="setup-cat"><h3>What Pensieve reads</h3><p>Text is always read. Images, video and audio are found by name unless you switch them on. You can change this later in Settings → Models.</p>${g.content.map(reads).join('')}</div>` : ''}
       ${btns('ai', 'Next', picked.length > 0)}`;
   } else if (step === 'ai') {
     body = `<h1>Choose your models</h1>
@@ -2158,7 +2162,19 @@ function renderSetup() {
   $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { const id = b.dataset.setupProf; st.profiles[st.profiles.has(id) ? 'delete' : 'add'](id); st.cands = null; st.chosen.clear(); renderSetup(); });
   $$('[data-setup-id]', el).forEach(c => c.onchange = () => { st.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
   $$('[data-setup-ai]', el).forEach(b => b.onclick = () => { st.ai = b.dataset.setupAi; renderSetup(); });
-  $$('[data-setup-embed]', el).forEach(b => b.onclick = () => { st.embed = b.dataset.setupEmbed; renderSetup(); });
+  $$('[data-setup-embed]', el).forEach(b => b.onclick = () => {
+    st.embed = b.dataset.setupEmbed;
+    const needs = (g.content || []).find(c => c.needs_model)?.needs_model;
+    if (st.kinds.size && needs && st.embed !== needs) { st.kinds.clear(); toast('Images, video and audio are found by name: reading them needs EmbeddingGemma 2'); }
+    renderSetup();
+  });
+  $$('[data-setup-content]', el).forEach(c => c.onchange = () => {
+    const k = (g.content || []).find(x => x.id === c.dataset.setupContent);
+    if (!k || k.id === 'text') return;
+    st.kinds[c.checked ? 'add' : 'delete'](k.id);
+    if (c.checked && k.needs_model) st.embed = k.needs_model;  // these need this search model
+    renderSetup();
+  });
   $$('[data-setup-add]', el).forEach(b => b.onclick = () => {
     if (window.pensieveNative) window.webkit?.messageHandlers?.pensieveWindow?.postMessage({pickFolder: b.dataset.setupAdd});
     else { st.adding = b.dataset.setupAdd; renderSetup(); $(`[data-setup-addin]`, el)?.focus(); }
@@ -2173,7 +2189,7 @@ function renderSetup() {
     }
     if (next !== 'go') return setupGo(next);
     st.busy = true; renderSetup();
-    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], ai: st.ai, embed_model: st.embed})});
+    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], ai: st.ai, embed_model: st.embed, content: [...st.kinds]})});
     const j = await r.json().catch(() => ({}));
     st.busy = false;
     if (!r.ok) { st.err = typeof j.detail === 'string' ? j.detail : 'Could not start indexing'; return renderSetup(); }
@@ -2463,7 +2479,7 @@ async function renderModels() {
   const choose = async id => {
     const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({embed_model: id})});
     toast(!r.ok ? 'Could not change the model' : id === d.current ? 'Switch stopped' : 'Re-indexing with the new model in the background');
-    setTimeout(renderModels, 600);
+    setTimeout(() => { renderModels(); renderContent(); }, 600);
   };
   $$('[data-model]', box).forEach(b => b.onclick = () => {
     const id = b.dataset.model; if (id === d.wanted) return;
@@ -2624,7 +2640,8 @@ async function renderSettings() {
     </div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
   else if (tab === 'ai') body = bar('Models', 'The search model that finds things by meaning, and the optional AI model that writes summaries, topic names and insights.') + `
-    <div class="set-card" id="set-Search-model"><h3>Search model</h3><p class="sc-p">Turns your files, code and sessions into vectors, so search finds them by meaning. It runs on this Mac.</p><div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div></div>` + aiSettingsHtml();
+    <div class="set-card" id="set-Search-model"><h3>Search model</h3><p class="sc-p">Turns your files, code and sessions into vectors, so search finds them by meaning. It runs on this Mac.</p><div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div></div>
+    <div class="set-card" id="set-What-it-reads"><h3>What the search model reads</h3><p class="sc-p">Text is always read. Images, video and audio are found by name until you switch them on. Switching one on downloads its part of the model, then reads those files in your folders (and images in your git repos).</p><div id="contentbox"><div class="spinner" style="margin:8px 0"></div></div></div>` + aiSettingsHtml();
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/usage.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
@@ -2646,7 +2663,7 @@ async function renderSettings() {
   $('#setmain').scrollTop = y;
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
-  if (tab === 'ai') { bindAISettings($('#setmain')); renderModels(); }
+  if (tab === 'ai') { bindAISettings($('#setmain')); renderModels(); renderContent(); }
   if (tab === 'agents') loadIntegrations();
   if (tab === 'general') bindGeneral();
   if (tab === 'usage') bindUsage();

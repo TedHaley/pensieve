@@ -8,5 +8,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(name: "Pensieve", path: "Sources/Pensieve"),
+        // decodes video frames and sound for the backend (Contents/MacOS/pensieve-media)
+        .executableTarget(name: "pensieve-media", path: "Sources/PensieveMedia"),
     ]
 )
