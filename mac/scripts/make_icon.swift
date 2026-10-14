@@ -1,4 +1,4 @@
-// Draws the app icon into an .iconset: the Pensieve mark from tedhaley.ca/pensieve (a ring with three dots,
+// Draws the app icon into an .iconset: the Pensieve mark from pensieve.tools (a ring with three dots,
 // SVG viewBox 0 0 24 24) in the site's light ink on its dark background, on Apple's icon grid.
 // Usage: make_icon <out.iconset>
 import AppKit

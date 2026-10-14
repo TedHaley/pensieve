@@ -1,6 +1,6 @@
 import AppKit
 
-/// The Pensieve mark from tedhaley.ca/pensieve (SVG viewBox 0 0 24 24): a ring with three dots of memory.
+/// The Pensieve mark from pensieve.tools (SVG viewBox 0 0 24 24): a ring with three dots of memory.
 /// scripts/make_icon.swift draws the same shape for the app icon.
 enum Mark {
     static let ring = (cx: 12.0, cy: 12.0, r: 10.0, stroke: 1.6)
