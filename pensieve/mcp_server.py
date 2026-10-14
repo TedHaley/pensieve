@@ -15,7 +15,7 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
-               "current_scope", "open", "index_path"}
+               "current_scope", "open", "index_path", "report_feedback"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -119,12 +119,38 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
         return not (cwd and wt and (cwd == wt or cwd.startswith(wt + "/")))
     res = [x for x in r["results"] if not elsewhere(x)] + [x for x in r["results"] if elsewhere(x)]
     usage.note(n_results=len(res), results=[[x.get("id"), x.get("path")] for x in res], laps=r.get("timing"))
+    res = _without_live_sessions(res, s, cwd)
     _mark_near_copies(res, s)
     _to_own_checkout(res, s, cwd)
     found = _lines(res)
     if getattr(sc, "unindexed", False):  # only past sessions in this repo can match; its code isn't indexed
         return (f"{sc.description}. `pensieve repo index` indexes it." + (f"\n{found}" if found else ""))
     return found or "No matches."
+
+
+LIVE_SECONDS = 300  # a session in the agent's folder written to this recently is the agent's own conversation
+
+
+def _without_live_sessions(results, searcher, cwd):
+    """Leave out sessions still being written in the agent's folder: the calling agent's own conversation matches
+    its own question best, but holds nothing it doesn't already know. MCP doesn't say which session calls, so a
+    second live session in the same folder is left out too."""
+    sids = [x["id"][8:] for x in results if str(x.get("id", "")).startswith("session:")]
+    if not cwd or not sids:
+        return results
+    with searcher.lock:
+        rows = searcher.db.execute(f"SELECT id, project, path FROM sessions WHERE id IN ({','.join('?' * len(sids))})",
+                                   sids).fetchall()
+    now, live = time.time(), set()
+    for sid, project, path in rows:
+        p = (project or "").rstrip("/")
+        if p and (cwd == p or cwd.startswith(p + "/") or p.startswith(cwd + "/")):
+            try:
+                if now - Path(path).stat().st_mtime < LIVE_SECONDS:
+                    live.add(sid)
+            except OSError:
+                pass
+    return [x for x in results if not (str(x.get("id", "")).startswith("session:") and x["id"][8:] in live)]
 
 
 def _to_own_checkout(results, searcher, cwd):
@@ -209,9 +235,23 @@ def _lines(results):
 
 @tool()
 def read(id: str, max_chars: int = 12000) -> dict:
-    """Full text of a search result id: code with its owners and recent commits, a document, or a session."""
-    _check(id)
-    return actions.read(id, max_chars)
+    """Full text of a search result id: code with its owners and recent commits, a document, or a session. Several
+    ids, separated by spaces, are read in one call ("code:12 code:40 session:…"), sharing max_chars."""
+    ids = [i for i in id.replace(",", " ").split() if i]
+    if len(ids) <= 1:
+        _check(id.strip())
+        return actions.read(id.strip(), max_chars)
+    each = max(2000, max_chars // len(ids))
+    out = []
+    for i in ids[:8]:
+        try:
+            _check(i)
+            out.append(actions.read(i, each))
+        except KeyError:
+            out.append({"id": i, "error": "not found"})
+        except ValueError as e:  # outside the connection's scope
+            out.append({"id": i, "error": str(e)})
+    return {"items": out, **({"skipped": ids[8:]} if len(ids) > 8 else {})}
 
 
 def prompt_context(prompt: str, cwd: str) -> str:
@@ -417,6 +457,17 @@ def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
     if r is None:
         raise ValueError(f"unknown repo {repo!r}")
     return r
+
+
+@tool()
+def report_feedback(kind: str, summary: str, details: str = "") -> dict:
+    """Report a problem with Pensieve, or an improvement, when you meet one: a tool error, a search that missed
+    code you then found another way, a wrong or stale result, something slow, or a tool that would have saved you
+    calls. kind: "bug" or "idea". summary: one line. details: what you did (the query or tool call), what you got,
+    what you expected. Keep secrets and private code out. The report stays on this Mac until the user sends it."""
+    from pensieve import feedback
+    x = feedback.add(kind, summary, details, source=agent_client.get() or "agent", context={"cwd": agent_cwd.get()})
+    return {"saved": x["id"], "note": "Saved on this Mac. The user can review and send it in Settings → Feedback."}
 
 
 @tool(name="open")

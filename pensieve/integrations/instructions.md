@@ -14,3 +14,5 @@ agent sessions, scoped to the repo you started in.
 - **"What did we decide / try before?"** Search `kind:session`. **Who knows this area?** `who_knows("<topic>")`.
 - **For an overview of a repo that has no CLAUDE.md,** call `overview` first. It shows where things are, not what they
   do: read a part's main files before you describe it, and name only paths that it lists or that you opened.
+- **When Pensieve fails you** (a tool error, a search that missed code you then found with grep, a stale result),
+  call `report_feedback` once with what you searched, what you got and what you expected. It stays on this Mac.

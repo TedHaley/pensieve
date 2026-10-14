@@ -2379,6 +2379,7 @@ const SET_TABS = [
   ['agents', 'Agents', '#30b0c7', '<circle cx="11" cy="11" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
   ['ai', 'Models', '#bf5af2', '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9Z" fill="#fff"/><circle cx="18.5" cy="17.5" r="1.6" fill="#fff"/>'],
   ['usage', 'Usage', '#34c759', '<path d="M5 19V11M10 19V5M15 19v-6M20 19V9" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>'],
+  ['feedback', 'Feedback', '#ff9f0a', '<path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H10l-4 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>'],
 ];
 // Usage: how agents call Pensieve over MCP, from the local log (~/.pensieve/usage.db)
 S.usageDays = +store.get('usageDays', 7);
@@ -2477,6 +2478,69 @@ async function renderModels() {
   });
   if (switching) setTimeout(() => { if ($('#modelbox') === box && !$('#modelconfirm', box)?.innerHTML) renderModels(); }, 5000);
 }
+// What the search model reads: text always; images, video and audio when switched on. Switching one on downloads its
+// part of the model first (the install), with progress; its files are found by name until it is done.
+async function renderContent() {
+  const box = $('#contentbox'); if (!box) return;
+  let d;
+  try { d = await api('/api/content'); } catch { box.innerHTML = '<p class="sc-p">Could not load this.</p>'; return; }
+  const gemma = d.model === d.needs_model;
+  const state = k => {
+    if (k.locked) return 'Always on.';
+    if (k.needs === 'model') return 'Needs the EmbeddingGemma 2 search model (above).';
+    if (k.needs === 'decoder') return 'Needs the Pensieve app’s video and sound decoder, or PyAV (pip install av).';
+    if (k.error) return `The download failed: ${k.error}. Switch it off and on to try again.`;
+    if (k.installing) { const p = k.installing; return `Downloading ${fmtBytes(p.done)} of ${fmtBytes(p.total)}. Until it is done, these files are found by name.`; }
+    if (k.on && k.ready) return `On. ${fmtBytes(k.size_mb * 1e6)} downloaded.`;
+    if (k.on) return 'Starting the download…';
+    return `Off: found by name. Switching on downloads ${fmtBytes(k.size_mb * 1e6)}${k.installed ? ' (already here)' : ''}.`;
+  };
+  box.innerHTML = d.kinds.map(k => `<div class="set-row ct-row"><div><div class="k">${esc(k.label)}</div><div class="d">${esc(k.description)}</div>
+      <div class="d ct-state ${k.error ? 'err' : ''}">${esc(state(k))}</div>${k.installing ? `<div class="ct-bar"><i style="width:${Math.round(100 * k.installing.done / Math.max(k.installing.total, 1))}%"></i></div>` : ''}</div>
+    <div><label class="tog"><input type="checkbox" data-content="${esc(k.id)}" ${k.on ? 'checked' : ''} ${k.locked || (!gemma && !k.on) ? 'disabled' : ''}></label></div></div>`).join('');
+  $$('[data-content]', box).forEach(c => c.onchange = async () => {
+    const r = await fetch('/api/content', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: c.dataset.content, on: c.checked})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(typeof j.detail === 'string' ? j.detail : 'Could not change this'); c.checked = !c.checked; return; }
+    toast(c.checked ? 'Installing, then reading these files' : 'These files are found by name again');
+    renderContent();
+  });
+  if (d.kinds.some(k => k.installing || (k.on && !k.ready && !k.needs && !k.error)))
+    setTimeout(() => { if ($('#contentbox') === box) renderContent(); }, 1500);
+}
+async function renderFeedback() {
+  const box = $('#fbbox'); if (!box) return;
+  let d;
+  try { d = await api('/api/feedback'); } catch { box.innerHTML = '<p class="sc-p">Could not load feedback.</p>'; return; }
+  const open = d.items.filter(x => x.status === 'new'), done = d.items.filter(x => x.status !== 'new');
+  const who = x => x.source === 'user' ? 'You' : `Agent (${esc(x.source)})`;
+  const row = x => `<div class="set-row fb-row ${x.status}"><div>
+      <div class="k"><span class="fb-kind ${x.kind}">${x.kind === 'bug' ? 'Bug' : 'Idea'}</span> ${esc(x.summary)}</div>
+      <div class="d">${who(x)} · ${rel(x.ts * 1000)} · Pensieve ${esc(x.version || '')}${x.status !== 'new' ? ` · ${x.status === 'sent' ? 'Sent' : 'Dismissed'}` : ''}</div>
+      ${x.details ? `<details class="fb-details"><summary>Details</summary><pre>${esc(x.details)}</pre></details>` : ''}</div>
+    <div class="fb-acts">${x.status === 'new' ? `<a class="btn primary" href="${esc(x.issue_url)}" target="_blank" rel="noopener" data-fb-send="${esc(x.id)}">Send to GitHub</a>
+      <button class="btn" data-fb-set="${esc(x.id)}" data-st="dismissed">Dismiss</button>` : `<button class="btn" data-fb-set="${esc(x.id)}" data-st="new">Restore</button>`}</div></div>`;
+  box.innerHTML = `<div class="set-card"><h3>Report a problem or an idea</h3>
+      <p class="sc-p">Agents report here too, with the <code>report_feedback</code> tool, when a search misses or a tool fails. Nothing leaves this Mac until you choose Send to GitHub, which opens a filled-in issue for you to read first.</p>
+      <div class="fb-form"><div class="seg mini" role="radiogroup" aria-label="Kind"><button data-fb-kind="bug" class="on">Bug</button><button data-fb-kind="idea">Idea</button></div>
+        <input class="set-in" id="fb-summary" placeholder="In one line: what went wrong, or what would be better">
+        <textarea class="set-in" id="fb-details" rows="3" placeholder="Details (optional): what you did, what you expected"></textarea>
+        <div><button class="btn primary" id="fb-add">Save</button> <span class="err" id="fb-err"></span></div></div></div>
+    <div class="set-card"><h3>To send (${open.length})</h3>${open.length ? open.map(row).join('') : '<p class="sc-p">Nothing new.</p>'}</div>
+    ${done.length ? `<div class="set-card"><h3>Sent or dismissed</h3>${done.map(row).join('')}</div>` : ''}`;
+  let kind = 'bug';
+  $$('[data-fb-kind]', box).forEach(b => b.onclick = () => { kind = b.dataset.fbKind; $$('[data-fb-kind]', box).forEach(x => x.classList.toggle('on', x === b)); });
+  $('#fb-add', box).onclick = async () => {
+    const r = await fetch('/api/feedback', {method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({kind, summary: $('#fb-summary', box).value, details: $('#fb-details', box).value})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('#fb-err', box).textContent = typeof j.detail === 'string' ? j.detail : 'Could not save it'; return; }
+    toast('Saved. Send it to GitHub when you are ready.'); renderFeedback();
+  };
+  const set = async (id, status) => { await fetch(`/api/feedback/${enc(id)}`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({status})}); renderFeedback(); };
+  $$('[data-fb-send]', box).forEach(a => a.addEventListener('click', () => setTimeout(() => set(a.dataset.fbSend, 'sent'), 300)));
+  $$('[data-fb-set]', box).forEach(b => b.onclick = () => set(b.dataset.fbSet, b.dataset.st));
+}
 function renderReset(step) {
   const box = $('#resetbox');
   if (!box) return;
@@ -2562,6 +2626,7 @@ async function renderSettings() {
   else if (tab === 'ai') body = bar('Models', 'The search model that finds things by meaning, and the optional AI model that writes summaries, topic names and insights.') + `
     <div class="set-card" id="set-Search-model"><h3>Search model</h3><p class="sc-p">Turns your files, code and sessions into vectors, so search finds them by meaning. It runs on this Mac.</p><div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div></div>` + aiSettingsHtml();
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/usage.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
+  else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
     <div class="set-card" id="set-Mac-app"><h3>Mac app</h3>${setRow('hotkey')}${setRow('editor')}
       <div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes. The search panel and the Map both use it.</div></div>
@@ -2585,6 +2650,7 @@ async function renderSettings() {
   if (tab === 'agents') loadIntegrations();
   if (tab === 'general') bindGeneral();
   if (tab === 'usage') bindUsage();
+  if (tab === 'feedback') renderFeedback();
   const upd = $('[data-upd]', el);
   if (upd) upd.onchange = async () => {
     const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({auto_update_check: upd.checked})});
@@ -2645,7 +2711,7 @@ async function route() {
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
   if (h === 'setup') return openSetup();
-  if (['sources', 'scopes', 'agents', 'ai', 'general', ...Object.keys(OLD_TABS)].includes(h)) {
+  if (['sources', 'scopes', 'agents', 'ai', 'general', 'usage', 'feedback', ...Object.keys(OLD_TABS)].includes(h)) {
     S.setTab = OLD_TABS[h] || h; store.set('setTab', S.setTab);
     return S.view === 'settings' ? renderSettings() : setView('settings');
   }

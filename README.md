@@ -265,6 +265,10 @@ Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for t
 
 On Apple Silicon, the embedding model runs on MLX. On other machines, it runs on sentence-transformers and PyTorch (CUDA or CPU), which makes the install about 650 MB larger. The backend and the Map work on Linux too; the search panel app is macOS only.
 
+## Feedback
+
+Report a bug or an idea in Settings → Feedback, or on [GitHub issues](https://github.com/TedHaley/pensieve/issues/new/choose). Agents report too: when a Pensieve tool fails or a search misses code that the agent then finds another way, the agent calls the MCP tool `report_feedback`. Reports stay on your Mac, in `~/.pensieve/feedback.jsonl`. Settings → Feedback lists them, and Send to GitHub opens a filled-in issue that you read before you post it.
+
 ## Development
 
 ```bash

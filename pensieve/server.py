@@ -1172,6 +1172,40 @@ def _version():
     return VERSION
 
 
+class FeedbackReq(BaseModel):
+    kind: str
+    summary: str
+    details: str = ""
+
+
+@app.get("/api/feedback")
+def get_feedback():
+    from pensieve import feedback
+    return {"items": feedback.items(), "new_issue": f"{feedback.REPO}/issues/new/choose"}
+
+
+@app.post("/api/feedback")
+def post_feedback(req: FeedbackReq):
+    from pensieve import feedback
+    try:
+        x = feedback.add(req.kind, req.summary, req.details, source="user")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    broadcast({"type": "feedback"})
+    return dict(x, issue_url=feedback.issue_url(x))
+
+
+@app.put("/api/feedback/{fid}")
+def put_feedback(fid: str, body: dict):
+    from pensieve import feedback
+    try:
+        return feedback.set_status(fid, body.get("status", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except KeyError:
+        raise HTTPException(404)
+
+
 @app.get("/api/about")
 def about():
     from pensieve import reset
