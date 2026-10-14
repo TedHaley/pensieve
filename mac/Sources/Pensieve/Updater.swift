@@ -218,12 +218,6 @@ final class Updater: ObservableObject {
         }
         try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", newApp.path],
                 "The downloaded app's signature didn't verify.")
-        // Signed with a certificate (mac/sign.sh), this app accepts only an update signed with the same one. An ad-hoc
-        // build's requirement is its own hash, which no new version can meet, so it has nothing to hold the update to.
-        if let req = Self.designatedRequirement(bundlePath), req.contains("certificate leaf") || req.contains("anchor apple") {
-            try run("/usr/bin/codesign", ["--verify", "--deep", "-R=" + req, newApp.path],
-                    "The downloaded app isn't signed by the same developer as this one.")
-        }
 
         let dest = URL(fileURLWithPath: bundlePath)
         let parent = dest.deletingLastPathComponent()
@@ -243,15 +237,6 @@ final class Updater: ObservableObject {
     }
 
     @discardableResult
-    /// The app's designated requirement as codesign prints it ("identifier … and certificate leaf = H…").
-    nonisolated private static func designatedRequirement(_ path: String) -> String? {
-        guard let out = try? run("/usr/bin/codesign", ["-d", "-r-", path], "") else { return nil }
-        return out.split(separator: "\n").compactMap { line -> String? in
-            guard let r = line.range(of: "designated => ") else { return nil }
-            return String(line[r.upperBound...])
-        }.first
-    }
-
     nonisolated private static func run(_ tool: String, _ args: [String], _ failure: String) throws -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)
