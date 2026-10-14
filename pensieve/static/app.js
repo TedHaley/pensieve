@@ -2089,6 +2089,7 @@ async function openSetup() {
   catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
   const ai = setupState.guide.ai;
   setupState.ai = ai.find(o => o.id === 'builtin' && o.available) ? 'builtin' : 'none';
+  setupState.embed = setupState.guide.embed_model;
   renderSetup();
 }
 const setupCats = () => { const want = new Set(setupState.guide.profiles.filter(p => setupState.profiles.has(p.id)).flatMap(p => p.categories));
@@ -2137,10 +2138,14 @@ function renderSetup() {
       ${more.length ? `<div class="setup-cat"><h3>Something else?</h3>${more.map(add).join(' · ')}</div>` : ''}
       ${btns('ai', 'Next', picked.length > 0)}`;
   } else if (step === 'ai') {
-    body = `<h1>Insights</h1><p class="sub">Optional. An AI engine writes summaries, topic names and insights about your work. ${esc(NO_AI_WORKS)}</p>
-      <div class="ai-opts" role="radiogroup">${g.ai.map(o => `<button class="ai-opt ${st.ai === o.id ? 'on' : ''}" data-setup-ai="${esc(o.id)}" role="radio" aria-checked="${st.ai === o.id}" ${o.available ? '' : 'disabled'}>
+    body = `<h1>Choose your models</h1>
+      <h3 class="setup-h">Search model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
+      <div class="ai-opts" role="radiogroup" aria-label="Search model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
+        <div class="ai-opt-h"><b>${esc(m.label)}</b><span class="priv local">Local</span></div><p>${esc(m.about)}</p></button>`).join('')}</div>
+      <h3 class="setup-h">AI model</h3><p class="sub">Optional. Writes summaries, topic names and insights about your work. ${esc(NO_AI_WORKS)}</p>
+      <div class="ai-opts" role="radiogroup" aria-label="AI model">${g.ai.map(o => `<button class="ai-opt ${st.ai === o.id ? 'on' : ''}" data-setup-ai="${esc(o.id)}" role="radio" aria-checked="${st.ai === o.id}" ${o.available ? '' : 'disabled'}>
         <div class="ai-opt-h"><b>${esc(o.id === 'none' ? 'Not now' : o.label)}</b>${o.privacy && o.id !== 'none' ? `<span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span>` : ''}</div>
-        <p>${esc(o.id === 'none' ? 'Turn insights on later in Settings → AI & Insights.' : o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}</button>`).join('')}</div>
+        <p>${esc(o.id === 'none' ? 'Turn insights on later in Settings → Models.' : o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}</button>`).join('')}</div>
       ${btns('start', 'Next', !!st.ai)}`;
   } else {
     body = `<h1>Ready to index</h1><p class="sub">Pensieve will index ${esc(plural(picked.filter(i => !i.rule).length, 'source'))}${files ? `, including ${files.toLocaleString()} code files` : ''}.</p>
@@ -2153,6 +2158,7 @@ function renderSetup() {
   $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { const id = b.dataset.setupProf; st.profiles[st.profiles.has(id) ? 'delete' : 'add'](id); st.cands = null; st.chosen.clear(); renderSetup(); });
   $$('[data-setup-id]', el).forEach(c => c.onchange = () => { st.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
   $$('[data-setup-ai]', el).forEach(b => b.onclick = () => { st.ai = b.dataset.setupAi; renderSetup(); });
+  $$('[data-setup-embed]', el).forEach(b => b.onclick = () => { st.embed = b.dataset.setupEmbed; renderSetup(); });
   $$('[data-setup-add]', el).forEach(b => b.onclick = () => {
     if (window.pensieveNative) window.webkit?.messageHandlers?.pensieveWindow?.postMessage({pickFolder: b.dataset.setupAdd});
     else { st.adding = b.dataset.setupAdd; renderSetup(); $(`[data-setup-addin]`, el)?.focus(); }
@@ -2167,7 +2173,7 @@ function renderSetup() {
     }
     if (next !== 'go') return setupGo(next);
     st.busy = true; renderSetup();
-    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], ai: st.ai})});
+    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], ai: st.ai, embed_model: st.embed})});
     const j = await r.json().catch(() => ({}));
     st.busy = false;
     if (!r.ok) { st.err = typeof j.detail === 'string' ? j.detail : 'Could not start indexing'; return renderSetup(); }
@@ -2195,8 +2201,8 @@ function syncingHtml() {
   const jobs = S.status?.syncing || [];
   if (S.status?.setup_done === false) return `<div class="sync-strip warn">${ENERGY_IC}<div><b>Nothing is indexed yet</b><span>Choose the sources to start.</span></div><button class="btn primary" data-open-setup>Choose sources</button></div>`;
   if (!jobs.length) return '';
-  const what = j => j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
-  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} files${j.seconds_left >= 60 && j.done >= 50 ? ` · about ${Math.round(j.seconds_left / 60).toLocaleString()} min left` : ''}`
+  const what = j => j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : j.kind === 'model' ? `Switching to ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
+  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} ${j.kind === 'model' ? 'pieces of text' : 'files'}${j.seconds_left >= 60 && j.done >= 50 ? ` · about ${Math.round(j.seconds_left / 60).toLocaleString()} min left` : ''}`
     : `${j.done.toLocaleString()} ${j.kind === 'sessions' ? 'sessions' : 'files'} so far`;
   return `<div class="sync-strip">${ENERGY_IC}<div><b>Syncing now</b>${jobs.map(j => `<span class="job">${what(j)} · ${prog(j)}</span>`).join('')}
     <span class="muted">Indexing uses a lot of energy: plug in your Mac if you can. Search works meanwhile.</span></div></div>`;
@@ -2371,7 +2377,7 @@ const SET_TABS = [
   ['sources', 'Sources', '#0a84ff', '<path d="M4 6.5C4 5.1 7.6 4 12 4s8 1.1 8 2.5S16.4 9 12 9 4 7.9 4 6.5Z M4 6.5v11C4 18.9 7.6 20 12 20s8-1.1 8-2.5v-11 M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" fill="none" stroke="#fff" stroke-width="1.8"/>'],
   ['scopes', 'Scopes', '#5e5ce6', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="#fff"/>'],
   ['agents', 'Agents', '#30b0c7', '<circle cx="11" cy="11" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
-  ['ai', 'AI & Insights', '#bf5af2', '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9Z" fill="#fff"/><circle cx="18.5" cy="17.5" r="1.6" fill="#fff"/>'],
+  ['ai', 'Models', '#bf5af2', '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9Z" fill="#fff"/><circle cx="18.5" cy="17.5" r="1.6" fill="#fff"/>'],
   ['usage', 'Usage', '#34c759', '<path d="M5 19V11M10 19V5M15 19v-6M20 19V9" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>'],
 ];
 // Usage: how agents call Pensieve over MCP, from the local log (~/.pensieve/usage.db)
@@ -2437,6 +2443,39 @@ async function bindGeneral() {
     chk.disabled = false;
   };
   renderReset();
+}
+const dur = s => s < 90 ? 'about a minute' : s < 5400 ? `about ${Math.round(s / 60)} minutes` : `about ${(s / 3600).toFixed(1)} hours`;
+async function renderModels() {
+  const box = $('#modelbox'); if (!box) return;
+  let d;
+  try { d = await api('/api/embed_models'); } catch { box.innerHTML = '<p class="sc-p">Could not load the models.</p>'; return; }
+  const p = d.progress, switching = d.wanted !== d.current;
+  box.innerHTML = `<div class="ai-opts" role="radiogroup" aria-label="Search model">${d.models.map(m => {
+    const now = m.id === d.current, next = switching && m.id === d.wanted;
+    const note = now ? (switching ? 'In use until the switch is done' : '')
+      : next ? (p ? `Embedding: ${Math.round(100 * p.done / Math.max(p.total, 1))}%${p.seconds_left ? `, ${dur(p.seconds_left)} left` : ''}. Pensieve restarts when it is done.` : 'Starting…')
+      : `Switching takes ${dur(m.switch_seconds)} on this Mac, for ${d.chunks.toLocaleString()} pieces of text.`;
+    return `<button class="ai-opt ${now && !switching || next ? 'on' : ''}" data-model="${esc(m.id)}" role="radio" aria-checked="${now}">
+      <div class="ai-opt-h"><b>${esc(m.label)}</b>${now ? '<span class="priv local">In use</span>' : ''}</div><p>${esc(m.about)}</p>${note ? `<p class="note">${esc(note)}</p>` : ''}</button>`;
+  }).join('')}</div>${switching ? `<p class="sc-p">Choose ${esc(d.models.find(m => m.id === d.current)?.label || 'the current model')} to stop the switch.</p>` : ''}
+    <div id="modelconfirm"></div>`;
+  const choose = async id => {
+    const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({embed_model: id})});
+    toast(!r.ok ? 'Could not change the model' : id === d.current ? 'Switch stopped' : 'Re-indexing with the new model in the background');
+    setTimeout(renderModels, 600);
+  };
+  $$('[data-model]', box).forEach(b => b.onclick = () => {
+    const id = b.dataset.model; if (id === d.wanted) return;
+    if (id === d.current) return choose(id);  // back to the model in use: stops a switch, nothing to re-index
+    const m = d.models.find(x => x.id === id), c = $('#modelconfirm', box);
+    c.innerHTML = `<div class="set-card danger" style="margin-top:10px"><div class="set-row" style="border-top:0"><div>
+      <div class="k">Re-index with ${esc(m.label)}?</div>
+      <div class="d">Pensieve embeds all ${d.chunks.toLocaleString()} pieces of text it has indexed again with the new model: ${dur(m.switch_seconds)} on this Mac. It uses a lot of energy while it runs, so plug in if you can. Your files are not read again, and search keeps working with the current model until the new one is ready; then Pensieve restarts.</div></div>
+      <div style="display:flex;gap:8px;align-self:center"><button class="btn" data-mc="no">Cancel</button><button class="btn primary" data-mc="yes">Re-index</button></div></div></div>`;
+    $('[data-mc=no]', c).onclick = () => { c.innerHTML = ''; };
+    $('[data-mc=yes]', c).onclick = () => choose(id);
+  });
+  if (switching) setTimeout(() => { if ($('#modelbox') === box && !$('#modelconfirm', box)?.innerHTML) renderModels(); }, 5000);
 }
 function renderReset(step) {
   const box = $('#resetbox');
@@ -2520,7 +2559,8 @@ async function renderSettings() {
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
     </div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
-  else if (tab === 'ai') body = bar('AI & Insights', 'Optional: the engine that writes summaries, topic names and insights.') + aiSettingsHtml();
+  else if (tab === 'ai') body = bar('Models', 'The search model that finds things by meaning, and the optional AI model that writes summaries, topic names and insights.') + `
+    <div class="set-card" id="set-Search-model"><h3>Search model</h3><p class="sc-p">Turns your files, code and sessions into vectors, so search finds them by meaning. It runs on this Mac.</p><div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div></div>` + aiSettingsHtml();
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/usage.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
     <div class="set-card" id="set-Mac-app"><h3>Mac app</h3>${setRow('hotkey')}${setRow('editor')}
@@ -2541,7 +2581,7 @@ async function renderSettings() {
   $('#setmain').scrollTop = y;
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
-  if (tab === 'ai') bindAISettings($('#setmain'));
+  if (tab === 'ai') { bindAISettings($('#setmain')); renderModels(); }
   if (tab === 'agents') loadIntegrations();
   if (tab === 'general') bindGeneral();
   if (tab === 'usage') bindUsage();
@@ -2698,14 +2738,13 @@ function bindAIButtons(root) {
     setAI({ai: id}, id === 'none' ? 'Insights are off' : id === 'builtin' ? 'Turning on insights in the background' : 'AI engine saved');
   });
 }
-// Settings → AI & Insights
 function aiSettingsHtml() {
   const d = aiState.data;
   if (!d) { loadAI().then(() => S.setTab === 'ai' && renderSettings()); return '<div class="set-card"><p class="sc-p">Checking…</p></div>'; }
   const bat = !!S.set?.orig?.ai_on_battery;
-  return `<div class="set-card ai-set"><h3>Status</h3>${aiStatusHtml(d)}${aiProgressHtml(d)}</div>
-    <div class="set-card ai-set"><h3>Engine</h3><p class="sc-p">${esc(NO_AI_WORKS)}</p>
-      <div class="ai-opts" role="radiogroup" aria-label="AI engine">${d.options.filter(o => o.id !== 'none').map(o => {
+  return `<div class="set-card ai-set"><h3>AI model</h3><p class="sc-p">Optional: writes summaries, topic names and insights. ${esc(NO_AI_WORKS)}</p>
+      ${aiStatusHtml(d)}${aiProgressHtml(d)}
+      <div class="ai-opts" role="radiogroup" aria-label="AI model">${d.options.filter(o => o.id !== 'none').map(o => {
         const on = d.setting === o.id || (d.setting === 'auto' && d.provider === o.id);
         if (o.id === 'server') return aiServerCard(o, on, d.setting === 'auto');
         if (o.id === 'cli') return aiCliCard(o, on);
@@ -2714,7 +2753,7 @@ function aiSettingsHtml() {
           <p>${esc(o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}
           ${on ? `<span class="ai-check">✓ ${d.setting === 'auto' ? 'In use (picked automatically)' : 'Selected'}</span>` : ''}</button>`;
       }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
-      <div class="cmd-l" style="margin-top:14px">Models</div>${setRow('builtin_model')}</div>
+      <div class="cmd-l" style="margin-top:14px">Built-in model</div>${setRow('builtin_model')}</div>
     <div class="set-card ai-set"><div class="set-row" style="border-top:0"><div><div class="k">Keep working on battery power</div><div class="d">Off by default: background insight work pauses until your Mac is plugged in.</div></div>
       <div><label class="tog"><input type="checkbox" data-aibat ${bat ? 'checked' : ''}></label></div></div>
     <div class="set-row"><div><div class="k">Refresh insights automatically</div><div class="d">When the sessions or topics behind them have changed a lot, insights are rewritten in the background, at most every 6 hours.</div></div>
@@ -3337,7 +3376,7 @@ function renderStatus() {
   pill.className = 'menu-status ' + state; $('#gearbtn').dataset.state = state;
   if (st.llm_offline) {
     label.textContent = 'Language model offline';
-    pill.title = `No language model at ${st.llm_url || 'the LLM URL'}. Start that server, or pick another in Settings → AI & Insights, for summaries, topic names and insights. Search, maps, files and code views still work.`;
+    pill.title = `No language model at ${st.llm_url || 'the LLM URL'}. Start that server, or pick another in Settings → Models, for summaries, topic names and insights. Search, maps, files and code views still work.`;
     return;
   }
   label.textContent = st.layout ? 'Laying out map…' : st.summarized_sessions < st.sessions ? `Summarizing ${st.summarized_sessions}/${st.sessions}` :
