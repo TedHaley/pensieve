@@ -32,9 +32,11 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout "$TMP/key.pem" -out "$TMP/cert
 PASS="$(openssl rand -base64 24)"
 openssl pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -out "$TMP/id.p12" -passout "pass:$PASS" -name "$NAME"
 security import "$TMP/id.p12" -k "$HOME/Library/Keychains/login.keychain-db" -P "$PASS" -T /usr/bin/codesign >/dev/null
+# codesign uses the key without a dialog only when the key's partition list has codesign: (asks for the login password)
+echo "Enter your login password to let codesign use the key without asking each time:"
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s -l "$NAME" "$HOME/Library/Keychains/login.keychain-db" >/dev/null
 security add-generic-password -a "$USER" -s "$NAME backup" -w "$PASS" -U
 cp "$TMP/id.p12" "$OUT"
 chmod 600 "$OUT"
 echo "Created \"$NAME\" (valid 10 years) in the login keychain."
 echo "Backup: $OUT (its password is in the keychain as \"$NAME backup\")."
-echo "The first build may ask to let codesign use the key: choose Always Allow."
