@@ -4,10 +4,10 @@ Tasks are made from the index: a code chunk is described by behaviour only (no i
 string literals, so plain grep can't shortcut it) and the agent is asked which file holds it. The answer is the
 chunk's file.
 
-  uv run python bench/agent_search.py gen  --repo ~/Desktop/databricks-bfp -n 10   # -> bench/out/<repo>/tasks.jsonl
-  uv run python bench/agent_search.py find --repo ~/Desktop/databricks-bfp         # Pensieve search alone, no agent
-  uv run python bench/agent_search.py run  --repo ~/Desktop/databricks-bfp --arms grep,pensieve
-  uv run python bench/agent_search.py report --repo ~/Desktop/databricks-bfp
+  uv run python bench/agent_search.py gen  --repo ~/code/my-app -n 10   # -> bench/out/<repo>/tasks.jsonl
+  uv run python bench/agent_search.py find --repo ~/code/my-app         # Pensieve search alone, no agent
+  uv run python bench/agent_search.py run  --repo ~/code/my-app --arms grep,pensieve
+  uv run python bench/agent_search.py report --repo ~/code/my-app
 
 Arms (each a `claude -p` run in the repo, sessions not saved so they never reach the index):
   grep      Read, Grep, Glob only

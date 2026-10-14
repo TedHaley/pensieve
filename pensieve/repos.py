@@ -46,8 +46,7 @@ SHADOW_MIN_FILES = 20  # files to (re)index before blame goes through the commit
 PROGRESS_MIN_FILES = 20  # checkouts with at least this many files to index report their progress (Sources, status)
 GENERATED_DIRS = {"dist", "build", "vendor", "third_party", "node_modules", "out", "target", ".venv"}
 CODE_CHUNK_CHARS = 1500
-CHARS_PER_CHUNK = 1000  # chunk_code's average size: counting a repo's chunks from file sizes came within 10% of the
-                        # real count on affinity, databricks-bfp and pensieve
+CHARS_PER_CHUNK = 1000  # chunk_code's average size: an estimate of a repo's chunks from file sizes comes within 10%
 RATE_MIN_CHUNKS = 2000  # an index this big measures the Mac's speed
 
 
@@ -147,7 +146,7 @@ def check(cwd: str, indexed: dict) -> dict:
 
 
 def area_of(path: str) -> str:
-    """Two-level area key for a repo-relative file path ('core/pipelines/x.py' -> 'core/pipelines')."""
+    """Two-level area key for a repo-relative file path ('src/billing/x.py' -> 'src/billing')."""
     parts = path.split("/")
     return "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if len(parts) > 1 else ".")
 
@@ -999,7 +998,7 @@ class Repos:
 
     def _sel(self, name, cols, extra=""):
         """Rows for one repo, or for every repo when name == ALL. `cols` must start with path; under ALL the
-        path comes back prefixed with the repo name ('anastomo/docs/x.md') so trees and areas span repos."""
+        path comes back prefixed with the repo name ('my-app/docs/x.md') so trees and areas span repos."""
         with self.lock:
             if name == ALL:
                 names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
@@ -1105,7 +1104,7 @@ class Repos:
 
     def _area_vectors(self, root):
         """Adaptive code areas: start from top-level directories and split any area holding more than ~6% of the
-        repo into its subdirectories (up to 4 levels), so big trees like core/pipelines get meaningful parts.
+        repo into its subdirectories (up to 4 levels), so big trees like src/billing get meaningful parts.
         Returns area -> (centroid, n_chunks, owners Counter, last_ts). Cached until the next reindex."""
         key = ("areas", root)
         if key in self._cache:

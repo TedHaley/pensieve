@@ -4,7 +4,7 @@
     "rate limit"                  -> must contain those exact words (case-insensitive substring)
     "rate limit" retries          -> contains the phrase, ranked by meaning of 'retries'
     -draft  -"old notes"          -> exclude
-    kind:code  ext:pdf  in:anastomo   -> filters (kind is file, code or session; in matches the path or project)
+    kind:code  ext:pdf  in:my-app     -> filters (kind is file, code or session; in matches the path or project)
 """
 import bisect
 import hashlib
@@ -435,7 +435,7 @@ class Searcher:
         return keep or sorted(terms, key=self._df.get)[:2]
 
     def _fragments(self, q):
-        """The fixed text of a message as it shows up at runtime ("company_id[20879] not found in directory"): the
+        """The fixed text of a message as it shows up at runtime ("order_id[20879] not found in cache"): the
         query split at numbers and at words no code contains (the values filled into a format string), fragments of
         8+ characters, and whether there was anything to split at. Call with self.lock held, after _rare_terms has
         looked up the query's words."""

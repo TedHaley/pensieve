@@ -1,6 +1,6 @@
 """Where indexing and search time goes, on a scratch index (never ~/.pensieve).
 
-  PENSIEVE_DATA=/tmp/x .venv/bin/python bench/speed.py index ~/Desktop/anastomo [more repos]
+  PENSIEVE_DATA=/tmp/x .venv/bin/python bench/speed.py index ~/code/my-app [more repos]
   PENSIEVE_DATA=/tmp/x .venv/bin/python bench/speed.py search [--tasks bench/out/*/tasks-v2.jsonl] [--memdb] [--profile]
   PENSIEVE_DATA=/tmp/x .venv/bin/python bench/speed.py proto       # vector search and embedding micro-benchmarks
 

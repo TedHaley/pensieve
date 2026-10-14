@@ -53,7 +53,7 @@ For each change in this section, measure on the validation set (`bench/validatio
 ### A1. Embed each distinct chunk once
 
 - **Evidence:** the index on this Mac has 221,954 code chunks but only 178,044 distinct texts. About 20% of the
-  embedding work went to copies. Most copies are in linked worktrees: databricks-bfp has 13,433 chunks in its main
+  embedding work went to copies. Most copies are in linked worktrees: one repo has 13,433 chunks in its main
   checkout and 39,884 more in 20 worktrees.
 - **Try:** before embedding a chunk, look for a stored chunk with the same text and path, and reuse its vector.
 - **Measure:** the time to index a new worktree, and the time of a first index of a repo with worktrees.
@@ -96,7 +96,7 @@ For each change in this section, measure on the validation set (`bench/validatio
     Qwen3 (1.9x), with batches padded to a multiple of 64 tokens. Details: `bench/STRATEGIES.md`.
   - Built: Settings → General → Search model. An index keeps its model, so no one has to index again; switching
     embeds the stored text with the new model in the background and swaps at a restart. Not yet measured: energy
-    (A5), and quality on affinity (the large repo was not re-embedded).
+    (A5), and quality on the largest repo (it was not re-embedded).
 
 ### A4. Settings that fit the hardware
 
@@ -246,8 +246,7 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 
 ### B7. Index agent memory files
 
-- **Evidence:** in a session on 2026-10-13 (`d48348bb`, databricks-bfp), the deciding fact ("a globally unique name is
-  not sufficient match evidence") was only in a Claude Code memory file, `project_crm_link_scored.md`. The session
+- **Evidence:** in a session on 2026-10-13, the deciding fact was only in a Claude Code memory file. The session
   that found it was deleted. Pensieve indexes none of the 172 memory files in `~/.claude/projects/*/memory/`.
 - **Try:** index each memory file with its project, as its own kind, and show it in session searches.
 - **Measure:** the share of session searches that return a memory file in the top 3, and agent answers on questions
@@ -264,12 +263,12 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 
 ### B8. Show hits in the agent's own checkout
 
-- **Evidence:** in the same session, the agent worked in the worktree `databricks-bfp-placeholders`, but every hit
-  showed a path in `~/Desktop/databricks-bfp`. The agent then read the files in its own checkout with `sed`.
+- **Evidence:** in the same session, the agent worked in a linked worktree, but every hit showed a path in the
+  main checkout. The agent then read the files in its own checkout with `sed`.
 - **Try:** when the agent works in a worktree and the file is the same there, show the worktree path.
 - **Status:** testing
 - **Notes:**
-  - 2026-10-13: built (`_to_own_checkout` in `mcp_server.py`). In the worktree `databricks-bfp-company`, 3 of 4 hits
+  - 2026-10-13: built (`_to_own_checkout` in `mcp_server.py`). In a test worktree, 3 of 4 hits
     now show the worktree's own path, relative to it. The fourth file differs in that worktree, so its hit keeps the
     main checkout's path and says "(main checkout; differs in your worktree)".
 

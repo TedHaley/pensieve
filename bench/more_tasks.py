@@ -2,7 +2,7 @@
 tasks-v2.jsonl are left out, so the two sets never share an answer. Same prompts and checks as agent_search.py gen
 (desc, query) and exact_tasks.py (ident, literal, mixed).
 
-  PENSIEVE_DATA=<index> .venv/bin/python bench/more_tasks.py --repo ~/Desktop/anastomo -n 35
+  PENSIEVE_DATA=<index> .venv/bin/python bench/more_tasks.py --repo ~/code/my-app -n 35
 """
 import argparse
 import json

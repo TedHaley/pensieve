@@ -73,12 +73,12 @@ Pensieve starts at login by default. To stop this, turn off **Launch at Login** 
 | `-draft` / `-"old notes"` | excludes a word or phrase |
 | `kind:file` | documents and code (`kind:doc` documents only, `kind:code` code only) |
 | `kind:session` | agent sessions only |
-| `kind:folder person build` | folders whose path and contents match, e.g. `core/pipelines/person/build`; a repo is a folder too |
+| `kind:folder invoice export` | folders whose path and contents match, e.g. `src/billing/invoice_export`; a repo is a folder too |
 | `kind:repo` | repositories (on its own: all of them) |
-| `kind:person spark jobs` | people who wrote the code about it; a plain search for a name also lists the person first |
-| `by:parth terraform` | only what that person wrote (code by git blame, documents by author) |
+| `kind:person payment retries` | people who wrote the code about it; a plain search for a name also lists the person first |
+| `by:sam terraform` | only what that person wrote (code by git blame, documents by author) |
 | `ext:pdf` | one file type |
-| `in:anastomo` | path or repo contains this |
+| `in:my-app` | path or repo contains this |
 
 A plain search also puts a folder first when its path names every word (`person build`). Under an empty field, **Options** lists all of these.
 
