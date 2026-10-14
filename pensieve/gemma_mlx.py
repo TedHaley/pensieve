@@ -5,6 +5,62 @@ import json
 from pathlib import Path
 
 GEMMA_MAX_TOKENS = 512  # the sliding window: longer inputs would need the sliding mask
+TEXT_WEIGHTS = "text.safetensors"  # beside the model's files: its text part only (download_text)
+TEXT_PREFIX = "language_model."
+
+
+def download_text(name):
+    """Download the model's config and tokenizer, and only the text part of its weights: 542 of 1,489 MB for
+    EmbeddingGemma 2 (the rest is its image and audio encoders). A safetensors file starts with a JSON index of
+    where each tensor is, so the text tensors are fetched as byte ranges and written to TEXT_WEIGHTS."""
+    import struct
+    from huggingface_hub import get_session, hf_hub_url, snapshot_download
+    folder = Path(snapshot_download(name, allow_patterns=["*.json", "tokenizer*"]))
+    out = folder / TEXT_WEIGHTS
+    if out.exists():
+        return out
+    url, s = hf_hub_url(name, "model.safetensors"), get_session()
+
+    def get(a, b):  # bytes a..b, inclusive
+        r = s.get(url, headers={"Range": f"bytes={a}-{b}"}, timeout=60, follow_redirects=True)
+        r.raise_for_status()
+        if r.status_code != 206:
+            raise OSError("the server ignored the byte range")
+        return r.content
+
+    n = struct.unpack("<Q", get(0, 7))[0]
+    header = json.loads(get(8, 8 + n - 1))
+    keep = sorted(((k, v) for k, v in header.items() if k.startswith(TEXT_PREFIX)),
+                  key=lambda kv: kv[1]["data_offsets"][0])
+    base, new_header, pos = 8 + n, {}, 0
+    for k, v in keep:
+        a, b = v["data_offsets"]
+        new_header[k] = {**v, "data_offsets": [pos, pos + b - a]}
+        pos += b - a
+    head = json.dumps(new_header, separators=(",", ":")).encode()
+    head += b" " * (-len(head) % 8)  # the data starts 8-byte aligned
+    tmp = out.with_suffix(".part")
+    with open(tmp, "wb") as f:
+        f.write(struct.pack("<Q", len(head)) + head)
+        i = 0
+        while i < len(keep):  # neighbouring tensors in one request
+            a, b = keep[i][1]["data_offsets"]
+            j = i + 1
+            while j < len(keep) and keep[j][1]["data_offsets"][0] == b and b - a < 64 << 20:
+                b = keep[j][1]["data_offsets"][1]
+                j += 1
+            f.write(get(base + a, base + b - 1))
+            i = j
+    tmp.rename(out)
+    return out
+
+
+if __name__ == "__main__":  # python -m pensieve.gemma_mlx <model>: the download, in a process that may go online
+    import socket
+    import sys
+    _getaddrinfo = socket.getaddrinfo  # IPv4 first: on some networks Python hangs on Hugging Face over IPv6
+    socket.getaddrinfo = lambda *a, **k: sorted(_getaddrinfo(*a, **k), key=lambda r: r[0] != socket.AF_INET)
+    print(download_text(sys.argv[1]))
 
 
 def _model(cfg):
@@ -138,7 +194,10 @@ class MLXGemmaEmbedder:
         import mlx.core as mx
         from huggingface_hub import snapshot_download
         from transformers import AutoTokenizer
-        path = Path(snapshot_download(name, allow_patterns=["*.json", "*.safetensors", "tokenizer*"]))
+        path = Path(snapshot_download(name, allow_patterns=["*.json", "tokenizer*"]))
+        weights = path / TEXT_WEIGHTS if (path / TEXT_WEIGHTS).exists() else path / "model.safetensors"
+        if not weights.exists():
+            raise ValueError(f"{name}: no weights downloaded (python -m pensieve.gemma_mlx {name})")
         cfg = json.loads((path / "config.json").read_text())
         if cfg.get("model_type") != "embedding_gemma2":
             raise ValueError(f"not an EmbeddingGemma 2 model: {cfg.get('model_type')}")
@@ -146,9 +205,8 @@ class MLXGemmaEmbedder:
         self.prompts = json.loads(st.read_text()).get("prompts", {}) if st.exists() else {}
         self.mx, self.max_tokens = mx, min(max_tokens, GEMMA_MAX_TOKENS)
         self.model = _model(cfg["text_config"])
-        weights = {k[len("language_model."):]: v for k, v in mx.load(str(path / "model.safetensors")).items()
-                   if k.startswith("language_model.")}
-        self.model.load_weights(list(weights.items()))
+        self.model.load_weights([(k[len(TEXT_PREFIX):], v) for k, v in mx.load(str(weights)).items()
+                                 if k.startswith(TEXT_PREFIX)])
         mx.eval(self.model.parameters())
         self.tok = AutoTokenizer.from_pretrained(str(path))
 

@@ -43,10 +43,11 @@ def detect_sessions(folder: Path) -> tuple[str, Path] | None:
 QWEN, GEMMA = "Qwen/Qwen3-Embedding-0.6B", "google/embeddinggemma-2"
 EMBED_MODELS = {  # the embedding models Pensieve can index with; an index holds vectors of one model only
     # rate: chunks per second of a first index on an M4 Max, until this Mac has measured its own
-    QWEN: dict(label="Qwen3 Embedding 0.6B", dim=1024, rate=30, about="The original model. 600M parameters."),
+    QWEN: dict(label="Qwen3 Embedding 0.6B", dim=1024, rate=30,
+               about="The original model. 600M parameters: a 1.2 GB download the first time."),
     GEMMA: dict(label="EmbeddingGemma 2", dim=768, rate=55,
                 about="About twice as fast to index and 25% smaller, with the same search quality in our tests. "
-                      "270M parameters (its text part); a 1.5 GB download the first time."),
+                      "270M parameters (its text part): a 550 MB download the first time."),
 }
 EMBED_MODEL_FILE = DATA_DIR / "embed_model"  # the model the index was built with, written at the first start
 
