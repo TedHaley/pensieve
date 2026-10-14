@@ -2688,6 +2688,9 @@ async function renderSettings() {
         <div><button class="btn" id="updcheck">Check now</button></div></div>
       <div class="set-row"><div><div class="k">Check for updates automatically</div><div class="d">Pensieve checks GitHub once a day and asks before installing.</div></div>
         <div><label class="tog"><input type="checkbox" data-upd ${S.set.orig.auto_update_check !== false ? 'checked' : ''}></label></div></div></div>
+    <div class="set-card" id="set-Setup"><h3>Setup</h3>
+      <div class="set-row" style="border-top:0"><div><div class="k">Run setup again</div><div class="d">Choose sources, what Pensieve reads and the models again. Your index stays: what you choose again is not indexed again, and what you leave out is removed.</div></div>
+        <div><button class="btn" data-open-setup>Run setup</button></div></div></div>
     <div class="set-card danger" id="set-Reset"><h3>Reset Pensieve</h3><div id="resetbox"></div></div>`;
   const prevMain = $('#setmain'), y = prevMain && prevMain.dataset.tab === tab ? prevMain.scrollTop : keep?.tab === tab ? keep.y : 0;
   el.innerHTML = `<div class="set-sheet"><nav class="set-nav">${SET_TABS.map(([id, l, c, ic]) => `<button class="${id === tab ? 'on' : ''}" data-settab="${id}"><span class="set-ic" style="background:${c}"><svg viewBox="0 0 24 24" width="14" height="14">${ic}</svg></span>${esc(l)}</button>`).join('')}<span class="grow"></span><button class="btn set-done" data-setdone title="Close (Esc)">Done</button></nav>
@@ -2698,7 +2701,7 @@ async function renderSettings() {
   if (tab === 'ai') { bindAISettings($('#setmain')); renderModels(); renderContent(); }
   if (tab === 'agents') loadIntegrations();
   if (tab === 'sources') renderPlaces();
-  if (tab === 'general') bindGeneral();
+  if (tab === 'general') { bindGeneral(); $('#set-Setup [data-open-setup]')?.addEventListener('click', openSetup); }
   if (tab === 'usage') bindUsage();
   if (tab === 'feedback') renderFeedback();
   const upd = $('[data-upd]', el);
