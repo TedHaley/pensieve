@@ -18,23 +18,35 @@ final class Backend: ObservableObject {
     @Published private(set) var syncing: [SyncJob] = []
     var onSettingsChange: (() -> Void)?
 
-    /// One running indexing job: `total` is known for repos, not for documents or sessions.
+    /// One running indexing job: `total` and `seconds_left` are known for repos and a search-model switch, not for
+    /// documents or sessions (they are found by walking folders).
     struct SyncJob: Decodable, Equatable {
-        let kind: String  // "repo" | "files" | "sessions"
+        let kind: String  // "repo" | "files" | "sessions" | "model"
         let name: String
         let done: Int
         let total: Int?
+        let seconds_left: Int?
 
-        /// "Code in pensieve · 312 of 1,204 files"
         var label: String {
+            let left = seconds_left.map { " · \(Self.timeLeft($0))" } ?? ""
+            if kind == "model" {
+                let pct = total.map { $0 > 0 ? " · \(100 * done / $0)%" : "" } ?? ""
+                return "Switching to \(name)\(pct)\(left)"
+            }
             let what = switch kind {
             case "repo": "Code in \(name)"
             case "files": "Documents in \(name)"
             default: "\(["claude": "Claude Code", "qwen": "Qwen Code", "codex": "Codex"][name] ?? name) sessions"
             }
             let n = done.formatted()
-            if let total { return "\(what) · \(n) of \(total.formatted()) files" }
+            if let total { return "\(what) · \(n) of \(total.formatted()) files\(left)" }
             return "\(what) · \(n) \(kind == "sessions" ? "sessions" : "files") so far"
+        }
+
+        static func timeLeft(_ s: Int) -> String {
+            if s < 60 { return "less than a minute left" }
+            let m = (s + 30) / 60
+            return m < 60 ? "about \(m) min left" : "about \(m / 60) h \(m % 60) min left"
         }
     }
 
