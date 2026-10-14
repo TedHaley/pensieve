@@ -81,7 +81,7 @@ const S = {
 const TOPICS = () => S.scope ? S.scope.topics : S.topics;
 const topicOf = id => (S.scope ? S.scope.topicById : S.topicById).get(id);
 const cl = s => S.scope ? (S.scope.assign.get(s.id) ?? -1) : s.cluster;
-/* Project filter keys are a repo/folder name ("databricks-bfp") or a directory inside a repo ("databricks-bfp/core/models"). */
+/* Project filter keys are a repo/folder name ("my-app") or a directory inside a repo ("my-app/src/models"). */
 const keyLabel = k => k.includes('/') ? k.split('/')[0] + ' › ' + k.split('/').slice(1).join('/') : k;
 function matchKey(s, k) {
   if (!k.includes('/')) return s.project === k || (s.dirs || []).some(d => d.startsWith(k + '/'));
@@ -416,7 +416,7 @@ function renderLabels() {
     const sk = pinFolderLabel(items);
     dataLabelGroups().filter(g => g.key !== sk).forEach(({key, idx}) => {
       const repo = repoOfKey(key), parts = key.split('/');
-      // repos read as "repo / area"; other folders as "parent / name" so "medrec" keeps its "Documents" context
+      // repos read as "repo / area"; other folders as "parent / name" so "taxes" keeps its "Documents" context
       const [pre, name] = repo ? (repo.key === key ? ['', repo.name] : [repo.name + ' /', tail(key.slice(repo.key.length + 1))])
                                : parts.length > 1 ? [parts.at(-2) + ' /', parts.at(-1)] : ['', key || '~'];
       const tc = {}; idx.forEach(i => { const t = mapPts[i].type; tc[t] = (tc[t] || 0) + 1; });
@@ -694,7 +694,7 @@ function treeRow(k, label, depth, n, kids, kind, sub = '', open = false) {
     <button class="tname" data-${kind}="${esc(k)}" title="${esc(k)}"><span class="check"></span><span class="name ${depth ? 'dir' : ''}">${kind === 'ddir' ? label.replace(/^([^<]*)/, m => esc(m)) : esc(label)}</span><span class="n">${n.toLocaleString()}</span></button>
     ${sub ? `<div class="tsub">${sub}</div>` : ''}</div>`;
 }
-// Recursive tree; single-child chains with the same count collapse into one row ("core/pipelines/company").
+// Recursive tree; single-child chains with the same count collapse into one row ("src/billing/invoices").
 function treeHtml(key, depth, cnt, kind = 'proj', children = S.tree.children, subFn = null, openSet = S.treeOpen) {
   let k = key, label = depth ? key.split('/').pop() : key;
   const kidsOf = x => (children.get(x) || []).filter(c => cnt.get(c));
@@ -1190,7 +1190,7 @@ S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'sessi
           topics: new Map(), topicsAI: false, sel: null, selStack: [], search: null, ctx: null, view: null, rev: '', authors: new Set(), drawerPerson: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
 const relHome = p => { const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
 const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
-// A repo, or a folder two levels under home (~/Documents/medrec): "Desktop" alone would color nearly everything the same.
+// A repo, or a folder two levels under home (~/Documents/taxes): "Desktop" alone would color nearly everything the same.
 // What's in view on the Data map: the type and folder filters, then any highlight (a topic, a person…) and search
 // results. Folder and author colors go to the biggest groups in view, so a repo shows its own people and areas.
 const dataInView = p => dataPass(p) && (!S.data.highlight || S.data.highlight.has(p.id)) && (!S.data.search || S.data.search.has(p.id));
@@ -1217,8 +1217,8 @@ function setDataSearch(results) {
 }
 const placeOf = dir => { const r = repoOfKey(dir); return r ? r.key : dir.split('/').slice(0, 2).join('/'); };
 const placeName = k => { const r = repoOfKey(k); return r && r.key === k ? r.name : '~/' + k; };
-// One color per person: git and document metadata spell the same person several ways ("Ted", "TedHaley", "Ted Haley",
-// "tedhaley-affinity"). Two spellings are merged when one is a leading run of the other's name parts; a lone first name
+// One color per person: git and document metadata spell the same person several ways ("Sam", "SamLee", "Sam Lee",
+// "samlee-work"). Two spellings are merged when one is a leading run of the other's name parts; a lone first name
 // is merged only when it matches exactly one person. Bots and agents get no color of their own.
 function canonAuthors(points) {
   const n = new Map(); points.forEach(p => { if (p.author && p.author_source !== 'agent' && !/\[bot\]|\bbot$/i.test(p.author)) n.set(p.author, (n.get(p.author) || 0) + 1); });
@@ -1688,7 +1688,7 @@ function bindGapLinks(root) {
   $$('[data-gaps]', root).forEach(b => b.onclick = () => openGaps(b.dataset.gaps));
 }
 // A code file is at risk when inactive authors wrote at least this much of its area. Whole-repo topics are too broad
-// to show risk (on affinity, 2–27% each), so the at-risk files get topics of their own: what knowledge is at risk.
+// to show risk (on a large repo, 2–27% each), so the at-risk files get topics of their own: what knowledge is at risk.
 const RISK_FILE = 0.5;
 async function loadRiskTopics() {
   const D = S.data;

@@ -14,9 +14,9 @@ repos (504 to 34,847 files). Each query has one right file. The queries are of s
 | question | 334 | "email sent once when free trial ends, skip sync-only users" |
 | name+words | 333 | "pg_inherits check whether table is a partition" |
 | name | 219 | `batch_update` |
-| string | 714 | `"No archived versions to publish."`, typed without quotes |
+| string | 714 | `"No invoices to send."`, typed without quotes |
 | ambiguous | 404 | a string from the code that 2 or more files contain |
-| runtime | 373 | a message as it shows up in a log: `company_id[20879] not found in directory` |
+| runtime | 373 | a message as it shows up in a log: `order_id[20879] not found in cache` |
 
 - **@1, @3, @8:** the share of queries where the right file is first, in the top 3, or in the top 8 (the MCP tool shows 8).
 - **test @1:** only the 1,302 queries from tasks that we never used to tune Pensieve.
@@ -263,11 +263,11 @@ the original):
   text to read, so it is 1–2 s slower.
 - **Without one, the overview tool is more accurate and faster:** 60% fewer wrong claims, 1 s faster, a third of the
   calls, and 39% cheaper. It was faster in three of the five repos.
-- **Stale notes cause errors that the overview prevents.** Affinity's CLAUDE.md says `workspaces/apps/` holds the CRM
-  app, but it does not. Grep repeated that in 4 of 6 answers. The overview lists what `workspaces/apps/` holds, and
-  no overview run repeated it.
-- **Some errors happen in every setup:** "PySpark 3.5" (the repo pins 4.1.0) and "a bronze/silver/gold layout" (the
-  notes say core/ has none). They come from the model's own assumptions.
+- **Stale notes cause errors that the overview prevents.** One repo's CLAUDE.md names a folder for an app that the
+  folder does not hold. Grep repeated that in 4 of 6 answers. The overview lists what the folder holds, and no
+  overview run repeated it.
+- **Some errors happen in every setup:** a wrong version of a main dependency, and a folder layout that the repo
+  does not have. They come from the model's own assumptions.
 - **What shipped:** `overview` as a default tool, and an instructions line to call it for a repo with no CLAUDE.md.
 - Earlier versions of the tool were less accurate. Each version is a separate fix:
   - with only 2 topics for a 73-file repo, the agent left out the indexer and the web UI
@@ -283,7 +283,7 @@ These are the changes that we expect to save an agent the most calls, in order:
 1. **Make `claude-prompt-search` the default once its accuracy holds.** It is the only change that cut calls by a
    third or more, and it costs the same. First test a text that asks the agent to read both files when two hits fit.
    Equivalent hooks for Codex and Gemini CLI would give the same to those agents.
-2. **Embed each distinct chunk only once.** Indexing is bound by the embedding model: on pomander and databricks-bfp,
+2. **Embed each distinct chunk only once.** Indexing is bound by the embedding model: on two large repos,
    embedding took 99% of the wall time (about 30 chunks per second on the GPU), and git blame ran beside it. Linked
    worktrees are mostly copies of the main checkout, so reusing the vector of an identical chunk would index a
    worktree in seconds.
