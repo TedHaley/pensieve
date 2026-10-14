@@ -2715,7 +2715,7 @@ async function renderSettings() {
   $$('#setmain > .set-card [data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
   renderSources(); renderScopes(); renderSyncing();
 }
-const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Largest repo to discover (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model', builtin_model: 'Built-in engine', agent_model: 'Claude Code engine'};
+const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Ask before indexing found repos larger than (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model', builtin_model: 'Built-in engine', agent_model: 'Claude Code engine'};
 async function saveSettings() {
   const ks = setDirty(); if (!ks.length) return;
   const body = Object.fromEntries(ks.map(k => [k, S.set.draft[k]]));

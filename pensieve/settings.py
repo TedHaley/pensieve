@@ -15,7 +15,7 @@ DEFAULTS = {
     "folders": ["~/Documents", "~/Desktop", "~/Downloads"],  # indexed as files (repos inside them get the git treatment)
     "sweep_roots": ["~"],
     "sweep_depth": 4,
-    "max_repo_files": 5000,    # swept repos bigger than this are skipped (list them in `repos` to include anyway)
+    "max_repo_files": 5000,    # found repos bigger than this, with no agent use, wait for the user to choose them
     "repos": [],               # extra repo roots, or folders searched sweep_depth levels deep
     "exclude": ["node_modules", ".venv", "venv", "__pycache__", "Library", ".Trash", "dist", "build", "target",
                 ".cache", "Applications", "Pictures", "Music", "Movies"],
@@ -66,7 +66,7 @@ DESCRIPTIONS = {
     "folders": "Folders whose documents are indexed for search (text, Markdown, code, PDF, Word).",
     "sweep_roots": "Where to look for git repos.",
     "sweep_depth": "How many folder levels below each sweep root to look for repos.",
-    "max_repo_files": "Repos found by discovery with more tracked files than this are skipped; switch one on, or add it in Sources, to index it anyway.",
+    "max_repo_files": "Repos that discovery finds with more tracked files than this, and that no agent has used, are listed for you to choose instead of indexed on their own. Repos your agents work in and repos you add are indexed at any size.",
     "repos": "Repos, or folders of repos, added in Sources. Always indexed, whatever their size.",
     "exclude": "Folder names never indexed or descended into.",
     "exclude_files": "File name patterns never indexed (secrets, keys, password exports). Case-insensitive globs.",

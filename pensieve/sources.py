@@ -49,7 +49,8 @@ def catalog(store, repos, files) -> list[dict]:
     repo_items = [
         dict(id="repos/discover", label="Discover git repositories",
              detail=f"Repos your agents worked in, and repos under {', '.join(s['sweep_roots'])} and your folders "
-                    f"({s['sweep_depth']} levels deep, up to {s['max_repo_files']:,} files each)",
+                    f"({s['sweep_depth']} levels deep). Found repos with more than {s['max_repo_files']:,} files and "
+                    f"no agent use are listed below for you to switch on, not indexed on their own",
              available=True, enabled=on("repos/discover"), kind="rule"),
     ]
     added = {a: str(Path(a).expanduser()) for a in s["repos"]}  # added in Sources: indexed whatever discovery finds
@@ -84,8 +85,8 @@ def catalog(store, repos, files) -> list[dict]:
     for sk in skipped:
         if sk["root"] in added.values():  # listed above, as added
             continue
-        repo_items.append(dict(id=f"repos/{sk['root']}", label=Path(sk["root"]).name, detail=f"{_home(sk['root'])} · skipped: "
-                               f"{sk['files']:,} files (switch on to index anyway)", available=True, enabled=False, count=0, unit="files",
+        repo_items.append(dict(id=f"repos/{sk['root']}", label=Path(sk["root"]).name, detail=f"{_home(sk['root'])} · not indexed yet: "
+                               f"{sk['files']:,} files and no agent use (switch on to index it)", available=True, enabled=False, count=0, unit="files",
                                parent="repos/discover"))
     for d in settings.get("disabled"):  # repos switched off no longer appear in the repos table; keep them listed
         if d.startswith("repos/") and d not in ("repos/sessions", "repos/sweep", "repos/discover") and not any(i["id"] == d for i in repo_items):
