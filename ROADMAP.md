@@ -13,29 +13,30 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | ID | Item | Area | Status |
 |---|---|---|---|
 | A1 | Embed each distinct chunk once | Indexing | testing |
-| A2 | Quantized embedding model | Indexing | idea |
+| A2 | Quantized embedding model | Indexing | dropped |
 | A3 | Smaller or pruned embedding model | Indexing | shipped |
-| A4 | Settings that fit the hardware | Indexing | idea |
+| A4 | Settings that fit the hardware | Indexing | investigating |
 | A5 | Measure the energy that indexing uses | Indexing | idea |
 | A6 | Real searches are slower than the benchmark | Search | investigating |
-| A7 | Search images, audio and video by content | Search | idea |
+| A7 | Search images, audio and video by content | Search | testing |
+| A8 | Index folders while agent sessions catch up | Indexing | idea |
 | B1 | Make the prompt hook the default | Agents | idea |
 | B2 | Prompt hooks for Codex and Gemini CLI | Agents | idea |
 | B3 | Benchmark other agents and models | Agents | idea |
 | B4 | Tell the agent how sure a hit is | Agents | idea |
 | B5 | A `pensieve search` shell command | Agents | testing |
-| B6 | Hit rate of real searches | Agents | idea |
+| B6 | Hit rate of real searches | Agents | testing |
 | B7 | Index agent memory files | Agents | shipped |
 | B8 | Show hits in the agent's own checkout | Agents | testing |
-| B9 | Leave out the agent's own session | Agents | idea |
-| B10 | `read` several hits in one call | Agents | idea |
+| B9 | Leave out the agent's own session | Agents | testing |
+| B10 | `read` several hits in one call | Agents | testing |
 | C1 | Test the two-step install in auto mode | Install | idea |
 | C2 | Claude Code plugin | Install | idea |
 | C3 | Confirm that agents load `~/.agents/skills` | Install | idea |
 | C4 | Homebrew cask | Install | idea |
 | D1 | Team features | Product | idea |
 | D2 | Opt-in usage counts | Product | idea |
-| D3 | A place for user feedback | Product | idea |
+| D3 | A place for user feedback | Product | testing |
 
 ## A. Indexing efficiency
 
@@ -71,8 +72,12 @@ For each change in this section, measure on the validation set (`bench/validatio
 - **Try:** 8-bit and 4-bit versions of the model on MLX.
 - **Measure:** chunks per second, @1 and @8, memory. Old vectors and new vectors must not mix: a new model needs a
   full re-index.
-- **Status:** idea
+- **Status:** dropped
 - **Notes:**
+  - 2026-10-14, EmbeddingGemma 2 on MLX (`nn.quantize` on its linear layers, group size 64), 800 code chunks on an
+    M4 Max: bf16 45.9 chunks/s; 8-bit 43.7 (cosine to bf16 at least 0.992); 4-bit 38.4 (at least 0.946, mean
+    0.977). The model is small, so dequantizing costs more than the smaller weights save. Memory is not a limit
+    (542 MB). Revisit only for a download smaller than 550 MB, which needs weights hosted by us.
 
 ### A3. Smaller or pruned embedding model
 
@@ -99,8 +104,13 @@ For each change in this section, measure on the validation set (`bench/validatio
   of 2,000 chunks or more stores the speed of the Mac (`embed_rate` in the index).
 - **Try:** choose the batch size and model from the chip, the GPU cores and the memory. Lower the priority on battery.
 - **Measure:** chunks per second on two or more Macs, for example an M1 Air and an M4 Max.
-- **Status:** idea
+- **Status:** investigating
 - **Notes:**
+  - 2026-10-14, M4 Max, 800 code chunks embedded the way indexing does it (one call per slice, longest first):
+    slices of 4, 8, 16 and 32 texts give 41.8–42.7 chunks/s with EmbeddingGemma 2 and 22.6–24.0 with Qwen3. The
+    slice size (`BULK_SLICE` = 8, chosen so a search waits for at most one slice) costs nothing here.
+  - Needs another Mac: the same measurement on an M1 or M2 with 8–16 GB. `embed_rate` in each index already records
+    the real speed of a Mac after its first big index.
 
 ### A5. Measure the energy that indexing uses
 
@@ -131,13 +141,51 @@ For each change in this section, measure on the validation set (`bench/validatio
 
 ### A7. Search images, audio and video by content
 
-- **Evidence:** EmbeddingGemma 2 puts text, images, audio and video in one vector space. Pensieve indexes media files
-  by name only today, and its MLX port (`gemma_mlx.py`) has only the text part.
-- **Try:** port the vision encoder (170M) to MLX, and index images (screenshots, diagrams, photos of whiteboards) in
-  the same index as their text. Then the audio encoder (300M) for recordings. Only for an index on EmbeddingGemma 2.
-- **Measure:** a query set of plain-language descriptions of images on this Mac; time and energy per image.
-- **Status:** idea
+- **Evidence:** EmbeddingGemma 2 puts text, images, audio and video in one vector space. Before A7, Pensieve indexed
+  media files by name only, and its MLX port (`gemma_mlx.py`) had only the text part.
+- **Try:** port the image and sound encoders to MLX. Index images, video and sound in the same index as text, only for
+  an index on EmbeddingGemma 2. Each kind is off by default, and its model part downloads when it is switched on.
+- **Measure:** queries that describe what a file shows or says; agreement with the torch reference; time per file.
+- **Status:** testing (images, video and audio)
 - **Notes:**
+  - All results are on an M4 Max. "Chance" is the hit rate at rank 1 when the order is random.
+
+    | Set | Files | @1 | @5 | @10 | MRR | Chance @1 |
+    |---|---|---|---|---|---|---|
+    | Images on this Mac (my descriptions) | 66 | 82% | 94% (@3) | 100% | 0.90 | 1.5% |
+    | Same images, by file name only | 66 | 65% | 71% (@3) | 76% | 0.69 | 1.5% |
+    | Video: MSR-VTT test clips, their captions | 80 | 76% | 92% | 96% | 0.83 | 1.3% |
+    | Sound: Clotho test clips, their first caption | 80 | 16% | 49% | 64% | 0.32 | 1.3% |
+    | Speech: LibriSpeech test-clean, 6 words of what is said | 80 | 91% | 95% | 100% | 0.93 | 1.3% |
+
+  - Bias in the images row: I wrote the queries after I looked at the images. The video, sound and speech rows use the
+    captions and transcripts of public datasets.
+  - The MLX port gives the same vectors as the torch reference (cosine 0.998 or more for images, video and sound).
+    Video inputs are longer than 512 tokens, so the text model now uses its sliding window mask (`|i - j| <= 512`).
+  - The sound encoder's attention is written as a band of 12 frames. A test with random weights matches the
+    reference to 3e-7. Note: transformers' eager attention inverts this mask. The real model uses sdpa.
+  - Speed: 8 images a second. Video with its sound: 22.5 minutes in 138 s (about 6 minutes for an hour). Sound only:
+    128 s of sound a second.
+  - The model reads at most 32 frames (1 a second) or 30 s of sound. So Pensieve cuts a video into 32 s windows and
+    sound into 30 s windows, each one a chunk with its time ("long_talk.wav 0:30-1:00"). The cap is 240 windows a file.
+  - Decoding: the Mac app carries `pensieve-media` (AVFoundation), so the backend needs no ffmpeg. PyAV is the
+    fallback for a backend without the app. AVFoundation's own resampler cut the sound hit rate at rank 1 from 20% to
+    11%. Now both decoders give samples at the file's own rate, and scipy's `resample_poly` gives 16 kHz.
+  - The install layer (`pensieve/content.py`): Settings → Models → "What the search model reads", the setup sheet,
+    `setup_start(content=[...])` and `pensieve setup ... images video audio`. A download shows its progress. Until
+    it is done, those files are found by name. Tested from an empty model cache: audio (611 MB) and image (335 MB)
+    parts downloaded, then the files were indexed and found.
+  - Open: energy per file is not measured. Images in git repos are read; video and sound in repos are not.
+    `~/Pictures` is in the default exclude list, so photos there stay out of the index.
+
+### A8. Index folders while agent sessions catch up
+
+- **Evidence:** the files loop indexes the agent-session backlog before it sweeps folders (`server.py`, `watcher`).
+  On a scratch index with session sources on, folders had 0 files after 11 minutes, while 4,232 session chunks were
+  indexed. A user with many sessions and new folders waits for every session first.
+- **Try:** sweep folders between batches of sessions, or in their own loop.
+- **Measure:** the time to the first indexed document on a new index with a large session backlog.
+- **Status:** idea
 
 ## B. Agents use Pensieve when it is better
 
@@ -188,8 +236,13 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 
 - **Try:** match each logged search with the files that the agent read or edited next.
 - **Measure:** the share of searches whose top hits contain the file that the agent used.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-14: `bench/hit_rate.py` matches each search in the usage log to the same call in its Claude Code
+    transcript and looks at the next 5 tool calls. Of 35 matched searches (2026-10-12 to 14, almost all by agents
+    working on Pensieve, on versions before 0.7.0): 18 used a hit, 14 grepped elsewhere, 3 returned nothing.
+  - Some of the misses were for code that the old version did not index (`app.js`, over 200 KB, before 0.6.5) or
+    a repo that is not indexed (the website). Run it again after a week on 0.7.x.
 
 ### B7. Index agent memory files
 
@@ -224,16 +277,25 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 
 - **Evidence:** in the same session, its own conversation was the first session hit, and the fourth code hit.
 - **Open question:** how the MCP server knows which session calls it.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-14: MCP does not say which session calls. The search tool now leaves out the sessions in the agent's
+    folder that were written to in the last 5 minutes (`_without_live_sessions`). On a copy of the index, this
+    conversation ranked first for a query about the release scripts; with the change it is gone and the earlier
+    sessions remain. It also leaves out a second live session in the same folder.
+  - Not done: the code hit. The session's own text is not in code results; the fourth code hit in the trace was
+    a test file, not the session.
 
 ### B10. `read` several hits in one call
 
 - **Evidence:** in the same session, the agent put several reads, a grep and a `cat` in one Bash call. The output was
   cut, so it needed one more call.
 - **Risk:** new tools did not cut calls in the benchmark (batch 1). Test before shipping.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-14: no new tool. `read` takes several ids separated by spaces (up to 8), which share `max_chars`, and
+    returns `items`; one id works as before. An id outside the agent's scope gets its own error in the list.
+  - Not measured: whether agents use it. Check in B6's next run.
 
 ## C. Install
 
@@ -287,5 +349,10 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 ### D3. A place for user feedback
 
 - **Try:** GitHub Discussions, or an issue template, linked from the app and the website.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-14: built. Agents report with the MCP tool `report_feedback` (on by default; the instructions block
+    asks them to call it when Pensieve fails them). The user reports in Settings → Feedback. Reports stay in
+    `~/.pensieve/feedback.jsonl`; Send to GitHub opens a filled-in issue (bug or idea template) for the user to
+    read before posting, because an agent's report can hold private code or paths.
+  - Open: a link on the website. Measure: reports per week, and how many are sent.
