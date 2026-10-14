@@ -153,8 +153,9 @@ def _repos(s, on):
             if o["kind"] == "repo"}
     found = list(dict.fromkeys([*sorted(used, key=used.get, reverse=True), *found]))
     out = [dict(id="repos/discover", label="Find new repos automatically",
-                detail=f"Repos under {', '.join(s['sweep_roots'])} and your folders, and repos your agents work in, "
-                       f"up to {s['max_repo_files']:,} files each", size=None, unit="", available=True,
+                detail=f"Repos your agents work in, and repos under {', '.join(s['sweep_roots'])} and your folders. "
+                       f"Found repos with more than {s['max_repo_files']:,} files and no agent use are listed for you "
+                       f"to choose, not indexed on their own", size=None, unit="", available=True,
                 checked=on("repos/discover"), rule=True)]
     clones = {}  # one row per remote: Pensieve indexes a single clone of each (Repos.discover)
     for r in sorted(set(found) | set(big), key=lambda r: (len(Path(r).name), Path(r).name.lower())):

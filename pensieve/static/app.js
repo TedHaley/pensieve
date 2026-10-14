@@ -466,7 +466,7 @@ function renderLegend() {
     const rest = (slots, key) => ctx.some(p => !slots.has(key(p)));
     if (cb === 'type') html = Object.entries(TYPE_SLOT).filter(([t]) => ctx.some(p => p.type === t)).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
     else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), placeName(k))).join('') + (rest(D.folderSlot, p => p.place) ? sw(pal().other, 'Other') : '');
-    else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + (rest(D.authorSlot, p => p.who) ? sw(pal().other, 'Others, bots and agents') : '');
+    else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + (rest(D.authorSlot, p => p.who) ? sw(pal().other, (D.authorRank?.length || 0) > PEOPLE_PAGE ? 'Everyone else, bots and agents' : 'Others, bots and agents') : '') + peoplePager(D.authorRank?.length || 0, D.authorPage || 0);
     else if (cb === 'recency') { const [a, b] = D.tRange; html = legendRamp(`Oldest · ${esc(monY(a / 1000) || '?')}`, `Newest · ${esc(monY(b / 1000) || '?')}`, 'Last changed (code: last commit)'); }
     else if (cb === 'risk') html = legendRamp('Authors active', 'Authors inactive', 'Knowledge risk') + sw(pal().other, 'Not code in this repo');
     else if (dataTopics().size) { const n = new Map(); ctx.forEach(p => { const c = dataTopicOf(p); if (c != null) n.set(c, (n.get(c) || 0) + 1); });
@@ -484,12 +484,29 @@ function renderLegend() {
     if (cb === 'recency') html = legendRamp('Older', 'Recently changed');
     else if (cb === 'repo') html = [...(S.code.repoSlot || [])].map(([r, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(r)}</span>`).join('');
     else if (cb === 'linked') html = `<span><i class="sw" style="background:${slotColor(1)}"></i>Touched in my sessions</span><span><i class="sw" style="background:${pal().other}"></i>Not touched</span>`;
-    else if (cb === 'author') html = [...S.code.authorSlot].map(([a, s]) => `<span><i class="sw" style="background:${slotColor(s)}"></i>${esc(person(a))}</span>`).join('') + `<span><i class="sw" style="background:${pal().other}"></i>Other</span>`;
+    else if (cb === 'author') html = [...S.code.authorSlot].map(([a, s]) => `<span><i class="sw" style="background:${slotColor(s)}"></i>${esc(person(a))}</span>`).join('') + `<span><i class="sw" style="background:${pal().other}"></i>${(S.code.people?.length || 0) > PEOPLE_PAGE ? 'Everyone else' : 'Other'}</span>` + peoplePager(S.code.people?.length || 0, S.code.authorPage || 0);
   } else if (S.colorBy === 'recency') html = legendRamp('Older', 'Recent');
   else if (S.colorBy === 'area') html = [...S.areaSlot].map(([a, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(keyLabel(a))}</span>`).join('') + `<span><i class="sw" style="background:${pal().other}"></i>Other / no code</span>`;
   else if (S.colorBy === 'agent') html = Object.entries(AGENT_SLOT).filter(([k]) => S.sessions.some(s => s.source === k)).map(([k, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${AGENT_NAME[k]}</span>`).join('');
   else if (S.colorBy === 'project') html = [...S.projectSlot].map(([p, v]) => `<span><i class="sw" style="background:${slotColor(v)}"></i>${esc(p)}</span>`).join('') + (S.projects.length > S.projectSlot.size ? `<span><i class="sw" style="background:${pal().other}"></i>Other</span>` : '');
   L.innerHTML = html;
+  $$('[data-people-step]', L).forEach(b => b.onclick = e => { e.stopPropagation(); stepPeople(+b.dataset.peopleStep); });
+}
+// Author colors: the palette has 7 colors for people, so the legend pages through everyone, 7 at a time, by how much
+// of what's in view they wrote. Everyone off the page shares the "other" color.
+const PEOPLE_PAGE = 7;
+const peoplePage = (ranked, page) => new Map(ranked.slice(page * PEOPLE_PAGE, (page + 1) * PEOPLE_PAGE).map((k, i) => [k, i]));
+const peoplePager = (n, page) => n > PEOPLE_PAGE ? `<span class="lg-pager"><button data-people-step="-1" aria-label="Previous people">‹</button>${page * PEOPLE_PAGE + 1}–${Math.min(n, (page + 1) * PEOPLE_PAGE)} of ${n} people<button data-people-step="1" aria-label="Next people">›</button></span>` : '';
+function stepPeople(d) {
+  const step = (rank, page) => { const pages = Math.max(1, Math.ceil(rank.length / PEOPLE_PAGE)); return ((page || 0) + d + pages) % pages; };
+  if (S.view === 'data') {
+    const D = S.data; D.authorPage = step(D.authorRank || [], D.authorPage); D.authorSlot = peoplePage(D.authorRank || [], D.authorPage);
+    renderSidebar();
+  } else if (S.view === 'code') {
+    const rank = (S.code.people || []).map(p => p.author);
+    S.code.authorPage = step(rank, S.code.authorPage); S.code.authorSlot = peoplePage(rank, S.code.authorPage);
+  }
+  recolor();
 }
 // the bar spans the panel with its end labels underneath, so long labels never push the bar onto its own line
 const legendRamp = (a, b, title) => `${title ? `<b class="lg-h">${title}</b>` : ''}<div class="lg-ramp"><div class="lg-bar" style="background:linear-gradient(90deg,${pal().seq.join(',')})"></div><div class="lg-ends"><div>${a}</div><div>${b}</div></div></div>`;
@@ -965,7 +982,8 @@ async function loadRepo(name, quiet = false) {
   S.code.repoSlot = new Map([...new Set(S.code.points.map(p => p.repo))].map((r, i) => [r, i]));
   S.code.owners = owners; S.code.people = people;
   S.code.dirSlot = new Map(owners.slice(0, 7).map((o, i) => [o.dir, i]));
-  S.code.authorSlot = new Map(people.slice(0, 7).map((p, i) => [p.author, i]));
+  if (!quiet) S.code.authorPage = 0;
+  S.code.authorSlot = peoplePage(people.map(p => p.author), S.code.authorPage || 0);
   const ts = S.code.points.map(p => p.ts).filter(Boolean).sort((a, b) => a - b);
   S.code.tRange = [ts[Math.floor(ts.length * 0.02)] || 0, ts[ts.length - 1] || 1];
   S.code.ctree = null;
@@ -1207,7 +1225,10 @@ const dataInView = p => dataPass(p) && (!S.data.highlight || S.data.highlight.ha
 function dataContextSlots() {
   const D = S.data, inView = D.points.filter(dataInView), ctx = inView.length ? inView : D.points.filter(p => dataPass(p));
   const top = f => { const m = new Map(); ctx.forEach(p => { const k = f(p); if (k) m.set(k, (m.get(k) || 0) + 1); }); return new Map([...m].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i])); };
-  const fs = top(p => p.place), as = top(p => p.who), same = (a, b) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
+  const who = new Map(); ctx.forEach(p => { if (p.who) who.set(p.who, (who.get(p.who) || 0) + 1); });
+  D.authorRank = [...who].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  D.authorPage = Math.min(D.authorPage || 0, Math.max(0, Math.ceil(D.authorRank.length / PEOPLE_PAGE) - 1));
+  const fs = top(p => p.place), as = peoplePage(D.authorRank, D.authorPage), same = (a, b) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
   const ts = ctx.map(p => p.t).filter(x => !isNaN(x)).sort((a, b) => a - b);
   const tr = [ts[Math.floor(ts.length * .05)] || 0, ts[ts.length - 1] || 1];
   const changed = !same(fs, D.folderSlot) || !same(as, D.authorSlot) || (D.colorBy === 'recency' && (tr[0] !== D.tRange?.[0] || tr[1] !== D.tRange?.[1]));
@@ -1517,12 +1538,12 @@ function renderDataSidebar(side) {
   const cnt = new Map();
   all.filter(p => dataPass(p, 'folders')).forEach(p => { const parts = p.dir.split('/').filter(Boolean); for (let i = 1; i <= parts.length; i++) { const k = parts.slice(0, i).join('/'); cnt.set(k, (cnt.get(k) || 0) + 1); } });
   const tc = {}; all.filter(p => dataPass(p, 'types')).forEach(p => tc[p.type] = (tc[p.type] || 0) + 1);
-  const people = dataPeople();
+  const pp = dataPeople(), people = pp.list;
   side.innerHTML = `
     <div class="sec"><div class="chips type-chips" role="group" aria-label="Types">${Object.keys(TYPE_SLOT).map(t => `<button class="chip ${D.types.has(t) ? 'on' : ''}" data-type="${t}" aria-pressed="${D.types.has(t)}"><i class="sw" style="background:${slotColor(TYPE_SLOT[t])}"></i>${TYPE_NAME[t]}<span class="n">${(tc[t] || 0).toLocaleString()}</span></button>`).join('')}</div>
       <div class="sec-note" style="margin-top:8px">${vis.length.toLocaleString()} of ${plural(all.length, 'item')}${D.folders.size ? ` in <b>${esc([...D.folders].join(', '))}</b> <button class="linkbtn" data-dclearf>Clear</button>` : ''}</div></div>
     ${D.colorBy === 'risk' ? riskTopicsHtml() : ''}
-    <div class="sec"><div class="sec-h"><span>People</span>${D.authors.size ? `<button class="linkbtn" data-dclearp>Clear</button>` : ''}</div>
+    <div class="sec"><div class="sec-h"><span>People</span><span class="sec-tools">${pp.total > PEOPLE_PAGE ? `<span class="lg-pager"><button data-people-step="-1" aria-label="Previous people">‹</button>${pp.page * PEOPLE_PAGE + 1}–${Math.min(pp.total, (pp.page + 1) * PEOPLE_PAGE)} of ${pp.total}<button data-people-step="1" aria-label="Next people">›</button></span>` : ''}${D.authors.size ? `<button class="linkbtn" data-dclearp>Clear</button>` : ''}</span></div>
       ${people.length ? `<div class="rows">${people.map(x => `<div class="prow-w ${D.drawerPerson === x.who ? 'open' : ''}"><button class="row prow ${D.authors.has(x.who) ? 'on' : ''}" data-who="${esc(x.who)}" aria-pressed="${D.authors.has(x.who)}" title="${D.authors.has(x.who) ? 'Click again to stop filtering by ' + esc(x.who) : 'Show only work by ' + esc(x.who) + ' (pick several to compare)'}"><span class="check"></span><span class="sw" style="background:${slotColor(D.authorSlot.get(x.who) ?? -1)}"></span><span class="name">${esc(x.who)}</span><span class="n">${x.n.toLocaleString()}</span></button><button class="parrow" data-pwho="${esc(x.who)}" title="What ${esc(x.who)} knows about, in what's shown" aria-label="About ${esc(x.who)}"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>` : '<div class="sec-note">No authors known for what is shown.</div>'}</div>
     <div class="sec"><div class="sec-h"><span>Sources</span></div>
       <div class="tree">${T.roots.filter(k => cnt.get(k)).sort((a, b) => cnt.get(b) - cnt.get(a)).map(k => treeHtml(k, 0, cnt, 'ddir', T.children, null, D.treeOpen)).join('') || '<div class="empty" style="padding:8px">Nothing indexed yet</div>'}</div></div>`;
@@ -1530,6 +1551,7 @@ function renderDataSidebar(side) {
   bindTree(side, 'ddir', k => toggleDataFolder(k), () => renderSidebar(), D.treeOpen, 'dataTreeOpen');
   $('[data-dclearf]', side)?.addEventListener('click', () => { D.folders.clear(); dataChanged(); });
   $$('[data-who]', side).forEach(b => b.onclick = () => toggleAuthor(b.dataset.who));
+  $$('[data-people-step]', side).forEach(b => b.onclick = () => stepPeople(+b.dataset.peopleStep));
   $$('[data-pwho]', side).forEach(b => b.onclick = () => {
     if (D.drawerPerson === b.dataset.pwho) { closeDrawer(); renderSidebar(); } else openPersonPanel(b.dataset.pwho);
   });
@@ -1545,11 +1567,13 @@ function riskTopicsHtml() {
     : loading ? '' : `<div class="sec-note">No area here has ${Math.round(RISK_FILE * 100)}% or more of its code by inactive authors.</div>`}</div>`;
 }
 // People in view (ignoring the author filter itself, so more can be added), selected ones always listed.
-function dataPeople(max = 8) {
+// The sidebar's people: the page the Author colors show (PEOPLE_PAGE at a time), plus anyone picked as a filter.
+function dataPeople() {
   const D = S.data, n = new Map();
   D.points.forEach(p => { if (p.who && dataPass(p, 'authors')) n.set(p.who, (n.get(p.who) || 0) + 1); });
-  const top = [...n].sort((a, b) => b[1] - a[1]).slice(0, max).map(([w]) => w);
-  return [...new Set([...D.authors, ...top])].map(w => ({who: w, n: n.get(w) || 0}));
+  const ranked = [...n].sort((a, b) => b[1] - a[1]).map(([w]) => w), page = D.authorPage || 0;
+  const shown = ranked.slice(page * PEOPLE_PAGE, (page + 1) * PEOPLE_PAGE);
+  return {total: ranked.length, page, list: [...new Set([...D.authors, ...shown])].map(w => ({who: w, n: n.get(w) || 0}))};
 }
 const whoOf = author => S.data.whoMap?.get(person(author)) || S.data.whoMap?.get(author) || person(author);
 // What one person knows about, within whatever the map is filtered to (types, folders, search; any repos): the topics
@@ -2715,7 +2739,7 @@ async function renderSettings() {
   $$('#setmain > .set-card [data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
   renderSources(); renderScopes(); renderSyncing();
 }
-const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Largest repo to discover (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model', builtin_model: 'Built-in engine', agent_model: 'Claude Code engine'};
+const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Ask before indexing found repos larger than (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model', builtin_model: 'Built-in engine', agent_model: 'Claude Code engine'};
 async function saveSettings() {
   const ks = setDirty(); if (!ks.length) return;
   const body = Object.fromEntries(ks.map(k => [k, S.set.draft[k]]));
@@ -3360,9 +3384,54 @@ function findItem(r) {
   return {ic: FIND_IC[r.kind], title: r.title + (r.line && r.kind === 'code' ? `:${r.line}` : ''), titleHtml: esc(r.title) + (r.kind === 'code' && r.line ? `<span class="muted">:${r.line}</span>` : '') + (ex ? '<span class="ex">exact</span>' : ''),
           subHtml: `<span style="font-family:var(--mono);font-size:11px">${esc(r.subtitle)}</span>${r.snippet ? ' — ' + hlSnip(r.snippet, r.highlights) : ''}`, run: () => openItem(r.id)};
 }
+// Autocomplete for the word being typed: by: people, in: repos and folders, kind: and ext: values, and for a plain word
+// the people and repos it starts. Built in the page from the loaded map, so it shows at once.
+const KIND_WORDS = ['code', 'doc', 'file', 'session', 'folder', 'repo', 'person'];
+function palPeople() {
+  const D = S.data;
+  if (D.peopleAll?.rev === D.rev) return D.peopleAll.list;
+  const n = new Map(); D.points.forEach(p => { if (p.who) n.set(p.who, (n.get(p.who) || 0) + 1); });
+  const names = [...n].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  const parts = names.map(k => k.toLowerCase().split(/[\s._-]+/).filter(Boolean));
+  // by: matches any part of a name: offer the first part that no one else's name has, else the longest one
+  const list = names.map((name, i) => ({name, parts: parts[i],
+    key: parts[i].find(x => x.length > 1 && parts.every((o, j) => j === i || !o.includes(x))) || parts[i].slice().sort((a, b) => b.length - a.length)[0]}));
+  D.peopleAll = {rev: D.rev, list};
+  return list;
+}
+function palSuggest(text) {
+  const last = text.split(/\s+/).pop(), head = text.slice(0, text.length - last.length), out = [];
+  const m = /^(by|in|kind|ext):(.*)$/i.exec(last), want = (m ? m[2] : last).toLowerCase();
+  const push = (tok, sub) => { if (out.length < 5 && !out.some(o => o.tok === tok) && tok.toLowerCase() !== last.toLowerCase()) out.push({tok, sub, text: head + tok + ' '}); };
+  const people = () => palPeople().filter(p => !want || p.parts.some(x => x.startsWith(want)));
+  const places = () => {
+    const repos = (S.data.repos || []).map(r => r.name), T = dataTree();
+    const folders = [...T.roots, ...[...T.children.values()].flat()].map(k => k.split('/').pop());
+    const seen = new Map();  // in: ignores case: one suggestion per name, repos first
+    [...repos, ...folders].forEach(x => { if (x && !seen.has(x.toLowerCase())) seen.set(x.toLowerCase(), x); });
+    return [...seen.values()].filter(x => !want || x.toLowerCase().startsWith(want));
+  };
+  if (m) {
+    const key = m[1].toLowerCase();
+    if (key === 'by') people().forEach(p => push(`by:${p.key}`, `only what ${p.name} wrote`));
+    else if (key === 'in') places().forEach(x => push(`in:${x}`, 'only in this repo or folder'));
+    else if (key === 'kind') KIND_WORDS.filter(k => k.startsWith(want)).forEach(k => push(`kind:${k}`, ''));
+    else { const n = new Map(); S.data.points.forEach(p => { if (p.ext) n.set(p.ext, (n.get(p.ext) || 0) + 1); });
+      [...n].sort((a, b) => b[1] - a[1]).map(([e]) => e).filter(e => e.startsWith(want)).forEach(e => push(`ext:${e}`, '')); }
+  } else if (want.length >= 2 && !/["-]/.test(last[0] || '')) {
+    people().slice(0, 3).forEach(p => push(`by:${p.key}`, `what ${p.name} wrote`));
+    places().slice(0, 2).forEach(x => push(`in:${x}`, 'search only in this repo or folder'));
+  }
+  return out;
+}
+function palAccept(s) {
+  const i = $('#palin'); i.value = s.text; i.focus(); i.setSelectionRange(i.value.length, i.value.length); palSearch();
+}
 function palRender() {
   const raw = pl.q.trim(), q = raw.toLowerCase(), items = [];
   const add = (group, it) => items.push({group, ...it});
+  pl.sugg = raw && !raw.startsWith('who:') && !raw.startsWith('>') ? palSuggest(pl.q) : [];
+  pl.sugg.forEach((s, i) => add('Suggestions', {ic: '⇥', title: s.tok, sub: s.sub, rt: i ? '' : 'Tab', run: () => palAccept(s)}));
   if (raw.startsWith('who:')) {
     const t = raw.slice(4).trim();
     add('Code', {ic: '👤', title: t ? `Who knows about “${t}”?` : 'Type a topic, e.g. who: billing retries', sub: `Ranks people by blame on the most relevant code in ${S.code.repo ? repoLabel(S.code.repo) : 'your repos'}`, run: () => t && whoKnows(t)});
@@ -3408,6 +3477,8 @@ $('#palin').addEventListener('keydown', e => {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     palRun(pl.sel);
+  } else if (e.key === 'Tab' && pl.sugg?.length && !e.shiftKey) {
+    e.preventDefault(); palAccept(pl.sugg[0]);
   } else if (e.key === 'Escape') { e.stopPropagation(); closePalette(); }
 });
 

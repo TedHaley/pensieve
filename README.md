@@ -178,7 +178,7 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 | **Git repositories** | Repos your agents worked in; repos found under your home folder (4 levels deep) and inside your folders; each repo on its own | on |
 | **Apps** | Obsidian vaults; Apple Notes (exported to Markdown in `~/.pensieve`, asks for permission) | Obsidian on, Notes off |
 
-Repos are indexed as they are on disk: committed, staged, modified and untracked files, with uncommitted lines credited to you in blame. **Linked worktrees** (including `.claude/worktrees`) are indexed too: files that differ from the main checkout show up tagged with their branch, and disappear when the worktree is removed. Clones of the same remote count as one repo. Repos found by the sweep with more than 5,000 tracked files are skipped unless you switch them on.
+Repos are indexed as they are on disk: committed, staged, modified and untracked files, with uncommitted lines credited to you in blame. **Linked worktrees** (including `.claude/worktrees`) are indexed too: files that differ from the main checkout show up tagged with their branch, and disappear when the worktree is removed. Clones of the same remote count as one repo. Repos your agents work in, and repos you add, are indexed at any size. A repo that only the sweep found, with more than 5,000 tracked files and no agent use, is listed in Sources for you to switch on instead of being indexed on its own.
 
 **Staying current:** Pensieve watches your folders, repos, worktrees and agent transcripts (FSEvents). It indexes a change about half a second after the last save. A search indexes the changes that are waiting before it runs, so a search right after an edit finds the new text. Each code and document result is also compared with the file on disk:
 
@@ -224,7 +224,7 @@ Change them in the Map window (Settings), from an agent connected with `--all-to
 | `file_types` | for each file type, `index` (`content`, `name` or `off`) and `map` (manage in Sources → File types) |
 | `chunk_chars`, `max_chunks` | 1500, 2000 (0 = no limit) |
 | `sweep_roots`, `sweep_depth` | `~`, 4 |
-| `max_repo_files` | 5000 (swept repos only) |
+| `max_repo_files` | 5000 (found repos with no agent use only) |
 | `repos` | extra repos, always indexed |
 | `exclude` | folder names never descended into (`node_modules`, `Library`, …) |
 | `exclude_files` | filename globs never indexed (secrets) |

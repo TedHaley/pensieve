@@ -1023,3 +1023,9 @@ body.native #top{pointer-events:auto}  /* the whole top bar drags the window, li
 .ct-bar i{display:block;height:100%;background:var(--accent);transition:width .3s}
 .setup-row .tx span.note{white-space:normal}
 .set-row.ct-row{grid-template-columns:minmax(0,1fr) auto}
+.legend .lg-pager{display:inline-flex;align-items:center;gap:6px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.legend .lg-pager button{border:1px solid var(--line);background:var(--surface-2);color:var(--text);border-radius:5px;width:20px;height:18px;line-height:14px;padding:0;cursor:pointer;font-size:13px}
+.legend .lg-pager button:hover{background:var(--surface-3)}
+.sec-h .sec-tools{display:inline-flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-weight:400}
+.sec-h .lg-pager{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.sec-h .lg-pager button{border:1px solid var(--line);background:var(--surface-2);color:var(--text);border-radius:5px;width:18px;height:17px;line-height:13px;padding:0;cursor:pointer;font-size:12px}
