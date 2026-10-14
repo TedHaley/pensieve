@@ -291,6 +291,7 @@ def run(a):
         r = claude(prompt, root, a.model, c["tools"], c["allowed"], c["mcp"], a.budget, system=c.get("system"))
         got, ok = grade(r["result"], t, root)
         rec = dict(task=t["id"], arm=arm, rep=rep, ok=ok, got=got, style=t.get("style", "desc"),
+                   twin=bool(t.get("twins")), got_twin=got in t.get("twins", []),  # bench/twins.py
                    **{k: r[k] for k in ("cost", "turns", "secs", "tokens", "usage", "calls", "error")},
                    tail=r["result"][-200:])  # the end of the answer: why a run without ANSWER: failed
         print(f"{t['id']} {t.get('style', 'desc'):<7} {arm:<8} {'OK ' if ok else 'MISS'} ${rec['cost'] or 0:.3f} {rec['turns']} turns "

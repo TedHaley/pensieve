@@ -14,10 +14,11 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 |---|---|---|---|
 | A1 | Embed each distinct chunk once | Indexing | idea |
 | A2 | Quantized embedding model | Indexing | idea |
-| A3 | Smaller or pruned embedding model | Indexing | idea |
+| A3 | Smaller or pruned embedding model | Indexing | testing |
 | A4 | Settings that fit the hardware | Indexing | idea |
 | A5 | Measure the energy that indexing uses | Indexing | idea |
 | A6 | Real searches are slower than the benchmark | Search | idea |
+| A7 | Search images, audio and video by content | Search | idea |
 | B1 | Make the prompt hook the default | Agents | idea |
 | B2 | Prompt hooks for Codex and Gemini CLI | Agents | idea |
 | B3 | Benchmark other agents and models | Agents | idea |
@@ -71,13 +72,19 @@ For each change in this section, measure on the validation set (`bench/validatio
 - **Evidence:** 1024-token chunks gave no gain over 512 (`bench/STRATEGIES.md`, embedding variants).
 - **Try:** a smaller embedding model, fewer layers, or shorter inputs (256 tokens).
 - **Measure:** as A2.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
   - Candidate: `google/embeddinggemma-2` (2026-10-06, Apache 2.0). Text and code use only its 270M text part,
     against 600M for Qwen3-Embedding-0.6B. Vectors have 768 dimensions (Matryoshka to 512, 256 or 128), against
     1024 now. Context is 8,192 tokens. Not checked: its code-search quality (one secondary source says 78.68 on MTEB
     Code) and an MLX path (`MLXEmbedder` runs only Qwen3 models). First test it through sentence-transformers on the
     validation set (`bench/retrieval.py`). A new model needs a full re-index.
+  - 2026-10-13, tested on the three smaller repos (1,625 queries): the full ranking puts the right file first 68.0%
+    of the time, against 68.1% with Qwen3 and 39.6% with grep. On MLX it embeds 42.7 chunks/s, against 22.3 for
+    Qwen3 (1.9x), with batches padded to a multiple of 64 tokens. Details: `bench/STRATEGIES.md`.
+  - Built: Settings → General → Search model. An index keeps its model, so no one has to index again; switching
+    embeds the stored text with the new model in the background and swaps at a restart. Not yet measured: energy
+    (A5), and quality on affinity (the large repo was not re-embedded).
 
 ### A4. Settings that fit the hardware
 
@@ -101,6 +108,16 @@ For each change in this section, measure on the validation set (`bench/validatio
   slowest 22 s. The benchmark median is 73 ms.
 - **Hypothesis:** these searches ran while Pensieve was indexing. Not checked.
 - **Try:** compare the time of each logged search with the indexing status at that time.
+- **Status:** idea
+- **Notes:**
+
+### A7. Search images, audio and video by content
+
+- **Evidence:** EmbeddingGemma 2 puts text, images, audio and video in one vector space. Pensieve indexes media files
+  by name only today, and its MLX port (`gemma_mlx.py`) has only the text part.
+- **Try:** port the vision encoder (170M) to MLX, and index images (screenshots, diagrams, photos of whiteboards) in
+  the same index as their text. Then the audio encoder (300M) for recordings. Only for an index on EmbeddingGemma 2.
+- **Measure:** a query set of plain-language descriptions of images on this Mac; time and energy per image.
 - **Status:** idea
 - **Notes:**
 
