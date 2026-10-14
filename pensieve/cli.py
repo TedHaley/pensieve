@@ -9,6 +9,8 @@
                        whether Pensieve indexes the git repo at path (default: here); index it, or never ask again
     pensieve setup [recommended | <source id> ...]
                        choose what to index on first run or after a reset (no items: list the sources)
+    pensieve search <query> [--kind code|doc|session|...] [--limit 8] [--scope auto]
+                       search as an agent does over MCP, scoped to the repo you run it in; prints the same lines
 
 Options are turned into env vars before anything reads config."""
 import argparse
@@ -22,7 +24,10 @@ import webbrowser
 
 def main():
     ap = argparse.ArgumentParser(prog="pensieve", description="Semantic search and a 3D map over your files, git repos and AI agent sessions.")
-    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate", "repo", "setup"], default="serve")
+    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate", "repo", "setup", "search"],
+                    default="serve")
+    ap.add_argument("--kind", help="search only: code, doc, session, folder, repo or person")
+    ap.add_argument("--limit", type=int, default=8, help="search only: how many results")
     ap.add_argument("items", nargs="*", help="integrate: what to install (no items: show what's available); "
                                              "repo: status | index | skip, then a folder (default: this one); "
                                              "setup: the source ids to index, or recommended (no items: list them)")
@@ -54,6 +59,8 @@ def main():
         return repo(a.port, *a.items[:2])
     if a.command == "setup":
         return setup(a.port, a.items)
+    if a.command == "search":
+        return search(a.port, " ".join(a.items), a.kind, a.limit, a.scope)
 
     from pensieve import reset
     done = reset.apply_pending()  # before anything opens the database
@@ -219,6 +226,35 @@ def _up(base):
         return httpx.get(f"{base}/api/status", timeout=2).status_code == 200
     except httpx.HTTPError:
         return False
+
+
+def search(port, query, kind=None, limit=8, scope="auto"):
+    """One search through the server's MCP tool, scoped like an agent started here, printed as the tool returns it."""
+    import json
+    import httpx
+    from urllib.parse import urlencode
+    if not query.strip():
+        sys.exit('usage: pensieve search "what the code does, plus names you would guess" [--kind code]')
+    base = f"http://127.0.0.1:{port}"
+    _start_server(base, port)
+    args = {"query": query, "limit": limit, **({"kind": kind} if kind else {})}
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "search", "arguments": args}}
+    url = f"{base}/mcp?" + urlencode({"scope": scope, "cwd": os.getcwd(), "client": "pensieve-cli"})
+    try:
+        r = httpx.post(url, json=body, timeout=300,
+                       headers={"Accept": "application/json, text/event-stream", "Content-Type": "application/json"})
+    except httpx.HTTPError as e:
+        sys.exit(f"Couldn't reach Pensieve ({e}). Open the Pensieve app, then try again.")
+    if r.status_code >= 400:
+        sys.exit(r.text)
+    d = r.json()
+    if "error" in d:
+        sys.exit(d["error"].get("message", json.dumps(d["error"])))
+    res = d.get("result") or {}
+    text = "\n".join(c.get("text", "") for c in res.get("content", []) if c.get("type") == "text")
+    print(text)
+    if res.get("isError"):
+        sys.exit(1)
 
 
 def stdio_bridge(port, scope="auto", all_tools=False):

@@ -12,21 +12,21 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 
 | ID | Item | Area | Status |
 |---|---|---|---|
-| A1 | Embed each distinct chunk once | Indexing | idea |
+| A1 | Embed each distinct chunk once | Indexing | testing |
 | A2 | Quantized embedding model | Indexing | idea |
-| A3 | Smaller or pruned embedding model | Indexing | testing |
+| A3 | Smaller or pruned embedding model | Indexing | shipped |
 | A4 | Settings that fit the hardware | Indexing | idea |
 | A5 | Measure the energy that indexing uses | Indexing | idea |
-| A6 | Real searches are slower than the benchmark | Search | idea |
+| A6 | Real searches are slower than the benchmark | Search | investigating |
 | A7 | Search images, audio and video by content | Search | idea |
 | B1 | Make the prompt hook the default | Agents | idea |
 | B2 | Prompt hooks for Codex and Gemini CLI | Agents | idea |
 | B3 | Benchmark other agents and models | Agents | idea |
 | B4 | Tell the agent how sure a hit is | Agents | idea |
-| B5 | A `pensieve search` shell command | Agents | idea |
+| B5 | A `pensieve search` shell command | Agents | testing |
 | B6 | Hit rate of real searches | Agents | idea |
-| B7 | Index agent memory files | Agents | testing |
-| B8 | Show hits in the agent's own checkout | Agents | idea |
+| B7 | Index agent memory files | Agents | shipped |
+| B8 | Show hits in the agent's own checkout | Agents | testing |
 | B9 | Leave out the agent's own session | Agents | idea |
 | B10 | `read` several hits in one call | Agents | idea |
 | C1 | Test the two-step install in auto mode | Install | idea |
@@ -56,8 +56,15 @@ For each change in this section, measure on the validation set (`bench/validatio
   checkout and 39,884 more in 20 worktrees.
 - **Try:** before embedding a chunk, look for a stored chunk with the same text and path, and reuse its vector.
 - **Measure:** the time to index a new worktree, and the time of a first index of a repo with worktrees.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-13: in the index on this Mac, 40,222 of 42,324 worktree chunks (95%) have the same path and text as
+    another chunk. Built: before a group of chunks is embedded, a chunk with the same path and text as a stored one
+    copies its vector (`Repos._known_vectors`). An edited file keeps the vectors of its unchanged chunks: they are
+    read before the old version is dropped.
+  - On the pensieve repo, a worktree of 672 chunks indexed in 10.8 s with 396 vectors copied (about 26 s before).
+    A copied vector matches a fresh one (cosine 0.9995, the float16 rounding). Re-indexing an edited `app.js` copied
+    every unchanged chunk's vector.
 
 ### A2. Quantized embedding model
 
@@ -108,8 +115,19 @@ For each change in this section, measure on the validation set (`bench/validatio
   slowest 22 s. The benchmark median is 73 ms.
 - **Hypothesis:** these searches ran while Pensieve was indexing. Not checked.
 - **Try:** compare the time of each logged search with the indexing status at that time.
-- **Status:** idea
+- **Status:** investigating
 - **Notes:**
+  - 2026-10-13, measured with the same 15 searches through the MCP tool on a copy of the index (264K chunks):
+    median 89–109 ms idle, and 348–352 ms while a repo indexes. During indexing a search waits for the current
+    embedding slice (embed phase 128–200 ms) and the database lock (corpora phase 89–149 ms).
+  - The real searches since 0.6.8 (7, median 1.1 s) are slow in other phases: "folders+people" (366–506 ms in 3),
+    "on-disk" (263–484 ms in 3) and "catch-up" (313 and 1,503 ms in 2). The vector search ("corpora") was slow in 2
+    (359 and 932 ms). Most look like the first search in a scope: the folder and people data are built then.
+  - On a cold server, the first search in each of four scopes took 70–398 ms, and none was slow in "folders+people"
+    or "on-disk". So the real slow searches waited for something else. The usage log now records each search's CPU
+    time and its wait for the index lock: wall time well above CPU time means it waited (lock, threads, disk).
+  - Next: read those fields on the next slow real searches.
+    Splitting the vector index by repo would speed up only the corpora phase, which is 56–67 ms when idle.
 
 ### A7. Search images, audio and video by content
 
@@ -160,8 +178,11 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 ### B5. A `pensieve search` shell command
 
 - **Why:** agents without MCP, scripts and hooks can then use Pensieve.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-13: `pensieve search "<query>" [--kind code] [--limit 8] [--scope auto]` calls the server's MCP search
+    tool, scoped like an agent started in the current folder, and prints the same lines. It starts the server if it
+    is not running.
 
 ### B6. Hit rate of real searches
 
@@ -193,8 +214,11 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Evidence:** in the same session, the agent worked in the worktree `databricks-bfp-placeholders`, but every hit
   showed a path in `~/Desktop/databricks-bfp`. The agent then read the files in its own checkout with `sed`.
 - **Try:** when the agent works in a worktree and the file is the same there, show the worktree path.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-13: built (`_to_own_checkout` in `mcp_server.py`). In the worktree `databricks-bfp-company`, 3 of 4 hits
+    now show the worktree's own path, relative to it. The fourth file differs in that worktree, so its hit keeps the
+    main checkout's path and says "(main checkout; differs in your worktree)".
 
 ### B9. Leave out the agent's own session
 

@@ -4,6 +4,7 @@ import contextvars
 import functools
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -119,10 +120,33 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     res = [x for x in r["results"] if not elsewhere(x)] + [x for x in r["results"] if elsewhere(x)]
     usage.note(n_results=len(res), results=[[x.get("id"), x.get("path")] for x in res], laps=r.get("timing"))
     _mark_near_copies(res, s)
+    _to_own_checkout(res, s, cwd)
     found = _lines(res)
     if getattr(sc, "unindexed", False):  # only past sessions in this repo can match; its code isn't indexed
         return (f"{sc.description}. `pensieve repo index` indexes it." + (f"\n{found}" if found else ""))
     return found or "No matches."
+
+
+def _to_own_checkout(results, searcher, cwd):
+    """An agent working in a linked worktree sees a main-checkout hit at the worktree's own copy of the file, when
+    that copy is the same: the index holds a worktree's files only where they differ from the main checkout."""
+    if not cwd:
+        return
+    with searcher.lock:
+        row = next(((w, repo) for w, repo in searcher.db.execute("SELECT path, repo FROM worktrees")
+                    if cwd == w or cwd.startswith(w + "/")), None)
+        if not row:
+            return
+        wt, root = row
+        changed = {p for (p,) in searcher.db.execute("SELECT path FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
+    for x in results:
+        path = x.get("path") or ""
+        if str(x.get("id", "")).startswith("code:") and path.startswith(root + "/"):
+            rel = path[len(root) + 1:]
+            if rel in changed:
+                x["own_differs"] = True  # the main checkout's version: the agent's copy is another
+            elif (Path(wt) / rel).is_file():
+                x["path"] = str(Path(wt) / rel)
 
 
 NEAR_COPY = 0.9  # matched code this alike in two files: the query can't tell them apart, so the agent reads both
@@ -168,6 +192,8 @@ def _lines(results):
             where = path + (f":{line}" if line else "") if path else x.get("title") or ""
             if x.get("stale"):  # edited after it was indexed: the snippet can be out of date
                 where += " (edited since indexed)"
+            if x.get("own_differs"):
+                where += " (main checkout; differs in your worktree)"
             if x.get("near_copy"):
                 other = x["near_copy"]
                 other = other[len(cwd.rstrip("/")) + 1:] if cwd and other.startswith(cwd.rstrip("/") + "/") else other

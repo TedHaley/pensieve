@@ -349,6 +349,7 @@ class Repos:
         self._removing = set()  # repos to remove from the index (✕ in Sources) once no sweep holds them
         self.found = []  # (root, remote) of the repos the last sweep found to sync
         self.upstream = {}  # root -> {branch, behind, current}, from check_upstream
+        self.reused = 0  # chunks whose vector was copied from an identical chunk, not embedded (since start)
         self._last = 0
         self._scope = (None, None)
         self._team = {}
@@ -692,6 +693,15 @@ class Repos:
         except ValueError:
             return default
 
+    def _known_vectors(self, root, paths) -> dict:
+        """(path, text) -> the stored vector of each chunk of these files already in this repo's index, from the
+        main checkout or any worktree."""
+        paths = list(paths)
+        with self.lock:
+            return {(p, t): v for p, t, v in self.db.execute(
+                f"SELECT path, text, vec FROM code_chunks WHERE repo=? AND path IN ({','.join('?' * len(paths))})",
+                (root, *paths))}
+
     def estimate_chunks(self, root) -> dict:
         """What indexing the main checkout of `root` still has to do, from file sizes (only the start of a file not yet
         indexed is read, to leave out binary files):
@@ -723,9 +733,11 @@ class Repos:
         target = state if base is None else {p: b for p, b in state.items() if base.get(p) != b}
         with self.lock:
             have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
-        for path in list(have):
-            if target.get(path) != have[path]:
-                self._drop_file(root, path, wt)
+        changed = [p for p in have if target.get(p) != have[p]]
+        # an edited file keeps most of its chunks: their vectors, before the old version is dropped
+        prior = self._known_vectors(root, changed) if changed and len(changed) <= 500 else {}
+        for path in changed:
+            self._drop_file(root, path, wt)
         checkout = wt or root
         me = git(checkout, "config", "user.name").strip(), git(checkout, "config", "user.email").strip()
         secrets = settings.get("exclude_files")
@@ -784,9 +796,19 @@ class Repos:
             nonlocal writing, embedded
             if not group:
                 return
-            embedded += sum(len(g[2]) for g in group)
-            vecs = embed([c[2] for _, _, chunks, _ in group for c in chunks],
-                         titles=[path for path, _, chunks, _ in group for _ in chunks])
+            texts = [c[2] for _, _, chunks, _ in group for c in chunks]
+            titles = [path for path, _, chunks, _ in group for _ in chunks]
+            # a chunk with the same path and text as one already indexed (a worktree's unchanged code, mostly) has
+            # the same vector: copy it instead of embedding it again
+            known = {**prior, **self._known_vectors(root, {p for p, *_ in group})}
+            vecs = np.zeros((len(texts), config.EMBED_DIM), np.float32)
+            todo_i = [i for i, (p, t) in enumerate(zip(titles, texts)) if (p, t) not in known]
+            for i in set(range(len(texts))) - set(todo_i):
+                vecs[i] = np.frombuffer(known[(titles[i], texts[i])], np.float16).astype(np.float32)
+            if todo_i:
+                vecs[todo_i] = embed([texts[i] for i in todo_i], titles=[titles[i] for i in todo_i])
+            embedded += len(todo_i)
+            self.reused += len(texts) - len(todo_i)
             if writing:
                 writing.result()  # in order, and an error surfaces here
             writing = writer.submit(write, list(group), vecs)

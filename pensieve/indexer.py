@@ -37,13 +37,18 @@ def ensure_downloaded(name):
     import subprocess
     import sys
     from huggingface_hub import try_to_load_from_cache
-    if isinstance(try_to_load_from_cache(name, "config.json"), str):
-        return
-    only = ["*.json", "*.safetensors", "tokenizer*"] if name == config.GEMMA else None
+    cfg = try_to_load_from_cache(name, "config.json")
     env = {k: v for k, v in os.environ.items() if k != "HF_HUB_OFFLINE"}
+    if name == config.GEMMA:  # its text weights only (gemma_mlx.download_text), unless the whole model is here
+        from pensieve.gemma_mlx import TEXT_WEIGHTS
+        if isinstance(cfg, str) and any((Path(cfg).parent / f).exists() for f in (TEXT_WEIGHTS, "model.safetensors")):
+            return
+        subprocess.run([sys.executable, "-m", "pensieve.gemma_mlx", name], env=env, check=True)
+        return
+    if isinstance(cfg, str):
+        return
     subprocess.run([sys.executable, "-c", "import sys; from huggingface_hub import snapshot_download; "
-                    "snapshot_download(sys.argv[1], allow_patterns=None if sys.argv[2] == '-' else sys.argv[2].split(','))",
-                    name, ",".join(only) if only else "-"], env=env, check=True)
+                    "snapshot_download(sys.argv[1])", name], env=env, check=True)
 
 
 def _load_embedder(name):

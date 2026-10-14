@@ -235,8 +235,8 @@ The search model turns text into vectors, so that search finds things by meaning
 
 | Model | Notes |
 |---|---|
-| **EmbeddingGemma 2** (`google/embeddinggemma-2`) | The default for a new index. Its 270M-parameter text part runs on MLX. About twice as fast to index as Qwen3 and 25% smaller, with the same search quality in our tests (`bench/STRATEGIES.md`). A 1.5 GB download the first time. |
-| **Qwen3 Embedding 0.6B** (`Qwen/Qwen3-Embedding-0.6B`) | The model of every index made before 0.6.9. |
+| **EmbeddingGemma 2** (`google/embeddinggemma-2`) | The default for a new index. Its 270M-parameter text part runs on MLX. About twice as fast to index as Qwen3 and 25% smaller, with the same search quality in our tests (`bench/STRATEGIES.md`). Pensieve downloads only its text part: 550 MB the first time. |
+| **Qwen3 Embedding 0.6B** (`Qwen/Qwen3-Embedding-0.6B`) | The model of every index made before 0.6.9. A 1.2 GB download the first time. |
 
 An index keeps the model it was built with: an update does not change it. If you choose another model, Pensieve warns you first. Then it embeds the text it already holds with the new model, in the background. It does not read your files or run git blame again, and search keeps working with the old model. When the new vectors are ready, the backend restarts and uses them.
 
@@ -258,6 +258,7 @@ pensieve                 # backend + Map in the browser (http://localhost:8765)
 pensieve --no-open       # backend only (what the Mac app runs)
 pensieve mcp             # MCP over stdio (--all-tools to include the settings tools)
 pensieve integrate       # agent add-ons: instructions block, skills and the edit hook
+pensieve search "retry failed webhook delivery" --kind code   # what an agent's search returns, scoped to this repo
 ```
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
