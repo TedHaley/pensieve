@@ -25,6 +25,10 @@ final class VisualizerController: NSObject, NSWindowDelegate, WKNavigationDelega
         NSApp.activate()
     }
 
+    func close() {
+        window?.close()
+    }
+
     func reload() {
         loaded = false
         load()

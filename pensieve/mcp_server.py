@@ -15,7 +15,7 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
-               "current_scope", "open", "index_path", "report_feedback"}
+               "current_scope", "open", "index_path", "report_feedback", "stale"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -457,6 +457,21 @@ def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
     if r is None:
         raise ValueError(f"unknown repo {repo!r}")
     return r
+
+
+@tool()
+def stale(days: int = 14) -> dict:
+    """Git worktrees on this Mac with no commit and no agent session in `days` days, to help the user keep a lean
+    system. verdict "remove": clean, its commits merged or pushed; `command` removes it (`deletes` lists the throwaway
+    folders, such as .venv, that go with it). "review": it has work that exists nowhere else; `keep_work` pushes it.
+    Show the user the list, then run a command only after they say yes to that item. Pensieve drops removed
+    worktrees from its index on its next sweep."""
+    from pensieve import stale as st
+    items = st.from_store(_c()["store"], max(1, days))
+    home = str(Path.home())
+    short = lambda s: s.replace(home, "~") if isinstance(s, str) else s
+    return {"days": days, "chunks": sum(w["chunks"] for w in items),
+            "items": [{k: short(v) for k, v in w.items() if v not in (None, False, [], "")} for w in items]}
 
 
 @tool()

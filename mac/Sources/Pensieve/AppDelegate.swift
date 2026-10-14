@@ -43,6 +43,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ProcessInfo.processInfo.environment["PENSIEVE_SHOW_PANEL"] != nil { panel.show() }
     }
 
+    /// Set by the menu bar's Quit and by the updater: quit for real, and stop the backend with the app.
+    static var quitting = false
+
+    /// ⌘Q in the map window, or Quit in the Dock, closes the windows: Pensieve keeps running in the menu bar and
+    /// keeps indexing. Logout, restart and shut down send a quit event with a reason, and quit at once.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let reason = NSAppleEventManager.shared().currentAppleEvent?.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))
+        if Self.quitting || reason != nil { return .terminateNow }
+        visualizer.close()
+        panel.hide()
+        NSApp.setActivationPolicy(.accessory)
+        return .terminateCancel
+    }
+
+    @objc func quitPensieve() {
+        Self.quitting = true
+        NSApp.terminate(nil)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if !Debug.enabled { SpotlightShortcut.restore() }  // ⌘Space would do nothing while Pensieve isn't running
         Backend.shared.stop()
@@ -261,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(version)
         menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
         menu.addItem(.separator())
-        menu.addItem(item("Quit Pensieve", #selector(NSApplication.terminate(_:)), key: "q", target: NSApp))
+        menu.addItem(item("Quit Pensieve", #selector(quitPensieve), key: "q"))
     }
 
     private func item(_ title: String, _ action: Selector, key: String = "", target: AnyObject? = nil) -> NSMenuItem {
@@ -386,8 +405,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let settings = mi("Settings…", "openSettings", ",")
         settings.target = NSApp.delegate
+        let quit = mi("Quit Pensieve", "quitPensieve", "q", [.command, .option])
+        quit.target = NSApp.delegate
         sub("Pensieve", [settings, .separator(), mi("Hide Pensieve", "hide:", "h"), .separator(),
-                         mi("Quit Pensieve", "terminate:", "q")])
+                         mi("Close Map (Pensieve keeps running)", "terminate:", "q"), quit])
         sub("Edit", [mi("Undo", "undo:", "z"), mi("Redo", "redo:", "z", [.command, .shift]), .separator(),
                      mi("Cut", "cut:", "x"), mi("Copy", "copy:", "c"), mi("Paste", "paste:", "v"),
                      mi("Select All", "selectAll:", "a")])

@@ -409,8 +409,9 @@ class DataMap:
                 continue
             sc = scope.get(sid, {})
             out.append(dict(id=k, type="session", open=k, title=title or sid, agent=AGENT.get(src, src), source=src,
-                            # in the folder tree a session sits in its repo (clones/worktrees fold in) or where it ran
-                            path=f"{sc.get('root') or cwd}/Agent sessions/{title or sid}" if (sc.get("root") or cwd) else None,
+                            # in the folder tree a session sits in its repo (clones/worktrees fold in) or where it ran;
+                            # one whose folder is unknown (a memory note of a deleted project) sits under home
+                            path=f"{sc.get('root') or cwd or home}/Agent sessions/{title or sid}",
                             display=(cwd or "").replace(home, "~", 1), repo=sc.get("project") if sc.get("root") else None,
                             repo_root=sc.get("root"), mtime=upd, chunks=n, summary=summary, author=AGENT.get(src, src),
                             author_source="agent", p=pos[k][:3], cluster=pos[k][3]))

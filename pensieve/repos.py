@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import config, settings
+from pensieve import config, places, settings
 from pensieve.files import IMAGE_MAX_BYTES, READ_IMAGE_EXT, images_on, secret
 from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, embed_images, reconcile, yield_to_searches
 from pensieve.layout import fit3d, place_new, unit
@@ -536,6 +536,10 @@ class Repos:
                 self.purge(r)
                 log(f"repo {Path(r).name}: removed from the index")
                 touched += 1
+        # the repos the agents use most first: on a new index, what is worth most is searchable soonest
+        ranked = {r: i for i, r in enumerate(places.busiest_first([r for r, _ in found], places.compute(
+            self._place_rows(), lambda r, k: {"state": "unknown"})))}
+        found = sorted(found, key=lambda f: ranked[f[0]])
         for root, remote in found:
             if only is not None and root not in only:
                 continue
@@ -554,6 +558,10 @@ class Repos:
         if touched or self.unsaved:
             self.save()
         return touched
+
+    def _place_rows(self):
+        with self.lock:
+            return self.db.execute(places.ROWS).fetchall()
 
     @staticmethod
     def switched_off(root):

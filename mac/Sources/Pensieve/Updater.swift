@@ -273,6 +273,7 @@ final class Updater: ObservableObject {
         p.environment = env
         do { try p.run() } catch { log("relaunch: couldn't start the relauncher: \(error.localizedDescription)") }
         Backend.shared.stop()
+        AppDelegate.quitting = true
         NSApp.terminate(nil)
     }
 

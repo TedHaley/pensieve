@@ -30,6 +30,9 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | B8 | Show hits in the agent's own checkout | Agents | testing |
 | B9 | Leave out the agent's own session | Agents | testing |
 | B10 | `read` several hits in one call | Agents | testing |
+| B11 | Index where your agents work | Agents | testing |
+| B12 | Rank search hits by usage | Search | idea |
+| B13 | Help the agent keep the user's system lean | Agents | testing |
 | C1 | Test the two-step install in auto mode | Install | idea |
 | C2 | Claude Code plugin | Install | idea |
 | C3 | Confirm that agents load `~/.agents/skills` | Install | idea |
@@ -295,6 +298,45 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - 2026-10-14: no new tool. `read` takes several ids separated by spaces (up to 8), which share `max_chars`, and
     returns `items`; one id works as before. An id outside the agent's scope gets its own error in the list.
   - Not measured: whether agents use it. Check in B6's next run.
+
+### B11. Index where your agents work
+
+- **Evidence:** on one test Mac, two thirds of the files that agent sessions read or edited were outside the index.
+  Most were in one busy repo that was not indexed.
+- **Try:** rank the repos and folders by agent use, from the sessions' working folders and the files they read and
+  edited (`pensieve/places.py`). Offer the places that aren't indexed, and index the busiest repos first.
+- **Measure:** the share of agent file activity inside the index, before and after.
+- **Status:** testing
+- **Notes:**
+  - Settings → Sources → "Where your agents work" lists them with an Index button (`/api/places`). Setup pre-checks
+    the repos found in the transcripts, busiest first. It reads only the transcript files: 2 s for 6,812 files.
+  - The repo sweep indexes repos in order of agent use.
+  - Tested on a copy of a real index: the Index button's API call indexed a 483-file repo in 3.5 minutes.
+
+### B12. Rank search hits by usage
+
+- **Evidence:** B11's ranking says which repos and files the agents use most. Search does not use it yet.
+- **Try:** a small boost for hits in the files and repos that the agents read and edit most.
+- **Risk:** it can push a right answer down when the user asks about code they seldom touch. Measure before shipping.
+- **Measure:** the validation set (`bench/validation.py`) @1 and @8, and a benchmark run against grep.
+- **Status:** idea
+
+### B13. Help the agent keep the user's system lean
+
+- **Evidence:** on one test Mac, a repo's linked worktrees held 3.3 times as many chunks as its main checkout. A third
+  of those worktrees had no commit and no agent session in 14 days.
+- **Try:** an MCP tool, `stale`, that lists them with a verdict and the command, so the agent offers a cleanup and the
+  user decides. Pensieve does not choose what the user keeps: it reports, and the index follows the disk.
+- **Measure:** worktrees and chunks removed after the agent offers a cleanup.
+- **Status:** testing
+- **Notes:**
+  - Verdict "remove": clean, and its commits are merged or pushed. "review": it has unmerged and unpushed commits or
+    uncommitted changes, and the tool gives the push command that keeps them, not a delete command.
+    Throwaway folders (`.venv`, `node_modules`, caches) don't count as work. They make `git worktree remove` need
+    `--force`, and the item lists them.
+  - The SessionStart hook adds a one-line hint in a repo with stale worktrees, from the last report only (the hook
+    waits 3 s at most). Tested on a copy of this index: the first session start warms the report, the next has the hint.
+  - Next: other things that are stale, for example merged branches, and repos that no agent used in months.
 
 ## C. Install
 
