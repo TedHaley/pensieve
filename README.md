@@ -274,3 +274,25 @@ mac/build.sh && open mac/build/Pensieve.app
 ```
 
 To support another agent's transcripts, add a parser in `pensieve/parsers.py` and a line in `SOURCES` in `pensieve/config.py`.
+
+### Signing the app (optional)
+
+Signing is your choice, and the app works either way. It decides whether macOS remembers the folder access you gave Pensieve after you install a new build:
+
+- **Not signed (ad hoc, the default):** macOS identifies the app by a hash of that exact build. Each new build is a new app to macOS, so it asks again for access to Desktop, Documents and the other folders that the earlier build could already read.
+- **Signed with your own certificate:** macOS identifies the app by its bundle ID and the certificate. Every build signed with the same certificate is the same app, so macOS keeps the access it gave before and does not ask again.
+
+To sign your builds, create a certificate once:
+
+```bash
+mac/signing-cert.sh      # a self-signed "Pensieve Code Signing" certificate in your login keychain, and a backup .p12
+```
+
+After that, `mac/build.sh` and `mac/dmg.sh` sign with it automatically (see `mac/sign.sh`). To use another identity, such as an Apple Developer ID, set `PENSIEVE_SIGN_IDENTITY` to its name. The first time, macOS asks whether `codesign` can use the key: choose Always Allow.
+
+Notes:
+
+- A self-signed certificate does not make the app trusted by Gatekeeper. Only an Apple Developer ID with notarization removes the "unidentified developer" warning.
+- The first build that you sign asks for folder access one more time, because macOS has only seen the ad-hoc builds.
+- Keep the backup `.p12`. An app signed with a certificate installs only updates that are signed with the same certificate. If you lose the key, apps that already have your signed build cannot update themselves.
+- `mac/release.sh` publishes only signed builds, so that a release cannot reset everyone's folder access. Set `PENSIEVE_ALLOW_ADHOC=1` to publish an ad-hoc build anyway.
