@@ -218,15 +218,31 @@ Change them in the Map window (Settings), from an agent connected with `--all-to
 | `exclude_files` | filename globs never indexed (secrets) |
 | `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the panel's scope |
 | `appearance` | `system` (or `light`, `dark`) |
+| `embed_model` | the search model for the index (manage in Settings → Models); empty: the index's own |
 | `ai`, `builtin_model` | `auto` (not chosen yet), `mlx-community/Qwen3.5-9B-MLX-4bit` |
 | `cli_command`, `cli_privacy` | the command for `ai: cli`, and `cloud` or `local` |
 | `hotkey` | `ctrl+shift` (or a combo like `cmd+shift+space`) |
 | `editor` | `default`, `vscode`, `cursor` or `zed` |
 | `llm_url`, `llm_model` | `http://localhost:1234/v1`, `qwen/qwen3.5-9b` |
 
-## AI insights (optional)
+## Models
 
-Search, maps, activity, keyword topics, your footprint in each repo and teammates' commits all work without AI. Summaries, topic names and the written insights need a model, and you choose which one writes them (Pensieve asks on first run; change it in Settings → AI & Insights or with `update_settings {"ai": ...}`):
+Pensieve uses two models. You choose both at setup, and change them in Settings → Models.
+
+### Search model
+
+The search model turns text into vectors, so that search finds things by meaning. It always runs on your Mac.
+
+| Model | Notes |
+|---|---|
+| **EmbeddingGemma 2** (`google/embeddinggemma-2`) | The default for a new index. Its 270M-parameter text part runs on MLX. About twice as fast to index as Qwen3 and 25% smaller, with the same search quality in our tests (`bench/STRATEGIES.md`). A 1.5 GB download the first time. |
+| **Qwen3 Embedding 0.6B** (`Qwen/Qwen3-Embedding-0.6B`) | The model of every index made before 0.6.9. |
+
+An index keeps the model it was built with: an update does not change it. If you choose another model, Pensieve warns you first. Then it embeds the text it already holds with the new model, in the background. It does not read your files or run git blame again, and search keeps working with the old model. When the new vectors are ready, the backend restarts and uses them.
+
+### AI model (optional)
+
+Search, maps, activity, keyword topics, your footprint in each repo and teammates' commits all work without AI. Summaries, topic names and the written insights need a model, and you choose which one writes them (Pensieve asks on first run; change it in Settings → Models or with `update_settings {"ai": ...}`):
 
 | Engine | Where it runs | Notes |
 |---|---|---|

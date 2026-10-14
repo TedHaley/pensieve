@@ -42,6 +42,7 @@ DEFAULTS = {
     "hotkey": "ctrl+shift",    # read by the Mac app; tap Control+Shift. Or e.g. "cmd+shift+space"
     "editor": "default",       # how code results open: default | vscode | cursor | zed
     "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
+    "embed_model": "",         # the embedding model to index with (config.EMBED_MODELS); "" = the index's own
     # What writes summaries, topic names and insights: auto (a local server if one is running; the UI asks) |
     # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model/llm_key: local or hosted) | cli (cli_command) | none
     "ai": "auto",
@@ -82,6 +83,8 @@ DESCRIPTIONS = {
               "Choose another shortcut to give ⌘Space back to Spotlight.",
     "editor": "Where code results open: default, vscode, cursor or zed.",
     "appearance": "System, light or dark. System follows macOS.",
+    "embed_model": "The model that turns text into vectors for search. Switching embeds the text already indexed "
+                   "again with the new model, in the background; search keeps working meanwhile.",
     "ai": "What writes summaries and insights: builtin, server, claude, codex or none (auto = not chosen yet).",
     "builtin_model": "The MLX model the built-in engine runs.",
     "agent_model": "Model of the old Claude Code engine; cli_command holds it now.",
@@ -96,7 +99,7 @@ DESCRIPTIONS = {
     "llm_url": "OpenAI-compatible endpoint, local (LM Studio, Ollama) or hosted, for summaries and insights.",
     "llm_model": "Chat model used for summaries and insights.",
     "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
-    "llm_connections": "Saved model servers, each with a name, URL, model and optional API key (manage in AI & Insights).",
+    "llm_connections": "Saved model servers, each with a name, URL, model and optional API key (manage in Settings → Models).",
 }
 
 _NO_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit"
@@ -189,6 +192,10 @@ def update(changes: dict) -> dict:
         elif isinstance(d, list):
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
                 raise ValueError(f"{k} must be a list of strings")
+        elif k == "embed_model":
+            from pensieve import config
+            if v and v not in config.EMBED_MODELS:
+                raise ValueError(f"embed_model must be one of: {', '.join(config.EMBED_MODELS)}")
         elif k == "scopes":
             if not isinstance(v, dict):
                 raise ValueError("scopes must map names to {sources: [...], description: ''}")

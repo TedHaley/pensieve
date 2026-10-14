@@ -21,18 +21,78 @@ _embedder = None
 _embed_lock = threading.Lock()
 
 
+def load_embedder(name):
+    """Embedding model `name` on MLX where it can run there (Apple Silicon), else on sentence-transformers."""
+    # one at a time, and not while a model embeds: transformers' first import isn't thread-safe (a second thread got
+    # an ImportError), and loading weights onto the GPU beside another model's work crashed Metal
+    ensure_downloaded(name)  # before the lock: a first download takes minutes, and searches must not wait for it
+    with _embed_lock:
+        return _load_embedder(name)
+
+
+def ensure_downloaded(name):
+    """Download model `name` if it isn't cached. In a child process: config turns Hugging Face offline once the
+    index's own model is cached, and this process can't turn it back on."""
+    import os
+    import subprocess
+    import sys
+    from huggingface_hub import try_to_load_from_cache
+    if isinstance(try_to_load_from_cache(name, "config.json"), str):
+        return
+    only = ["*.json", "*.safetensors", "tokenizer*"] if name == config.GEMMA else None
+    env = {k: v for k, v in os.environ.items() if k != "HF_HUB_OFFLINE"}
+    subprocess.run([sys.executable, "-c", "import sys; from huggingface_hub import snapshot_download; "
+                    "snapshot_download(sys.argv[1], allow_patterns=None if sys.argv[2] == '-' else sys.argv[2].split(','))",
+                    name, ",".join(only) if only else "-"], env=env, check=True)
+
+
+def _load_embedder(name):
+    try:
+        if name == config.GEMMA:
+            from pensieve.gemma_mlx import MLXGemmaEmbedder
+            return MLXGemmaEmbedder(name, config.EMBED_MAX_TOKENS)
+        return MLXEmbedder(name, config.EMBED_MAX_TOKENS)
+    except (ImportError, ValueError) as e:
+        print(f"embedding model {name}: no MLX ({e!r}); using sentence-transformers", flush=True)
+        from sentence_transformers import SentenceTransformer
+        kw = {"config_kwargs": {"vision_config": None, "audio_config": None}} if name == config.GEMMA else {}
+        m = SentenceTransformer(name, device=config.device(), **kw)
+        m.max_seq_length = config.EMBED_MAX_TOKENS
+        return m
+
+
 def embedder():
-    """The embedding model: on MLX where it can run there (Apple Silicon, a Qwen3 model), else sentence-transformers."""
+    """The index's embedding model (config.EMBED_MODEL), loaded once."""
     global _embedder
-    if _embedder is None:
-        try:
-            _embedder = MLXEmbedder(config.EMBED_MODEL, config.EMBED_MAX_TOKENS)
-        except (ImportError, ValueError):
-            from sentence_transformers import SentenceTransformer
-            m = SentenceTransformer(config.EMBED_MODEL, device=config.device())
-            m.max_seq_length = config.EMBED_MAX_TOKENS
-            _embedder = m
-    return _embedder
+    if _embedder is None or _embedder[0] != config.EMBED_MODEL:
+        _embedder = (config.EMBED_MODEL, load_embedder(config.EMBED_MODEL))
+    return _embedder[1]
+
+
+def model_texts(texts, query=False, titles=None, name=None, m=None):
+    """The texts as model `name` (the index's model by default) reads them. A query gets the model's instruction:
+    `query` is True (general search), an instruction string such as CODE_QUERY, or one of those per text. A document
+    gets the model's document format, with its title (a path) when there is one."""
+    name, m = name or config.EMBED_MODEL, m or embedder()
+    general = (getattr(m, "prompts", None) or {}).get("query", "")
+    gemma = name == config.GEMMA
+
+    def instruction(p):
+        if p is True or (gemma and p == CODE_QUERY):  # EmbeddingGemma: its search query beat its code query
+            return general
+        return p or None
+
+    ps = [instruction(p) for p in query] if isinstance(query, list) else [instruction(query)] * len(texts)
+    out = []
+    for i, (p, t) in enumerate(zip(ps, texts)):
+        title = titles[i] if titles else None
+        if p is not None:
+            out.append(p + t)
+        elif gemma:
+            out.append(f"title: {title or 'none'} | text: {t}")
+        else:
+            out.append(f"{title}\n{t}" if title else t)
+    return out
 
 
 class MLXEmbedder:
@@ -125,32 +185,32 @@ def yield_to_searches():
 BULK_SLICE = 8  # indexing texts per model call: 16 runs ~10% faster, but a search could then wait twice as long
 
 
-def embed(texts, query=False) -> np.ndarray:
+def embed(texts, query=False, titles=None, model=None) -> np.ndarray:
     """`query`: True for the model's general search instruction, an instruction string (e.g. CODE_QUERY), or a list
-    with one of those per text, so a search gets its differently-instructed vectors from one model call.
+    with one of those per text, so a search gets its differently-instructed vectors from one model call. `titles`:
+    a document's path, for the models that take it apart. `model`: (name, loaded model) instead of the index's.
     Indexing embeds its texts BULK_SLICE at a time and steps aside between slices while a search waits, so a search
     during indexing waits for one slice (a quarter second at most), not for a whole batch of files."""
-    searching = bool(query)
-    if isinstance(query, list):
-        general = getattr(embedder(), "prompts", {}).get("query", "")
-        texts = [(p if isinstance(p, str) else general if p else "") + t for p, t in zip(query, texts)]
-        query = ""
-    kw = dict(batch_size=16, normalize_embeddings=True, show_progress_bar=False,
-              **({"prompt": query} if isinstance(query, str) else {"prompt_name": "query" if query else None}))
+    searching = bool(query) if not isinstance(query, list) else any(query)
+    name, m = model if model else (config.EMBED_MODEL, None)
+    m = m or embedder()
+    texts = model_texts(texts, query, titles, name, m)
+    kw = dict(batch_size=16, normalize_embeddings=True, show_progress_bar=False)
     if searching:
         queries_waiting.add(1)
         try:
             with _embed_lock:
-                return np.asarray(embedder().encode(texts, **kw), dtype=np.float32)
+                return np.asarray(m.encode(texts, **kw), dtype=np.float32)
         finally:
             queries_waiting.add(-1)
     order = sorted(range(len(texts)), key=lambda i: -len(texts[i]))  # similar lengths in a slice: less padding
-    out = np.zeros((len(texts), config.EMBED_DIM), np.float32)
+    out = np.zeros((len(texts), config.EMBED_MODELS[name]["dim"] if name in config.EMBED_MODELS else config.EMBED_DIM),
+                   np.float32)
     for i in range(0, len(order), BULK_SLICE):
         _wait_while(queries_waiting)
         idx = order[i:i + BULK_SLICE]
         with _embed_lock:
-            out[idx] = embedder().encode([texts[j] for j in idx], **kw)
+            out[idx] = m.encode([texts[j] for j in idx], **kw)
     return out
 
 

@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, llm, mcp_server, onboarding, scopes, search as search_mod, settings, sources, summarize, usage
+from pensieve import actions, config, llm, mcp_server, onboarding, reembed, scopes, search as search_mod, settings, sources, summarize, usage
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -117,6 +117,7 @@ async def watcher():
     watch.configure(repos.checkouts())
     asyncio.create_task(repo_watcher())
     asyncio.create_task(upstream_watcher())
+    asyncio.create_task(model_switcher())
     last_full = 0
     while True:
         if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
@@ -284,7 +285,7 @@ async def run_insights(scope=None, sids=None):
         await loop.run_in_executor(None, job)
         broadcast({"type": "insights", "scope": scope})
     except Exception as e:
-        msg = ("Choose an AI engine in Settings → AI & Insights to generate insights." if isinstance(e, llm.Offline)
+        msg = ("Choose an AI model in Settings → Models to generate insights." if isinstance(e, llm.Offline)
                else f"Insight generation failed: {e!r}"[:200])
         broadcast({"type": "toast", "message": msg})
     finally:
@@ -490,7 +491,41 @@ def _syncing() -> list[dict]:
         p = getattr(src, "progress", None)
         if p:
             out.append({"kind": kind, **p})
+    if reembed.progress:
+        p = reembed.progress
+        out.append({"kind": "model", "name": config.EMBED_MODELS[p["model"]]["label"], **p})
     return out
+
+
+wake_model = asyncio.Event()
+
+
+async def model_switcher():
+    """Embeds the index with the model chosen in Settings, in the background (see reembed). Ends in a restart."""
+    loop = asyncio.get_running_loop()
+    while True:
+        if settings.get("setup_done") and reembed.wanted() != config.EMBED_MODEL or store.meta("next_model"):
+            try:
+                if reembed.switch_empty(store, [store, repos, files]):
+                    broadcast({"type": "status", **status})
+                    await _wait(wake_model, 600)
+                    continue
+                await _run(reembed.run, store, lambda: loop.call_soon_threadsafe(
+                    broadcast, {"type": "status", **status, "syncing": _syncing()}))
+            except Exception:
+                import traceback
+                traceback.print_exc()
+        await _wait(wake_model, 600)
+
+
+@app.get("/api/embed_models")
+def embed_models():
+    """The models the index can use: the index's own, the one chosen, and how long switching takes on this Mac."""
+    with store.lock:
+        n = sum(store.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in reembed.TABLES)
+    return {"current": config.EMBED_MODEL, "wanted": reembed.wanted(), "chunks": n, "progress": reembed.progress,
+            "models": [dict(id=k, label=m["label"], about=m["about"], dim=m["dim"],
+                            switch_seconds=round(n / repos.embed_rate(k))) for k, m in config.EMBED_MODELS.items()]}
 
 
 @app.get("/api/projects")
@@ -1037,17 +1072,19 @@ class SetupReq(BaseModel):
     sources: list[str] | None = None  # ids to index; None with recommended=true takes the pre-checked ones
     recommended: bool = False
     ai: str | None = None  # the insights engine
+    embed_model: str | None = None  # the search model (config.EMBED_MODELS)
 
 
 @app.post("/api/setup")
 async def post_setup(req: SetupReq):
     """Index exactly the chosen sources: every other candidate is switched off, then indexing starts."""
     try:
-        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.ai))
+        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.ai, req.embed_model))
     except ValueError as e:
         raise HTTPException(400, str(e))
     wake_files.set()
     wake_repos.set()
+    wake_model.set()
     return res
 
 
@@ -1225,9 +1262,12 @@ def get_settings():
 @app.put("/api/settings")
 def put_settings(changes: dict):
     try:
-        return {"settings": settings.public(settings.update(changes))}
+        out = {"settings": settings.public(settings.update(changes))}
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if "embed_model" in changes:
+        wake_model.set()
+    return out
 
 
 @app.get("/api/ai/models")

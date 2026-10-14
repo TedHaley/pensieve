@@ -480,12 +480,11 @@ class Files:
 
     def _index_file(self, p: Path, root: Path, st, kind, max_bytes, level="content"):
         rel = p.relative_to(root.parent) if root.parent != p else p
-        head = f"{rel}\n"
         text = extract(p, max_bytes) if level == "content" and st.st_size <= max_bytes else ""
         chunks = chunk_text(text, settings.get("chunk_chars"), settings.get("max_chunks")) if text.strip() else []
         if not chunks:  # name-only entry: still findable by name and folder
             chunks = [(0, 0, f"{p.name}\n{p.parent}")]
-        vecs = embed([head + c[2] for c in chunks])
+        vecs = embed([c[2] for c in chunks], titles=[str(rel)] * len(chunks))
         with self.lock:
             self._drop(str(p))
             ids = []
