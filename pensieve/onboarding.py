@@ -70,7 +70,9 @@ def guide() -> dict:
             "categories": [dict(id=c, label=label, description=desc, reads=reads(c)) for c, (label, desc) in cats.items()],
             "ai": [{k: o[k] for k in ("id", "label", "privacy", "available", "description", "note") if k in o}
                    for o in llm.options()],
-            "energy": ENERGY_NOTE, "files_per_minute": REPO_FILES_PER_MINUTE}
+            "energy": ENERGY_NOTE, "files_per_minute": REPO_FILES_PER_MINUTE,
+            "embed_model": config.EMBED_MODEL,
+            "embed_models": [dict(id=k, label=m["label"], about=m["about"]) for k, m in config.EMBED_MODELS.items()]}
 
 
 def categories_for(profiles) -> list[str]:
@@ -211,12 +213,20 @@ def index(path: str, cwd=None) -> dict:
             else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
 
 
-def start(chosen=None, recommended=False, ai=None) -> dict:
+def start(chosen=None, recommended=False, ai=None, embed_model=None) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
     switched off, then indexing starts. Categories that were never scanned are switched off whole. `ai` picks the
-    insights engine (an id from guide()["ai"], or "none")."""
+    insights engine (an id from guide()["ai"], or "none"); `embed_model` the search model (guide()["embed_models"]).
+    On an empty index the search model changes at once; otherwise the switch runs in the background (reembed)."""
     if chosen is None and not recommended:
         raise ValueError("Send the source ids to index, or recommended: true")
+    if embed_model:
+        if embed_model not in config.EMBED_MODELS:
+            raise ValueError(f"unknown search model {embed_model!r}; one of: {', '.join(config.EMBED_MODELS)}")
+        from pensieve import reembed
+        settings.update({"embed_model": embed_model})
+        c = actions.ctx
+        reembed.switch_empty(c["store"], [c["store"], c["repos"], c["files"]])
     if ai is not None and ai not in {o["id"] for o in llm.options()} | {"none", "auto"}:
         raise ValueError(f"unknown AI engine {ai!r}")
     if _scanned:
@@ -242,7 +252,6 @@ def start(chosen=None, recommended=False, ai=None) -> dict:
     if ai is not None:
         changes["ai"] = ai
         if ai == "cli" and not settings.get("cli_command").strip():  # the first template whose CLI is installed
-            from pensieve import llm
             t = next((t for t in settings.CLI_TEMPLATES if llm._exe(t["command"])), None)
             if t:
                 changes.update(cli_command=t["command"], cli_privacy=t["privacy"])

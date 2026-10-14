@@ -97,6 +97,28 @@ questions and names (+3 and +5 points), but the full ranking already finds names
 
 Not tried: Qwen3-Embedding-4B (downloaded, never measured).
 
+**Another model: EmbeddingGemma 2** (`google/embeddinggemma-2`, its 270M text part, 768 dimensions), on the same
+three repos and 1,625 queries. Documents are embedded as `title: <path> | text: <chunk>`, queries with its
+search-query prefix (the code-retrieval prefix is 0.4 points worse).
+
+| Strategy | question | name+words | name | string | ambiguous | runtime | all @1 | all @3 | test @1 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| dense, Qwen3-Embedding-0.6B | 49.7 | 72.7 | 61.3 | 37.2 | 15.8 | 25.7 | 39.0 | 57.8 | 41.0 |
+| dense, EmbeddingGemma 2 | 55.4 | 77.0 | 51.9 | 38.5 | 13.2 | 30.1 | 40.2 | 59.0 | 40.6 |
+| 0.6.3 rules, Qwen3-Embedding-0.6B | 62.1 | 79.4 | 96.2 | 89.1 | 40.3 | 42.3 | 68.1 | 86.6 | 68.8 |
+| 0.6.3 rules, EmbeddingGemma 2 | 64.6 | 82.8 | 94.3 | 88.7 | 38.3 | 40.8 | 68.0 | 87.1 | 67.4 |
+| grep, whole query (the same queries) | | | | | | | 39.6 | 53.2 | 37.1 |
+
+- **The same quality, at about twice the speed.** Over all queries the two models are level (68.0 against 68.1 @1;
+  each ranks first on about 110 queries where the other does not). EmbeddingGemma 2 is better on questions (+2.5)
+  and names with words (+3.4), and worse on bare names (−1.9) and ambiguous strings (−2.0).
+- **Speed on the same 1,200 chunks (M4 Max):** Qwen3 on MLX (the shipped path) 22.3 chunks/s; EmbeddingGemma 2 on
+  MLX 42.7 chunks/s, with each batch padded to a multiple of 64 tokens (24.9 chunks/s without: each new length
+  builds new GPU kernels). The padding does not speed up Qwen3 (20.7 chunks/s).
+- **What shipped:** EmbeddingGemma 2 as an option in Settings → General → Search model, on MLX (`gemma_mlx.py`,
+  cosine 0.996 or more to sentence-transformers). An index keeps the model it was built with; switching embeds the
+  stored chunk text again in the background (`reembed.py`).
+
 ## Changes for agents (Claude Code with Pensieve)
 
 [`agent_search.py`](agent_search.py) runs Claude Sonnet headless through Claude Code on 72 held-out tasks in the same
@@ -171,6 +193,38 @@ rates are a little low. `agent_search.py` now loads only the repo's settings (`-
 | v5b | numbered lines of the top 3 hits; other worktrees' copies ranked last | 1.86 calls |
 | v5d | "if two hits fit, read both" | fixed early wrong answers on tasks with two candidates |
 | v5test | all of v5, held-out tasks | 131/144 against 123/144 for grep, 43% fewer calls, 18% cheaper, 21% faster |
+
+### Clean runs: Pensieve in every run against grep (2026-10-13)
+
+Batches 1–3 loaded the user's own Claude Code settings: in them, guided used Pensieve in only 93–119 of 144 runs.
+These two batches load only the repo's settings (`--setting-sources project,local`). The user's global
+`~/.claude/CLAUDE.md` still loads in every arm (it is not a settings file): in 3–4 grep runs per batch, the agent
+tried a Pensieve tool that the arm does not have, then used grep. `only` is Pensieve's tools and Read, with no Grep or
+Glob. v8 adds a note to a hit whose matched code is a near-copy of a higher hit's (`_mark_near_copies`).
+
+| Batch | Arm | Used Pensieve | Found | Without twin tasks | Seconds (mean) | Cost per answer | Calls |
+|---|---|---:|---:|---:|---:|---:|---:|
+| v7clean | grep | — | 129/144 | 123/134 | 15.2 | $0.050 | 3.34 |
+| v7clean | guided | 144/144 | 129/144 | 123/134 | 11.4 | $0.038 | 1.72 |
+| v7clean | only | 144/144 | 127/144 | 121/134 | 11.1 | $0.037 | 1.60 |
+| v8 | grep | — | 129/144 | 123/134 | 9.5 | $0.051 | 3.42 |
+| v8 | guided | 144/144 | 129/144 | 123/134 | 6.8 | $0.039 | 1.81 |
+| v8 | only | 144/144 | 130/144 | 123/134 | 6.5 | $0.038 | 1.70 |
+
+- **Accuracy is level with grep; cost and time are not.** Guided is 23–25% cheaper and 25–29% faster than grep;
+  `only` is 25–27% cheaper and 27–32% faster. The accuracy gap in batches 1–3 (73–80% for grep) came from runs with
+  the user's own settings.
+- **Plain questions** (the `query` style, 32 runs per arm in v8): grep 24, guided 24, only 25 found. Grep gets there
+  by searching more: 15.8 s against 8.3 s (guided) and 6.7 s (only).
+- **Why both miss the same tasks.** 6 tasks are missed in every run of every arm: the description fits a near-copy
+  as well as the answer (an identical `mark.js` in two folders, `credible (1).tpl.sql` beside `credible.tpl.sql`,
+  two Ruby permission classes that differ only in the gating class they call). Pensieve ranked the answer first or
+  second in most of them, but nothing in the description tells the copies apart. `bench/twins.py` marks the tasks
+  whose answer chunk has a near-identical twin (at least 90% the same text), and `bench/clean_report.py` reports
+  them apart. It finds 5 of the 72 test tasks; some of the 6 differ by more than 10%.
+- **The near-copy note changed nothing measurable:** on the twin tasks, guided found 6 of 10 runs in both batches.
+- **This task set suits grep:** most descriptions name words that are in the code, and an agent that runs grep
+  several times reaches the same file. It cannot show an accuracy gain; it does show the cost and time saved.
 
 ### Repo overviews: the `overview` tool
 

@@ -48,7 +48,6 @@ GENERATED_DIRS = {"dist", "build", "vendor", "third_party", "node_modules", "out
 CODE_CHUNK_CHARS = 1500
 CHARS_PER_CHUNK = 1000  # chunk_code's average size: counting a repo's chunks from file sizes came within 10% of the
                         # real count on affinity, databricks-bfp and pensieve
-EMBED_RATE = 30  # chunks per second of a first index on an M4 Max, until this Mac has measured its own (embed_rate)
 RATE_MIN_CHUNKS = 2000  # an index this big measures the Mac's speed
 
 
@@ -683,12 +682,15 @@ class Repos:
             self._team.clear()
         return n
 
-    def embed_rate(self) -> float:
-        """Chunks this Mac embeds per second during an index: the last big index measured it, else EMBED_RATE."""
+    def embed_rate(self, model=None) -> float:
+        """Chunks this Mac embeds per second during an index with `model` (the index's by default): the last big
+        index with it measured it, else the model's rate on an M4 Max (config.EMBED_MODELS)."""
+        model = model or config.EMBED_MODEL
+        default = config.EMBED_MODELS.get(model, config.EMBED_MODELS[config.QWEN])["rate"]
         try:
-            return float(self.store.meta("embed_rate") or EMBED_RATE)
+            return float(self.store.meta(f"embed_rate:{model}") or default)
         except ValueError:
-            return EMBED_RATE
+            return default
 
     def estimate_chunks(self, root) -> dict:
         """What indexing the main checkout of `root` still has to do, from file sizes (only the start of a file not yet
@@ -783,7 +785,8 @@ class Repos:
             if not group:
                 return
             embedded += sum(len(g[2]) for g in group)
-            vecs = embed([f"{path}\n{c[2]}" for path, _, chunks, _ in group for c in chunks])
+            vecs = embed([c[2] for _, _, chunks, _ in group for c in chunks],
+                         titles=[path for path, _, chunks, _ in group for _ in chunks])
             if writing:
                 writing.result()  # in order, and an error surfaces here
             writing = writer.submit(write, list(group), vecs)
@@ -818,7 +821,7 @@ class Repos:
                 if writing:
                     writing.result()
                 if embedded >= RATE_MIN_CHUNKS:
-                    self.store.meta("embed_rate", round(embedded / (time.time() - t0), 1))
+                    self.store.meta(f"embed_rate:{config.EMBED_MODEL}", round(embedded / (time.time() - t0), 1))
             finally:
                 if big:
                     self.progress = None

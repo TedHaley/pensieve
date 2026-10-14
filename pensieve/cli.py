@@ -57,6 +57,8 @@ def main():
 
     from pensieve import reset
     done = reset.apply_pending()  # before anything opens the database
+    from pensieve import reembed
+    reembed.finish()  # a switch to another embedding model whose vectors are ready
     import uvicorn
     from pensieve import config, settings
     if done:

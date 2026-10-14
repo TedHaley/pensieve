@@ -12,7 +12,7 @@ import sys
 from pensieve import config
 
 MARK = config.DATA_DIR / "reset-pending"
-INDEX = ["pensieve.db", "pensieve.db-wal", "pensieve.db-shm", "index.tv", "files.tv", "code.tv"]
+INDEX = ["pensieve.db", "pensieve.db-wal", "pensieve.db-shm", "index.tv", "files.tv", "code.tv", "embed_model"]
 EXPORTS = "apps"  # copies of app content made for indexing
 
 
@@ -45,6 +45,7 @@ def apply_pending() -> str | None:
             f.write_text(json.dumps({**s, "setup_done": False}, indent=2))
         except (OSError, ValueError):
             pass
+    config.use_model(config._index_model())  # the new index's model: the one chosen in Settings, else the default
     MARK.unlink(missing_ok=True)
     return what
 

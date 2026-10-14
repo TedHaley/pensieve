@@ -109,20 +109,84 @@ def parse_codex(path: Path) -> Session:
     return s
 
 
+MEMORY_GLOB = "*/memory/*.md"  # Claude Code's memory files, in the project folder next to its transcripts
+_projects = {}  # project folder -> the working folder its transcripts ran in
+
+
+def _project_of(folder: Path) -> str:
+    """The working folder of a Claude Code project folder, from the cwd in its transcripts. The folder's name encodes
+    the path with every "/" (and ".") turned into "-", so it can't be decoded reliably."""
+    if folder not in _projects:
+        cwd = ""
+        for f in sorted(folder.glob("*.jsonl"), key=lambda p: -p.stat().st_mtime)[:3]:
+            for d in _lines(f):
+                cwd = d.get("cwd") or ""
+                if cwd:
+                    break
+            if cwd:
+                break
+        _projects[folder] = cwd or _decode(folder.name)
+    return _projects[folder]
+
+
+def _decode(name: str) -> str:
+    """A project folder name back to a path that exists, matching each "-" as "/", "-" or "." (longest folder first);
+    "" when no folder on disk fits."""
+    parts, cur = name.lstrip("-").split("-"), Path("/")
+    i = 0
+    while i < len(parts):
+        for j in range(len(parts), i, -1):
+            hit = next((cur / n for n in {"-".join(parts[i:j]), ".".join(parts[i:j])} if (cur / n).is_dir()), None)
+            if hit is None and parts[i] == "" and j > i + 1:  # "--x": a hidden folder (".x")
+                hit = next((cur / ("." + n) for n in ("-".join(parts[i + 1:j]),) if (cur / ("." + n)).is_dir()), None)
+            if hit:
+                cur, i = hit, j
+                break
+        else:
+            return ""
+    return str(cur)
+
+
+def parse_memory(path: Path) -> Session:
+    """One Claude Code memory file (a fact, decision or preference that outlives its session) as a one-turn session."""
+    from datetime import datetime, timezone
+    text = path.read_text(errors="replace")
+    meta, body = {}, text
+    if text.startswith("---\n"):
+        head, sep, rest = text[4:].partition("\n---\n")
+        if sep:
+            body = rest
+            for ln in head.splitlines():
+                k, _, v = ln.strip().partition(":")
+                if k in ("name", "description", "modified") and v.strip():
+                    meta[k] = v.strip().strip("\"'")
+    ts = meta.get("modified") or datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    folder = path.parent.parent
+    s = Session(id=f"claude:memory/{folder.name}/{path.stem}", source="claude", path=str(path), project=_project_of(folder),
+                title=f"Memory: {meta.get('description') or meta.get('name') or path.stem}"[:120], started=ts, updated=ts)
+    s.turns.append(("memory", f"{meta.get('name') or path.stem}: {meta.get('description', '')}\n\n{body.strip()}"))
+    return s
+
+
 PARSERS = {"claude": parse_claude, "qwen": parse_qwen, "codex": parse_codex}
 
 
 def discover():
-    """Yield (source, path) for every transcript file currently on disk."""
+    """Yield (source, path) for every transcript file currently on disk, and Claude Code's memory files (but not
+    MEMORY.md, its index of them)."""
     for sid, name, root, pattern in session_sources():
         if settings.enabled(sid) and settings.enabled(f"agents/{name}") and root.exists():
             for p in root.glob(pattern):
                 if p.is_file() and "subagents" not in p.parts:
                     yield name, p
+            if name == "claude":
+                for p in root.glob(MEMORY_GLOB):
+                    if p.is_file() and p.name != "MEMORY.md":
+                        yield name, p
 
 
 def parse(source: str, path: Path) -> Session:
-    s = PARSERS[source](path)
+    s = parse_memory(path) if path.suffix == ".md" else PARSERS[source](path)
     if not s.title:
         first = next((t for r, t in s.turns if r == "user"), "")
         s.title = " ".join(first.split())[:80] or path.stem

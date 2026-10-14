@@ -72,7 +72,17 @@ VARIANTS = {  # name -> (model, max tokens, text format)
     "stored": None,
     "len1024": ("Qwen/Qwen3-Embedding-0.6B", 1024, "path"),
     "symbols": ("Qwen/Qwen3-Embedding-0.6B", 512, "symbols"),
+    "gemma2": ("google/embeddinggemma-2", 512, "gemma"),  # query with --qmodel google/embeddinggemma-2
 }
+GEMMA_TEXT_ONLY = {"vision_config": None, "audio_config": None}  # EmbeddingGemma 2 without its image/audio encoders
+QMODEL = ""  # --qmodel: embed queries with this model instead of the production embedder
+
+
+def load_st(model):
+    from sentence_transformers import SentenceTransformer
+    from pensieve import config
+    kw = {"config_kwargs": GEMMA_TEXT_ONLY} if "embeddinggemma" in model else {}
+    return SentenceTransformer(model, device=config.device(), **kw)
 
 
 class Repo:
@@ -97,11 +107,12 @@ class Repo:
         f = CACHE / f"v-{variant}-{Path(self.root).name}-{len(self.ids)}.npy"
         if f.exists():
             return np.load(f).astype(np.float32)
-        from sentence_transformers import SentenceTransformer
-        from pensieve import config
-        m = SentenceTransformer(model, device=config.device())
+        import time
+        m = load_st(model)
         m.max_seq_length = max_tokens
-        if fmt == "symbols":
+        if fmt == "gemma":  # its document prefix, with the path as the title
+            docs = [f"title: {p} | text: {t}" for p, t in zip(self.paths, self.texts)]
+        elif fmt == "symbols":
             by = defaultdict(list)
             for p, t in zip(self.paths, self.texts):
                 by[p].append(t)
@@ -111,7 +122,10 @@ class Repo:
             docs = [f"{p}\n{t}" for p, t in zip(self.paths, self.texts)]
         order = np.argsort([len(d) for d in docs])  # length-sorted batches pad less
         V = np.zeros((len(docs), m.get_sentence_embedding_dimension()), np.float32)
+        t0 = time.time()
         V[order] = m.encode([docs[i] for i in order], batch_size=16, normalize_embeddings=True, show_progress_bar=True)
+        print(f"{Path(self.root).name}: embedded {len(docs)} chunks with {model} in {time.time() - t0:.0f}s "
+              f"({len(docs) / (time.time() - t0):.1f} chunks/s)", file=sys.stderr)
         CACHE.mkdir(parents=True, exist_ok=True)
         np.save(f, V.astype(np.float16))
         return V
@@ -187,14 +201,22 @@ class Repo:
 
 
 def embed_queries(texts, instruct):
-    key = hashlib.sha1(json.dumps([texts, instruct]).encode()).hexdigest()[:16]
+    key = hashlib.sha1(json.dumps([texts, instruct] + ([QMODEL] if QMODEL else [])).encode()).hexdigest()[:16]
     f = CACHE / f"q-{key}.npy"
     if f.exists():
         return np.load(f)
-    from pensieve.indexer import embedder
-    m = embedder()
-    v = m.encode(texts, batch_size=16, normalize_embeddings=True, show_progress_bar=False,
-                 **({"prompt_name": "query"} if instruct is None else {"prompt": instruct}))
+    if QMODEL:
+        m = load_st(QMODEL)
+        # --instruct web: the model's search-query prefix; code: its code-retrieval prefix (EmbeddingGemma's own)
+        prompt = (m.prompts.get("CodeRetrieval") if instruct else m.prompts.get("query")) if "embeddinggemma" in QMODEL \
+            else instruct
+        v = m.encode(texts, batch_size=16, normalize_embeddings=True, show_progress_bar=False,
+                     **({"prompt": prompt} if prompt else {"prompt_name": "query"}))
+    else:
+        from pensieve.indexer import embedder
+        m = embedder()
+        v = m.encode(texts, batch_size=16, normalize_embeddings=True, show_progress_bar=False,
+                     **({"prompt_name": "query"} if instruct is None else {"prompt": instruct}))
     CACHE.mkdir(parents=True, exist_ok=True)
     np.save(f, v)
     return v
@@ -432,8 +454,8 @@ def main():
     ap.add_argument("--tasks", help="a query set instead (bench/out/validation.jsonl): every query, in every split")
     ap.add_argument("--ranks", help="folder to write <instruct>-<method>.json: each query's rank, in --tasks order")
     a = ap.parse_args()
-    global SPLIT
-    SPLIT = a.tok
+    global SPLIT, QMODEL
+    SPLIT, QMODEL = a.tok, a.qmodel
     if a.tasks:
         tasks = [dict(id=t.get("task", str(i)), repo=t["repo"], files=t["answers"], _i=i, **{t["style"]: t["query"]})
                  for i, t in enumerate(map(json.loads, open(a.tasks)))]
