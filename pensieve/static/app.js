@@ -944,13 +944,22 @@ async function loadRepos() {
     sessions: real.reduce((a, r) => a + r.sessions, 0), all: true, n: real.length}, ...repos] : repos;
   if (!S.code.repos.some(r => r.name === S.code.repo)) S.code.repo = S.code.repos[0]?.name || null;
 }
-async function loadRepo(name) {
+// quiet: a refresh of the repo on screen (its code changed). It shows no loading circle over the map, and it keeps
+// what the user has selected and filtered.
+async function loadRepo(name, quiet = false) {
   if (!name) { S.code.points = []; return; }
+  quiet = quiet && name === S.code.repo && S.code.points.length > 0;
   S.code.repo = name; store.set('repo', name);
   if (name === ALL && S.code.colorBy === 'dir') S.code.colorBy = 'repo';
   if (name !== ALL && S.code.colorBy === 'repo') S.code.colorBy = 'dir';
-  $('#loading').classList.remove('gone'); $('#loadingtext').textContent = `Loading ${name}…`;
-  const [pts, owners, people] = await Promise.all([api(`/api/repo/${enc(name)}/points`), api(`/api/repo/${enc(name)}/owners`), api(`/api/repo/${enc(name)}/people`)]);
+  if (!quiet) { $('#loading').classList.remove('gone'); $('#loadingtext').textContent = `Loading ${name}…`; }
+  let pts, owners, people;
+  try {
+    [pts, owners, people] = await Promise.all([api(`/api/repo/${enc(name)}/points`), api(`/api/repo/${enc(name)}/owners`), api(`/api/repo/${enc(name)}/people`)]);
+  } catch (e) {  // the map stays as it was; a first load says why it is empty
+    if (!quiet) { $('#loading').classList.add('gone'); toast(`Could not load ${name}: ${e.message}`); }
+    return;
+  }
   const depth = name === ALL ? 3 : 2;
   S.code.points = pts.points.map(p => ({...p, area: areaOf(p.path, depth), repo: name === ALL ? p.path.split('/')[0] : name}));
   S.code.repoSlot = new Map([...new Set(S.code.points.map(p => p.repo))].map((r, i) => [r, i]));
@@ -959,7 +968,8 @@ async function loadRepo(name) {
   S.code.authorSlot = new Map(people.slice(0, 7).map((p, i) => [p.author, i]));
   const ts = S.code.points.map(p => p.ts).filter(Boolean).sort((a, b) => a - b);
   S.code.tRange = [ts[Math.floor(ts.length * 0.02)] || 0, ts[ts.length - 1] || 1];
-  S.code.focus = null; S.code.highlight = null; S.code.treeSel = new Set(); S.code.treeOpen = new Set(); S.code.ctree = null;
+  S.code.ctree = null;
+  if (!quiet) { S.code.focus = null; S.code.highlight = null; S.code.treeSel = new Set(); S.code.treeOpen = new Set(); }
 }
 const areaOf = (path, depth = 2) => { const p = path.split('/'); return p.length > depth ? p.slice(0, depth).join('/') : p.length > 1 ? p.slice(0, -1).join('/') : '.'; };
 function codeColorFor(kind, key) {
@@ -1188,7 +1198,7 @@ const TYPE_ONE = {doc: 'Document', code: 'Code', session: 'Agent session'};
 S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type'),
           treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map(),
           topics: new Map(), topicsAI: false, sel: null, selStack: [], search: null, ctx: null, view: null, rev: '', authors: new Set(), drawerPerson: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
-const relHome = p => { const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
+const relHome = (p = '') => { p = p || ''; const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
 const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
 // A repo, or a folder two levels under home (~/Documents/taxes): "Desktop" alone would color nearly everything the same.
 // What's in view on the Data map: the type and folder filters, then any highlight (a topic, a person…) and search
@@ -3515,7 +3525,7 @@ async function handleEvent(m) {
     else if (m.type === 'insights') { await loadInsights(); if (S.view === 'insights') renderInsights(); toast('New insights are ready'); pollStatus(); }
     else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); reloadDataSoon(); refetchSourcesSoon(); }
     else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { await loadSettings(true); if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
-    else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); await loadRepos(); if (S.view === 'code') { await loadRepo(S.code.repo); buildMap(); renderSidebar(); } }
+    else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); reloadRepoSoon(); }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'upstream') loadUpstream();
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
@@ -3526,6 +3536,12 @@ async function handleEvent(m) {
 const reloadDataSoon = debounce(async () => {
   S.data.stale = true; if (S.view !== 'data') return;
   await loadData(); const c = gl.saveCam(); buildMap(); gl.loadCam(c); renderSidebar();
+}, 2500);
+// while indexing runs, repos change every few seconds: one quiet reload after they settle, not one per change
+const reloadRepoSoon = debounce(async () => {
+  await loadRepos().catch(() => {});
+  if (S.view !== 'code') return;
+  await loadRepo(S.code.repo, true); const c = gl.saveCam(); buildMap(); gl.loadCam(c); renderSidebar();
 }, 2500);
 const reloadFilesSoon = debounce(async () => {
   if (S.view !== 'files') return;
