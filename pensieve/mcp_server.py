@@ -118,10 +118,33 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
         return not (cwd and wt and (cwd == wt or cwd.startswith(wt + "/")))
     res = [x for x in r["results"] if not elsewhere(x)] + [x for x in r["results"] if elsewhere(x)]
     usage.note(n_results=len(res), results=[[x.get("id"), x.get("path")] for x in res], laps=r.get("timing"))
+    _mark_near_copies(res, s)
     found = _lines(res)
     if getattr(sc, "unindexed", False):  # only past sessions in this repo can match; its code isn't indexed
         return (f"{sc.description}. `pensieve repo index` indexes it." + (f"\n{found}" if found else ""))
     return found or "No matches."
+
+
+NEAR_COPY = 0.9  # matched code this alike in two files: the query can't tell them apart, so the agent reads both
+
+
+def _mark_near_copies(results, searcher):
+    """Note on a code hit whose matched code is a near-copy of a higher hit's in another file (a vendored or
+    duplicated file, the same pipeline for two domains), so the agent compares them instead of taking the first."""
+    import difflib
+    code = [x for x in results if str(x.get("id", "")).startswith("code:") and x.get("path")]
+    if len(code) < 2:
+        return
+    ids = [int(x["id"][5:]) for x in code]
+    with searcher.lock:
+        text = dict(searcher.db.execute(f"SELECT id, text FROM code_chunks WHERE id IN ({','.join('?' * len(ids))})", ids))
+    for j, b in enumerate(code):
+        tb = text.get(ids[j]) or ""
+        for i in range(j):
+            a, ta = code[i], text.get(ids[i]) or ""
+            if a["path"] != b["path"] and ta and tb and difflib.SequenceMatcher(None, ta, tb).ratio() >= NEAR_COPY:
+                b["near_copy"] = a["path"]
+                break
 
 
 def _lines(results):
@@ -145,6 +168,10 @@ def _lines(results):
             where = path + (f":{line}" if line else "") if path else x.get("title") or ""
             if x.get("stale"):  # edited after it was indexed: the snippet can be out of date
                 where += " (edited since indexed)"
+            if x.get("near_copy"):
+                other = x["near_copy"]
+                other = other[len(cwd.rstrip("/")) + 1:] if cwd and other.startswith(cwd.rstrip("/") + "/") else other
+                where += f" (near-copy of {other}: read both to tell them apart)"
             if x.get("focus"):  # code: the line that matched, inside its definition
                 cut = lambda s, n: s[:n] + ("…" if len(s) > n else "")
                 snip = (f"{cut(x['definition'], 90)}  ▸ " if x.get("definition") else "") + cut(x["focus"], 140)
