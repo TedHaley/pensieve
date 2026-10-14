@@ -137,6 +137,25 @@ def ensure_fts(db, lock, meta, log=print):
     return True
 
 
+_lock_wait = threading.local()  # ms this thread's search has waited for the index lock (_TimedLock)
+
+
+class _TimedLock:
+    """The index lock as searches take it, counting how long the search waits for it."""
+
+    def __init__(self, lock):
+        self._lock = lock
+
+    def __enter__(self):
+        t = time.perf_counter()
+        self._lock.acquire()
+        _lock_wait.ms = getattr(_lock_wait, "ms", 0.0) + (time.perf_counter() - t) * 1000
+        return self
+
+    def __exit__(self, *exc):
+        self._lock.release()
+
+
 class _Laps:
     """How long each phase of a search took (milliseconds), in `ms` for the usage log; with PENSIEVE_TRACE set, also
     printed."""
@@ -144,11 +163,15 @@ class _Laps:
     def __init__(self, q):
         self.on = bool(os.environ.get("PENSIEVE_TRACE"))
         self.q, self.t, self.ms = q, time.perf_counter(), {}
+        self.cpu0, _lock_wait.ms = time.thread_time(), 0.0
 
     def __call__(self, name, done=False):
         now = time.perf_counter()
         self.ms[name] = round(self.ms.get(name, 0) + (now - self.t) * 1000, 2)
         self.t = now
+        if done:  # wall time well above cpu: the search waited (for the index lock, other threads, the disk)
+            self.ms["cpu"] = round((time.thread_time() - self.cpu0) * 1000, 2)
+            self.ms["lock_wait"] = round(getattr(_lock_wait, "ms", 0.0), 2)
         if done and self.on:
             print(f"trace find {self.q[:40]!r}: " + ", ".join(f"{k} {v:.0f}" for k, v in self.ms.items()), flush=True)
 
@@ -181,7 +204,7 @@ def _fts_query(phrases):
 class Searcher:
     def __init__(self, store, repos, files):
         self.store, self.repos, self.files = store, repos, files
-        self.db, self.lock = store.db, store.lock
+        self.db, self.lock = store.db, _TimedLock(store.lock)
         self._fbuilding = False
 
     def _index(self, kind):
