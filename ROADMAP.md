@@ -40,6 +40,9 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D1 | Team features | Product | idea |
 | D2 | Opt-in usage counts | Product | idea |
 | D3 | A place for user feedback | Product | testing |
+| E1 | Connections as one list | Connections | idea |
+| E2 | Remote disks | Connections | idea |
+| E3 | Database metadata | Connections | idea |
 
 ## A. Indexing efficiency
 
@@ -414,7 +417,8 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     those 2 hooks, and makes no skill link in `~/.claude/skills`. Otherwise Claude gets each one twice.
   - Tested with Claude Code 2.1.300: `--plugin-dir` in a `claude -p` session (14 tools, 3 skills, the
     instructions from the hook), and an install from a local clone of the marketplace (2.3 MB in the cache).
-  - Not tested: the install from GitHub, which works only after this is on `main`.
+  - 2026-10-15: released in 0.7.7. An install from GitHub (`claude plugin marketplace add TedHaley/pensieve`, then
+    `claude plugin install pensieve@pensieve`) worked with an empty home folder.
   - Measure: B6's hit rate for plugin sessions against `integrate` sessions.
 
 ### C3. Confirm that agents load `~/.agents/skills`
@@ -476,3 +480,76 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - 2026-10-14: the website footer and `site/llms.txt` link to the GitHub issue chooser (bug and idea templates).
     The site goes live when this reaches `main`.
   - Measure: reports per week, and how many are sent.
+
+## E. Connections
+
+Pensieve searches the disk of one machine today. A connection is a place that a search can reach: the local disk,
+the disk of another machine, or the metadata of a database. Search, scopes and `who_knows` then work the same on
+each connection, and each hit shows its connection.
+
+### E1. Connections as one list
+
+- **Why:** E2 and E3 add places to search. One list in Settings and one `connection` field on each hit keep search,
+  scopes and the agent tools the same for each place.
+- **Try:** make the local disk the first connection. Its sources (repos, folders, agent sessions) stay as they are.
+- **Questions:**
+  - Names: the README uses "connection" for an agent's MCP connection, and the app uses "Sources" for what the
+    local disk indexes. Pick one word for each meaning before the UI shows "Connections".
+  - Build E1 only when E2 or E3 is built. Without them, the list has one item.
+- **Status:** idea
+- **Notes:**
+
+### E2. Remote disks
+
+- **Why:** many developers work on more than one machine: a laptop, a desktop, a remote dev box. Each Pensieve
+  sees only its own repos, documents and agent sessions. A search on one machine misses the session or the
+  branch that is on the other.
+- **Who needs it:** with herdr, the agents run on the remote machines, and the user watches them from one device.
+  An agent on a remote machine uses the Pensieve on that machine, so it finds that machine's code already. A
+  federated search helps in two cases:
+  - The user, on one device, looks for something and does not know which machine has it.
+  - An agent on one machine needs data that only another machine has, for example the user's documents.
+- **Try first:** `pensieve search` is a shell command (B5). `ssh <host> pensieve search "<query>"` can search a
+  remote machine with nothing new. A `pensieve search --machines a,b` that does this on each machine and merges
+  the output shows if the user searches other machines. Build the rest only if they do.
+- **Try:** federated search for one user. Each machine keeps its own index. A search sends the query to each machine
+  that is online, then merges the hits. Nothing is copied, so a removed file is gone from every search.
+- **Model:** herdr (herdr.dev) connects machines for terminal agents in the same way:
+  - `herdr machine add <ssh host>` adds a machine. OpenSSH does all authentication, so herdr stores no keys and
+    opens no port. Each machine runs its own server, and the client talks to it through an SSH bridge.
+  - Setup offers to install herdr on the remote, and only with the user's yes. Background reconnects never prompt,
+    install or restart anything.
+  - When a machine is asleep or offline, herdr shows its last state dimmed and retries, with a back-off to 2
+    minutes at most.
+  - For Pensieve: `pensieve machine add <ssh host>`, and the bridge reaches the remote server on its own 127.0.0.1.
+    The server then keeps listening on 127.0.0.1 only.
+- **Questions:**
+  - A remote dev box is often Linux. Without MLX, the indexer uses sentence-transformers (CUDA or CPU), with the
+    same vectors (cosine 0.998 or more). Not checked: the backend on Linux, and the indexing speed on a CPU.
+  - Scores from two indexes are comparable only with the same embedding model. Merge by rank if the models differ.
+  - Two clones of the same repo give the same hits twice. Show one, keyed by the remote and the path.
+  - `read` and `similar` on a hit from another machine must fetch it from that machine.
+  - Scope "auto" uses the agent's folder, which exists on one machine only. Map it by the repo remote.
+  - A search must not wait for a machine that is asleep. Give each machine a short time limit, then show which
+    machines did not answer.
+- **Related:** D1, and the design note for team sharing in PR #1. That note shares session cards between people.
+  This item searches one person's own machines, so it can return full content.
+- **Measure:** search time with 2 machines against 1, and how often a used hit comes from another machine.
+- **Status:** idea
+- **Notes:**
+
+### E3. Database metadata
+
+- **Why:** "which table has the churn dates?" is a search by meaning. Agents look for the table, column or view
+  with grep through migrations, or they ask the user.
+- **Try:** index the schema of a database connection: tables, columns, views, comments, and saved queries. Search
+  then finds the right table, and the agent queries it with its own database tool.
+- **Rule:** metadata only, never rows. Rows are large and change all the time. The database has its own access
+  control, and an index of rows copies data that the database protects.
+- **Questions:**
+  - Credentials: read them from the user's existing client files, or ask. Pensieve stores no password.
+  - Freshness: read the schema again on a schedule, or when a migration file changes.
+  - Which databases first: Postgres and SQLite cover most local work.
+- **Measure:** the share of agent questions about data that find the right table in the top 3 hits.
+- **Status:** idea
+- **Notes:**
