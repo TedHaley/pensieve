@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import resource
 import sqlite3
 import threading
 import time
@@ -160,10 +161,12 @@ class _Laps:
     """How long each phase of a search took (milliseconds), in `ms` for the usage log; with PENSIEVE_TRACE set, also
     printed."""
 
-    def __init__(self, q):
+    def __init__(self, q, busy=()):
         self.on = bool(os.environ.get("PENSIEVE_TRACE"))
         self.q, self.t, self.ms = q, time.perf_counter(), {}
         self.cpu0, _lock_wait.ms = time.thread_time(), 0.0
+        self.faults0 = resource.getrusage(resource.RUSAGE_SELF).ru_majflt
+        self.busy = list(busy)  # what was indexing when the search started
 
     def __call__(self, name, done=False):
         now = time.perf_counter()
@@ -172,8 +175,12 @@ class _Laps:
         if done:  # wall time well above cpu: the search waited (for the index lock, other threads, the disk)
             self.ms["cpu"] = round((time.thread_time() - self.cpu0) * 1000, 2)
             self.ms["lock_wait"] = round(getattr(_lock_wait, "ms", 0.0), 2)
+            # page faults that read the disk, in any thread of the process: high when memory is short
+            self.ms["faults"] = resource.getrusage(resource.RUSAGE_SELF).ru_majflt - self.faults0
+            self.ms["busy"] = self.busy
         if done and self.on:
-            print(f"trace find {self.q[:40]!r}: " + ", ".join(f"{k} {v:.0f}" for k, v in self.ms.items()), flush=True)
+            print(f"trace find {self.q[:40]!r}: " + ", ".join(f"{k} {v:.0f}" if isinstance(v, (int, float)) else f"{k} {v}"
+                                                         for k, v in self.ms.items()), flush=True)
 
 
 FOLDER_REBUILD = 30  # seconds between background rebuilds of the folder index while the index keeps changing
@@ -232,7 +239,8 @@ class Searcher:
 
     def _find(self, q, limit, kinds, scope, retry):
         from pensieve import scopes
-        lap = _Laps(q)
+        lap = _Laps(q, [k for k, o in (("repos", self.repos), ("files", self.files), ("sessions", self.store))
+                        if getattr(o, "progress", None)])
         if retry:
             self._catch_up()
             lap("catch-up")

@@ -12,7 +12,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 
 | ID | Item | Area | Status |
 |---|---|---|---|
-| A1 | Embed each distinct chunk once | Indexing | testing |
+| A1 | Embed each distinct chunk once | Indexing | shipped |
 | A2 | Quantized embedding model | Indexing | dropped |
 | A3 | Smaller or pruned embedding model | Indexing | shipped |
 | A4 | Settings that fit the hardware | Indexing | investigating |
@@ -60,7 +60,7 @@ For each change in this section, measure on the validation set (`bench/validatio
   checkout and 39,884 more in 20 worktrees.
 - **Try:** before embedding a chunk, look for a stored chunk with the same text and path, and reuse its vector.
 - **Measure:** the time to index a new worktree, and the time of a first index of a repo with worktrees.
-- **Status:** testing
+- **Status:** shipped
 - **Notes:**
   - 2026-10-13: in the index on this Mac, 40,222 of 42,324 worktree chunks (95%) have the same path and text as
     another chunk. Built: before a group of chunks is embedded, a chunk with the same path and text as a stored one
@@ -69,6 +69,18 @@ For each change in this section, measure on the validation set (`bench/validatio
   - On the pensieve repo, a worktree of 672 chunks indexed in 10.8 s with 396 vectors copied (about 26 s before).
     A copied vector matches a fresh one (cosine 0.9995, the float16 rounding). Re-indexing an edited `app.js` copied
     every unchanged chunk's vector.
+  - Shipped in 0.7.0. 2026-10-14, first index of a scratch clone of the pensieve repo with 3 worktrees at older
+    tags, EmbeddingGemma 2, M4 Max:
+
+    | | Copies on | Copies off |
+    |---|---|---|
+    | Chunks embedded | 1,646 | 3,106 |
+    | Vectors copied | 1,460 | 0 |
+    | The 3 worktrees | 23.6 s | 149.3 s |
+    | Total | 85.9 s | 236.4 s |
+
+  - The Mac was busy with other work during both runs. The main checkout took 61 s and 86 s for the same 1,218
+    chunks, so the times vary by about 40%. The chunk counts do not vary.
 
 ### A2. Quantized embedding model
 
@@ -139,8 +151,16 @@ For each change in this section, measure on the validation set (`bench/validatio
   - On a cold server, the first search in each of four scopes took 70–398 ms, and none was slow in "folders+people"
     or "on-disk". So the real slow searches waited for something else. The usage log now records each search's CPU
     time and its wait for the index lock: wall time well above CPU time means it waited (lock, threads, disk).
-  - Next: read those fields on the next slow real searches.
-    Splitting the vector index by repo would speed up only the corpora phase, which is 56–67 ms when idle.
+  - Splitting the vector index by repo would speed up only the corpora phase, which is 56–67 ms when idle.
+  - 2026-10-14, the 8 real searches over 500 ms since those fields: CPU time was 116–285 ms in each, and wall time
+    was 519–4,892 ms. So every slow search waited. The index lock explains part of 5 of them (290–1,777 ms).
+  - In 2 searches at 15:05 (1.5 s and 1.7 s), the corpora phase took 1.24–1.26 s with a lock wait of 9 ms or less.
+    At that time, a repo was indexing and the built-in LLM was writing summaries.
+  - Hypothesis, not checked: these searches wait for the CPU, the GPU or the disk, which indexing and the LLM
+    also use. CPU time counts only the search's own thread.
+  - The usage log now also records, for each search, the page faults that read the disk ("faults"), and what was
+    indexing when the search started ("busy": repos, files or sessions).
+  - Next: read "faults" and "busy" on the next slow real searches. Also record whether the LLM was busy.
 
 ### A7. Search images, audio and video by content
 
@@ -246,6 +266,10 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     working on Pensieve, on versions before 0.7.0): 18 used a hit, 14 grepped elsewhere, 3 returned nothing.
   - Some of the misses were for code that the old version did not index (`app.js`, over 200 KB, before 0.6.5) or
     a repo that is not indexed (the website). Run it again after a week on 0.7.x.
+  - 2026-10-14, run again: 52 searches by Claude Code, 41 matched to a transcript. 21 used a hit, 16 grepped
+    elsewhere, 3 returned nothing, and 1 opened nothing. That is 51% against 51% before (18 of 35). Most of the
+    week on 0.7.x is still to come. Several misses were for a website or a repo outside the agent's scope.
+  - Next: run it again on 2026-10-21. Also count the `read` calls with several ids (B10).
 
 ### B7. Index agent memory files
 
@@ -411,4 +435,6 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     asks them to call it when Pensieve fails them). The user reports in Settings → Feedback. Reports stay in
     `~/.pensieve/feedback.jsonl`; Send to GitHub opens a filled-in issue (bug or idea template) for the user to
     read before posting, because an agent's report can hold private code or paths.
-  - Open: a link on the website. Measure: reports per week, and how many are sent.
+  - 2026-10-14: the website footer and `site/llms.txt` link to the GitHub issue chooser (bug and idea templates).
+    The site goes live when this reaches `main`.
+  - Measure: reports per week, and how many are sent.
