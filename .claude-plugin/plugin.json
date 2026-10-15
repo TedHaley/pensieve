@@ -1,6 +1,6 @@
 {
   "name": "pensieve",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "Pensieve for Claude Code: semantic search over your repos, documents and past agent sessions (MCP server), the search skills, and hooks that keep the index current. Needs the Pensieve app or `pensieve` command on this Mac.",
   "author": {
     "name": "Ted Haley"
