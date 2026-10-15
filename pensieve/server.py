@@ -39,6 +39,7 @@ def broadcast(event: dict):
 
 
 FULL_SWEEP_SECONDS = 300  # safety net behind the file watcher; also discovers new repos and folders
+SESSION_BATCH_SECONDS = 30  # a session backlog is indexed in turns this long, with folders swept between them
 
 
 async def _run(fn, *a):
@@ -128,7 +129,7 @@ async def watcher():
             d = watch.take()
             if sorted(str(p) for p in files.roots()) != sorted(watch.folders):  # a folder appeared or went away
                 d["full_files"] = True
-            n = await _run(lambda: store.sync_files(
+            n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
                 on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
             if n:
                 broadcast({"type": "updated", "sessions": n})
@@ -160,6 +161,8 @@ async def watcher():
             import traceback
             traceback.print_exc()
             status.update(indexing=False, layout=False, message=f"error: {e!r}")
+        if store.behind:  # sessions left over: go on after the folders, without the pause
+            continue
         await _wait(wake_files, config.POLL_SECONDS)
         await _quiet(wake_files)
 
