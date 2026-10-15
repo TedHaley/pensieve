@@ -19,7 +19,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | A5 | Measure the energy that indexing uses | Indexing | idea |
 | A6 | Real searches are slower than the benchmark | Search | investigating |
 | A7 | Search images, audio and video by content | Search | testing |
-| A8 | Index folders while agent sessions catch up | Indexing | idea |
+| A8 | Index folders while agent sessions catch up | Indexing | testing |
 | B1 | Make the prompt hook the default | Agents | idea |
 | B2 | Prompt hooks for Codex and Gemini CLI | Agents | idea |
 | B3 | Benchmark other agents and models | Agents | idea |
@@ -208,7 +208,16 @@ For each change in this section, measure on the validation set (`bench/validatio
   indexed. A user with many sessions and new folders waits for every session first.
 - **Try:** sweep folders between batches of sessions, or in their own loop.
 - **Measure:** the time to the first indexed document on a new index with a large session backlog.
-- **Status:** idea
+- **Status:** testing
+- **Notes:**
+  - 2026-10-14: built. `Store.sync_files` stops after 30 s (`SESSION_BATCH_SECONDS`) and sets `behind`. The
+    watcher then sweeps folders and goes on with the sessions without the poll pause.
+  - Measured with a real server on a scratch home: 600 sessions (8,936 chunks) and 40 documents. The first
+    document was indexed at 31 s, against 365 s before. One run each.
+  - The session speed differed between the two runs (about 12 and 30 chunks/s) because of other work on the Mac.
+    So the runs do not show whether the change slows the sessions.
+  - Open: the first full folder sweep has no time limit. A large new folder still makes the sessions wait.
+    `files._sync` drops the files that it did not see, so it cannot simply stop partway.
 
 ## B. Agents use Pensieve when it is better
 
