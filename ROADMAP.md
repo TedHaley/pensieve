@@ -360,7 +360,17 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     `--force`, and the item lists them.
   - The SessionStart hook adds a one-line hint in a repo with stale worktrees, from the last report only (the hook
     waits 3 s at most). Tested on a copy of this index: the first session start warms the report, the next has the hint.
-  - Next: other things that are stale, for example merged branches, and repos that no agent used in months.
+  - 2026-10-14: `stale` also lists two more kinds:
+    - Local branches that are merged into the default branch, idle 14 days and not checked out. The command is
+      `git branch -d`. A branch that `git branch -d` refuses gets "review" and no command.
+    - Indexed repos with no agent session and no git activity in 3 months. The command is the new
+      `pensieve repo remove`, which removes the repo from the index only.
+  - Squash-merged branches are not listed, because git cannot prove that they are merged.
+  - The SessionStart hint now counts merged branches.
+  - Tested on scratch repos. On a copy of the index on this Mac, it found 26 merged branches in 3 repos and no
+    unused repo. With no cache, the report took 34 s.
+  - Not tested: `pensieve repo remove` against a running server.
+  - Next: squash-merged branches as "review", found by patch IDs.
 
 ## C. Install
 
