@@ -29,7 +29,7 @@ def main():
     ap.add_argument("--kind", help="search only: code, doc, session, folder, repo or person")
     ap.add_argument("--limit", type=int, default=8, help="search only: how many results")
     ap.add_argument("items", nargs="*", help="integrate: what to install (no items: show what's available); "
-                                             "repo: status | index | skip, then a folder (default: this one); "
+                                             "repo: status | index | skip | remove, then a folder (default: this one); "
                                              "setup: the source ids to index, or recommended (no items: list them)")
     ap.add_argument("--remove", action="store_true", help="integrate only: remove the named add-ons")
     ap.add_argument("--all-tools", action="store_true",
@@ -136,13 +136,23 @@ def integrate(items, remove=False):
 
 def repo(port, action="status", path="."):
     """Whether Pensieve indexes the git repo at path; `index` adds it, `skip` switches it off in Sources. Either
-    answer is kept, so the SessionStart hook doesn't ask about this repo again."""
+    answer is kept, so the SessionStart hook doesn't ask about this repo again. `remove` also drops it from the
+    index (the ✕ in Sources); the repo stays on disk."""
     import httpx
-    if action not in ("status", "index", "skip"):
-        sys.exit(f"pensieve repo: unknown action {action!r} (status, index or skip)")
+    if action not in ("status", "index", "skip", "remove"):
+        sys.exit(f"pensieve repo: unknown action {action!r} (status, index, skip or remove)")
     base, cwd = f"http://127.0.0.1:{port}", os.path.abspath(os.path.expanduser(path))
     try:
-        if action == "status":
+        if action == "remove":
+            c = httpx.get(f"{base}/api/repo-check", params={"cwd": cwd}, timeout=30).json()
+            if c.get("state") == "none":
+                sys.exit(f"{cwd} is not in a git repo.")
+            r = httpx.delete(f"{base}/api/sources/repos", params={"path": c["root"]}, timeout=30)
+            if r.status_code < 400:
+                print(f"Pensieve removes {c.get('name')} from its index and stops indexing it. The repo stays on disk; "
+                      f"`pensieve repo index` adds it back.")
+                return
+        elif action == "status":
             r = httpx.get(f"{base}/api/repo-check", params={"cwd": cwd}, timeout=30)
         else:
             r = httpx.post(f"{base}/api/repo-choice", json={"cwd": cwd, "index": action == "index"}, timeout=30)

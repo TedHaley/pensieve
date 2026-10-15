@@ -461,9 +461,14 @@ def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
 
 @tool()
 def stale(days: int = 14) -> dict:
-    """Git worktrees on this Mac with no commit and no agent session in `days` days, to help the user keep a lean
-    system. verdict "remove": clean, its commits merged or pushed; `command` removes it (`deletes` lists the throwaway
-    folders, such as .venv, that go with it). "review": it has work that exists nowhere else; `keep_work` pushes it.
+    """What looks abandoned on this Mac, to help the user keep a lean system. Each item has a `kind`:
+    "worktree": a git worktree with no commit and no agent session in `days` days. verdict "remove": clean, its
+    commits merged or pushed; `command` removes it (`deletes` lists the throwaway folders, such as .venv, that go
+    with it). "review": it has work that exists nowhere else; `keep_work` pushes it.
+    "branches": local branches merged into the default branch, idle `days` days, not checked out. "remove":
+    `command` is `git branch -d`, which refuses anything unmerged. "review": git branch -d refuses them for now.
+    "repo": an indexed repo no agent session used in 3 months, with no git activity either. verdict "unindex":
+    `command` removes it from Pensieve's index only; the repo stays on disk.
     Show the user the list, then run a command only after they say yes to that item. Pensieve drops removed
     worktrees from its index on its next sweep."""
     from pensieve import stale as st

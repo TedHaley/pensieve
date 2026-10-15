@@ -185,12 +185,18 @@ def repo_note(c: dict) -> str | None:
 
 
 def stale_note(name: str, items: list[dict]) -> str | None:
-    """What the SessionStart hook adds when worktrees of the repo look abandoned (stale.py), or None."""
-    if not items:
+    """What the SessionStart hook adds when worktrees or merged branches of the repo look abandoned (stale.py), or
+    None. The repo itself is in use: the session runs in it."""
+    wts = [w for w in items if w.get("kind", "worktree") == "worktree"]
+    nb = sum(len(w["branches"]) for w in items if w.get("kind") == "branches")
+    if not wts and not nb:
         return None
-    n, chunks = len(items), sum(w["chunks"] for w in items)
-    return (f"{n} git worktree{'s' if n != 1 else ''} of {name} look abandoned: no commit or agent session in 14 days"
-            f"{f', {chunks:,} chunks in the Pensieve index' if chunks else ''}. Don't interrupt the task for this. At a "
+    n, chunks = len(wts), sum(w["chunks"] for w in wts)
+    found = " and ".join(x for x in (
+        f"{n} git worktree{'s' if n != 1 else ''} with no commit or agent session in 14 days" if n else "",
+        f"{nb} local branch{'es' if nb != 1 else ''} already merged into the default branch" if nb else "") if x)
+    return (f"{name} has {found}{f' ({chunks:,} chunks in the Pensieve index)' if chunks else ''}. Don't interrupt "
+            f"the task for this. At a "
             f"natural pause, offer the user a cleanup: call Pensieve's `stale` tool and show its list. Remove nothing "
             f"without their yes.")
 
