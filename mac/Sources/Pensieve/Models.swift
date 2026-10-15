@@ -130,7 +130,7 @@ enum Kind {
 /// results arrive. Mirrors Google: "quotes" = exact, -word = exclude, key:value = filter, the rest = meaning.
 enum QueryParse {
     private static let quoted = try! NSRegularExpression(pattern: "(-?)\"([^\"]*)\"?")
-    private static let filterKeys: Set<String> = ["kind", "ext", "type", "in", "repo", "by"]
+    private static let filterKeys: Set<String> = ["kind", "ext", "type", "in", "repo", "by", "person"]
 
     static func parse(_ q: String) -> ParsedQuery {
         let ns = q as NSString

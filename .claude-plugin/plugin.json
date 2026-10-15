@@ -1,0 +1,46 @@
+{
+  "name": "pensieve",
+  "version": "0.7.7",
+  "description": "Pensieve for Claude Code: semantic search over your repos, documents and past agent sessions (MCP server), the search skills, and hooks that keep the index current. Needs the Pensieve app or `pensieve` command on this Mac.",
+  "author": {
+    "name": "Ted Haley"
+  },
+  "homepage": "https://github.com/TedHaley/pensieve",
+  "repository": "https://github.com/TedHaley/pensieve",
+  "license": "MIT",
+  "keywords": ["search", "semantic-search", "mcp", "code-search", "knowledge"],
+  "skills": "./pensieve/integrations/skills/",
+  "mcpServers": {
+    "pensieve": {
+      "command": "${HOME}/.local/bin/pensieve",
+      "args": ["mcp"]
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat \"${CLAUDE_PLUGIN_ROOT}/pensieve/integrations/instructions.md\""
+          },
+          {
+            "type": "command",
+            "command": "curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/repo-check 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/touched >/dev/null 2>&1 || true"
+          }
+        ]
+      }
+    ]
+  }
+}

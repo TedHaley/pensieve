@@ -25,7 +25,7 @@ TARGETS = {  # id -> (label, memory file the instructions go in)
     "qwen": ("Qwen Code", Path.home() / ".qwen" / "QWEN.md"),
 }
 SKILLS_DIR = Path.home() / ".agents" / "skills"  # the user-level skills folder of the open Agent Skills standard
-SKILL_LINKS = {  # agents that read only their own skills folder: it gets a link to the copy in SKILLS_DIR
+SKILL_LINKS = {  # agents that read only their own skills folder (Qwen Code before 0.25): a link to the copy in SKILLS_DIR
     "Claude Code": Path.home() / ".claude" / "skills",
     "Qwen Code": Path.home() / ".qwen" / "skills",
 }
@@ -78,6 +78,19 @@ MCP = {
     "vscode-mcp": ("VS Code", APP_SUPPORT / "Code" / "User" / "mcp.json", "servers", APP_SUPPORT / "Code" / "User"),
 }
 TOML_START, TOML_END = "# pensieve:start", "# pensieve:end"
+
+
+CLAUDE_PLUGINS = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+PLUGIN_HAS = "the Pensieve plugin for Claude Code is installed and already has this; uninstall it first to use this instead"
+
+
+def claude_plugin() -> bool:
+    """The Pensieve plugin (.claude-plugin/ at the repo root) is installed in Claude Code. It has the MCP server, the
+    skills, the instructions and the recommended hooks, so adding them here too would give Claude each one twice."""
+    try:
+        return any(k.split("@")[0] == "pensieve" for k in json.loads(CLAUDE_PLUGINS.read_text()).get("plugins", {}))
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _claude_bin():
@@ -138,6 +151,8 @@ def set_mcp(item: str, on: bool) -> str:
         raise ValueError(f"{f} already has a pensieve server that Pensieve didn't add; leaving it alone")
     if on == (state == "on"):
         return state
+    if on and item == "claude-mcp" and claude_plugin():
+        raise ValueError(PLUGIN_HAS)
     if item == "claude-mcp":  # through the claude CLI, which owns ~/.claude.json and writes it while it runs
         argv = [_claude_bin(), "mcp", "add", "--scope", "user", "pensieve", "--", _pensieve_bin(), "mcp"] if on \
             else [_claude_bin(), "mcp", "remove", "--scope", "user", "pensieve"]
@@ -185,12 +200,18 @@ def repo_note(c: dict) -> str | None:
 
 
 def stale_note(name: str, items: list[dict]) -> str | None:
-    """What the SessionStart hook adds when worktrees of the repo look abandoned (stale.py), or None."""
-    if not items:
+    """What the SessionStart hook adds when worktrees or merged branches of the repo look abandoned (stale.py), or
+    None. The repo itself is in use: the session runs in it."""
+    wts = [w for w in items if w.get("kind", "worktree") == "worktree"]
+    nb = sum(len(w["branches"]) for w in items if w.get("kind") == "branches")
+    if not wts and not nb:
         return None
-    n, chunks = len(items), sum(w["chunks"] for w in items)
-    return (f"{n} git worktree{'s' if n != 1 else ''} of {name} look abandoned: no commit or agent session in 14 days"
-            f"{f', {chunks:,} chunks in the Pensieve index' if chunks else ''}. Don't interrupt the task for this. At a "
+    n, chunks = len(wts), sum(w["chunks"] for w in wts)
+    found = " and ".join(x for x in (
+        f"{n} git worktree{'s' if n != 1 else ''} with no commit or agent session in 14 days" if n else "",
+        f"{nb} local branch{'es' if nb != 1 else ''} already merged into the default branch" if nb else "") if x)
+    return (f"{name} has {found}{f' ({chunks:,} chunks in the Pensieve index)' if chunks else ''}. Don't interrupt "
+            f"the task for this. At a "
             f"natural pause, offer the user a cleanup: call Pensieve's `stale` tool and show its list. Remove nothing "
             f"without their yes.")
 
@@ -239,6 +260,8 @@ def hook_state(hook: str, port: int) -> str:
 
 def set_hook(hook: str, on: bool, port: int) -> str:
     event, _, url = HOOK_SPEC[hook]
+    if on and hook != "claude-prompt-search" and claude_plugin():
+        raise ValueError(PLUGIN_HAS)
     s = _claude_settings()
     hooks = s.setdefault("hooks", {})
     entries = [e for e in hooks.get(event, []) if not _ours(e, url)]
@@ -283,6 +306,8 @@ def set_instructions(target: str, on: bool) -> str:
     f = TARGETS[target][1]
     text = f.read_text() if f.exists() else ""
     rest = _strip(text)
+    if on and target == "claude" and claude_plugin():
+        raise ValueError(PLUGIN_HAS)
     if on:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text((rest + "\n\n" if rest else "") + _block())
@@ -301,6 +326,8 @@ def _links(name: str):
     for agent, base in SKILL_LINKS.items():
         if not base.parent.is_dir():
             continue  # the agent isn't installed
+        if agent == "Claude Code" and claude_plugin():
+            continue  # the plugin has the skills
         if base.is_symlink() and not base.exists():
             yield agent, base / name, f"{_tilde(base)} links to {os.readlink(base)}, which doesn't exist"
         elif (base / name).exists() and not _our_skill(base / name):

@@ -76,6 +76,7 @@ Pensieve starts at login by default. To stop this, turn off **Launch at Login** 
 | `kind:folder invoice export` | folders whose path and contents match, e.g. `src/billing/invoice_export`; a repo is a folder too |
 | `kind:repo` | repositories (on its own: all of them) |
 | `kind:person payment retries` | people who wrote the code about it; a plain search for a name also lists the person first |
+| `person:sam` | that person; the same as `kind:person sam` |
 | `by:sam terraform` | only what that person wrote (code by git blame, documents by author) |
 | `ext:pdf` | one file type |
 | `in:my-app` | path or repo contains this |
@@ -119,7 +120,7 @@ claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=paymen
 
 For agents that only speak stdio, the JSON config is `{"mcpServers": {"pensieve": {"command": "pensieve", "args": ["mcp"]}}}`. `pensieve mcp` starts the backend if it isn't running.
 
-Tools: `search`, `read`, `similar`, `overview`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `unexplored`, `open`, `current_scope`, `index_path`, `report_feedback`, `stale`. Tool descriptions are sent to the agent on every turn, so these fourteen are all an agent sees by default. `stale` lists git worktrees with no commit and no agent session in 14 days, so that your agent can offer to clean them up. Each has a verdict: "remove" (clean, and its commits are merged or pushed, with the command) or "review" (it has work that exists nowhere else). Pensieve only reports: the agent asks you before it removes anything, and the index drops a removed worktree on its next sweep. With the session-start hook, a session in a repo with stale worktrees gets a one-line hint to offer this at a natural pause. `overview` shows where things are in a repo: its size, languages, folders two levels deep, the README's start, its dependencies and its largest files, then its topics (files grouped by meaning) with their files and authors. It reads the index, not the files. `index_path` indexes a folder when you ask the agent to: a git repo, a folder of repos, a folder of agent sessions, or documents. Pensieve finds out which kind it is. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`. Until setup is done, every connection also gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source`, `setup_start`.
+Tools: `search`, `read`, `similar`, `overview`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `unexplored`, `open`, `current_scope`, `index_path`, `report_feedback`, `stale`. Tool descriptions are sent to the agent on every turn, so these fourteen are all an agent sees by default. `stale` lists what looks abandoned, so that your agent can offer to clean it up. It finds three kinds. Git worktrees with no commit and no agent session in 14 days: "remove" (clean, and its commits are merged or pushed, with the command) or "review" (it has work that exists nowhere else). Local branches that are merged into the default branch, idle for 14 days and not checked out: the command is `git branch -d`, which refuses unmerged work. Squash-merged branches get "review" and no command: their whole change is one commit in the default branch, but `git branch -d` refuses them, because their own commits are not there. Indexed repos with no agent session and no git activity in 3 months: the command is `pensieve repo remove`, which removes the repo from Pensieve's index only. The repo stays on disk. Pensieve only reports: the agent asks you before it removes anything, and the index drops a removed worktree on its next sweep. With the session-start hook, a session in a repo with stale worktrees or merged branches gets a one-line hint to offer this at a natural pause. `overview` shows where things are in a repo: its size, languages, folders two levels deep, the README's start, its dependencies and its largest files, then its topics (files grouped by meaning) with their files and authors. It reads the index, not the files. `index_path` indexes a folder when you ask the agent to: a git repo, a folder of repos, a folder of agent sessions, or documents. Pensieve finds out which kind it is. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`. Until setup is done, every connection also gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source`, `setup_start`.
 
 ### Get the most out of it: agent add-ons
 
@@ -136,13 +137,26 @@ pensieve integrate claude --remove    # removes exactly what was added
 
 - **MCP server** (`claude-mcp`, `codex-mcp`, `cursor-mcp`, `gemini-mcp`, `qwen-mcp`, `windsurf-mcp`, `claude-desktop-mcp`, `vscode-mcp`): adds Pensieve to the agent's MCP config for every project. For Claude Code, it runs `claude mcp add --scope user`. In other config files, Pensieve changes only its own entry. Restart an open agent to load the server.
 - **Instructions block** ([`instructions.md`](pensieve/integrations/instructions.md)): a short "search before you grep" section in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md` or `~/.qwen/QWEN.md`, kept between `<!-- pensieve:start -->` markers. For other agents (Cursor, Windsurf, …), paste it into the agent's rules.
-- **Skills** go once into `~/.agents/skills`, the user-level skills folder that Codex, Gemini CLI, Cursor, VS Code, Windsurf and other agents read. Claude Code and Qwen Code read only their own folder, so they get a link to that copy in `~/.claude/skills` or `~/.qwen/skills`. Pensieve makes no folder for an agent that is not installed. If an agent's skills folder is a link to a folder that does not exist, Pensieve leaves it and tells you.
+- **Skills** go once into `~/.agents/skills`, the user-level skills folder that Codex, Gemini CLI, opencode, Qwen Code (0.25 and later), Cursor, VS Code, Windsurf and other agents read. Claude Code reads only its own folder, so it gets a link to that copy in `~/.claude/skills`. Older versions of Qwen Code also read only their own folder, so they get a link in `~/.qwen/skills`. Pensieve makes no folder for an agent that is not installed. If an agent's skills folder is a link to a folder that does not exist, Pensieve leaves it and tells you.
 - **`pensieve-search` skill** (recommended): query styles, when to fall back to grep, finding similar code before writing new code, recalling past sessions.
 - **`pensieve-teammates`**: suggests who knows an area from git blame and drafts the question for you. It never messages anyone.
 - **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.
 - **`claude-hook`** (recommended): a `PostToolUse` hook in `~/.claude/settings.json`. After each Edit or Write, it sends the changed path to Pensieve. The agent's next search then always finds the new code, even when the file system event comes late. The hook adds about 50 ms to each edit.
 - **`claude-repo-check`** (recommended): a `SessionStart` hook. When a session starts in a repo that Pensieve does not index, Claude asks you once whether to index it. If you say yes, Claude runs `pensieve repo index`. If you say no, Claude runs `pensieve repo skip` and uses grep in that repo. Pensieve keeps the answer as the repo's switch in Settings → Sources, so Claude does not ask again. To change it, use that switch or `pensieve repo index`.
 - **`claude-prompt-search`**: a `UserPromptSubmit` hook. When you send a prompt in a repo that Pensieve indexes, Pensieve searches the prompt and adds its 5 best code matches to it, as the `search` tool shows them. Claude then often starts on the right file without a search of its own. The hook adds about 300 ms and 400 tokens to each prompt. Slash commands, prompts of 1 or 2 words and folders that Pensieve does not index get nothing.
+
+### Claude Code plugin
+
+The plugin gives Claude Code the MCP server, the three skills, the instructions block and the two recommended hooks. It does not change your config files. Install Pensieve first, because the plugin starts `~/.local/bin/pensieve`.
+
+```
+/plugin marketplace add TedHaley/pensieve
+/plugin install pensieve@pensieve
+```
+
+- Use the plugin or `pensieve integrate` for Claude Code, not both. When the plugin is installed, `pensieve integrate` does not add the Claude Code MCP server, instructions block, hooks or skill link.
+- The plugin's tools are named `mcp__plugin_pensieve_pensieve__*`.
+- If you run the backend on another port, set `PENSIEVE_PORT` in the environment that starts Claude Code.
 
 ### Does it help? The benchmark
 
@@ -271,6 +285,7 @@ pensieve --no-open       # backend only (what the Mac app runs)
 pensieve mcp             # MCP over stdio (--all-tools to include the settings tools)
 pensieve integrate       # agent add-ons: instructions block, skills and the edit hook
 pensieve search "retry failed webhook delivery" --kind code   # what an agent's search returns, scoped to this repo
+pensieve repo status     # whether Pensieve indexes this repo; also index, skip (stop syncing it) or remove (drop it from the index)
 ```
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.

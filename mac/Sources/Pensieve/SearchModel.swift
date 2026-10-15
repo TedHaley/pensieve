@@ -133,7 +133,7 @@ final class SearchModel: ObservableObject {
         ("-word", "leave out"),
         ("kind:file  code  doc  session", "only that kind (file = documents and code)"),
         ("kind:folder  repo  person", "folders and repos by name, people who know it"),
-        ("by:name", "what someone wrote"),
+        ("person:name  by:name", "that person · what they wrote"),
         ("in:folder  ext:pdf", "inside a path · a file type"),
         ("app or setting name", "open it (Tab fills in the Top Hit)"),
         ("2^10   15% of 80   3 ft in cm", "calculate or convert (↩ copies)"),

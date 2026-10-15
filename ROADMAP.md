@@ -12,14 +12,14 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 
 | ID | Item | Area | Status |
 |---|---|---|---|
-| A1 | Embed each distinct chunk once | Indexing | testing |
+| A1 | Embed each distinct chunk once | Indexing | shipped |
 | A2 | Quantized embedding model | Indexing | dropped |
 | A3 | Smaller or pruned embedding model | Indexing | shipped |
 | A4 | Settings that fit the hardware | Indexing | investigating |
 | A5 | Measure the energy that indexing uses | Indexing | idea |
 | A6 | Real searches are slower than the benchmark | Search | investigating |
 | A7 | Search images, audio and video by content | Search | testing |
-| A8 | Index folders while agent sessions catch up | Indexing | idea |
+| A8 | Index folders while agent sessions catch up | Indexing | testing |
 | B1 | Make the prompt hook the default | Agents | idea |
 | B2 | Prompt hooks for Codex and Gemini CLI | Agents | idea |
 | B3 | Benchmark other agents and models | Agents | idea |
@@ -34,8 +34,8 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | B12 | Rank search hits by usage | Search | idea |
 | B13 | Help the agent keep the user's system lean | Agents | testing |
 | C1 | Test the two-step install in auto mode | Install | idea |
-| C2 | Claude Code plugin | Install | idea |
-| C3 | Confirm that agents load `~/.agents/skills` | Install | idea |
+| C2 | Claude Code plugin | Install | testing |
+| C3 | Confirm that agents load `~/.agents/skills` | Install | testing |
 | C4 | Homebrew cask | Install | idea |
 | D1 | Team features | Product | idea |
 | D2 | Opt-in usage counts | Product | idea |
@@ -60,7 +60,7 @@ For each change in this section, measure on the validation set (`bench/validatio
   checkout and 39,884 more in 20 worktrees.
 - **Try:** before embedding a chunk, look for a stored chunk with the same text and path, and reuse its vector.
 - **Measure:** the time to index a new worktree, and the time of a first index of a repo with worktrees.
-- **Status:** testing
+- **Status:** shipped
 - **Notes:**
   - 2026-10-13: in the index on this Mac, 40,222 of 42,324 worktree chunks (95%) have the same path and text as
     another chunk. Built: before a group of chunks is embedded, a chunk with the same path and text as a stored one
@@ -69,6 +69,18 @@ For each change in this section, measure on the validation set (`bench/validatio
   - On the pensieve repo, a worktree of 672 chunks indexed in 10.8 s with 396 vectors copied (about 26 s before).
     A copied vector matches a fresh one (cosine 0.9995, the float16 rounding). Re-indexing an edited `app.js` copied
     every unchanged chunk's vector.
+  - Shipped in 0.7.0. 2026-10-14, first index of a scratch clone of the pensieve repo with 3 worktrees at older
+    tags, EmbeddingGemma 2, M4 Max:
+
+    | | Copies on | Copies off |
+    |---|---|---|
+    | Chunks embedded | 1,646 | 3,106 |
+    | Vectors copied | 1,460 | 0 |
+    | The 3 worktrees | 23.6 s | 149.3 s |
+    | Total | 85.9 s | 236.4 s |
+
+  - The Mac was busy with other work during both runs. The main checkout took 61 s and 86 s for the same 1,218
+    chunks, so the times vary by about 40%. The chunk counts do not vary.
 
 ### A2. Quantized embedding model
 
@@ -139,8 +151,18 @@ For each change in this section, measure on the validation set (`bench/validatio
   - On a cold server, the first search in each of four scopes took 70–398 ms, and none was slow in "folders+people"
     or "on-disk". So the real slow searches waited for something else. The usage log now records each search's CPU
     time and its wait for the index lock: wall time well above CPU time means it waited (lock, threads, disk).
-  - Next: read those fields on the next slow real searches.
-    Splitting the vector index by repo would speed up only the corpora phase, which is 56–67 ms when idle.
+  - Splitting the vector index by repo would speed up only the corpora phase, which is 56–67 ms when idle.
+  - 2026-10-14, the 8 real searches over 500 ms since those fields: CPU time was 116–285 ms in each, and wall time
+    was 519–4,892 ms. So every slow search waited. The index lock explains part of 5 of them (290–1,777 ms).
+  - In 2 searches at 15:05 (1.5 s and 1.7 s), the corpora phase took 1.24–1.26 s with a lock wait of 9 ms or less.
+    At that time, a repo was indexing and the built-in LLM was writing summaries.
+  - Hypothesis, not checked: these searches wait for the CPU, the GPU or the disk, which indexing and the LLM
+    also use. CPU time counts only the search's own thread.
+  - The usage log now also records, for each search, the page faults that read the disk ("faults"), and what was
+    indexing when the search started ("busy": repos, files or sessions).
+  - 2026-10-15: "busy" also has "llm" when an LLM completion is running at the start of the search.
+  - Next: release these fields, then read "faults" and "busy" on the next slow real searches. The running server
+    (0.7.6) does not record them yet.
 
 ### A7. Search images, audio and video by content
 
@@ -188,7 +210,16 @@ For each change in this section, measure on the validation set (`bench/validatio
   indexed. A user with many sessions and new folders waits for every session first.
 - **Try:** sweep folders between batches of sessions, or in their own loop.
 - **Measure:** the time to the first indexed document on a new index with a large session backlog.
-- **Status:** idea
+- **Status:** testing
+- **Notes:**
+  - 2026-10-14: built. `Store.sync_files` stops after 30 s (`SESSION_BATCH_SECONDS`) and sets `behind`. The
+    watcher then sweeps folders and goes on with the sessions without the poll pause.
+  - Measured with a real server on a scratch home: 600 sessions (8,936 chunks) and 40 documents. The first
+    document was indexed at 31 s, against 365 s before. One run each.
+  - The session speed differed between the two runs (about 12 and 30 chunks/s) because of other work on the Mac.
+    So the runs do not show whether the change slows the sessions.
+  - Open: the first full folder sweep has no time limit. A large new folder still makes the sessions wait.
+    `files._sync` drops the files that it did not see, so it cannot simply stop partway.
 
 ## B. Agents use Pensieve when it is better
 
@@ -246,6 +277,10 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     working on Pensieve, on versions before 0.7.0): 18 used a hit, 14 grepped elsewhere, 3 returned nothing.
   - Some of the misses were for code that the old version did not index (`app.js`, over 200 KB, before 0.6.5) or
     a repo that is not indexed (the website). Run it again after a week on 0.7.x.
+  - 2026-10-14, run again: 52 searches by Claude Code, 41 matched to a transcript. 21 used a hit, 16 grepped
+    elsewhere, 3 returned nothing, and 1 opened nothing. That is 51% against 51% before (18 of 35). Most of the
+    week on 0.7.x is still to come. Several misses were for a website or a repo outside the agent's scope.
+  - Next: run it again on 2026-10-21. Also count the `read` calls with several ids (B10).
 
 ### B7. Index agent memory files
 
@@ -336,7 +371,24 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     `--force`, and the item lists them.
   - The SessionStart hook adds a one-line hint in a repo with stale worktrees, from the last report only (the hook
     waits 3 s at most). Tested on a copy of this index: the first session start warms the report, the next has the hint.
-  - Next: other things that are stale, for example merged branches, and repos that no agent used in months.
+  - 2026-10-14: `stale` also lists two more kinds:
+    - Local branches that are merged into the default branch, idle 14 days and not checked out. The command is
+      `git branch -d`. A branch that `git branch -d` refuses gets "review" and no command.
+    - Indexed repos with no agent session and no git activity in 3 months. The command is the new
+      `pensieve repo remove`, which removes the repo from the index only.
+  - Squash-merged branches are not listed, because git cannot prove that they are merged.
+  - The SessionStart hint now counts merged branches.
+  - Tested on scratch repos. On a copy of the index on this Mac, it found 26 merged branches in 3 repos and no
+    unused repo. With no cache, the report took 34 s.
+  - Not tested: `pensieve repo remove` against a running server.
+  - 2026-10-15: squash-merged branches get "review" with no command. A branch is squash-merged when its whole
+    change (merge base to tip, as one diff) has the patch ID of a commit in the default branch (the last 2,000).
+    `git branch -d` refuses these branches, so the item says that `git branch -D` deletes them.
+  - Measured on the 5 repos indexed on this Mac: of 318 local branches that are not merged, 225 are squash-merged.
+    The check took 14.4 s in all, 6.7 s at most for one repo. One diff per branch made it 36.8 s, so all diffs go
+    through one `git diff-tree --stdin`.
+  - Not found: a branch that changed after its squash, and a squash that git had to adjust to the default branch.
+  - Next: check how long the full `stale` report takes now, and whether the agent offers the cleanup.
 
 ## C. Install
 
@@ -352,16 +404,41 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 
 - **Why:** `/plugin install` is a command that the user types, so auto mode does not check it. A plugin can hold the
   MCP server, the skill and the hooks. The app still needs its own install.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-15: built. The repo root is the plugin and its marketplace (`.claude-plugin/`), so the skills and the
+    instructions have one copy. The plugin has the MCP server (`${HOME}/.local/bin/pensieve mcp`), the 3 skills, the
+    instructions (a SessionStart hook prints `instructions.md`) and the 2 recommended hooks. The prompt hook is
+    not in it (B1).
+  - When the plugin is installed, `pensieve integrate` refuses the Claude Code MCP server, instructions block and
+    those 2 hooks, and makes no skill link in `~/.claude/skills`. Otherwise Claude gets each one twice.
+  - Tested with Claude Code 2.1.300: `--plugin-dir` in a `claude -p` session (14 tools, 3 skills, the
+    instructions from the hook), and an install from a local clone of the marketplace (2.3 MB in the cache).
+  - Not tested: the install from GitHub, which works only after this is on `main`.
+  - Measure: B6's hit rate for plugin sessions against `integrate` sessions.
 
 ### C3. Confirm that agents load `~/.agents/skills`
 
 - **Evidence:** the docs of Codex, Gemini CLI, Cursor, VS Code, Windsurf, opencode, Amp and Goose say that they read
   `~/.agents/skills`. Not tested on real installs.
 - **Try:** install the skill, then ask each agent to list its skills.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-14: a test skill went into `~/.agents/skills` only. Each agent below found it.
+
+    | Agent | Version | How we know |
+    |---|---|---|
+    | Codex | 0.162.1 | `codex debug prompt-input` puts the skill in the model's prompt |
+    | Gemini CLI | 0.64.0 | `gemini skills list` |
+    | opencode | 1.19.0 | `opencode debug skill` |
+    | Qwen Code | 0.25.0 | The agent named the skill when asked, and `~/.qwen/skills` was empty |
+    | Cursor | 3.24.18 | Its code has `~/.agents/skills` as a user skills folder; not run |
+    | VS Code | 1.141.0 | Its code has `~/.agents/skills` as a personal skills folder; not run |
+
+  - Qwen Code now reads `~/.agents/skills`. The README says that it does not. Older versions can need the link
+    in `~/.qwen/skills`, so the link stays.
+  - opencode also reads `~/.claude/skills`. With the link there, opencode and Qwen Code each list the skill once.
+  - Not tested: Windsurf, Amp and Goose. They are not installed on this Mac.
 
 ### C4. Homebrew cask
 
@@ -396,4 +473,6 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     asks them to call it when Pensieve fails them). The user reports in Settings → Feedback. Reports stay in
     `~/.pensieve/feedback.jsonl`; Send to GitHub opens a filled-in issue (bug or idea template) for the user to
     read before posting, because an agent's report can hold private code or paths.
-  - Open: a link on the website. Measure: reports per week, and how many are sent.
+  - 2026-10-14: the website footer and `site/llms.txt` link to the GitHub issue chooser (bug and idea templates).
+    The site goes live when this reaches `main`.
+  - Measure: reports per week, and how many are sent.

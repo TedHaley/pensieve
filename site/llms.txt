@@ -39,3 +39,4 @@ Claude Sonnet in Claude Code, 72 held-out tasks in four repos (504 to 34,847 fil
 - [Source code](https://github.com/TedHaley/pensieve)
 - [Releases](https://github.com/TedHaley/pensieve/releases)
 - [Benchmark](https://github.com/TedHaley/pensieve/tree/main/bench)
+- [Feedback](https://github.com/TedHaley/pensieve/issues/new/choose): report a bug or suggest an idea. Agents can call the `report_feedback` MCP tool; users can use Settings → Feedback in the app.

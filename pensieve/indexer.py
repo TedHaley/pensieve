@@ -313,6 +313,7 @@ class Store:
         from turbovec import IdMapIndex
         self.lock = threading.RLock()
         self._indexed_at = {}
+        self.behind = False  # the last sync_files ran out of time with sessions left to index
         self.progress = None  # sessions being indexed now: {name: agent, root, done, total=None}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
@@ -353,13 +354,19 @@ class Store:
             self.index.sync(str(config.INDEX_PATH))
 
     # ---- ingestion -------------------------------------------------------
-    def sync_files(self, log=lambda m: print(m, flush=True), on_progress=None) -> int:
-        """Index new/changed transcript files. Returns number of sessions touched."""
+    def sync_files(self, log=lambda m: print(m, flush=True), on_progress=None, budget=None) -> int:
+        """Index new/changed transcript files. Returns number of sessions touched. With `budget` (seconds), stops
+        after that long and sets `behind`: the caller sweeps folders and calls again for the rest."""
         import time
+        end = time.monotonic() + budget if budget else None
+        self.behind = False
         touched = self._purge_disabled(log) + self._purge_own(log) + self._purge_memories(log)
         with self.lock:
             known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
         for source, path in parsers.discover():
+            if end and time.monotonic() > end:
+                self.behind = True
+                break
             st = path.stat()
             if known.get(str(path)) == (st.st_mtime, st.st_size):
                 continue

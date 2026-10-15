@@ -345,9 +345,27 @@ def test_command(command):
         return dict(ok=False, reply="", ms=round((time.time() - t) * 1000), error=str(e)[:300] or type(e).__name__)
 
 
+_running = {"n": 0, "lock": threading.Lock()}  # completions in progress, for the search timing log
+
+
+def busy() -> bool:
+    """A completion is running now (it can slow a search down: same CPU, GPU and memory)."""
+    return _running["n"] > 0
+
+
 def complete(prompt: str, system: str = "", max_tokens: int = 200, temperature: float = 0.2, schema: dict | None = None):
     """One-shot completion with the chosen engine. With `schema`, returns the parsed JSON object.
     Raises Offline when no engine is available, so callers can skip AI work quietly."""
+    with _running["lock"]:
+        _running["n"] += 1
+    try:
+        return _complete(prompt, system, max_tokens, temperature, schema)
+    finally:
+        with _running["lock"]:
+            _running["n"] -= 1
+
+
+def _complete(prompt, system, max_tokens, temperature, schema):
     p = provider()
     if p == "none":
         raise Offline("AI is off")
