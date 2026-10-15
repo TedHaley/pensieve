@@ -35,7 +35,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | B13 | Help the agent keep the user's system lean | Agents | testing |
 | C1 | Test the two-step install in auto mode | Install | idea |
 | C2 | Claude Code plugin | Install | idea |
-| C3 | Confirm that agents load `~/.agents/skills` | Install | idea |
+| C3 | Confirm that agents load `~/.agents/skills` | Install | testing |
 | C4 | Homebrew cask | Install | idea |
 | D1 | Team features | Product | idea |
 | D2 | Opt-in usage counts | Product | idea |
@@ -360,8 +360,23 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Evidence:** the docs of Codex, Gemini CLI, Cursor, VS Code, Windsurf, opencode, Amp and Goose say that they read
   `~/.agents/skills`. Not tested on real installs.
 - **Try:** install the skill, then ask each agent to list its skills.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-14: a test skill went into `~/.agents/skills` only. Each agent below found it.
+
+    | Agent | Version | How we know |
+    |---|---|---|
+    | Codex | 0.162.1 | `codex debug prompt-input` puts the skill in the model's prompt |
+    | Gemini CLI | 0.64.0 | `gemini skills list` |
+    | opencode | 1.19.0 | `opencode debug skill` |
+    | Qwen Code | 0.25.0 | The agent named the skill when asked, and `~/.qwen/skills` was empty |
+    | Cursor | 3.24.18 | Its code has `~/.agents/skills` as a user skills folder; not run |
+    | VS Code | 1.141.0 | Its code has `~/.agents/skills` as a personal skills folder; not run |
+
+  - Qwen Code now reads `~/.agents/skills`. The README says that it does not. Older versions can need the link
+    in `~/.qwen/skills`, so the link stays.
+  - opencode also reads `~/.claude/skills`. With the link there, opencode and Qwen Code each list the skill once.
+  - Not tested: Windsurf, Amp and Goose. They are not installed on this Mac.
 
 ### C4. Homebrew cask
 

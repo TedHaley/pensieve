@@ -25,7 +25,7 @@ TARGETS = {  # id -> (label, memory file the instructions go in)
     "qwen": ("Qwen Code", Path.home() / ".qwen" / "QWEN.md"),
 }
 SKILLS_DIR = Path.home() / ".agents" / "skills"  # the user-level skills folder of the open Agent Skills standard
-SKILL_LINKS = {  # agents that read only their own skills folder: it gets a link to the copy in SKILLS_DIR
+SKILL_LINKS = {  # agents that read only their own skills folder (Qwen Code before 0.25): a link to the copy in SKILLS_DIR
     "Claude Code": Path.home() / ".claude" / "skills",
     "Qwen Code": Path.home() / ".qwen" / "skills",
 }
