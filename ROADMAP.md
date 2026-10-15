@@ -34,7 +34,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | B12 | Rank search hits by usage | Search | idea |
 | B13 | Help the agent keep the user's system lean | Agents | testing |
 | C1 | Test the two-step install in auto mode | Install | idea |
-| C2 | Claude Code plugin | Install | idea |
+| C2 | Claude Code plugin | Install | testing |
 | C3 | Confirm that agents load `~/.agents/skills` | Install | testing |
 | C4 | Homebrew cask | Install | idea |
 | D1 | Team features | Product | idea |
@@ -160,7 +160,9 @@ For each change in this section, measure on the validation set (`bench/validatio
     also use. CPU time counts only the search's own thread.
   - The usage log now also records, for each search, the page faults that read the disk ("faults"), and what was
     indexing when the search started ("busy": repos, files or sessions).
-  - Next: read "faults" and "busy" on the next slow real searches. Also record whether the LLM was busy.
+  - 2026-10-15: "busy" also has "llm" when an LLM completion is running at the start of the search.
+  - Next: release these fields, then read "faults" and "busy" on the next slow real searches. The running server
+    (0.7.6) does not record them yet.
 
 ### A7. Search images, audio and video by content
 
@@ -379,7 +381,14 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - Tested on scratch repos. On a copy of the index on this Mac, it found 26 merged branches in 3 repos and no
     unused repo. With no cache, the report took 34 s.
   - Not tested: `pensieve repo remove` against a running server.
-  - Next: squash-merged branches as "review", found by patch IDs.
+  - 2026-10-15: squash-merged branches get "review" with no command. A branch is squash-merged when its whole
+    change (merge base to tip, as one diff) has the patch ID of a commit in the default branch (the last 2,000).
+    `git branch -d` refuses these branches, so the item says that `git branch -D` deletes them.
+  - Measured on the 5 repos indexed on this Mac: of 318 local branches that are not merged, 225 are squash-merged.
+    The check took 14.4 s in all, 6.7 s at most for one repo. One diff per branch made it 36.8 s, so all diffs go
+    through one `git diff-tree --stdin`.
+  - Not found: a branch that changed after its squash, and a squash that git had to adjust to the default branch.
+  - Next: check how long the full `stale` report takes now, and whether the agent offers the cleanup.
 
 ## C. Install
 
@@ -395,8 +404,18 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 
 - **Why:** `/plugin install` is a command that the user types, so auto mode does not check it. A plugin can hold the
   MCP server, the skill and the hooks. The app still needs its own install.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-15: built. The repo root is the plugin and its marketplace (`.claude-plugin/`), so the skills and the
+    instructions have one copy. The plugin has the MCP server (`${HOME}/.local/bin/pensieve mcp`), the 3 skills, the
+    instructions (a SessionStart hook prints `instructions.md`) and the 2 recommended hooks. The prompt hook is
+    not in it (B1).
+  - When the plugin is installed, `pensieve integrate` refuses the Claude Code MCP server, instructions block and
+    those 2 hooks, and makes no skill link in `~/.claude/skills`. Otherwise Claude gets each one twice.
+  - Tested with Claude Code 2.1.300: `--plugin-dir` in a `claude -p` session (14 tools, 3 skills, the
+    instructions from the hook), and an install from a local clone of the marketplace (2.3 MB in the cache).
+  - Not tested: the install from GitHub, which works only after this is on `main`.
+  - Measure: B6's hit rate for plugin sessions against `integrate` sessions.
 
 ### C3. Confirm that agents load `~/.agents/skills`
 

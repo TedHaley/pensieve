@@ -1,0 +1,14 @@
+{
+  "name": "pensieve",
+  "description": "Pensieve: local search across your files, git repositories and AI agent sessions.",
+  "owner": {
+    "name": "Ted Haley"
+  },
+  "plugins": [
+    {
+      "name": "pensieve",
+      "source": "./",
+      "description": "Semantic search over your repos, documents and past agent sessions, for Claude Code."
+    }
+  ]
+}

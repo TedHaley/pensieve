@@ -101,7 +101,7 @@ def tool(name=None):
 def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     """Find code (or docs, past agent sessions) in one call; use before Grep/Glob. Best query: what the code does plus
     names you'd guess it uses ("retry failed webhook delivery with backoff retryWebhook"); a bare name or an error
-    string also works. "quotes" = exact, -word excludes, ext:py, in:<path>, by:<person>,
+    string also works. "quotes" = exact, -word excludes, ext:py, in:<path>, by:<person>, person:<name>,
     kind:code|doc|session|folder|repo|person. One line per hit, best first: path:line  enclosing definition ▸ the
     line that matched  [id for read/similar]. If those lines show what you need, use the hit: no grep to confirm."""
     sc = _scope()

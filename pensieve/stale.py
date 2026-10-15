@@ -123,12 +123,47 @@ def _is_ancestor(root, a, b) -> bool:
     return subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
 
 
+def _patch_ids(root, args, stdin=None) -> list[tuple[str, str]]:
+    """(patch id, commit) for each commit that `git <args>` prints with its patch. `git patch-id --stable` gives the
+    same change the same id at other line numbers."""
+    out = subprocess.run(["git", "-C", root, *args], input=stdin, capture_output=True).stdout
+    r = subprocess.run(["git", "-C", root, "patch-id", "--stable"], input=out, capture_output=True)
+    return [tuple(x.split()[:2]) for x in r.stdout.decode(errors="replace").split("\n") if x]
+
+
+SQUASH_COMMITS = 2000  # how far back in the default branch to look for a branch's squashed commit
+
+
+def _squashed(root, base, names) -> list[str]:
+    """The branches in `names` whose whole change (from the merge base to the tip, as one diff) is one commit in
+    `base`: squash-merged. A branch that changed again after the squash, or whose squash git had to adjust, is not
+    found."""
+    from concurrent.futures import ThreadPoolExecutor
+    if not names:  # for-each-ref with no pattern lists every ref
+        return []
+    tips = dict(x.split() for x in git(root, "for-each-ref", "--format=%(refname:short) %(objectname)",
+                                       *(f"refs/heads/{n}" for n in names)).split("\n") if x)
+    with ThreadPoolExecutor(8) as pool:  # one git process per branch: in parallel
+        mbs = dict(zip(tips, pool.map(lambda n: git(root, "merge-base", base, tips[n]).strip(), tips)))
+    mbs = {n: m for n, m in mbs.items() if m}
+    if not mbs:
+        return []
+    since = min(int(git(root, "show", "-s", "--format=%ct", m).strip() or 0) for m in mbs.values())
+    # --no-renames on both sides: log finds renames by default and diff-tree doesn't, so a rename gave two ids
+    ids = {p for p, _ in _patch_ids(root, ["log", "-p", "--no-renames", "--no-merges", f"-{SQUASH_COMMITS}",
+                                           f"--since={since}", base])}
+    # one diff per branch, tip against merge base, in one process: diff-tree reads "<commit> <parent>" lines
+    pairs = "".join(f"{tips[n]} {m}\n" for n, m in mbs.items()).encode()
+    done = {c for p, c in _patch_ids(root, ["diff-tree", "-p", "--no-renames", "--stdin"], pairs) if p in ids}
+    return [n for n in mbs if tips[n] in done]
+
+
 def branches(root: str, listed: list[dict], days: int = DAYS) -> list[dict]:
     """Local branches whose commits are all in the default branch, with no commit and no move in `days` days, and
     not checked out in any worktree. One item for the ones `git branch -d` deletes; one more, without a command, for
     those it refuses because the branch it compares with (its upstream, else the checked-out branch) lacks them.
-    Squash-merged branches are left out: their commits are not in the default branch, so nothing proves they are
-    merged, and `git branch -d` refuses them."""
+    Squash-merged branches (see _squashed) get an item of their own, also without a command: their commits are not
+    in the default branch, so `git branch -d` refuses them and only `git branch -D` deletes them."""
     base = _default_branch(root)
     if not base:
         return []
@@ -139,14 +174,14 @@ def branches(root: str, listed: list[dict], days: int = DAYS) -> list[dict]:
                                                 "--format=%(refname:short) %(upstream)", "refs/heads").split("\n") if x]
     merged_head = set(git(root, "for-each-ref", "--merged", "HEAD", "--format=%(refname:short)", "refs/heads").split())
     logs = _git_dir(root) / "logs" / "refs" / "heads"
-    ok, refused = [], []
-    for name, up, *_ in rows:
-        if name in skip:
-            continue
-        # idle: no commit on it, and the branch not created or moved (its reflog file), in `days` days
+
+    def idle(name):  # no commit on it, and the branch not created or moved (its reflog file), in `days` days
         ages = [a for a in (_age_days(git(root, "log", "-1", "--format=%cI", f"refs/heads/{name}").strip()),
                             _mtime_days(logs / name)) if a is not None]
-        if ages and min(ages) < days:
+        return not ages or min(ages) >= days
+    ok, refused = [], []
+    for name, up, *_ in rows:
+        if name in skip or not idle(name):
             continue
         up = up.strip()
         if up and git(root, "rev-parse", "-q", "--verify", up).strip():
@@ -164,6 +199,14 @@ def branches(root: str, listed: list[dict], days: int = DAYS) -> list[dict]:
         res.append(dict(kind="branches", branches=refused, verdict="review", chunks=0,
                         why=f"merged into {base_name}, but git branch -d refuses them: their upstream or the "
                             f"checked-out branch ({cur}) lacks those commits. Bring {cur} up to date first"))
+    unmerged = git(root, "for-each-ref", "--no-merged", base, "--format=%(refname:short)", "refs/heads").split()
+    squashed = _squashed(root, base, [n for n in unmerged if n not in skip and idle(n)])
+    if squashed:
+        res.append(dict(kind="branches", branches=squashed, verdict="review", chunks=0,
+                        why=f"squash-merged into {base_name}: each one's changes are one commit there, idle {days}+ "
+                            f"days, not checked out. git branch -d refuses them, because their own commits are not in "
+                            f"{base_name}. If the user agrees, `git -C {root} branch -D {' '.join(squashed)}` deletes "
+                            f"them"))
     return res
 
 

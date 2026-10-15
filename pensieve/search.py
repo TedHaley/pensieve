@@ -5,6 +5,7 @@
     "rate limit" retries          -> contains the phrase, ranked by meaning of 'retries'
     -draft  -"old notes"          -> exclude
     kind:code  ext:pdf  in:my-app     -> filters (kind is file, code or session; in matches the path or project)
+    person:sam                    -> the same as kind:person sam
 """
 import bisect
 import hashlib
@@ -42,7 +43,7 @@ def repo_token(root):
     "these words AND this repo" rather than scoring every repo's matches. Letters only, so FTS5 keeps it whole."""
     return "zzrepo" + "".join(chr(97 + int(c, 16)) for c in hashlib.sha1(str(root).encode()).hexdigest()[:12])
 _TOKEN = re.compile(r'(-?)"([^"]*)"?|(\S+)')
-_FILTER = re.compile(r"^(kind|ext|in|by):(.+)$", re.I)
+_FILTER = re.compile(r"^(kind|ext|in|by|person):(.+)$", re.I)
 _KINDS = {"file": "file", "files": "file", "doc": "doc", "docs": "doc", "document": "doc", "documents": "doc",
           "code": "code", "session": "session", "sessions": "session", "chat": "session", "agent": "session",
           "folder": "folder", "folders": "folder", "dir": "folder", "dirs": "folder", "directory": "folder",
@@ -71,6 +72,10 @@ def parse(q: str) -> dict:
         m = _FILTER.match(word)
         if m:
             key, val = m.group(1).lower(), m.group(2).lower().lstrip(".")
+            if key == "person":  # person:sam = kind:person sam
+                filters["kind"] = "person"
+                words.append(m.group(2))
+                continue
             if key == "kind":
                 val = _KINDS.get(val, val)
             filters[key] = val
@@ -166,7 +171,7 @@ class _Laps:
         self.q, self.t, self.ms = q, time.perf_counter(), {}
         self.cpu0, _lock_wait.ms = time.thread_time(), 0.0
         self.faults0 = resource.getrusage(resource.RUSAGE_SELF).ru_majflt
-        self.busy = list(busy)  # what was indexing when the search started
+        self.busy = list(busy)  # what was indexing, and whether the LLM was running, when the search started
 
     def __call__(self, name, done=False):
         now = time.perf_counter()
@@ -238,9 +243,9 @@ class Searcher:
             indexer.searches_running.add(1)
 
     def _find(self, q, limit, kinds, scope, retry):
-        from pensieve import scopes
+        from pensieve import llm, scopes
         lap = _Laps(q, [k for k, o in (("repos", self.repos), ("files", self.files), ("sessions", self.store))
-                        if getattr(o, "progress", None)])
+                        if getattr(o, "progress", None)] + (["llm"] if llm.busy() else []))
         if retry:
             self._catch_up()
             lap("catch-up")

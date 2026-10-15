@@ -107,6 +107,7 @@ def integrate(items, remove=False):
     targets = {t["id"] for t in st["instructions"]}
     found = [k["id"] for k in st["mcp"] if k["available"]]
     claude = "claude-mcp" in found
+    preset = items in (["all"], ["recommended"])
     if items == ["all"]:
         items = [*found, *(t["id"] for t in st["instructions"] if t["present"]), *(ig.SKILLS if found else ()),
                  *(ig.HOOKS if claude else ())]
@@ -117,6 +118,9 @@ def integrate(items, remove=False):
             return
         items = [*found, *(t["id"] for t in st["instructions"] if t["present"]),
                  *(n for n, v in ig.SKILLS.items() if v[2]), *(n for n, v in ig.HOOKS.items() if v[2] and claude)]
+    if preset and ig.claude_plugin():
+        print("Claude Code: the Pensieve plugin is installed, so its MCP server, instructions and hooks are skipped.")
+        items = [it for it in items if it not in ("claude-mcp", "claude", "claude-hook", "claude-repo-check")]
     for it in items:
         try:
             if it in targets:

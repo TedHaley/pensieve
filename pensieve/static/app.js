@@ -3384,7 +3384,7 @@ function findItem(r) {
   return {ic: FIND_IC[r.kind], title: r.title + (r.line && r.kind === 'code' ? `:${r.line}` : ''), titleHtml: esc(r.title) + (r.kind === 'code' && r.line ? `<span class="muted">:${r.line}</span>` : '') + (ex ? '<span class="ex">exact</span>' : ''),
           subHtml: `<span style="font-family:var(--mono);font-size:11px">${esc(r.subtitle)}</span>${r.snippet ? ' — ' + hlSnip(r.snippet, r.highlights) : ''}`, run: () => openItem(r.id)};
 }
-// Autocomplete for the word being typed: by: people, in: repos and folders, kind: and ext: values, and for a plain word
+// Autocomplete for the word being typed: by: and person: people, in: repos and folders, kind: and ext: values, and for a plain word
 // the people and repos it starts. Built in the page from the loaded map, so it shows at once.
 const KIND_WORDS = ['code', 'doc', 'file', 'session', 'folder', 'repo', 'person'];
 function palPeople() {
@@ -3401,7 +3401,7 @@ function palPeople() {
 }
 function palSuggest(text) {
   const last = text.split(/\s+/).pop(), head = text.slice(0, text.length - last.length), out = [];
-  const m = /^(by|in|kind|ext):(.*)$/i.exec(last), want = (m ? m[2] : last).toLowerCase();
+  const m = /^(by|person|in|kind|ext):(.*)$/i.exec(last), want = (m ? m[2] : last).toLowerCase();
   const push = (tok, sub) => { if (out.length < 5 && !out.some(o => o.tok === tok) && tok.toLowerCase() !== last.toLowerCase()) out.push({tok, sub, text: head + tok + ' '}); };
   const people = () => palPeople().filter(p => !want || p.parts.some(x => x.startsWith(want)));
   const places = () => {
@@ -3414,6 +3414,7 @@ function palSuggest(text) {
   if (m) {
     const key = m[1].toLowerCase();
     if (key === 'by') people().forEach(p => push(`by:${p.key}`, `only what ${p.name} wrote`));
+    else if (key === 'person') people().forEach(p => push(`person:${p.key}`, p.name));
     else if (key === 'in') places().forEach(x => push(`in:${x}`, 'only in this repo or folder'));
     else if (key === 'kind') KIND_WORDS.filter(k => k.startsWith(want)).forEach(k => push(`kind:${k}`, ''));
     else { const n = new Map(); S.data.points.forEach(p => { if (p.ext) n.set(p.ext, (n.get(p.ext) || 0) + 1); });
