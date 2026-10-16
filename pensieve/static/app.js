@@ -3127,14 +3127,14 @@ function dataFollowInsights() {
 async function setView(v, repo) {
   if (LEGACY_TYPE[v] && v !== 'data') { setTypes(LEGACY_TYPE[v]); v = 'data'; }
   if (S.view === v && !repo) return;
-  if (S.view !== 'insights' && S.view !== 'settings') cams[camKey()] = gl.saveCam();
+  if (!['insights', 'settings', 'work'].includes(S.view)) cams[camKey()] = gl.saveCam();
   const prev = S.view;
   S.view = v; store.set('view', v);
   syncTabs(v);
-  const page = v === 'insights' || v === 'settings';
+  const page = v === 'insights' || v === 'settings' || v === 'work';
   if (prev !== 'settings' && prev !== v) S.prevView = prev;
   document.body.dataset.view = v;  // the map stays as the backdrop; CSS shows the right floating panels
-  $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings';
+  $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings'; $('#work').hidden = v !== 'work';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
   renderSidebar();  // now, not after the loads below: the panel would show the previous view's until then
   if (v === 'code') {
@@ -3149,8 +3149,76 @@ async function setView(v, repo) {
   renderSidebar(); renderTimeline();
   if (v === 'insights') { await insightsFollowData(); renderInsights(); loadAI().then(refreshAIViews); }
   if (v === 'settings') renderSettings();
+  if (v === 'work') { renderWork(); loadWork(true); }
 }
 $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'data' ? dataType() : b.dataset.view));
+
+/* ============================== data tab ============================== */
+// Each task: its data points from every source, newest first, and an AI note on how it stands and is moving.
+S.work = {data: null, filter: store.get('workFilter', 'all'), days: +store.get('workDays', 30), open: new Set(), adj: {}, asked: false};
+const WK_SRC = {session: 'Session', commit: 'Commit', ticket: 'Ticket', message: 'Message', change: 'Change'};
+async function loadWork(first = false) {
+  try { S.work.data = await api(`/api/work?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
+  if (first && !S.work.asked && insightsOn() && S.work.data?.tasks.some(t => !S.work.data.notes[t.id] || S.work.data.notes[t.id].stale)) {
+    S.work.asked = true;  // once per visit: the server writes the notes that are missing or out of date, in the background
+    api(`/api/work/notes?days=${S.work.days}`, {method: 'POST'}).then(() => { S.work.data.writing = true; renderWork(); }).catch(() => {});
+  }
+  if (S.view === 'work') renderWork();
+}
+const wkDate = ts => new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+function wkEvent(e) {
+  const link = e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title)}</a>` :
+    e.source === 'session' ? `<button class="linkbtn subtle" data-wk-session="${esc(e.ref)}">${esc(e.title)}</button>` :
+    e.ref && e.source !== 'commit' ? `<button class="linkbtn subtle" data-wk-file="${esc(e.ref)}">${esc(e.title)}</button>` : esc(e.title);
+  return `<div class="wk-ev"><span class="d">${wkDate(e.ts)}</span><span class="wk-src ${e.source}">${WK_SRC[e.source] || e.source}</span>
+    <span class="t" title="${esc(e.title + (e.detail ? ' · ' + e.detail : ''))}">${link}${e.detail ? `<small>${esc(e.detail)}</small>` : ''}</span></div>`;
+}
+function wkAdjacent(t) {
+  const a = S.work.adj[t.id];
+  if (!a) return `<div class="wk-adj"><button class="linkbtn" data-wk-adj="${esc(t.id)}">Show coworkers and related work</button></div>`;
+  if (a.loading) return '<div class="wk-adj muted">Looking at coworkers’ commits and related tickets…</div>';
+  const people = a.coworkers.map(p => `<div class="row"><b>${esc(p.name)}</b> <small>${plural(p.commits, 'commit')} · ${fmtWhen(p.last)}${p.branches.length ? ' · ' + esc(p.branches.join(', ')) : ''}</small><br><small>${esc(p.subjects[0] || '')}</small></div>`).join('');
+  const rel = a.related.map(r => `<div class="row">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : `<button class="linkbtn subtle" data-wk-file="${esc(r.path)}">${esc(r.title)}</button>`}<br><small>${esc([r.status, r.assignee].filter(Boolean).join(' · '))}</small></div>`).join('');
+  return `<div class="wk-adj"><div class="h4">Coworkers in the same folders</div>${people || '<div class="muted">No commits by others there in the last 3 weeks.</div>'}
+    <div class="h4" style="margin-top:10px">Related tickets and threads</div>${rel || '<div class="muted">Nothing related among your connections.</div>'}</div>`;
+}
+function renderWork() {
+  const el = $('#work'); if (!el) return;
+  const d = S.work.data, f = S.work.filter;
+  if (!d) { el.innerHTML = S.work.err ? `<div class="empty">Could not load your tasks: ${esc(S.work.err)}</div>` : '<div class="shimmer" style="height:160px"></div>'; return; }
+  const tasks = d.tasks.filter(t => f === 'all' || (f === 'tickets' ? t.keys.length : !t.keys.length));
+  const seg = [['all', 'All'], ['tickets', 'With a ticket'], ['other', 'Without a ticket']].map(([k, l]) => `<button class="${f === k ? 'on' : ''}" data-wk-filter="${k}">${l}</button>`).join('');
+  const note = t => {
+    const n = d.notes[t.id];
+    if (n) return `<div class="wk-note"><div class="h">Note${n.stale ? (d.writing ? ' · updating…' : ' · out of date') : ''}</div>${esc(n.text)}</div>`;
+    if (!insightsOn()) return '<div class="wk-note"><div class="h">Note</div>Choose an insights engine in Settings → Models to get a note on each task.</div>';
+    return `<div class="wk-note"><div class="h">Note</div>${d.writing ? 'Writing…' : 'No note yet.'}</div>`;
+  };
+  el.innerHTML = `<div class="wk-head"><div><h2>Data</h2><p>Your tasks, with what happened in each one: agent sessions, commits, tickets and messages, newest first. Tasks join by ticket keys, branches and the files that sessions edited.</p></div>
+      <div class="wk-ctl"><div class="seg mini">${seg}</div><select class="set-in" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
+    ${tasks.length ? tasks.map(t => {
+      const open = S.work.open.has(t.id), ev = open ? t.events : t.events.slice(0, 6);
+      const meta = [t.status, t.repos.map(r => r.split('/').pop()).join(', '), t.branches.map(b => b.branch).join(', '), `last ${fmtWhen(t.updated)}`].filter(Boolean).join(' · ');
+      return `<div class="wk-task card"><div>
+          <div class="wk-title">${esc(t.title)}${t.keys.slice(0, 3).map(k => `<span class="wk-badge">${esc(k)}</span>`).join('')}</div>
+          <div class="wk-meta">${esc(meta)}</div>
+          ${ev.map(wkEvent).join('')}
+          ${t.events.length > 6 ? `<button class="linkbtn" data-wk-open="${esc(t.id)}" style="margin-top:6px">${open ? 'Show less' : `Show all ${t.events.length}`}</button>` : ''}
+        </div><div>${note(t)}${wkAdjacent(t)}</div></div>`;
+    }).join('') : '<div class="empty">No tasks in this period. Tasks come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.</div>'}`;
+  $$('[data-wk-filter]', el).forEach(b => b.onclick = () => { S.work.filter = b.dataset.wkFilter; store.set('workFilter', S.work.filter); renderWork(); });
+  $$('[data-wk-days]', el).forEach(s => s.onchange = () => { S.work.days = +s.value; store.set('workDays', S.work.days); S.work.asked = false; loadWork(true); });
+  $$('[data-wk-open]', el).forEach(b => b.onclick = () => { const id = b.dataset.wkOpen; S.work.open[S.work.open.has(id) ? 'delete' : 'add'](id); renderWork(); });
+  $$('[data-wk-session]', el).forEach(b => b.onclick = () => openSession(b.dataset.wkSession));
+  $$('[data-wk-file]', el).forEach(b => b.onclick = () => openFile(b.dataset.wkFile));
+  $$('[data-wk-adj]', el).forEach(b => b.onclick = async () => {
+    const id = b.dataset.wkAdj;
+    S.work.adj[id] = {loading: true}; renderWork();
+    try { S.work.adj[id] = await api(`/api/work/adjacent?id=${enc(id)}&days=${S.work.days}`); }
+    catch (e) { S.work.adj[id] = {coworkers: [], related: []}; toast('Could not look: ' + e.message); }
+    renderWork();
+  });
+}
 
 /* ============================== insights ============================== */
 async function loadInsights() {
@@ -3503,7 +3571,7 @@ function palRender() {
   } else {
     S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));
   }
-  const cmds = [['Show code', '1', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '2', () => setView('insights')], ['Open Settings', '3', () => setView('settings')],
+  const cmds = [['Show code', '1', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Data', '2', () => setView('work')], ['Go to Insights', '3', () => setView('insights')], ['Open Settings', '4', () => setView('settings')],
     ['Toggle light / dark', 'T', toggleTheme], ['Clear all filters', '', clearFilters], ['Fit map to view', 'F', () => gl.fit(visibleIdx())], ['Keyboard shortcuts', '?', () => ($('#helpmodal').hidden = false)]];
   cmds.filter(([t]) => !q || t.toLowerCase().includes(q.replace(/^>/, '').trim())).slice(0, raw ? 3 : 7).forEach(([t, k, run]) => add('Commands', {ic: '›', title: t, rt: k, run}));
   pl.items = items; pl.sel = Math.min(pl.sel, items.length - 1);
@@ -3601,7 +3669,7 @@ document.addEventListener('keydown', e => {
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === '/') { e.preventDefault(); openPalette(); }
-  else if (k === '1') setView(dataType()); else if (k === '2') setView('insights'); else if (k === '3') setView('settings');
+  else if (k === '1') setView(dataType()); else if (k === '2') setView('work'); else if (k === '3') setView('insights'); else if (k === '4') setView('settings');
   else if (k === 'f') gl.fit(visibleIdx());
   else if (k === 't') toggleTheme();
   else if (k === '?') $('#helpmodal').hidden = false;
@@ -3674,6 +3742,7 @@ async function handleEvent(m) {
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); reloadRepoSoon(); }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'upstream') loadUpstream();
+    else if (m.type === 'work') { if (S.view === 'work') loadWork(); }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }

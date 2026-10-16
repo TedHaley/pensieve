@@ -98,6 +98,7 @@ Code results open at the matching line in your editor if you set `editor` to `vs
 | | |
 |---|---|
 | **Map** | Documents, code and agent sessions on one 3D map, laid out by meaning. Filter by type (Documents · Code · Agent sessions) or by folder; repos show as folders with a *code* badge. Color by type, folder, author, recency or topic. Inside a repo: git blame per line, owners, *who knows about X*, overlaps, and knowledge gaps. |
+| **Data** | Your tasks of the last 7, 30 or 90 days, newest first. Each task lists its agent sessions, commits, tickets, messages and ticket changes, newest first. A short AI note says where the task stands, how it changed, and which other task it relates to. On request, it also shows coworkers' recent commits in the same folders, and related tickets and threads. Tasks join by ticket keys, feature branches, and the files that sessions edited, so work without a ticket is a task too. |
 | **Insights** | Activity and topics, AI themes and open threads per repo or folder; your footprint in each repo, unexplored areas next to your work and who owns them, what each teammate shipped in the last 90 days, and knowledge gaps. |
 | **Settings** | Everything below, plus copy-paste commands for connecting agents. |
 

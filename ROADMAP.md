@@ -41,6 +41,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D2 | Opt-in usage counts | Product | idea |
 | D3 | A place for user feedback | Product | testing |
 | D4 | Find people with similar or complementary work | Product | idea |
+| D5 | The Data tab: tasks across sources | Product | testing |
 | E1 | Connections as one list | Connections | idea |
 | E2 | Remote disks | Connections | idea |
 | E3 | Database metadata | Connections | idea |
@@ -505,6 +506,36 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   get.
 - **Status:** idea
 - **Notes:**
+
+### D5. The Data tab: tasks across sources
+
+- **Why:** one piece of work is spread over a ticket, a Slack thread, a branch, agent sessions and a PR. It is hard
+  to follow across these services. A tab that joins them shows the progress of the work in one place.
+- **Built:** `pensieve/work.py` and the Data tab. A task joins these by:
+  - ticket keys (`ABC-123`) in branch names, commit subjects, session text and connection items, when the key's
+    prefix is a known project (from collected tickets or branch names);
+  - the git branch of a session (from the Claude Code transcript), for feature branches only;
+  - for work without a ticket: two sessions in one repo, at most 3 days apart, that edited 2 specific files in
+    common, or one file that only they edited. A file that more than 3 sessions edited does not count.
+  Each task shows its data points newest first, and an AI note from the insights engine. The note is written again
+  when the task's data points change. Coworkers: `git log --remotes` in the task's folders, by people who are not the
+  user. Related: a search of the connections for the task's title.
+- **Comments:** keep comments in Pensieve first. Writing a comment back to Jira or Slack posts as the user, so each
+  one needs the user's approval. Not built.
+- **Questions:**
+  - A branch with more than 6 sessions, or sessions over more than 4 days, counts as long-lived and holds many
+    tasks. Check these limits on more repos.
+  - Remote branches are only as new as the last fetch. The upstream watcher fetches the default branch only.
+  - The Claude Code engine for notes needs `--strict-mcp-config --tools ""`. With the user's MCP tools loaded, it
+    tried to look things up and stopped at `--max-turns 1`. Saved commands get the flags when settings load.
+- **Depends on:** E4.
+- **Measure:** the share of open tickets that join to at least one branch or session, and how often the user opens
+  the tab.
+- **Status:** testing
+- **Notes:**
+  - 2026-10-16: on the real index (30 days): 114 tasks in 0.2 s (49 with a ticket, 10 on a feature branch, 55
+    without either). Notes: 9 of 9 written once the engine flags were added, against 2 of 10 before. Coworker lookup
+    takes 0.1 to 0.6 s for each task.
 
 ## E. Connections
 

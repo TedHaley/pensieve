@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, connections, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, usage
+from pensieve import actions, config, connections, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, usage, work
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -1308,6 +1308,55 @@ def remove_mcp_server(path: str):
                      "connections_on": [d for d in settings.get("connections_on") if d != f"connections/{sid}"]})
     connections.remove(sid)
     return sources.catalog(store, repos, files)
+
+
+@app.get("/api/work")
+def get_work(days: int = 30):
+    """The Data tab: tasks with their data points from every source, newest first, and each task's AI note."""
+    ts = work.tasks(store, days)
+    have = work.notes()
+    stale = {t["id"] for t in work.stale_notes(ts)}
+    return dict(tasks=ts, notes={t["id"]: dict(text=have[t["id"]]["text"], stale=t["id"] in stale)
+                                 for t in ts if t["id"] in have},
+                writing=status.get("work_notes", False))
+
+
+_notes_running = threading.Lock()
+
+
+@app.post("/api/work/notes")
+async def write_work_notes(days: int = 30):
+    """Write the AI notes that are missing or out of date, for the newest tasks, in the background."""
+    if _notes_running.locked():
+        return {"started": False}
+
+    async def run():
+        with _notes_running:
+            status["work_notes"] = True
+            ts = work.tasks(store, days)
+            for t in work.stale_notes(ts):
+                try:
+                    await asyncio.to_thread(work.write_note, t, ts)
+                except llm.Offline:
+                    break
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                broadcast({"type": "work"})
+            status["work_notes"] = False
+            broadcast({"type": "work"})
+    asyncio.create_task(run())
+    return {"started": True}
+
+
+@app.get("/api/work/adjacent")
+async def work_adjacent(id: str, days: int = 30):
+    """For one task: coworkers' recent commits in the same folders, and tickets and threads on the same subject."""
+    t = next((t for t in work.tasks(store, days) if t["id"] == id), None)
+    if not t:
+        raise HTTPException(404, f"unknown task {id!r}")
+    people, rel = await asyncio.gather(asyncio.to_thread(work.coworkers, t), asyncio.to_thread(work.related, t, searcher))
+    return dict(coworkers=people, related=rel)
 
 
 CONNECTIONS_CHECK_SECONDS = 300

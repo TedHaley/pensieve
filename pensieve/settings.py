@@ -120,7 +120,7 @@ _NO_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit
 # is a file the command writes its answer to.
 CLI_TEMPLATES = [
     dict(id="claude", label="Claude Code", privacy="cloud",
-         command=f"claude -p --model haiku --output-format text --max-turns 1 --disallowedTools {_NO_TOOLS}"),
+         command=f'claude -p --strict-mcp-config --tools "" --model haiku --output-format text --max-turns 1 --disallowedTools {_NO_TOOLS}'),
     dict(id="codex", label="Codex", privacy="cloud",
          command="codex exec --skip-git-repo-check --sandbox read-only --output-last-message {out} -"),
     dict(id="qwen", label="Qwen Code", privacy="cloud", command="qwen --approval-mode plan --output-format text {prompt}"),
@@ -168,6 +168,10 @@ def load() -> dict:
             if _data["ai"] in ("claude", "codex"):  # the engines before cli: the same CLI through its template
                 t = cli_template(_data["ai"], _data["agent_model"])
                 _data.update(ai="cli", cli_command=t["command"], cli_privacy=t["privacy"])
+            c = _data["cli_command"]
+            if c.startswith("claude -p ") and "--strict-mcp-config" not in c:  # with tools to call (the user's MCP
+                # servers, newer built-in tools), the engine tried to act instead of answering and hit --max-turns 1
+                _data["cli_command"] = c.replace("claude -p ", 'claude -p --strict-mcp-config --tools "" ', 1)
             off = _data["disabled"]  # the two repo-discovery rules became one
             if "repos/sessions" in off or "repos/sweep" in off:
                 _data["disabled"] = [d for d in off if d not in ("repos/sessions", "repos/sweep")] + \
