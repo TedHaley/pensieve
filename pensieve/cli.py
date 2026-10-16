@@ -11,6 +11,7 @@
                        choose what to index on first run or after a reset (no items: list the sources)
     pensieve search <query> [--kind code|doc|session|...] [--limit 8] [--scope auto]
                        search as an agent does over MCP, scoped to the repo you run it in; prints the same lines
+    pensieve open      open Pensieve in the web browser (http://pensieve.localhost:8765)
 
 Options are turned into env vars before anything reads config."""
 import argparse
@@ -23,8 +24,8 @@ import webbrowser
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="pensieve", description="Semantic search and a 3D map over your files, git repos and AI agent sessions.")
-    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate", "repo", "setup", "search"],
+    ap = argparse.ArgumentParser(prog="pensieve", description="One place for all your information, for context engineering: files, git repos, AI agent sessions, tickets and messages.")
+    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate", "repo", "setup", "search", "open"],
                     default="serve")
     ap.add_argument("--kind", help="search only: code, doc, session, folder, repo or person")
     ap.add_argument("--limit", type=int, default=8, help="search only: how many results")
@@ -61,6 +62,10 @@ def main():
         return setup(a.port, a.items)
     if a.command == "search":
         return search(a.port, " ".join(a.items), a.kind, a.limit, a.scope)
+    if a.command == "open":  # names under .localhost reach this Mac in Chrome, Firefox and curl
+        url = f"http://pensieve.localhost:{a.port}/"
+        print(url)
+        return webbrowser.open(url) and None
 
     from pensieve import reset
     done = reset.apply_pending()  # before anything opens the database
