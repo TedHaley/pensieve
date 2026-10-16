@@ -41,7 +41,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D2 | Opt-in usage counts | Product | idea |
 | D3 | A place for user feedback | Product | testing |
 | D4 | Find people with similar or complementary work | Product | idea |
-| D5 | The Data tab: tasks across sources | Product | testing |
+| D5 | The Context tab: context cards across sources, in five states | Product | testing |
 | E1 | Connections as one list | Connections | idea |
 | E2 | Remote disks | Connections | idea |
 | E3 | Database metadata | Connections | idea |
@@ -507,7 +507,17 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Status:** idea
 - **Notes:**
 
-### D5. The Data tab: tasks across sources
+### D5. The Context tab: context cards across sources, in five states
+
+- **States** (`pensieve/task_states.py`): latent, conscious, subconscious, etched and forgotten. Each one has a
+  meaning and an automatic rule. Forgotten: not done, quiet for 21 days (14 for latent work), no open PR and no
+  uncommitted work. A state set by hand (on the card, or by an agent with `set_task_state`) holds until
+  the task has new activity. Each change by hand is a row in `task_states`, so a task keeps its history.
+- **MCP:** `tasks` (by state, within the agent's scope), `task` (one card, as Markdown) and `set_task_state`. Test:
+  an agent picks a subconscious task with `tasks`, finishes it from the `task` card, and marks it etched.
+- 2026-10-16: on the copied index (30 days): 5 conscious, 18 subconscious, 37 latent and 23 etched, once the PR
+  states arrived. Many latent tasks are single sessions that only asked questions. Check whether these belong on the
+  tab at all.
 
 - **Why:** one piece of work is spread over a ticket, a Slack thread, a branch, agent sessions and a PR. It is hard
   to follow across these services. A tab that joins them shows the progress of the work in one place.

@@ -1,7 +1,7 @@
 [project]
 name = "pensieve"
 version = "0.7.7"
-description = "Spotlight-style semantic and exact search over your documents, git repos and AI agent sessions, with a 3D map and an MCP server for agents."
+description = "One place for all your information, for context engineering: search your documents, git repos, AI agent sessions, tickets and messages, with an MCP server for agents."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
