@@ -1916,6 +1916,7 @@ const SRC_ICON = {
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
   repos: '<circle cx="6" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.2v7.6M18 10.2c0 4-6 3-11 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   apps: '<rect x="4" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+  connections: '<path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0Z M12 16v5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 // 'a/very/long/path/to/thing' -> 'a/very/lo…/to/thing': keeps both the root and the name readable
 const midEllipsis = (t, max) => !t || t.length <= max ? t : t.slice(0, Math.ceil(max * .4)) + '…' + t.slice(-Math.floor(max * .6 - 1));
@@ -1923,7 +1924,23 @@ const srcCount = (n, unit) => n == null ? '' : `${n.toLocaleString()} ${n === 1 
 const SRC_ADD = {agents: ['A folder of agent sessions, e.g. ~/work/.claude', 'Add folder'],
                  files: ['A folder, e.g. ~/notes', 'Add folder'],
                  repos: ['A repo, or a folder of repos, e.g. ~/code', 'Add repo']};
-const SRC_ROUTE = {agents: 'agents', files: 'folders', repos: 'repos'};
+const SRC_ROUTE = {agents: 'agents', files: 'folders', repos: 'repos', connections: 'connections'};
+// One of the user's own MCP servers, from the add form: a URL with "Name: value" headers, or a command with
+// NAME=value environment variables. The values are sent once; Pensieve never shows them again.
+function mcpServerFrom(name, target, secrets) {
+  const lines = secrets.split(/\n|;/).map(s => s.trim()).filter(Boolean);
+  if (/^https?:\/\//.test(target)) return {name, url: target, headers: Object.fromEntries(lines.map(l => { const i = l.indexOf(':'); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }).filter(([k]) => k))};
+  const [command, ...args] = target.split(/\s+/);
+  return {name, command, args, env: Object.fromEntries(secrets.split(/\s+|;/).filter(s => s.includes('=')).map(s => [s.slice(0, s.indexOf('=')), s.slice(s.indexOf('=') + 1)]))};
+}
+function connAddHtml() {
+  return `<div class="set-add src-add conn-add">
+      <input class="set-in" placeholder="Name, e.g. Linear" data-conn-in="name">
+      <input class="set-in" placeholder="URL (https://…/mcp) or command (npx -y some-mcp-server)" data-conn-in="target">
+      <input class="set-in" type="password" autocomplete="off" placeholder="Authorization: Bearer … or API_KEY=…" data-conn-in="secrets">
+      <button class="btn" data-conn-add>Add server</button></div>
+    <div class="err" data-src-add-err="connections">${esc(srcState.addErr.connections || '')}</div>`;
+}
 const srcState = {cat: null, types: null, hints: new Map(), err: null, opts: new Set(), addErr: {}};  // opts: cards with Options open
 async function loadSources() {
   const [cat, types] = await Promise.all([api('/api/sources').catch(() => null), api('/api/filetypes').catch(() => null)]);
@@ -2005,12 +2022,12 @@ function srcHint(id) {
 }
 function srcItem(it, catOn, parentOff = false) {
   const off = !it.available;
-  const detail = off ? 'Not found on this Mac' : it.detail;
-  const shown = it.kind === 'rule' ? detail : midEllipsis(detail, 64);
+  const detail = off ? it.na || 'Not found on this Mac' : it.detail;
+  const shown = it.kind === 'rule' || it.id.startsWith('connections/') ? detail : midEllipsis(detail, 64);
   return `<div class="src-item ${it.kind === 'rule' ? 'rule' : ''} ${it.parent ? 'child' : ''} ${catOn && !parentOff ? '' : 'muted-all'} ${off ? 'na' : ''}">
     ${it.kind === 'worktree' ? '<span title="Synced with its repo"></span>' : `<label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>`}
     <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(it.error ? detail : shown)}</div></div>
-    <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}${it.id.startsWith('repos/') ? pullBtn(it.id.slice(6)) : ''}</div>
+    <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}${it.id.startsWith('repos/') ? pullBtn(it.id.slice(6)) : ''}${it.collect && it.enabled && catOn ? `<button class="linkbtn" data-conn-collect="${esc(it.id.slice(12))}" title="Collect from it now, with its read-only tools">Collect now</button>` : ''}</div>
     ${it.kind === 'rule' || it.map == null ? '<span></span>' : mapBtn(it.id, it.map, off || !catOn || !it.enabled)}
     ${it.remove ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.remove.kind)}" data-src-rm-path="${esc(it.remove.path)}" title="Remove from the index">✕</button>` : '<span></span>'}
   </div>`;
@@ -2020,19 +2037,24 @@ function sourcesHtml() {
   if (!cat) return '<div class="set-card"><div class="shimmer" style="height:120px"></div></div>';
   return `<div class="src-head"><h2>Sources</h2><p>What Pensieve indexes. Switching a source off removes its data from the index on the next sweep, and switching it back on indexes it again. A git repository switched off stops syncing but stays searchable; ✕ removes it from the index.</p>${srcState.err ? `<p class="err">${esc(srcState.err)}</p>` : ''}</div>
     <div class="src-grid">${cat.map(c => {
-      const rules = c.items.filter(i => i.kind === 'rule' && !i.parent), rest = c.items.filter(i => i.kind !== 'rule' && !i.parent);
+      const rules = c.items.filter(i => i.kind === 'rule' && !i.parent);
+      // connections that need sign-in fold into one closed group: an account can have dozens
+      const folded = c.id === 'connections' ? c.items.filter(i => !i.available && !i.parent) : [];
+      const rest = c.items.filter(i => i.kind !== 'rule' && !i.parent && !folded.includes(i));
       const kids = id => c.items.filter(i => i.parent === id);
       const tree = (i, parentOff = false) => srcItem(i, c.enabled, parentOff) + (kids(i.id).length
         ? `<div class="src-kids">${kids(i.id).map(k => tree(k, parentOff || (i.kind === 'rule' && !i.enabled))).join('')}</div>` : '');
       return `<div class="set-card src-card ${c.enabled ? '' : 'off'}">
         <div class="src-top"><span class="src-ic"><svg viewBox="0 0 24 24" width="18" height="18">${SRC_ICON[c.id] || SRC_ICON.apps}</svg></span>
           <div class="src-tx"><h3>${esc(c.label)}${srcHint(c.id)}</h3><p>${esc(c.description)}</p></div>
-          <div class="src-n big">${c.count != null ? srcCount(c.count, c.id === 'agents' ? 'sessions' : c.id === 'apps' ? 'items' : 'files') : ''}</div>
+          <div class="src-n big">${c.count != null ? srcCount(c.count, c.id === 'agents' ? 'sessions' : ['apps', 'connections'].includes(c.id) ? 'items' : 'files') : ''}</div>
           ${mapBtn(c.id, c.map, !c.enabled)}
           <label class="tog" title="${c.enabled ? 'Switch off everything in ' + esc(c.label) : 'Switch on'}"><input type="checkbox" data-src-id="${esc(c.id)}" ${c.enabled ? 'checked' : ''}></label></div>
+        ${c.note != null ? `<div class="src-note">${esc(c.note)} <button class="linkbtn" data-conn-discover ${srcState.discovering ? 'disabled' : ''}>${srcState.discovering ? 'Checking…' : 'Check again'}</button></div>` : ''}
         ${rules.length ? `<div class="src-rules">${rules.map(i => tree(i)).join('')}</div>` : ''}
         ${rest.length ? `<div class="src-items">${rest.map(i => tree(i)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
-        ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="${SRC_ADD[c.id][0]}" data-src-add-in="${c.id}"><button class="btn" data-src-add="${c.id}">${SRC_ADD[c.id][1]}</button></div><div class="err" data-src-add-err="${c.id}">${esc(srcState.addErr[c.id] || '')}</div>` : ''}
+        ${folded.length ? `<details class="src-opts"><summary>${plural(folded.length, 'more server')} to sign in to first</summary><div class="src-items">${folded.map(i => tree(i)).join('')}</div></details>` : ''}
+        ${c.id === 'connections' ? connAddHtml() : c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="${SRC_ADD[c.id][0]}" data-src-add-in="${c.id}"><button class="btn" data-src-add="${c.id}">${SRC_ADD[c.id][1]}</button></div><div class="err" data-src-add-err="${c.id}">${esc(srcState.addErr[c.id] || '')}</div>` : ''}
         ${(SRC_OPTS[c.id] || []).some(k => S.set && k in S.set.draft) ? `<details class="src-opts" data-opts="${c.id}" ${srcState.opts.has(c.id) ? 'open' : ''}><summary>Options</summary>${SRC_OPTS[c.id].map(setRow).join('')}</details>` : ''}
       </div>`;
     }).join('')}</div>${byNameHtml()}${fileTypesHtml()}`;
@@ -2104,6 +2126,32 @@ function renderSources() {
     srcState.cat = j; srcState.hints.set(kind, {on: true, t: Date.now()}); renderSources(); toast('Added — indexing it now');
   };
   $$('[data-src-add]', box).forEach(b => b.onclick = () => add(b.dataset.srcAdd));
+  $$('[data-conn-discover]', box).forEach(b => b.onclick = async () => {
+    srcState.discovering = true; renderSources();
+    try { srcState.cat = await api('/api/connections/discover', {method: 'POST'}); srcState.err = null; }
+    catch (e) { srcState.err = 'Could not check the MCP servers: ' + e.message; }
+    srcState.discovering = false; renderSources();
+  });
+  $$('[data-conn-collect]', box).forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Collecting…';
+    try {
+      const r = await api(`/api/connections/${enc(b.dataset.connCollect)}/collect`, {method: 'POST'});
+      srcState.cat = r.sources; srcState.err = null;
+      toast(r.run.error ? 'Collection failed: ' + r.run.error : `Collected ${plural(r.run.last_items || 0, 'new or changed item')}`);
+    } catch (e) { srcState.err = 'Could not collect: ' + e.message; }
+    renderSources();
+  });
+  $$('[data-conn-add]', box).forEach(b => b.onclick = async () => {
+    const v = k => $(`[data-conn-in="${k}"]`, box).value.trim();
+    if (!v('name') || !v('target')) { srcState.addErr.connections = 'Give the server a name, and its URL or command.'; return renderSources(); }
+    b.disabled = true; b.textContent = 'Connecting…';
+    const r = await fetch('/api/sources/connections', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(mcpServerFrom(v('name'), v('target'), v('secrets')))});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { srcState.addErr.connections = typeof j.detail === 'string' ? j.detail : 'Could not add that server'; return renderSources(); }
+    delete srcState.addErr.connections;
+    $$('[data-conn-in]', box).forEach(i => i.value = '');
+    srcState.cat = j; renderSources(); toast('Added. Switch it on to collect from it');
+  });
   $$('[data-src-add-in]', box).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(i.dataset.srcAddIn); } });
 }
 const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await Promise.all([loadSources(), loadScopes()]); renderSources(); renderScopes(); }, 1200);

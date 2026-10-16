@@ -191,6 +191,15 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 | **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Content of text, Markdown, RTF, Word, PowerPoint, Excel, Pages, Keynote, Numbers, PDF, mail (`.eml`), subtitles, data files and code; images, video and audio by what they show or say (if you switch them on) or by name; other files by name; folders by name and what they contain. Each document's author comes from its metadata (PDF, Office, Spotlight) or its owner. | on |
 | **Git repositories** | Repos your agents worked in; repos found under your home folder (4 levels deep) and inside your folders; each repo on its own | on |
 | **Apps** | Obsidian vaults; Apple Notes (exported to Markdown in `~/.pensieve`, asks for permission) | Obsidian on, Notes off |
+| **Connections** | Tickets, messages and pages from MCP servers (Jira, Slack, Linear and others), and the MCP results in your agent sessions | each one off |
+
+**Connections** collect data from MCP servers with read-only tools. Pensieve keeps each item over time, with a list of its changes.
+
+- **The engine's servers:** when the insights engine is Claude Code, Sources lists its MCP servers, including the claude.ai connectors of your account. To collect, Pensieve runs Claude Code with only the read tools of one server. Every other tool is blocked.
+- **Your own servers:** for any engine, including the built-in one, add a server in Sources. Give a URL with headers (for example `Authorization: Bearer …`), or a command with environment variables. Pensieve connects to it itself. The engine chooses the search calls, and Pensieve makes them. Pensieve never shows the header or environment values again. They stay in `~/.pensieve/settings.json`, which only you can read.
+- **From your agent sessions:** the results that your agents already got from MCP tools. Pensieve fetches nothing new for this source.
+
+A tool is read-only if its name has a read verb (get, list, search, read, fetch and others) and no write verb (create, update, send, delete and others). A server's `readOnlyHint: false` or `destructiveHint: true` makes a tool a write tool. Pensieve never calls a write tool. Each connection that is on is collected every 6 hours (`connections_every_hours`); **Collect now** collects at once. The first collection goes back 30 days (`connections_days`). Items are Markdown files in `~/.pensieve/connections`.
 
 Repos are indexed as they are on disk: committed, staged, modified and untracked files, with uncommitted lines credited to you in blame. **Linked worktrees** (including `.claude/worktrees`) are indexed too: files that differ from the main checkout show up tagged with their branch, and disappear when the worktree is removed. Clones of the same remote count as one repo. Repos your agents work in, and repos you add, are indexed at any size. A repo that only the sweep found, with more than 5,000 tracked files and no agent use, is listed in Sources for you to switch on instead of being indexed on its own.
 

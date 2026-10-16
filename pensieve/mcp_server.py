@@ -569,7 +569,7 @@ def update_settings(changes: dict[str, Any]) -> dict:
 
 @tool()
 def list_sources() -> list[dict]:
-    """What Pensieve indexes, by category (agents, files, repos, apps), with on/off state and item counts.
+    """What Pensieve indexes, by category (agents, files, repos, apps, connections), with on/off state and item counts.
     Use the ids with set_source."""
     return [dict(id=c["id"], label=c["label"], enabled=c["enabled"], map=c["map"], count=c["count"],
                  items=[{k: i.get(k) for k in ("id", "label", "detail", "enabled", "map", "available", "count")}

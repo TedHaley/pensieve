@@ -1,7 +1,8 @@
 """Scopes: named slices of the index that an agent (or the search panel) works within.
 
-A scope lists source ids, the same ids as Sources: a category ("agents", "files", "repos", "apps") or an item
-("repos/<repo root>", "files/~/Documents/specs", "agents/claude", "apps/obsidian"). Everything stays in one index;
+A scope lists source ids, the same ids as Sources: a category ("agents", "files", "repos", "apps", "connections") or
+an item ("repos/<repo root>", "files/~/Documents/specs", "agents/claude", "apps/obsidian", "connections/<server>").
+Everything stays in one index;
 a scope just filters every query. Agent sessions come along with the repos they ran in.
 
 'auto' picks a scope from the agent's working directory: the first named scope that includes that repo, else just
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, settings
+from pensieve import apps, connections, settings
 
 ALL = None  # no scope: everything
 current = contextvars.ContextVar("pensieve_scope", default=None)  # set per MCP request
@@ -54,6 +55,9 @@ def _build(name, sources, description=""):
                     a = apps.APPS.get(k)
                     if a and a["available"]():
                         s.folders += [str(p.resolve()) for p in a["roots"]()]
+        elif cat == "connections":
+            if s.folders is not None:
+                s.folders += [str(p.resolve()) for p in connections.roots(lambda x: not item or x == sid)]
         elif cat == "agents":
             if not item:
                 s.agents = None

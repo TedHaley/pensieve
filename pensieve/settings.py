@@ -60,6 +60,13 @@ DEFAULTS = {
     "llm_key": "",             # API key for a hosted server; sent only to llm_url, never shown back in full
     # Saved model servers to pick from: [{"name", "url", "model", "key"}]. Using one copies it into llm_url/llm_model/llm_key.
     "llm_connections": [],
+    # Connections (connections.py): MCP servers whose data Pensieve collects with read-only tools. Each one is off
+    # until it is in `connections_on`. `mcp_servers` are the servers that Pensieve connects to itself:
+    # {"name", "url", "headers": {}} or {"name", "command", "args": [], "env": {}}. Secret values stay in this file.
+    "connections_on": [],
+    "mcp_servers": [],
+    "connections_every_hours": 6,  # how often to collect from each connection that is on; 0 = only on request
+    "connections_days": 30,        # how far back the first collection goes
 }
 
 DESCRIPTIONS = {
@@ -101,6 +108,11 @@ DESCRIPTIONS = {
     "llm_model": "Chat model used for summaries and insights.",
     "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
     "llm_connections": "Saved model servers, each with a name, URL, model and optional API key (manage in Settings → Models).",
+    "connections_on": "Connections that Pensieve collects from (easier to change in Sources). A connection is off until it is here.",
+    "mcp_servers": "MCP servers that Pensieve connects to itself, with a URL and headers, or a command and environment. "
+                   "Use them when the insights engine has no MCP servers, for example the built-in engine.",
+    "connections_every_hours": "How often Pensieve collects from each connection that is on (0 = only when you ask).",
+    "connections_days": "How many days back the first collection from a connection goes.",
 }
 
 _NO_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit"
@@ -184,6 +196,8 @@ def update(changes: dict) -> dict:
             keys = {c["name"]: c.get("key", "") for c in cur[k]}  # clients only ever see key_set
             v = [{"name": c["name"], "url": c["url"], "model": c.get("model", ""),
                   "key": c["key"] if "key" in c else keys.get(c["name"], "")} for c in v]
+        elif k == "mcp_servers":
+            v = _mcp_servers(v, cur[k])
         elif isinstance(d, bool):
             if not isinstance(v, bool):
                 raise ValueError(f"{k} must be true or false")
@@ -205,7 +219,7 @@ def update(changes: dict) -> dict:
                     raise ValueError(f"invalid scope name {n!r} (reserved or contains '/')")
                 if not isinstance(sc, dict) or not isinstance(sc.get("sources"), list) or not sc["sources"]:
                     raise ValueError(f"scope {n!r} needs a non-empty sources list")
-                if any(not isinstance(x, str) or x.split("/", 1)[0] not in ("agents", "files", "repos", "apps") for x in sc["sources"]):
+                if any(not isinstance(x, str) or x.split("/", 1)[0] not in ("agents", "files", "repos", "apps", "connections") for x in sc["sources"]):
                     raise ValueError(f"scope {n!r}: sources are ids like repos/<root>, files/<folder>, agents/claude, apps/obsidian")
         elif k == "file_types":
             if not isinstance(v, dict):
@@ -247,15 +261,49 @@ def update(changes: dict) -> dict:
     with _lock:
         _data = {**(_data or DEFAULTS), **clean}
         PATH.write_text(json.dumps(_data, indent=2))
+        os.chmod(PATH, 0o600)  # it can hold API keys and MCP server credentials
     for fn in list(_listeners):
         fn(clean)
     return load()
 
 
 def public(s: dict) -> dict:
-    """Settings as the visualizer and agents see them: the API key is never sent back, only whether one is saved."""
+    """Settings as the visualizer and agents see them: the API key is never sent back, only whether one is saved.
+    The same for MCP server headers and environment: their names are sent, with empty values."""
     conns = [{**{k: v for k, v in c.items() if k != "key"}, "key_set": bool(c.get("key"))} for c in s.get("llm_connections", [])]
-    return {**s, "llm_key": "", "llm_key_set": bool(s.get("llm_key")), "llm_connections": conns}
+    mcp = [{**c, **{f: {n: "" for n in c[f]} for f in ("headers", "env") if f in c}} for c in s.get("mcp_servers", [])]
+    return {**s, "llm_key": "", "llm_key_set": bool(s.get("llm_key")), "llm_connections": conns, "mcp_servers": mcp}
+
+
+def _mcp_servers(v, cur: list) -> list:
+    """Validate `mcp_servers`. A header or env value sent back empty keeps the saved value (clients see no secrets)."""
+    if not isinstance(v, list) or not all(isinstance(c, dict) and isinstance(c.get("name"), str) and c["name"].strip()
+                                          for c in v):
+        raise ValueError("mcp_servers must be a list of {name, url, headers} or {name, command, args, env}")
+    names = [c["name"].strip() for c in v]
+    if len(set(names)) != len(names):
+        raise ValueError("each MCP server needs its own name")
+    saved = {c["name"]: c for c in cur}
+    out = []
+    for c in v:
+        name = c["name"].strip()
+        url, command = c.get("url") or "", c.get("command") or ""
+        if bool(url) == bool(command):
+            raise ValueError(f"MCP server {name!r}: give a url or a command, not both")
+        if url and not url.startswith(("http://", "https://")):
+            raise ValueError(f"MCP server {name!r}: the url must start with http:// or https://")
+        args = c.get("args") or []
+        if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            raise ValueError(f"MCP server {name!r}: args must be a list of strings")
+        f = "headers" if url else "env"
+        vals = c.get(f) or {}
+        if not isinstance(vals, dict) or not all(isinstance(a, str) and isinstance(b, str) for a, b in vals.items()):
+            raise ValueError(f"MCP server {name!r}: {f} must map names to text values")
+        old = saved.get(name, {}).get(f, {})
+        x = {"name": name, "url": url} if url else {"name": name, "command": command, "args": args}
+        x[f] = {a: b or old.get(a, "") for a, b in vals.items()}
+        out.append(x)
+    return out
 
 
 def on_change(fn):
@@ -263,9 +311,12 @@ def on_change(fn):
 
 
 def enabled(source_id: str) -> bool:
-    """A source is on unless it, or any category above it, is in `disabled`. 'files/~/Docs' -> checks 'files' too."""
+    """A source is on unless it, or any category above it, is in `disabled`. 'files/~/Docs' -> checks 'files' too.
+    A connection is the other way round: it is off until it is in `connections_on`."""
     off = set(get("disabled"))
     cat = source_id.split("/", 1)[0]
+    if cat == "connections" and "/" in source_id and source_id not in get("connections_on"):
+        return False
     return source_id not in off and cat not in off
 
 
@@ -290,6 +341,9 @@ def file_type(t: str) -> dict:
 
 
 def set_enabled(source_id: str, on: bool) -> dict:
+    if source_id.startswith("connections/"):
+        cur = [d for d in get("connections_on") if d != source_id]
+        return update({"connections_on": cur + [source_id] if on else cur})
     off = [d for d in get("disabled") if d != source_id]
     if not on:
         off.append(source_id)

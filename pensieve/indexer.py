@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import config, parsers, settings
+from pensieve import config, connections, parsers, settings
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 from pensieve.projects import project_name
 
@@ -466,6 +466,8 @@ class Store:
         if in_temp(s.project):
             return False
         self.save_session_files(s.id, s.touched)
+        if s.mcp and settings.enabled(f"connections/{connections.SESSIONS}"):
+            connections.from_session(s.id, s.mcp)
         chunks = chunk_session(s.turns)
         hashes = [hashlib.sha1(c.encode()).hexdigest() for c in chunks]
         with self.lock:

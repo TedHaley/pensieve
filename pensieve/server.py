@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, usage
+from pensieve import actions, config, connections, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, usage
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -119,6 +119,7 @@ async def watcher():
     asyncio.create_task(repo_watcher())
     asyncio.create_task(upstream_watcher())
     asyncio.create_task(model_switcher())
+    asyncio.create_task(connections_worker())
     last_full = 0
     while True:
         if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
@@ -1251,6 +1252,94 @@ def remove_repos(path: str):
         sources.set_source(f"repos/{root}", False)
         threading.Thread(target=repos.remove, args=(root,), daemon=True).start()
     return sources.catalog(store, repos, files)
+
+
+@app.get("/api/connections")
+def get_connections():
+    """The MCP servers that Pensieve can collect from, each with its tools and which of them are read-only."""
+    return connections.servers()
+
+
+@app.post("/api/connections/discover")
+async def discover_connections():
+    """Read the MCP servers of the insights engine again, and connect to the user's own servers."""
+    await asyncio.to_thread(connections.discover)
+    return sources.catalog(store, repos, files)
+
+
+@app.post("/api/connections/{sid}/collect")
+async def collect_connection(sid: str):
+    """Collect from one connection now, with its read-only tools."""
+    if sid not in {r["id"] for r in connections.servers()}:
+        raise HTTPException(404, f"unknown connection {sid!r}")
+    run = await asyncio.to_thread(connections.collect, sid)
+    wake_files.set()
+    return {"run": run, "sources": sources.catalog(store, repos, files)}
+
+
+class McpServerReq(BaseModel):
+    name: str
+    url: str = ""
+    headers: dict[str, str] = {}
+    command: str = ""
+    args: list[str] = []
+    env: dict[str, str] = {}
+
+
+@app.post("/api/sources/connections")
+async def add_mcp_server(req: McpServerReq):
+    """Add or change one of the MCP servers that Pensieve connects to itself, then list its tools."""
+    x = {"name": req.name, **({"url": req.url, "headers": req.headers} if req.url else
+                               {"command": req.command, "args": req.args, "env": req.env})}
+    cur = [c for c in settings.get("mcp_servers") if c["name"] != req.name.strip()]
+    try:
+        settings.update({"mcp_servers": cur + [x]})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(connections.discover_own)
+    return sources.catalog(store, repos, files)
+
+
+@app.delete("/api/sources/connections")
+def remove_mcp_server(path: str):
+    """✕ on a server that Pensieve connects to itself: forget it and its collected items."""
+    sid = connections.slug(path)
+    settings.update({"mcp_servers": [c for c in settings.get("mcp_servers") if c["name"] != path],
+                     "connections_on": [d for d in settings.get("connections_on") if d != f"connections/{sid}"]})
+    connections.remove(sid)
+    return sources.catalog(store, repos, files)
+
+
+CONNECTIONS_CHECK_SECONDS = 300
+DISCOVER_SECONDS = 6 * 3600
+
+
+async def connections_worker():
+    """Read the engine's MCP servers now and then, and collect from each connection that is on when it is due."""
+    wait = 20  # soon after start, then every CONNECTIONS_CHECK_SECONDS
+    while True:
+        await asyncio.sleep(wait)
+        wait = CONNECTIONS_CHECK_SECONDS
+        if not settings.get("setup_done"):
+            continue
+        try:
+            st = connections._load()
+            if settings.enabled(f"connections/{connections.SESSIONS}") and not st.get("sessions_backfilled"):
+                if await asyncio.to_thread(connections.backfill_sessions):
+                    wake_files.set()
+                    broadcast({"type": "repos"})
+            if (connections.engine() == "claude" or settings.get("mcp_servers")) and \
+                    time.time() - (st.get("discovered") or 0) > DISCOVER_SECONDS:
+                await asyncio.to_thread(connections.discover)
+                broadcast({"type": "repos"})  # the Sources list changed
+            if not llm.on_battery() or settings.get("ai_on_battery"):
+                for sid in connections.due():
+                    await asyncio.to_thread(connections.collect, sid)
+                    wake_files.set()
+                    broadcast({"type": "repos"})
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
 
 def _read_version():
