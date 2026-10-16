@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <script>try{const t=localStorage.getItem('pensieve.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
-<body data-view="code">
+<body data-view="work">
 <div id="app">
   <main id="center">
     <section id="stage">
@@ -41,8 +41,8 @@
       </div>
     </div>
     <nav id="tabs" role="tablist" class="glass">
-      <button role="tab" data-view="data" class="on" title="Code, files and agent sessions on one map (1)">Map</button>
-      <button role="tab" data-view="work" title="Your tasks, with their sessions, commits, tickets and messages (2)">Data</button>
+      <button role="tab" data-view="work" class="on" title="Context: a card for each piece of your work, with what you need to pick it back up (1)">Context</button>
+      <button role="tab" data-view="data" title="Code, files and agent sessions on one map (2)">Map</button>
       <button role="tab" data-view="insights" title="Insights (3)">Insights</button>
       <button role="tab" data-view="settings" title="Settings (4)">Settings</button>
     </nav>
@@ -66,7 +66,7 @@
 
 <div id="helpmodal" class="modal" hidden><div class="card help glass"><h3>Keyboard shortcuts</h3><dl>
 <dt><kbd>⌘K</kbd> or <kbd>/</kbd></dt><dd>Search everything</dd>
-<dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></dt><dd>Map · Data · Insights · Settings</dd>
+<dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></dt><dd>Context · Map · Insights · Settings</dd>
 <dt><kbd>F</kbd></dt><dd>Fit map to visible points</dd>
 <dt><kbd>T</kbd></dt><dd>Switch between light and dark</dd>
 <dt><kbd>Esc</kbd></dt><dd>Close panel · clear selection</dd>

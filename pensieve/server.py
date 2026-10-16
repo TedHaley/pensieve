@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, connections, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, usage, work
+from pensieve import actions, config, connections, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, task_states, usage, work
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -120,6 +120,8 @@ async def watcher():
     asyncio.create_task(upstream_watcher())
     asyncio.create_task(model_switcher())
     asyncio.create_task(connections_worker())
+    work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
+    threading.Thread(target=work.tasks, args=(store, 30), daemon=True).start()  # built now, so the first view of the tab does not wait for git and gh
     last_full = 0
     while True:
         if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
@@ -440,9 +442,12 @@ async def local_only(request: Request, call_next):
     still reach it: through DNS rebinding (its own host name pointed at 127.0.0.1, which the Host header shows) or
     with a cross-site request (which carries the page's Origin)."""
     from urllib.parse import urlsplit
+
+    def local(h):  # names under .localhost always resolve to this Mac (RFC 6761), e.g. pensieve.localhost
+        return h in LOCAL_HOSTS or (h or "").endswith(".localhost")
     host = urlsplit("//" + request.headers.get("host", "")).hostname
     origin = request.headers.get("origin")
-    if host not in LOCAL_HOSTS or (origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS):  # "null" too
+    if not local(host) or (origin is not None and not local(urlsplit(origin).hostname)):  # "null" too
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse("Pensieve only answers requests from this Mac", status_code=403)
     return await call_next(request)
@@ -1312,29 +1317,51 @@ def remove_mcp_server(path: str):
 
 @app.get("/api/work")
 def get_work(days: int = 30):
-    """The Data tab: tasks with their data points from every source, newest first, and each task's AI note."""
+    """The Context tab: context cards (tasks) with their state, their data points from every source, and each task's AI note."""
     ts = work.tasks(store, days)
     have = work.notes()
-    stale = {t["id"] for t in work.stale_notes(ts)}
-    return dict(tasks=ts, notes={t["id"]: dict(text=have[t["id"]]["text"], stale=t["id"] in stale)
-                                 for t in ts if t["id"] in have},
-                writing=status.get("work_notes", False))
+    stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
+    def note(n):  # notes written before the fields were renamed show until they are written again
+        return dict(recap=n.get("recap") or n.get("conjure", ""), current=n.get("current") or n.get("now", ""),
+                    left=n.get("left", ""))
+    return dict(tasks=ts, notes={t["id"]: {**note(have[t["id"]]), "stale": t["id"] in stale}
+                                 for t in ts if t["id"] in have and ("current" in have[t["id"]] or "now" in have[t["id"]])},
+                states=task_states.models(), writing=status.get("work_notes") or [])
+
+
+class TaskStateReq(BaseModel):
+    id: str
+    state: str  # latent | conscious | subconscious | etched | forgotten | auto
+    reason: str = ""
+
+
+@app.post("/api/work/state")
+def set_task_state(req: TaskStateReq):
+    """Set a task's state by hand, or back to automatic with "auto"."""
+    try:
+        r = work.set_state(store, req.id, req.state, "user", req.reason)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    broadcast({"type": "work"})
+    return r
 
 
 _notes_running = threading.Lock()
 
 
 @app.post("/api/work/notes")
-async def write_work_notes(days: int = 30):
-    """Write the AI notes that are missing or out of date, for the newest tasks, in the background."""
+async def write_work_notes(days: int = 30, ids: str = ""):
+    """Write the AI notes that are missing or out of date, for the tasks in `ids` (comma-separated; default: the
+    first 10), in the background."""
     if _notes_running.locked():
         return {"started": False}
 
     async def run():
         with _notes_running:
-            status["work_notes"] = True
             ts = work.tasks(store, days)
-            for t in work.stale_notes(ts):
+            todo = work.stale_notes(ts, ids=set(_csv(ids)) or None)
+            status["work_notes"] = [t["id"] for t in todo]  # the notes being written, for their "Updating…" mark
+            for t in todo:
                 try:
                     await asyncio.to_thread(work.write_note, t, ts)
                 except llm.Offline:
@@ -1342,11 +1369,29 @@ async def write_work_notes(days: int = 30):
                 except Exception:
                     import traceback
                     traceback.print_exc()
+                status["work_notes"] = [x for x in status["work_notes"] if x != t["id"]]
                 broadcast({"type": "work"})
-            status["work_notes"] = False
+            status["work_notes"] = []
             broadcast({"type": "work"})
     asyncio.create_task(run())
     return {"started": True}
+
+
+class ResumeReq(BaseModel):
+    session: str
+
+
+@app.post("/api/work/resume")
+def resume_session(req: ResumeReq):
+    """Open Terminal in the session's folder and resume the agent session there."""
+    cmd = work.resume_command(store, req.session)
+    if not cmd:
+        raise HTTPException(404, "can't resume that session: its folder is gone, or its agent has no resume command")
+    script = cmd.replace("\\", "\\\\").replace('"', '\\"')
+    import subprocess
+    subprocess.run(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
+                    "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True)
+    return {"ok": True, "command": cmd}
 
 
 @app.get("/api/work/adjacent")

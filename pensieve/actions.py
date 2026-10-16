@@ -142,9 +142,18 @@ def show_search(query: str = ""):
 
 
 def open_item(id: str, action="open"):
-    if action not in ("open", "reveal", "visualize"):
-        raise ValueError("action must be open, reveal or visualize")
+    if action not in ("open", "reveal", "visualize", "editor", "terminal"):
+        raise ValueError("action must be open, reveal, visualize, editor or terminal")
     r = resolve(id)
+    if action in ("editor", "terminal"):  # a folder where work happens: open it to pick the work back up
+        if r["kind"] != "folder":
+            raise ValueError(f"{action} opens a folder")
+        editor = settings.get("editor")
+        if action == "editor" and editor in ("vscode", "cursor", "zed"):
+            if _open_url(f"{editor}://file{urllib.parse.quote(r['path'])}"):
+                return dict(ok=True, path=r["path"], editor=editor)
+        subprocess.run(["open", "-a", "Terminal" if action == "terminal" else "Finder", r["path"]], check=False)
+        return dict(ok=True, path=r["path"])
     if action == "visualize" or r["kind"] in ("session", "person"):
         return visualize(id=id)
     if r["kind"] == "folder" and action == "open":  # a folder opens in Finder
