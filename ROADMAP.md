@@ -40,6 +40,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D1 | Team features | Product | idea |
 | D2 | Opt-in usage counts | Product | idea |
 | D3 | A place for user feedback | Product | testing |
+| D4 | Find people with similar or complementary work | Product | idea |
 | E1 | Connections as one list | Connections | idea |
 | E2 | Remote disks | Connections | idea |
 | E3 | Database metadata | Connections | idea |
@@ -480,6 +481,28 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - 2026-10-14: the website footer and `site/llms.txt` link to the GitHub issue chooser (bug and idea templates).
     The site goes live when this reaches `main`.
   - Measure: reports per week, and how many are sent.
+
+### D4. Find people with similar or complementary work
+
+- **Why:** people who research or work in the same field can find each other. People can also find friends.
+  Pensieve already knows the topics of each user from the local index.
+- **Risk:** an embedding does not hide the text. Inversion attacks rebuild text from its vector. Vec2Text (Morris
+  et al., 2023) rebuilt 92% of 32-token inputs exactly. Treat a shared chunk embedding as the chunk itself.
+- **Try:**
+  - Pensieve makes topic labels on the machine. The user edits the labels before they leave the machine. Only the
+    labels go out.
+  - If vectors are necessary, share one profile vector: the average of many chunks, with differential-privacy
+    noise. This lowers the inversion risk, but it does not remove it.
+  - Show a match only when both people opt in. Private set intersection on hashed topic IDs can find matches, and
+    the server does not see the topics.
+  - Complementary matches: cosine similarity finds only similar people. Match what one person lacks
+    (`knowledge_gaps`) with what another person knows (`who_knows`).
+- **Before building:** this needs a server, identities and moderation. The local index needs none of these. People
+  index work machines, so the employer can own the signal. Check the employment agreement, as for D1.
+- **Measure:** 5 to 10 consenting people make profiles on their machines. Each person rates the matches that they
+  get.
+- **Status:** idea
+- **Notes:**
 
 ## E. Connections
 
