@@ -2,7 +2,7 @@
 item. Switching a source off removes what it had indexed on the next sweep."""
 from pathlib import Path
 
-from pensieve import apps, config, settings
+from pensieve import apps, config, connections, settings
 
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
 CATEGORIES = [
@@ -10,7 +10,67 @@ CATEGORIES = [
     ("files", "Files & folders", "Documents in these folders: text, Markdown, code, PDF, Word, PowerPoint. Git repos inside them are indexed as repos."),
     ("repos", "Git repositories", "Code with git blame and history, including uncommitted changes and linked worktrees."),
     ("apps", "Apps", "Content that lives inside apps on this Mac."),
+    ("connections", "Connections", "Tickets, messages and pages from your MCP servers (Jira, Slack, Linear and others), "
+     "collected with read-only tools and kept over time, with each change. Each connection is off until you switch it on."),
 ]
+
+
+def _ago(t) -> str:
+    import time
+    if not t:
+        return ""
+    s = time.time() - t
+    return "just now" if s < 90 else f"{int(s // 60)} min ago" if s < 5400 else \
+        f"{int(s // 3600)} h ago" if s < 172800 else f"{int(s // 86400)} days ago"
+
+
+def connection_items() -> list[dict]:
+    on = settings.enabled
+    out = [dict(id=f"connections/{connections.SESSIONS}", label="From your agent sessions",
+                detail="What your agents read with MCP tools in past sessions: issues, threads, pages. Nothing new is fetched.",
+                available=True, enabled=on(f"connections/{connections.SESSIONS}"),
+                count=connections._count(connections.SESSIONS), unit="items")]
+    rank = {"connected": 0, "pending": 1, "failed": 2, "unknown": 3}
+    for r in sorted(connections.servers(), key=lambda r: (rank.get(r["status"], 4), r["name"].lower())):
+        reads, total = sum(t["read"] for t in r["tools"]), len(r["tools"])
+        via = "via Claude Code" if r["origin"] == "engine" else "Pensieve connects itself"
+        if r["status"] == "connected":
+            parts = [f"{reads} of {total} tools read-only", via]
+            if r.get("error"):
+                parts.insert(0, f"last collection failed: {r['error']}")
+            elif r.get("collected"):
+                parts.append(f"collected {_ago(r['collected'])}")
+                if r.get("tokens"):
+                    parts.append(f"{r['tokens'] / 1000:,.0f}k tokens a run" +
+                                 (f" (${r['cost_usd']:.2f} at API prices)" if r.get("cost_usd") else ""))
+            detail = " · ".join(parts)
+        elif r["status"] == "needs-auth":
+            detail = "Needs sign-in: sign in to it in Claude Code (/mcp) or on claude.ai"
+        elif r["status"] == "pending":
+            detail = f"Was still connecting at the last check · {via}"
+        else:
+            detail = f"{r['status']}: {r.get('error') or 'could not connect'} · {via}"
+        label = r["name"].removeprefix("claude.ai ").split(":")[-1]  # plugin:<plugin>:<server> -> <server>
+        out.append(dict(id=f"connections/{r['id']}", label=label, detail=detail,
+                        error=bool(r.get("error")), available=r["status"] in ("connected", "pending") or r["items"] > 0,
+                        na=detail, enabled=on(f"connections/{r['id']}"), count=r["items"], unit="items",
+                        collect=r["status"] == "connected" and reads > 0,
+                        remove=dict(kind="connections", path=r["name"]) if r["origin"] == "own" else None))
+    return out
+
+
+def connections_note() -> str:
+    st = connections._load()
+    eng = connections.engine()
+    when = f" Checked {_ago(st['discovered'])}." if st.get("discovered") else " Not checked yet."
+    if st.get("discover_error"):
+        when += f" The last check failed: {st['discover_error']}"
+    if eng == "claude":
+        return "These are the MCP servers of your insights engine, Claude Code, and the servers you add here." + when
+    if eng == "codex":
+        return "Pensieve cannot list the MCP servers of Codex yet. Add a server here with its URL or command." + when
+    return ("Your insights engine has no MCP servers of its own. Add a server here with its URL and headers, or its "
+            "command and environment. Pensieve connects to it itself." + when)
 
 
 def _home(p) -> str:
@@ -102,12 +162,12 @@ def catalog(store, repos, files) -> list[dict]:
                               available=a["available"](), enabled=on(f"apps/{k}"),
                               count=sum(n for r, n in per_root.items() if any(r == x or r.startswith(x + "/") for x in roots)), unit="items"))
 
-    items = {"agents": agents, "files": folders, "repos": repo_items, "apps": app_items}
+    items = {"agents": agents, "files": folders, "repos": repo_items, "apps": app_items, "connections": connection_items()}
     for it in (i for group in items.values() for i in group if i.get("kind") not in ("rule", "worktree")):
         it["map"] = settings.on_map(it["id"])
     return [dict(id=c, label=label, description=desc, enabled=on(c), map=settings.on_map(c), items=items[c],
                  count=sum(i.get("count", 0) for i in items[c] if i.get("kind") not in ("rule", "worktree")),
-                 addable=c != "apps")
+                 addable=c != "apps", **({"note": connections_note()} if c == "connections" else {}))
             for c, label, desc in CATEGORIES]
 
 

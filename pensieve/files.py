@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, config, content, media, settings
+from pensieve import apps, config, connections, content, media, settings
 from pensieve.indexer import LAYOUT_VERSION, embed, embed_images, embed_media, reconcile
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 
@@ -401,10 +401,12 @@ class Files:
 
     @staticmethod
     def roots():
-        """Folders to index: the enabled folders plus enabled apps' content; nested roots fold into their parent."""
+        """Folders to index: the enabled folders plus enabled apps' content and connections; nested roots fold into
+        their parent."""
         cand = [p.resolve() for f, p in zip(settings.get("folders"), settings.paths("folders"))
                 if settings.enabled(f"files/{f}") and p.is_dir()]
         cand += [p.resolve() for p in apps.roots(settings.enabled)]
+        cand += [p.resolve() for p in connections.roots(settings.enabled)]
         return [p for p in dict.fromkeys(cand) if not any(p != q and p.is_relative_to(q) for q in cand)]
 
     def sync_paths(self, paths, log=lambda m: print(m, flush=True), settle=config.SETTLE_SECONDS, layout=True):
@@ -572,6 +574,8 @@ class Files:
                 folders.update({str(Path(r).resolve()): f"apps/{k}" for r in (a["roots"]() if a["available"]() else [])})
             except Exception:
                 pass
+        if connections.DIR.is_dir():
+            folders.update({str(p.resolve()): f"connections/{p.name}" for p in connections.DIR.iterdir() if p.is_dir()})
         src = {}
 
         def ok(path, root):

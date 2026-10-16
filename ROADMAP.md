@@ -41,9 +41,12 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D2 | Opt-in usage counts | Product | idea |
 | D3 | A place for user feedback | Product | testing |
 | D4 | Find people with similar or complementary work | Product | idea |
+| D5 | The Context tab: context cards across sources, in five states | Product | testing |
 | E1 | Connections as one list | Connections | idea |
 | E2 | Remote disks | Connections | idea |
 | E3 | Database metadata | Connections | idea |
+| E4 | Collect from MCP servers, read-only | Connections | testing |
+| E5 | Rolling expiry for collected items | Connections | idea |
 
 ## A. Indexing efficiency
 
@@ -504,6 +507,46 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Status:** idea
 - **Notes:**
 
+### D5. The Context tab: context cards across sources, in five states
+
+- **States** (`pensieve/task_states.py`): latent, conscious, subconscious, etched and forgotten. Each one has a
+  meaning and an automatic rule. Forgotten: not done, quiet for 21 days (14 for latent work), no open PR and no
+  uncommitted work. A state set by hand (on the card, or by an agent with `set_task_state`) holds until
+  the task has new activity. Each change by hand is a row in `task_states`, so a task keeps its history.
+- **MCP:** `tasks` (by state, within the agent's scope), `task` (one card, as Markdown) and `set_task_state`. Test:
+  an agent picks a subconscious task with `tasks`, finishes it from the `task` card, and marks it etched.
+- 2026-10-16: on the copied index (30 days): 5 conscious, 18 subconscious, 37 latent and 23 etched, once the PR
+  states arrived. Many latent tasks are single sessions that only asked questions. Check whether these belong on the
+  tab at all.
+
+- **Why:** one piece of work is spread over a ticket, a Slack thread, a branch, agent sessions and a PR. It is hard
+  to follow across these services. A tab that joins them shows the progress of the work in one place.
+- **Built:** `pensieve/work.py` and the Data tab. A task joins these by:
+  - ticket keys (`ABC-123`) in branch names, commit subjects, session text and connection items, when the key's
+    prefix is a known project (from collected tickets or branch names);
+  - the git branch of a session (from the Claude Code transcript), for feature branches only;
+  - for work without a ticket: two sessions in one repo, at most 3 days apart, that edited 2 specific files in
+    common, or one file that only they edited. A file that more than 3 sessions edited does not count.
+  Each task shows its data points newest first, and an AI note from the insights engine. The note is written again
+  when the task's data points change. Coworkers: `git log --remotes` in the task's folders, by people who are not the
+  user. Related: a search of the connections for the task's title.
+- **Comments:** keep comments in Pensieve first. Writing a comment back to Jira or Slack posts as the user, so each
+  one needs the user's approval. Not built.
+- **Questions:**
+  - A branch with more than 6 sessions, or sessions over more than 4 days, counts as long-lived and holds many
+    tasks. Check these limits on more repos.
+  - Remote branches are only as new as the last fetch. The upstream watcher fetches the default branch only.
+  - The Claude Code engine for notes needs `--strict-mcp-config --tools ""`. With the user's MCP tools loaded, it
+    tried to look things up and stopped at `--max-turns 1`. Saved commands get the flags when settings load.
+- **Depends on:** E4.
+- **Measure:** the share of open tickets that join to at least one branch or session, and how often the user opens
+  the tab.
+- **Status:** testing
+- **Notes:**
+  - 2026-10-16: on the real index (30 days): 114 tasks in 0.2 s (49 with a ticket, 10 on a feature branch, 55
+    without either). Notes: 9 of 9 written once the engine flags were added, against 2 of 10 before. Coworker lookup
+    takes 0.1 to 0.6 s for each task.
+
 ## E. Connections
 
 Pensieve searches the disk of one machine today. A connection is a place that a search can reach: the local disk,
@@ -574,5 +617,63 @@ each connection, and each hit shows its connection.
   - Freshness: read the schema again on a schedule, or when a migration file changes.
   - Which databases first: Postgres and SQLite cover most local work.
 - **Measure:** the share of agent questions about data that find the right table in the top 3 hits.
+- **Status:** idea
+- **Notes:**
+
+### E4. Collect from MCP servers, read-only
+
+- **Why:** tickets, messages and pages are part of the work, but they live in other services. Pensieve keeps each
+  item over time, with its changes, so it is searchable next to the code and sessions.
+- **Rule:** read-only. A tool is read-only if its name has a read verb and no write verb. A server's
+  `readOnlyHint: false` or `destructiveHint: true` makes a tool a write tool. Pensieve never calls a write tool.
+- **Built:**
+  - Sources → Connections lists the MCP servers of the insights engine when it is Claude Code. Pensieve reads them
+    from the startup event of `claude -p --output-format stream-json --verbose` (about 3 s). The process stops before
+    the model answers.
+  - To collect, Pensieve runs Claude Code with `--tools ""`, the read tools of one server in `--allowedTools`, and its
+    write tools and every other server in `--disallowedTools`. It keeps the raw tool results from the stream, not the
+    model's answer. A large result that Claude Code saves to a file is read from that file.
+  - Own servers (`mcp_servers`): for any engine, also the built-in one. Pensieve connects with the MCP SDK (URL with
+    headers, or command with environment). The engine plans the search calls. Pensieve then calls the server's get
+    tool for each item that it found.
+  - From agent sessions: the MCP results in Claude Code transcripts, also from sessions indexed before.
+  - Items are Markdown in `~/.pensieve/connections/<server>/`, indexed as files. The raw JSON and a list of field
+    changes are in hidden folders. The Markdown ends with the changes, for example "status changed from Triaged to Done".
+- **Questions:**
+  - Codex: list its servers with `codex mcp list`. Not built, and Codex is not installed on the test Mac.
+  - The Claude Code startup event shows a slow server as `pending`, without tools. Pensieve keeps the tools from the
+    last check.
+  - Only the agent-sessions source is backfilled from the past. A new connection starts `connections_days` back.
+- **Measure:** the share of searches that return a connection item that the agent or user then uses, and the cost of a
+  collection run.
+- **Status:** testing
+- **Notes:**
+  - 2026-10-16: tested on a scratch data folder.
+    - Atlassian through Claude Code: 48 Jira items in 27 s. A run that only checks for changes used 105k tokens,
+      mostly cache reads ($0.006 at API prices). A manual run before the other servers were blocked used 281k new
+      tokens ($0.30).
+    - A local test server with a bearer token: a wrong token is refused. The write tool `create_issue` was never
+      called.
+    - The agent-sessions backfill: 183 items from past transcripts in 9 s.
+    - Through the backend: discover, switch on, collect, index, then search finds the items. Switching a connection
+      off removes its items from search.
+
+### E5. Rolling expiry for collected items
+
+- **Why:** much of what E4 collects is transient: alerts, bot messages, closed tickets, pages read once. Without an
+  end date, the index and `~/.pensieve/connections` grow with each collection run.
+- **Try:** a retention period for each connection, for example 90 days by default. An item expires when it has not
+  changed and has not been used in that period. Expiry removes its Markdown file and raw JSON, and the next sweep
+  removes it from the index.
+- **Keep:**
+  - Items that a search hit led to: the agent or the user opened or read them.
+  - Items that join to code: a ticket key in a branch, commit or session (see D5).
+  - A short line for each expired item, so the D5 timeline still shows that it existed.
+- **Questions:**
+  - Expire by item age, or also cap the size of each connection (for example the 5,000 newest items)?
+  - Bot and alert messages can expire sooner. Find them by author, or by how often the same text repeats.
+  - The agent-sessions source keeps what an agent used. Expire it with its session, or keep it longer?
+- **Measure:** the size of `~/.pensieve/connections` and the number of connection chunks over time, and the share of
+  used hits that point to an expired item.
 - **Status:** idea
 - **Notes:**

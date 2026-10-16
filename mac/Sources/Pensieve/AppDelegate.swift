@@ -76,6 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if SMAppService.mainApp.status != .enabled { try? SMAppService.mainApp.register() }
     }
 
+    /// The Dock icon shows while the app window is open; its menu opens the app or the same pages in the browser.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(item("Open App", #selector(openVisualizer)))
+        menu.addItem(item("Open in Browser", #selector(openInBrowser)))
+        return menu
+    }
+
     /// Opening the app again (Finder, Spotlight, `open -a Pensieve`) shows the search panel.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         panel.show()
@@ -225,7 +233,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             search.keyEquivalentModifierMask = HotKeys.parse(spec).flags
         }
         menu.addItem(search)
-        menu.addItem(item("Open Map",#selector(openVisualizer)))
+        menu.addItem(item("Open App", #selector(openVisualizer)))
+        menu.addItem(item("Open in Browser", #selector(openInBrowser)))
         menu.addItem(.separator())
 
         menu.addItem(item("Settings…", #selector(openSettings), key: ","))
@@ -291,6 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showSearch() { panel.show() }
     @objc private func openVisualizer() { visualizer.show() }
+    @objc private func openInBrowser() { NSWorkspace.shared.open(Backend.shared.url("/")) }
     @objc private func openSettings() { visualizer.show(fragment: "settings") }
     @objc private func reloadVisualizer() { visualizer.reload() }
 

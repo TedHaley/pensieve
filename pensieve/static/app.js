@@ -105,17 +105,22 @@ class Scene3D {
     Object.assign(this.controls, {enableDamping: true, dampingFactor: 0.08, rotateSpeed: 0.7, zoomSpeed: 0.9, autoRotateSpeed: 0.35, zoomToCursor: true});    this.controls.autoRotate = store.get('autorotate', true);
     this.mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false,
-      uniforms: {uPR: {value: this.renderer.getPixelRatio()}, uScale: {value: 300}, uRing: {value: new THREE.Color(pal().ring)}},
+      uniforms: {uPR: {value: this.renderer.getPixelRatio()}, uScale: {value: 300}, uRing: {value: new THREE.Color(pal().ring)},
+                 uFade: {value: 1}, uCenter: {value: new THREE.Vector3()}, uRad: {value: 1}},
+      // uFade 0 -> 1 sends a wave out from uCenter: each point fades in and grows as the wave reaches it
       vertexShader: `attribute vec3 aColor;attribute float aSize;attribute float aState;uniform float uPR;uniform float uScale;
-        varying vec3 vC;varying float vS;
+        uniform float uFade;uniform vec3 uCenter;uniform float uRad;
+        varying vec3 vC;varying float vS;varying float vF;
         void main(){vC=aColor;vS=aState;vec4 mv=modelViewMatrix*vec4(position,1.);
+          float d=clamp(distance(position,uCenter)/uRad,0.,1.);
+          vF=uFade>=1.?1.:smoothstep(0.,1.,uFade*1.9-d*.9);
           float k=aState<.25?.55:aState<.75?.8:aState>1.5?1.75:1.;
-          gl_PointSize=max(2.,aSize*k*uPR*uScale/-mv.z);gl_Position=projectionMatrix*mv;}`,
-      fragmentShader: `uniform vec3 uRing;varying vec3 vC;varying float vS;
+          gl_PointSize=max(2.,aSize*k*uPR*uScale/-mv.z)*mix(.3,1.,vF);gl_Position=projectionMatrix*mv;}`,
+      fragmentShader: `uniform vec3 uRing;varying vec3 vC;varying float vS;varying float vF;
         void main(){float r=length(gl_PointCoord-.5);if(r>.5||vS<-.5)discard;
           float a=vS<.25?.07:vS<.75?.2:vS>1.5?1.:.9;
           vec3 c=mix(vC,uRing,smoothstep(.34,.44,r)*.9);
-          gl_FragColor=vec4(c,a*(1.-smoothstep(.45,.5,r)));}`,
+          gl_FragColor=vec4(c,a*vF*(1.-smoothstep(.45,.5,r)));}`,
     });
     this.ringMat = new THREE.ShaderMaterial({
       transparent: true, depthTest: false,
@@ -131,6 +136,7 @@ class Scene3D {
     this.points = null; this.n = 0; this.labelObjs = []; this.fly = null;
     new ResizeObserver(() => this.resize()).observe(el);
     this.resize();
+    this.paused = false;
     const loop = t => { this.tick(t); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
   }
@@ -233,11 +239,35 @@ class Scene3D {
     if (instant) { this.controls.target.copy(target); this.camera.position.copy(endPos); return; }
     this.fly = {t0: performance.now(), dur: 700, fromT: this.controls.target.clone(), toT: target.clone(), fromP: this.camera.position.clone(), toP: endPos};
   }
+  // Call after the camera is placed: it starts 1.9x further out and ends where it was put
+  intro(dur = 1800) {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) { this.mat.uniforms.uFade.value = 1; return; }
+    const t = this.controls.target.clone(), end = this.camera.position.clone();
+    const start = t.clone().add(end.clone().sub(t).multiplyScalar(2.2));
+    this.camera.position.copy(start);
+    this.fly = {t0: performance.now(), dur, fromT: t, toT: t.clone(), fromP: start, toP: end, out: true};
+    const u = this.mat.uniforms;
+    u.uCenter.value.copy(t); u.uRad.value = Math.max(0.2, end.distanceTo(t) * 0.7); u.uFade.value = 0;
+    this.fade = {t0: performance.now(), dur: dur * 1.35};
+  }
+  release() {
+    if (this.points) { this.scene.remove(this.points); this.points.geometry.dispose(); this.points = null; }
+    this.n = 0; this.pos = null; this.states = null; this.fly = null;
+    this.setLabels([]); this.setRings(-1, -1);
+    this.renderer.renderLists.dispose();
+  }
   tick(now) {
+    if (this.paused) return;
     if (this.fly) {
-      const f = this.fly, k = Math.min(1, (now - f.t0) / f.dur), e = k < .5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
+      const f = this.fly, k = Math.min(1, (now - f.t0) / f.dur);
+      const e = f.out ? 1 - (1 - k) ** 3 : k < .5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
       this.controls.target.lerpVectors(f.fromT, f.toT, e); this.camera.position.lerpVectors(f.fromP, f.toP, e);
       if (k >= 1) this.fly = null;
+    }
+    if (this.fade) {
+      const k = Math.min(1, (now - this.fade.t0) / this.fade.dur);
+      this.mat.uniforms.uFade.value = 1 - (1 - k) ** 2;
+      if (k >= 1) this.fade = null;
     }
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
@@ -288,7 +318,8 @@ function itemColor(it) {
 }
 
 function buildMap() {
-  mapPts = S.view === 'data' ? S.data.points : S.view === 'code' ? S.code.points : S.view === 'files' ? S.files.points : S.level === 'chunk' ? (S.chunks || []) : S.sessions;
+  if (S.view === 'work') return;
+  mapPts =S.view === 'data' ? S.data.points : S.view === 'code' ? S.code.points : S.view === 'files' ? S.files.points : S.level === 'chunk' ? (S.chunks || []) : S.sessions;
   const n = mapPts.length, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n), st = new Float32Array(n);
   const c = new THREE.Color();
   mapPts.forEach((p, i) => {
@@ -300,7 +331,7 @@ function buildMap() {
   hoverIdx = -1;
   refreshStates(); renderLabels(); renderLegend();
   $('#loading').classList.toggle('gone', n > 0);
-  if (n && (firstFit || cams[camKey()] == null)) { gl.fit(null, true); firstFit = false; }
+  if (n && (firstFit || cams[camKey()] == null)) { gl.fit(null, true); firstFit = false; gl.intro(); }
   gl.setRings(-1, selIdx);
 }
 const camKey = () => S.view === 'data' ? 'data' : S.view === 'code' ? 'code:' + S.code.repo : S.view === 'files' ? 'files' : 'map:' + S.level;
@@ -322,9 +353,15 @@ function recolor() {
 function refreshStates() {
   const a = gl.attr('aState'); if (!a) return;
   if (S.view === 'data') {
-    const {highlight: hl, search: sr} = S.data;
-    // -1: filtered out (another folder, type or author), not drawn at all
-    mapPts.forEach((p, i) => { let v = dataPass(p) ? 1 : -1; if (v > 0 && (hl || sr)) v = (!hl || hl.has(p.id)) && (!sr || sr.has(p.id)) ? 2 : 0.5; a.array[i] = v; });
+    const {highlight: hl, search: sr, colorBy, cardOf} = S.data, ctx = colorBy === 'context' && cardOf;
+    // -1: filtered out (another folder, type or author), not drawn at all. Colored by context, the points of no
+    // card recede so the cards stand out.
+    mapPts.forEach((p, i) => {
+      let v = dataPass(p) ? 1 : -1;
+      if (v > 0 && (hl || sr)) v = (!hl || hl.has(p.id)) && (!sr || sr.has(p.id)) ? 2 : 0.5;
+      else if (v > 0 && ctx) v = cardOf.has(p.id) ? 2 : 0.2;  // 0.2: small and faint, so tens of thousands draw cheaply
+      a.array[i] = v;
+    });
     a.needsUpdate = true;
     if (dataContextSlots()) recolor(); else renderLegend();  // colors and legend follow what's in view
     return;
@@ -378,6 +415,17 @@ function renderLabels() {
       const idx = []; mapPts.forEach((p, i) => { if (D.sel.members.has(p.id) && dataPass(p)) idx.push(i); });
       if (idx.length) items.push({n: idx.length, text: D.sel.name, sel: true, pos: dataAnchor(idx), color: D.colorBy === 'topic' ? slotColor(D.sel.slot) : 'transparent',
         title: `${plural(idx.length, 'item')} · click to step back out`, onClick: () => deselectLabel()});
+    }
+    if (D.colorBy === 'context') {  // one label per context card, where its sessions and files sit
+      const cards = new Map();
+      mapPts.forEach((p, i) => { const t = D.cardOf?.get(p.id); if (t && dataInView(p)) { if (!cards.has(t)) cards.set(t, []); cards.get(t).push(i); } });
+      [...cards].sort((a, b) => b[0].updated - a[0].updated).slice(0, MAP_CARD_LABELS).forEach(([t, idx]) => {
+        const on = D.sel?.kind === 'card' && D.sel.key === t.id;
+        items.push({n: idx.length + (on ? 1e6 : 0), text: t.title, sel: on, pos: dataAnchor(idx), color: cardColor(t),
+          title: `${(D.cards.states.find(m => m.state === t.state) || {}).label || t.state} · ${plural(idx.length, 'item')}\n${on ? 'click to step back out' : 'click for its context card'}`,
+          onClick: () => on ? deselectLabel() : selectLabel('card', t.id)});
+      });
+      return gl.setLabels(items);
     }
     mapPts.forEach((p, i) => { const c = dataTopicOf(p); if (dataInView(p) && c != null && (!basis || basis.has(i))) { if (!by.has(c)) by.set(c, []); by.get(c).push(i); } });
     if (D.colorBy === 'risk') {  // only the topics at risk get a label, with how much of their code lost its authors
@@ -464,7 +512,10 @@ function renderLegend() {
   if (S.view === 'data') {
     const D = S.data, cb = D.colorBy, sw = (c, l) => `<span><i class="sw" style="background:${c}"></i>${esc(l)}</span>`, ctx = D.ctx || D.points;
     const rest = (slots, key) => ctx.some(p => !slots.has(key(p)));
-    if (cb === 'type') html = Object.entries(TYPE_SLOT).filter(([t]) => ctx.some(p => p.type === t)).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
+    if (cb === 'context') {
+      const n = new Map(); ctx.forEach(p => { const t = D.cardOf?.get(p.id); if (t) n.set(t.state, (n.get(t.state) || new Set()).add(t.id)); });
+      html = `<b class="lg-h">Context cards of the last ${MAP_CARD_DAYS} days</b>` + (D.cards?.states || []).filter(m => n.has(m.state)).map(m => sw(m.color, `${m.label} · ${n.get(m.state).size}`)).join('') + sw(pal().other, 'No context card');
+    } else if (cb === 'type') html = Object.entries(TYPE_SLOT).filter(([t]) => ctx.some(p => p.type === t)).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
     else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), placeName(k))).join('') + (rest(D.folderSlot, p => p.place) ? sw(pal().other, 'Other') : '');
     else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + (rest(D.authorSlot, p => p.who) ? sw(pal().other, (D.authorRank?.length || 0) > PEOPLE_PAGE ? 'Everyone else, bots and agents' : 'Others, bots and agents') : '') + peoplePager(D.authorRank?.length || 0, D.authorPage || 0);
     else if (cb === 'recency') { const [a, b] = D.tRange; html = legendRamp(`Oldest · ${esc(monY(a / 1000) || '?')}`, `Newest · ${esc(monY(b / 1000) || '?')}`, 'Last changed (code: last commit)'); }
@@ -561,12 +612,13 @@ function renderToolbar() {
     const D = S.data;
     const fr = focusedRepo();
     if (D.colorBy === 'risk' && !fr) D.colorBy = 'type';
-    tb.innerHTML = `<div class="seg" id="dcolor"><span class="seg-label">Color</span>${[['type', 'Type'], ['folder', 'Folder'], ['author', 'Author'], ['recency', 'Recency'], ['topic', 'Topic'], ...(fr ? [['risk', 'Knowledge risk']] : [])].map(([k, l]) => `<button data-v="${k}" class="${D.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+    tb.innerHTML = `<div class="seg" id="dcolor"><span class="seg-label">Color</span>${[['context', 'Context'], ['type', 'Type'], ['folder', 'Folder'], ['author', 'Author'], ['recency', 'Recency'], ['topic', 'Topic'], ...(fr ? [['risk', 'Knowledge risk']] : [])].map(([k, l]) => `<button data-v="${k}" class="${D.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       ${D.highlight ? `<button class="btn on" data-act="cleardhl">✕ Clear highlight</button>` : ''}`;
     $$('#dcolor button', tb).forEach(b => b.onclick = async () => {
       D.colorBy = b.dataset.v; if (D.colorBy !== 'risk') store.set('dataColor', D.colorBy);
       if (D.colorBy === 'risk') await loadGaps(focusedRepo()?.name);
-      renderToolbar(); recolor(); renderSidebar();
+      if (D.colorBy === 'context' && !D.cardOf) await loadCards();
+      renderToolbar(); refreshStates(); recolor(); renderSidebar();
     });
   } else if (S.view === 'files') {
     tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Folders</button>
@@ -1215,6 +1267,7 @@ const TYPE_NAME = {doc: 'Documents', code: 'Code', session: 'Agent sessions'};
 const TYPE_ONE = {doc: 'Document', code: 'Code', session: 'Agent session'};
 S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type'),
           treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map(),
+          srcOff: new Set(store.get('dataSrcOff', [])), srcOpen: new Set(store.get('dataSrcOpen', [])), cards: null, cardOf: null,
           topics: new Map(), topicsAI: false, sel: null, selStack: [], search: null, ctx: null, view: null, rev: '', authors: new Set(), drawerPerson: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
 const relHome = (p = '') => { p = p || ''; const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
 const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
@@ -1297,7 +1350,7 @@ function onScreen() {
 }
 function viewTopicsTick() {
   const D = S.data;
-  if (S.view !== 'data' || !D.loaded || document.hidden || VT.busy) return;
+  if (S.view !== 'data' || !D.loaded || document.hidden || VT.busy || D.colorBy === 'context') return;  // context: no topics
   const cur = onScreen(), now = performance.now();
   if (jaccard(cur, VT.prev) < 0.95) { VT.prev = cur; VT.still = now; return; }  // still moving: wait for it to settle
   if (cur.size < 10) return;  // too few to cluster: keep the topics you zoomed in from
@@ -1371,8 +1424,7 @@ async function loadData() {
     const rel = relHome(p.path), dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
     return {...p, rel, dir, top: rel.split('/')[0], group: p.repo || rel.split('/')[0], t: ptTime(p)};
   });
-  D.points.forEach((p, i) => { p.i = i;
-  });
+  D.points.forEach((p, i) => { p.i = i; [p.sg, p.si] = srcOf(p); });
   const cnt = (f) => { const m = new Map(); D.points.forEach(p => { const k = f(p); if (k) m.set(k, (m.get(k) || 0) + 1); }); return new Map([...m].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k], i) => [k, i])); };
   const who = canonAuthors(D.points); D.whoMap = who;
   D.points.forEach(p => { p.who = who.get(p.author) || null; p.place = placeOf(p.dir); });
@@ -1380,10 +1432,39 @@ async function loadData() {
   const ts = D.points.map(p => p.t).filter(x => !isNaN(x)).sort((a, b) => a - b);
   D.tRange = [ts[Math.floor(ts.length * .05)] || 0, ts[ts.length - 1] || 1];
   D.tree = null; D.loaded = true; D.stale = false;
+  if (D.colorBy === 'context') await loadCards();
 }
+// A point's source group (as in Settings → Sources) and its item in that group
+function srcOf(p) {
+  if (p.type === 'session') return ['agents', p.source || 'agent'];
+  if (p.type === 'code') return ['repos', p.repo || p.top];
+  const parts = p.rel.split('/');
+  if (parts[0] === '.pensieve' && parts[1] === 'connections') return ['connections', parts[2] || ''];
+  if (parts[0] === '.pensieve' && parts[1] === 'apps') return ['apps', parts[2] || ''];
+  return ['files', p.top || '~'];
+}
+const SRC_GROUPS = [['agents', 'Agent sessions', 'A', '#30b0c7'], ['repos', 'Repositories', 'R', '#34c759'],
+                    ['files', 'Files & folders', 'F', '#0a84ff'], ['apps', 'Apps', 'Ap', '#8e8e93'], ['connections', 'Connections', 'C', '#bf5af2']];
+const srcItemName = (g, k) => g === 'agents' ? (AGENT_NAME[k] || k) : g === 'connections' ? k.replace(/^claude_ai_/, '').replace(/_/g, ' ') : g === 'files' ? '~/' + k : k;
+// Context cards on the map: each point takes the card it belongs to (its sessions, the files they edited, its tickets).
+// Only the recent cards, and only the most recent ones get a label: with every card and label the map was slow to zoom.
+const MAP_CARD_DAYS = 7, MAP_CARD_LABELS = 25;
+async function loadCards() {
+  const D = S.data;
+  try { D.cards = await api(`/api/work?days=${MAP_CARD_DAYS}`); } catch { D.cards = null; return; }
+  const byPath = new Map(D.points.map(p => [p.path, p])), of = new Map();
+  for (const t of D.cards.tasks) {
+    const ids = [...t.sessions.map(s => 'session:' + s.id), ...t.files.map(f => byPath.get(f)?.id),
+                 ...t.tickets.map(k => k.path && byPath.get(k.path)?.id), ...t.items.map(i => i.path && byPath.get(i.path)?.id)];
+    ids.forEach(id => { if (id && !of.has(id)) of.set(id, t); });
+  }
+  D.cardOf = of;
+}
+const cardColor = t => (S.data.cards?.states || []).find(m => m.state === t.state)?.color || pal().other;
 function dataColor(p) {
   const D = S.data;
   switch (D.colorBy) {
+    case 'context': { const t = D.cardOf?.get(p.id); return t ? cardColor(t) : pal().other; }
     case 'type': return slotColor(TYPE_SLOT[p.type]);
     case 'folder': return slotColor(D.folderSlot.has(p.place) ? D.folderSlot.get(p.place) : -1);
     case 'author': return slotColor(p.who && D.authorSlot.has(p.who) ? D.authorSlot.get(p.who) : -1);
@@ -1396,6 +1477,7 @@ function dataColor(p) {
 function dataPass(p, skip) {
   const D = S.data;
   if (skip !== 'types' && !D.types.has(p.type)) return false;
+  if (skip !== 'src' && D.srcOff.size && (D.srcOff.has(p.sg) || D.srcOff.has(p.sg + '|' + p.si))) return false;
   if (skip !== 'authors' && D.authors.size && !D.authors.has(p.who)) return false;
   if (skip !== 'folders' && D.folders.size && ![...D.folders].some(k => p.rel.startsWith(k + '/'))) return false;
   return true;
@@ -1469,6 +1551,14 @@ function selectLabel(kind, key) {
     const stack = D.selStack;
     toggleDataFolder(key, true);  // filters and fits (and clears the selection, restored here)
     D.selStack = [...stack, entry]; D.sel = entry;
+  } else if (kind === 'card') {
+    const t = D.cards?.tasks.find(x => x.id === key); if (!t) return;
+    const members = new Set(D.points.filter(p => D.cardOf.get(p.id) === t).map(p => p.id));
+    Object.assign(entry, {card: t, name: t.title, members});
+    D.selStack.push(entry); D.sel = entry;
+    D.highlight = members;
+    refreshStates(); renderToolbar(); setTimeout(() => gl.fit(visibleIdx()), 30);
+    openCardPanel(t);
   } else {
     const t = dataTopics().get(key) || {name: `Topic ${key + 1}`, keywords: '', description: '', reps: []};
     const members = new Set(D.points.filter(p => dataTopicOf(p) === key && dataInView(p)).map(p => p.id));
@@ -1487,7 +1577,7 @@ function deselectLabel() {
   const sameFolders = s.folders.size === D.folders.size && [...s.folders].every(f => D.folders.has(f));
   if (!sameFolders) { const stack = D.selStack, sel = D.sel; D.folders = new Set(s.folders); dataChanged(false); D.selStack = stack; D.sel = sel; D.highlight = s.highlight; refreshStates(); renderLabels(); }
   else { refreshStates(); renderToolbar(); renderLabels(); }
-  if (D.drawerTopic) { if (D.sel?.kind === 'topic') openTopic(D.sel); else closeDrawer(); }
+  if (D.drawerTopic) { if (D.sel?.kind === 'topic') openTopic(D.sel); else if (D.sel?.kind === 'card') openCardPanel(D.sel.card); else closeDrawer(); }
   const dir = s.cam.p.clone().sub(s.cam.t), dist = dir.length();
   gl.flyTo(s.cam.t.clone(), dist, dir.normalize());
 }
@@ -1521,6 +1611,29 @@ function openTopic(entry) {
   $$('[data-twho]', body).forEach(b => b.onclick = () => openPersonPanel(b.dataset.twho));
   $('[data-zoomout]', body).onclick = () => deselectLabel();
 }
+function openCardPanel(t) {
+  const D = S.data, m = (D.cards?.states || []).find(x => x.state === t.state) || {label: t.state, color: pal().other};
+  const n = D.cards?.notes?.[t.id], p = (t.places || [])[0];
+  const prs = t.prs.slice(0, 4).map(r => `<a class="item" href="${esc(r.url)}" target="_blank" rel="noopener"><div class="t"><span class="grow">#${esc(prNum(r.url) || '')} ${esc(r.title || '')}</span><span class="muted">${esc(r.state || '')}</span></div></a>`).join('');
+  const note = n ? [['Recap', n.recap], ['Current state', n.current], ['What’s left', n.left]].filter(([, v]) => v)
+    .map(([l, v]) => `<div class="h4">${l}</div><p style="margin:2px 0 0">${esc(v)}</p>`).join('') : '';
+  openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${m.color}"></i>${esc(m.label)}</span>${t.active ? 'Session running · ' : ''}${fmtWhen(t.updated)}</div><h2>${esc(t.title)}</h2>`,
+    `${p ? `<p class="muted" style="margin:0">${esc(homeTilde(p.path))}${p.branch ? ` · ${esc(p.branch)}` : ''}${p.changed ? ` · ${plural(p.changed, 'uncommitted file')}` : ''}</p>` : ''}
+     ${note}
+     ${prs ? `<div class="h4">Pull requests</div><div class="list">${prs}</div>` : ''}
+     <div class="actions">${t.resume ? `<button class="btn on" data-card-resume="${esc(t.resume.session)}">Resume last session</button>` : ''}<button class="btn" data-card-open>Open in Context</button><button class="btn" data-zoomout>Zoom back out</button></div>`);
+  D.drawerTopic = {card: t};
+  const body = $('#drawer-body');
+  $('[data-card-resume]', body)?.addEventListener('click', async e => {
+    try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: e.currentTarget.dataset.cardResume})}); toast('Resuming it in Terminal'); }
+    catch (err) { toast('Could not resume it: ' + err.message); }
+  });
+  $('[data-card-open]', body).onclick = () => {
+    S.work.flash = {id: t.id, state: t.state, until: Date.now() + 2000, shown: false};  // renderWork finds and lights it
+    setView('work');
+  };
+  $('[data-zoomout]', body).onclick = () => deselectLabel();
+}
 // the repo (name, folder key) that the current folder filter is in, if exactly one
 function focusedRepo() {
   const D = S.data; if (D.folders.size !== 1) return null;
@@ -1534,21 +1647,40 @@ function renderDataSidebar(side) {
     side.innerHTML = '<div class="empty" style="padding:16px"><div class="spinner" style="margin:0 auto 8px"></div>Loading…</div>';
     return;
   }
-  const T = dataTree(), all = D.points, vis = all.filter(p => dataPass(p));
-  const cnt = new Map();
-  all.filter(p => dataPass(p, 'folders')).forEach(p => { const parts = p.dir.split('/').filter(Boolean); for (let i = 1; i <= parts.length; i++) { const k = parts.slice(0, i).join('/'); cnt.set(k, (cnt.get(k) || 0) + 1); } });
-  const tc = {}; all.filter(p => dataPass(p, 'types')).forEach(p => tc[p.type] = (tc[p.type] || 0) + 1);
+  const all = D.points, vis = all.filter(p => dataPass(p));
   const pp = dataPeople(), people = pp.list;
+  const gn = new Map(), items = new Map();
+  all.filter(p => dataPass(p, 'src')).forEach(p => {
+    gn.set(p.sg, (gn.get(p.sg) || 0) + 1);
+    if (!items.has(p.sg)) items.set(p.sg, new Map());
+    items.get(p.sg).set(p.si, (items.get(p.sg).get(p.si) || 0) + 1);
+  });
+  const sources = SRC_GROUPS.map(([g, label, mark, color]) => {
+    const open = D.srcOpen.has(g), on = !D.srcOff.has(g), its = [...(items.get(g) || [])].sort((a, b) => b[1] - a[1]);
+    return `<div class="src-g ${on ? '' : 'off'}" style="--c:${color}">
+      <div class="src-gh"><button class="src-chev" data-srcopen="${g}" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} ${esc(label)}" ${its.length ? '' : 'disabled'}>${open ? '▾' : '▸'}</button>
+        <span class="src-mark" aria-hidden="true">${mark}</span><span class="name">${esc(label)}</span><span class="n">${(gn.get(g) || 0).toLocaleString()}</span>
+        <input type="checkbox" data-srcon="${g}" ${on ? 'checked' : ''} aria-label="Show ${esc(label)} on the map"></div>
+      ${open ? its.map(([k, n]) => `<div class="src-i ${D.srcOff.has(g + '|' + k) ? 'off' : ''}"><button class="linkbtn subtle" data-srcfocus="${esc(g + '|' + k)}" title="Show only this on the map">${esc(srcItemName(g, k))}</button><span class="n">${n.toLocaleString()}</span>
+        <input type="checkbox" data-srcon="${esc(g + '|' + k)}" ${D.srcOff.has(g + '|' + k) ? '' : 'checked'} ${on ? '' : 'disabled'} aria-label="Show ${esc(srcItemName(g, k))}"></div>`).join('') : ''}</div>`;
+  }).join('');
   side.innerHTML = `
-    <div class="sec"><div class="chips type-chips" role="group" aria-label="Types">${Object.keys(TYPE_SLOT).map(t => `<button class="chip ${D.types.has(t) ? 'on' : ''}" data-type="${t}" aria-pressed="${D.types.has(t)}"><i class="sw" style="background:${slotColor(TYPE_SLOT[t])}"></i>${TYPE_NAME[t]}<span class="n">${(tc[t] || 0).toLocaleString()}</span></button>`).join('')}</div>
+    <div class="sec"><div class="sec-h"><span>Sources</span>${D.srcOff.size ? '<span class="sec-tools"><button class="linkbtn" data-srcall>Show all</button></span>' : ''}</div>
+      <div class="src-list">${sources}</div>
       <div class="sec-note" style="margin-top:8px">${vis.length.toLocaleString()} of ${plural(all.length, 'item')}${D.folders.size ? ` in <b>${esc([...D.folders].join(', '))}</b> <button class="linkbtn" data-dclearf>Clear</button>` : ''}</div></div>
     ${D.colorBy === 'risk' ? riskTopicsHtml() : ''}
     <div class="sec"><div class="sec-h"><span>People</span><span class="sec-tools">${pp.total > PEOPLE_PAGE ? `<span class="lg-pager"><button data-people-step="-1" aria-label="Previous people">‹</button>${pp.page * PEOPLE_PAGE + 1}–${Math.min(pp.total, (pp.page + 1) * PEOPLE_PAGE)} of ${pp.total}<button data-people-step="1" aria-label="Next people">›</button></span>` : ''}${D.authors.size ? `<button class="linkbtn" data-dclearp>Clear</button>` : ''}</span></div>
-      ${people.length ? `<div class="rows">${people.map(x => `<div class="prow-w ${D.drawerPerson === x.who ? 'open' : ''}"><button class="row prow ${D.authors.has(x.who) ? 'on' : ''}" data-who="${esc(x.who)}" aria-pressed="${D.authors.has(x.who)}" title="${D.authors.has(x.who) ? 'Click again to stop filtering by ' + esc(x.who) : 'Show only work by ' + esc(x.who) + ' (pick several to compare)'}"><span class="check"></span><span class="sw" style="background:${slotColor(D.authorSlot.get(x.who) ?? -1)}"></span><span class="name">${esc(x.who)}</span><span class="n">${x.n.toLocaleString()}</span></button><button class="parrow" data-pwho="${esc(x.who)}" title="What ${esc(x.who)} knows about, in what's shown" aria-label="About ${esc(x.who)}"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>` : '<div class="sec-note">No authors known for what is shown.</div>'}</div>
-    <div class="sec"><div class="sec-h"><span>Sources</span></div>
-      <div class="tree">${T.roots.filter(k => cnt.get(k)).sort((a, b) => cnt.get(b) - cnt.get(a)).map(k => treeHtml(k, 0, cnt, 'ddir', T.children, null, D.treeOpen)).join('') || '<div class="empty" style="padding:8px">Nothing indexed yet</div>'}</div></div>`;
-  $$('[data-type]', side).forEach(b => b.onclick = () => { const t = b.dataset.type; if (D.types.has(t) && D.types.size === 1) D.types = new Set(Object.keys(TYPE_SLOT)); else toggleSet(D.types, t); dataChanged(); });
-  bindTree(side, 'ddir', k => toggleDataFolder(k), () => renderSidebar(), D.treeOpen, 'dataTreeOpen');
+      ${people.length ? `<div class="rows">${people.map(x => `<div class="prow-w ${D.drawerPerson === x.who ? 'open' : ''}"><button class="row prow ${D.authors.has(x.who) ? 'on' : ''}" data-who="${esc(x.who)}" aria-pressed="${D.authors.has(x.who)}" title="${D.authors.has(x.who) ? 'Click again to stop filtering by ' + esc(x.who) : 'Show only work by ' + esc(x.who) + ' (pick several to compare)'}"><span class="check"></span><span class="sw" style="background:${slotColor(D.authorSlot.get(x.who) ?? -1)}"></span><span class="name">${esc(x.who)}</span><span class="n">${x.n.toLocaleString()}</span></button><button class="parrow" data-pwho="${esc(x.who)}" title="What ${esc(x.who)} knows about, in what's shown" aria-label="About ${esc(x.who)}"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>`).join('')}</div>` : '<div class="sec-note">No authors known for what is shown.</div>'}</div>`;
+  const saveSrc = () => { store.set('dataSrcOff', [...D.srcOff]); dataChanged(); };
+  $$('[data-srcon]', side).forEach(c => c.onchange = () => { const k = c.dataset.srcon; c.checked ? D.srcOff.delete(k) : D.srcOff.add(k); saveSrc(); });
+  $$('[data-srcopen]', side).forEach(b => b.onclick = () => { toggleSet(D.srcOpen, b.dataset.srcopen); store.set('dataSrcOpen', [...D.srcOpen]); renderSidebar(); });
+  $('[data-srcall]', side)?.addEventListener('click', () => { D.srcOff.clear(); saveSrc(); });
+  // only this item: every other item and group off, this one on
+  $$('[data-srcfocus]', side).forEach(b => b.onclick = () => {
+    const [g, k] = b.dataset.srcfocus.split('|');
+    D.srcOff = new Set([...SRC_GROUPS.map(x => x[0]).filter(x => x !== g), ...[...(items.get(g) || new Map()).keys()].filter(x => x !== k).map(x => g + '|' + x)]);
+    saveSrc();
+  });
   $('[data-dclearf]', side)?.addEventListener('click', () => { D.folders.clear(); dataChanged(); });
   $$('[data-who]', side).forEach(b => b.onclick = () => toggleAuthor(b.dataset.who));
   $$('[data-people-step]', side).forEach(b => b.onclick = () => stepPeople(+b.dataset.peopleStep));
@@ -1916,6 +2048,7 @@ const SRC_ICON = {
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
   repos: '<circle cx="6" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.2v7.6M18 10.2c0 4-6 3-11 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   apps: '<rect x="4" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+  connections: '<path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0Z M12 16v5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 // 'a/very/long/path/to/thing' -> 'a/very/lo…/to/thing': keeps both the root and the name readable
 const midEllipsis = (t, max) => !t || t.length <= max ? t : t.slice(0, Math.ceil(max * .4)) + '…' + t.slice(-Math.floor(max * .6 - 1));
@@ -1923,7 +2056,23 @@ const srcCount = (n, unit) => n == null ? '' : `${n.toLocaleString()} ${n === 1 
 const SRC_ADD = {agents: ['A folder of agent sessions, e.g. ~/work/.claude', 'Add folder'],
                  files: ['A folder, e.g. ~/notes', 'Add folder'],
                  repos: ['A repo, or a folder of repos, e.g. ~/code', 'Add repo']};
-const SRC_ROUTE = {agents: 'agents', files: 'folders', repos: 'repos'};
+const SRC_ROUTE = {agents: 'agents', files: 'folders', repos: 'repos', connections: 'connections'};
+// One of the user's own MCP servers, from the add form: a URL with "Name: value" headers, or a command with
+// NAME=value environment variables. The values are sent once; Pensieve never shows them again.
+function mcpServerFrom(name, target, secrets) {
+  const lines = secrets.split(/\n|;/).map(s => s.trim()).filter(Boolean);
+  if (/^https?:\/\//.test(target)) return {name, url: target, headers: Object.fromEntries(lines.map(l => { const i = l.indexOf(':'); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }).filter(([k]) => k))};
+  const [command, ...args] = target.split(/\s+/);
+  return {name, command, args, env: Object.fromEntries(secrets.split(/\s+|;/).filter(s => s.includes('=')).map(s => [s.slice(0, s.indexOf('=')), s.slice(s.indexOf('=') + 1)]))};
+}
+function connAddHtml() {
+  return `<div class="set-add src-add conn-add">
+      <input class="set-in" placeholder="Name, e.g. Linear" data-conn-in="name">
+      <input class="set-in" placeholder="URL (https://…/mcp) or command (npx -y some-mcp-server)" data-conn-in="target">
+      <input class="set-in" type="password" autocomplete="off" placeholder="Authorization: Bearer … or API_KEY=…" data-conn-in="secrets">
+      <button class="btn" data-conn-add>Add server</button></div>
+    <div class="err" data-src-add-err="connections">${esc(srcState.addErr.connections || '')}</div>`;
+}
 const srcState = {cat: null, types: null, hints: new Map(), err: null, opts: new Set(), addErr: {}};  // opts: cards with Options open
 async function loadSources() {
   const [cat, types] = await Promise.all([api('/api/sources').catch(() => null), api('/api/filetypes').catch(() => null)]);
@@ -2005,12 +2154,12 @@ function srcHint(id) {
 }
 function srcItem(it, catOn, parentOff = false) {
   const off = !it.available;
-  const detail = off ? 'Not found on this Mac' : it.detail;
-  const shown = it.kind === 'rule' ? detail : midEllipsis(detail, 64);
+  const detail = off ? it.na || 'Not found on this Mac' : it.detail;
+  const shown = it.kind === 'rule' || it.id.startsWith('connections/') ? detail : midEllipsis(detail, 64);
   return `<div class="src-item ${it.kind === 'rule' ? 'rule' : ''} ${it.parent ? 'child' : ''} ${catOn && !parentOff ? '' : 'muted-all'} ${off ? 'na' : ''}">
     ${it.kind === 'worktree' ? '<span title="Synced with its repo"></span>' : `<label class="tog" title="${off ? 'Not found on this Mac' : it.enabled ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-src-id="${esc(it.id)}" ${it.enabled ? 'checked' : ''} ${off || !catOn ? 'disabled' : ''}></label>`}
     <div class="src-tx"><div class="src-l">${esc(it.label)}${srcHint(it.id)}</div><div class="src-d ${it.error ? 'warn' : ''}" title="${esc(detail)}">${it.error ? '⚠ ' : ''}${esc(it.error ? detail : shown)}</div></div>
-    <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}${it.id.startsWith('repos/') ? pullBtn(it.id.slice(6)) : ''}</div>
+    <div class="src-n">${it.kind === 'rule' ? '' : srcCount(it.count, it.unit)}${it.id.startsWith('repos/') ? pullBtn(it.id.slice(6)) : ''}${it.collect && it.enabled && catOn ? `<button class="linkbtn" data-conn-collect="${esc(it.id.slice(12))}" title="Collect from it now, with its read-only tools">Collect now</button>` : ''}</div>
     ${it.kind === 'rule' || it.map == null ? '<span></span>' : mapBtn(it.id, it.map, off || !catOn || !it.enabled)}
     ${it.remove ? `<button class="iconbtn src-rm" data-src-rm="${esc(it.remove.kind)}" data-src-rm-path="${esc(it.remove.path)}" title="Remove from the index">✕</button>` : '<span></span>'}
   </div>`;
@@ -2020,19 +2169,24 @@ function sourcesHtml() {
   if (!cat) return '<div class="set-card"><div class="shimmer" style="height:120px"></div></div>';
   return `<div class="src-head"><h2>Sources</h2><p>What Pensieve indexes. Switching a source off removes its data from the index on the next sweep, and switching it back on indexes it again. A git repository switched off stops syncing but stays searchable; ✕ removes it from the index.</p>${srcState.err ? `<p class="err">${esc(srcState.err)}</p>` : ''}</div>
     <div class="src-grid">${cat.map(c => {
-      const rules = c.items.filter(i => i.kind === 'rule' && !i.parent), rest = c.items.filter(i => i.kind !== 'rule' && !i.parent);
+      const rules = c.items.filter(i => i.kind === 'rule' && !i.parent);
+      // connections that need sign-in fold into one closed group: an account can have dozens
+      const folded = c.id === 'connections' ? c.items.filter(i => !i.available && !i.parent) : [];
+      const rest = c.items.filter(i => i.kind !== 'rule' && !i.parent && !folded.includes(i));
       const kids = id => c.items.filter(i => i.parent === id);
       const tree = (i, parentOff = false) => srcItem(i, c.enabled, parentOff) + (kids(i.id).length
         ? `<div class="src-kids">${kids(i.id).map(k => tree(k, parentOff || (i.kind === 'rule' && !i.enabled))).join('')}</div>` : '');
       return `<div class="set-card src-card ${c.enabled ? '' : 'off'}">
         <div class="src-top"><span class="src-ic"><svg viewBox="0 0 24 24" width="18" height="18">${SRC_ICON[c.id] || SRC_ICON.apps}</svg></span>
           <div class="src-tx"><h3>${esc(c.label)}${srcHint(c.id)}</h3><p>${esc(c.description)}</p></div>
-          <div class="src-n big">${c.count != null ? srcCount(c.count, c.id === 'agents' ? 'sessions' : c.id === 'apps' ? 'items' : 'files') : ''}</div>
+          <div class="src-n big">${c.count != null ? srcCount(c.count, c.id === 'agents' ? 'sessions' : ['apps', 'connections'].includes(c.id) ? 'items' : 'files') : ''}</div>
           ${mapBtn(c.id, c.map, !c.enabled)}
           <label class="tog" title="${c.enabled ? 'Switch off everything in ' + esc(c.label) : 'Switch on'}"><input type="checkbox" data-src-id="${esc(c.id)}" ${c.enabled ? 'checked' : ''}></label></div>
+        ${c.note != null ? `<div class="src-note">${esc(c.note)} <button class="linkbtn" data-conn-discover ${srcState.discovering ? 'disabled' : ''}>${srcState.discovering ? 'Checking…' : 'Check again'}</button></div>` : ''}
         ${rules.length ? `<div class="src-rules">${rules.map(i => tree(i)).join('')}</div>` : ''}
         ${rest.length ? `<div class="src-items">${rest.map(i => tree(i)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
-        ${c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="${SRC_ADD[c.id][0]}" data-src-add-in="${c.id}"><button class="btn" data-src-add="${c.id}">${SRC_ADD[c.id][1]}</button></div><div class="err" data-src-add-err="${c.id}">${esc(srcState.addErr[c.id] || '')}</div>` : ''}
+        ${folded.length ? `<details class="src-opts"><summary>${plural(folded.length, 'more server')} to sign in to first</summary><div class="src-items">${folded.map(i => tree(i)).join('')}</div></details>` : ''}
+        ${c.id === 'connections' ? connAddHtml() : c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="${SRC_ADD[c.id][0]}" data-src-add-in="${c.id}"><button class="btn" data-src-add="${c.id}">${SRC_ADD[c.id][1]}</button></div><div class="err" data-src-add-err="${c.id}">${esc(srcState.addErr[c.id] || '')}</div>` : ''}
         ${(SRC_OPTS[c.id] || []).some(k => S.set && k in S.set.draft) ? `<details class="src-opts" data-opts="${c.id}" ${srcState.opts.has(c.id) ? 'open' : ''}><summary>Options</summary>${SRC_OPTS[c.id].map(setRow).join('')}</details>` : ''}
       </div>`;
     }).join('')}</div>${byNameHtml()}${fileTypesHtml()}`;
@@ -2104,6 +2258,32 @@ function renderSources() {
     srcState.cat = j; srcState.hints.set(kind, {on: true, t: Date.now()}); renderSources(); toast('Added — indexing it now');
   };
   $$('[data-src-add]', box).forEach(b => b.onclick = () => add(b.dataset.srcAdd));
+  $$('[data-conn-discover]', box).forEach(b => b.onclick = async () => {
+    srcState.discovering = true; renderSources();
+    try { srcState.cat = await api('/api/connections/discover', {method: 'POST'}); srcState.err = null; }
+    catch (e) { srcState.err = 'Could not check the MCP servers: ' + e.message; }
+    srcState.discovering = false; renderSources();
+  });
+  $$('[data-conn-collect]', box).forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Collecting…';
+    try {
+      const r = await api(`/api/connections/${enc(b.dataset.connCollect)}/collect`, {method: 'POST'});
+      srcState.cat = r.sources; srcState.err = null;
+      toast(r.run.error ? 'Collection failed: ' + r.run.error : `Collected ${plural(r.run.last_items || 0, 'new or changed item')}`);
+    } catch (e) { srcState.err = 'Could not collect: ' + e.message; }
+    renderSources();
+  });
+  $$('[data-conn-add]', box).forEach(b => b.onclick = async () => {
+    const v = k => $(`[data-conn-in="${k}"]`, box).value.trim();
+    if (!v('name') || !v('target')) { srcState.addErr.connections = 'Give the server a name, and its URL or command.'; return renderSources(); }
+    b.disabled = true; b.textContent = 'Connecting…';
+    const r = await fetch('/api/sources/connections', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(mcpServerFrom(v('name'), v('target'), v('secrets')))});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { srcState.addErr.connections = typeof j.detail === 'string' ? j.detail : 'Could not add that server'; return renderSources(); }
+    delete srcState.addErr.connections;
+    $$('[data-conn-in]', box).forEach(i => i.value = '');
+    srcState.cat = j; renderSources(); toast('Added. Switch it on to collect from it');
+  });
   $$('[data-src-add-in]', box).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(i.dataset.srcAddIn); } });
 }
 const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await Promise.all([loadSources(), loadScopes()]); renderSources(); renderScopes(); }, 1200);
@@ -2756,7 +2936,7 @@ async function saveSettings() {
 }
 
 /* ============================== deep links (#open=, #view=, #settings) ============================== */
-const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings'};
+const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings', tasks: 'work'};
 async function openItem(id) {
   const i = id.indexOf(':'), kind = id.slice(0, i), ref = id.slice(i + 1);
   if (kind === 'file') return openFile(ref);
@@ -2787,6 +2967,8 @@ async function route() {
   if (!h) return;
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
+  if (['context', 'currents', 'tasks', 'work'].includes(h)) return setView('work');
+  if (h === 'map' || h === 'mind') return setView(dataType());
   if (h === 'setup') return openSetup();
   if (['sources', 'scopes', 'agents', 'ai', 'general', 'usage', 'feedback', ...Object.keys(OLD_TABS)].includes(h)) {
     S.setTab = OLD_TABS[h] || h; store.set('setTab', S.setTab);
@@ -3079,14 +3261,14 @@ function dataFollowInsights() {
 async function setView(v, repo) {
   if (LEGACY_TYPE[v] && v !== 'data') { setTypes(LEGACY_TYPE[v]); v = 'data'; }
   if (S.view === v && !repo) return;
-  if (S.view !== 'insights' && S.view !== 'settings') cams[camKey()] = gl.saveCam();
+  if (!['insights', 'settings', 'work'].includes(S.view)) cams[camKey()] = gl.saveCam();
   const prev = S.view;
   S.view = v; store.set('view', v);
   syncTabs(v);
-  const page = v === 'insights' || v === 'settings';
+  const page = v === 'insights' || v === 'settings' || v === 'work';
   if (prev !== 'settings' && prev !== v) S.prevView = prev;
   document.body.dataset.view = v;  // the map stays as the backdrop; CSS shows the right floating panels
-  $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings';
+  $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings'; $('#work').hidden = v !== 'work';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
   renderSidebar();  // now, not after the loads below: the panel would show the previous view's until then
   if (v === 'code') {
@@ -3097,12 +3279,229 @@ async function setView(v, repo) {
   if (v === 'data' && (!S.data.loaded || S.data.stale)) { $('#loading').classList.remove('gone'); $('#loadingtext').textContent = 'Loading your map…'; await loadData(); }
   if (v === 'files' && (!S.files.loaded || S.files.stale)) await loadFiles();
   if (v === 'files') $('#loadingtext').textContent = S.files.points.length ? '' : 'Indexing your files — the map appears once the first batch is laid out…';
-  if (!page) { renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]); if (!cams[camKey()]) gl.fit(null, true); }
+  gl.paused = v === 'work';
+  if (v === 'work') gl.release();
+  if (!page) {
+    const empty = !gl.n;
+    renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]); if (!cams[camKey()]) gl.fit(null, true);
+    if (empty) gl.intro();
+  }
   renderSidebar(); renderTimeline();
   if (v === 'insights') { await insightsFollowData(); renderInsights(); loadAI().then(refreshAIViews); }
   if (v === 'settings') renderSettings();
+  if (v === 'work') { renderWork(); loadWork(true); }
 }
 $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'data' ? dataType() : b.dataset.view));
+
+/* ============================== data tab ============================== */
+// Each task: its data points from every source, newest first, and an AI note on how it stands and is moving.
+S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, asked: new Set(), menu: false,
+          states: new Set((() => { const v = store.get('taskStates', ['conscious', 'subconscious']); return Array.isArray(v) ? v : [v]; })())};
+const WK_PAGE = 10;
+const wkModel = s => (S.work.data?.states || []).find(m => m.state === s) || {label: s, color: '#8e8e93', meaning: ''};
+const wkShown = () => (S.work.data?.tasks || []).filter(t => !S.work.states.size || S.work.states.has(t.state));
+const closeWkMenu = () => { if (S.work.menu) { S.work.menu = false; renderWork(); } };
+document.addEventListener('click', closeWkMenu);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeWkMenu(); });
+const WK_SRC = {session: 'Session', commit: 'Commit', ticket: 'Ticket', pr: 'PR', message: 'Message', change: 'Change'};
+const homeTilde = p => p.replace(/^\/Users\/[^/]+/, '~');
+const WK_IC = {
+  play: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/></svg>',
+  term: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="3.5" y="5" width="17" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 8.5V6.2a1.7 1.7 0 0 0-1.7-1.7H6.2a1.7 1.7 0 0 0-1.7 1.7v7.6a1.7 1.7 0 0 0 1.7 1.7h2.3" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
+  pr: '<svg viewBox="0 0 24 24" width="13" height="13"><circle cx="6.5" cy="5.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6.5" cy="18.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="17.5" cy="18.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6.5 7.7v8.6M17.5 16.3V10a3 3 0 0 0-3-3h-3.5m2-2.2L10.8 7l2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  people: '<svg viewBox="0 0 24 24" width="15" height="15"><circle cx="9" cy="8.5" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6M15.5 5.8a3 3 0 0 1 0 5.4M17.5 14.6c1.6.6 2.7 2 3 4.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  branch: '<svg viewBox="0 0 24 24" width="12" height="12"><circle cx="6.5" cy="5.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6.5" cy="18.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.5" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 7.5v9M17.5 10c0 4-6 3-11 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+};
+const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
+// The bar at the foot of a card: resume the last session, and see coworkers and related work
+function wkActions(t) {
+  const resume = t.resume ? `<button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button>` : '';
+  const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
+  return `<div class="wk-bar">${resume}<span class="wk-loc"></span>${adj}</div>`;
+}
+const wkSt = (text, kind = '') => `<span class="wk-st ${kind}">${esc(text)}</span>`;
+const PR_ORDER = {open: 0, draft: 1, merged: 2, closed: 3};
+// The card's sections, each only when it has data: where the work is, PRs, tickets, sessions, and all activity
+function wkSections(t) {
+  const sec = (name, body) => body ? `<section class="wk-sec"><h5>${name}</h5>${body}</section>` : '';
+  const places = (t.places || []).map(p => {
+    const st = [p.head ? wkSt(`checked out: ${p.head}`, 'warn') : '', p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : '',
+      p.ahead ? wkSt(`${p.ahead} ahead`, 'warn') : '', p.behind ? wkSt(`${p.behind} behind`) : ''].join('');
+    const clean = p.git && !p.head && !p.changed && !p.ahead && !p.behind ? wkSt('clean', 'ok') : '';
+    return `<div class="wk-row wk-where"><div class="l1"><span class="nm">${esc(p.repo || p.path.split('/').pop())}</span>
+      ${p.git && p.branch ? `<span class="wk-branch">${WK_IC.branch}${esc(p.branch)}</span>` : ''}${p.worktree ? wkSt('worktree') : ''}${st}${clean}</div>
+      <div class="l2"><span class="wk-path" title="${esc(p.path)}">${esc(homeTilde(p.path))}</span>
+      <span class="wk-icons"><button class="wk-btn icon" data-wk-folder="${esc(p.path)}" data-act="terminal" title="Open in Terminal">${WK_IC.term}</button><button class="wk-btn icon" data-wk-folder="${esc(p.path)}" data-act="open" title="Show in Finder">${WK_IC.folder}</button><button class="wk-btn icon" data-wk-copy="${esc(p.path)}" data-what="Path" title="Copy the path">${WK_IC.copy}</button></span></div></div>`;
+  }).join('');
+  const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).map(r => `<div class="wk-row">
+      <a class="nm" href="${esc(r.url)}" target="_blank" rel="noopener">${WK_IC.pr}#${esc(prNum(r.url) || '')}</a><span class="ttl" title="${esc(r.title || r.url)}">${esc(r.title || r.url.replace(/^https:\/\//, ''))}</span>
+      ${r.state ? wkSt(r.state, 'pr-' + r.state) : wkSt('state unknown')}${r.checks ? wkSt(`checks ${r.checks}`, r.checks === 'failing' ? 'bad' : r.checks === 'passing' ? 'ok' : 'warn') : ''}${r.review ? wkSt(r.review, r.review === 'approved' ? 'ok' : 'warn') : ''}</div>`).join('');
+  const tickets = t.tickets.map(k => `<div class="wk-row">
+      <a class="nm" href="${esc(k.url || '#')}" target="_blank" rel="noopener">${esc(k.key)}</a><span class="ttl" title="${esc(k.title)}">${esc(k.title || '')}</span>
+      ${k.status ? wkSt(k.status, /done|closed|resolved/i.test(k.status) ? 'ok' : '') : wkSt('status unknown')}${k.assignee ? `<span class="who">${esc(k.assignee)}</span>` : ''}</div>`).join('');
+  const sess = t.events.filter(e => e.source === 'session'), other = t.events.filter(e => e.source !== 'session');
+  const openS = S.work.open.has(t.id + ':s'), openA = S.work.open.has(t.id + ':a');
+  const arts = new Map(t.sessions.map(s => [s.id, s.artifacts || []]));
+  const sessions = (openS ? sess : sess.slice(0, 3)).map(e => {
+    const a = arts.get(e.ref) || [], key = 'art:' + e.ref, open = S.work.open.has(key);
+    const files = a.filter(x => x.kind === 'file').length, links = a.length - files;
+    const count = [files ? plural(files, 'file') : '', links ? plural(links, 'artifact') : ''].filter(Boolean).join(', ');
+    return `<div class="wk-row"><button class="nm linkbtn subtle" data-wk-resume="${esc(e.ref)}" title="Resume this session in Terminal">${WK_IC.play}</button>
+      <span class="ttl">${esc(e.title)}</span>${a.length ? `<button class="wk-arts" data-wk-open="${esc(key)}" aria-expanded="${open}" title="What this session made">${open ? '▾' : '▸'} ${count}</button>` : ''}
+      ${e.detail ? `<span class="who">${esc(e.detail)}</span>` : ''}<span class="when">${wkDate(e.ts)}</span></div>
+      ${open ? `<div class="wk-artlist">${a.map(x => x.kind === 'link'
+        ? `<a class="wk-art" href="${esc(x.url)}" target="_blank" rel="noopener"><span class="k">Artifact</span><span class="nm2">${esc(x.url.replace(/^https:\/\//, ''))}</span></a>`
+        : `<button class="wk-art" data-wk-openfile="${esc(x.path)}" title="Open ${esc(x.path)}"><span class="k">File</span><span class="nm2">${esc(x.name)}</span><span class="dir">${esc(homeTilde(x.path.slice(0, x.path.lastIndexOf('/'))))}</span></button>`).join('')}</div>` : ''}`;
+  }).join('')
+    + (sess.length > 3 ? `<button class="wk-more" data-wk-open="${esc(t.id)}:s">${openS ? 'Show less' : `Show ${sess.length - 3} more`}</button>` : '');
+  const activity = other.length ? `<button class="wk-more" data-wk-open="${esc(t.id)}:a">${openA ? 'Hide activity' : `All activity (${other.length})`}</button>
+      ${openA ? `<ol class="wk-tl">${other.map(wkEvent).join('')}</ol>` : ''}` : '';
+  return sec('Working in', places) + sec(t.prs.length > 1 ? 'Pull requests' : 'Pull request', prs) +
+    sec(t.tickets.length > 1 ? 'Tickets' : 'Ticket', tickets) + sec(sess.length > 1 ? 'Sessions' : 'Session', sessions) + activity;
+}
+async function loadWork(first = false) {
+  try { S.work.data = await api(`/api/work?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
+  if (first) S.work.asked.clear();
+  askNotes();
+  if (S.view === 'work') renderWork();
+}
+const wkPageTasks = () => wkShown().slice(S.work.page * WK_PAGE, (S.work.page + 1) * WK_PAGE);
+// The notes of the page in view that are missing or out of date: written by the server in the background, once per page
+function askNotes() {
+  const d = S.work.data, key = `${S.work.days}:${[...S.work.states].sort()}:${S.work.page}`;
+  if (!d || !insightsOn() || S.work.asked.has(key)) return;
+  const ids = wkPageTasks().filter(t => !d.notes[t.id] || d.notes[t.id].stale).map(t => t.id);
+  if (!ids.length) return;
+  S.work.asked.add(key);
+  api(`/api/work/notes?days=${S.work.days}&ids=${enc(ids.join(','))}`, {method: 'POST'})
+    .then(r => { if (r.started) { d.writing = ids; renderWork(); } else S.work.asked.delete(key); }).catch(() => S.work.asked.delete(key));
+}
+const wkDate = ts => new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+function wkEvent(e) {
+  const link = e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title)}</a>` :
+    e.source === 'session' ? `<button class="linkbtn subtle" data-wk-resume="${esc(e.ref)}" title="Resume this session in Terminal">${esc(e.title)}</button>` :
+    e.ref && e.source !== 'commit' ? `<button class="linkbtn subtle" data-wk-file="${esc(e.ref)}">${esc(e.title)}</button>` : esc(e.title);
+  return `<li class="${e.source}"><span class="what" title="${esc(e.title + (e.detail ? ' · ' + e.detail : ''))}">${link}</span>
+    <span class="src">${WK_SRC[e.source] || e.source}</span><span class="when">${wkDate(e.ts)}</span></li>`;
+}
+function wkAdjacent(t) {
+  const a = S.work.adj[t.id];
+  if (!a) return '';
+  if (a.loading) return '<div class="wk-adj muted">Looking at coworkers’ commits and related tickets…</div>';
+  const people = a.coworkers.map(p => `<div class="row"><b>${esc(p.name)}</b> <small>${plural(p.commits, 'commit')} · ${fmtWhen(p.last)}${p.branches.length ? ' · ' + esc(p.branches.join(', ')) : ''}</small><br><small>${esc(p.subjects[0] || '')}</small></div>`).join('');
+  const rel = a.related.map(r => `<div class="row">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : `<button class="linkbtn subtle" data-wk-file="${esc(r.path)}">${esc(r.title)}</button>`}<br><small>${esc([r.status, r.assignee].filter(Boolean).join(' · '))}</small></div>`).join('');
+  return `<div class="wk-adj"><div><div class="h">Coworkers in the same folders</div>${people || '<div class="muted">No commits by others there in the last 3 weeks.</div>'}</div>
+    <div><div class="h">Related tickets and threads</div>${rel || '<div class="muted">Nothing related among your connections.</div>'}</div></div>`;
+}
+function renderWork() {
+  const el = $('#work'); if (!el) return;
+  const d = S.work.data;
+  if (!d) { el.innerHTML = S.work.err ? `<div class="empty">Could not load your tasks: ${esc(S.work.err)}</div>` : '<div class="shimmer" style="height:160px"></div>'; return; }
+  const fl = S.work.flash && Date.now() < S.work.flash.until ? S.work.flash : null;
+  if (fl && !fl.shown) {  // a card opened from the map: its state into the filter, its page in view
+    if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('taskStates', [...S.work.states]); }
+    const at = wkShown().findIndex(x => x.id === fl.id);
+    if (at >= 0) S.work.page = Math.floor(at / WK_PAGE);
+  }
+  const shown = wkShown(), pages = Math.max(1, Math.ceil(shown.length / WK_PAGE));
+  S.work.page = Math.min(S.work.page, pages - 1);
+  const tasks = wkPageTasks(), first = S.work.page * WK_PAGE;
+  const count = s => d.tasks.filter(t => t.state === s).length;
+  const def = m => `${m.meaning} ${m.rule}`;
+  const picked = d.states.filter(m => S.work.states.has(m.state));
+  const label = !picked.length || picked.length === d.states.length ? 'All states' : picked.length <= 2 ? picked.map(m => m.label).join(', ') : `${picked.length} states`;
+  const filter = `<div class="wk-filter">
+      <button class="wk-drop" data-wk-menu aria-haspopup="listbox" aria-expanded="${S.work.menu}">${picked.length && picked.length < d.states.length ? picked.map(m => `<i style="background:${m.color}"></i>`).join('') : ''}${esc(label)}<span>${shown.length}</span></button>
+      ${S.work.menu ? `<div class="wk-menu" role="listbox" aria-multiselectable="true">${d.states.map(m => `<label title="${esc(def(m))}">
+          <input type="checkbox" data-wk-st="${m.state}" ${S.work.states.has(m.state) ? 'checked' : ''}><i style="background:${m.color}"></i>${esc(m.label)}<span>${count(m.state)}</span></label>`).join('')}
+        <div class="wk-menu-foot"><button class="linkbtn" data-wk-st-all>All</button><button class="linkbtn" data-wk-st-none>Clear</button></div></div>` : ''}
+    </div>`;
+  const stateSel = t => `<select class="wk-state" data-wk-state="${esc(t.id)}" style="--c:${wkModel(t.state).color}" title="${esc(wkModel(t.state).meaning + ' ' + (t.state_by === 'auto' ? 'Set automatically: ' : 'Set by ' + t.state_by + ': ') + t.state_why)}">
+      ${d.states.map(m => `<option value="${m.state}" ${t.state === m.state ? 'selected' : ''}>${m.label}${t.state === m.state && t.state_by === 'auto' ? ' · auto' : ''}</option>`).join('')}
+      ${t.state_by !== 'auto' ? '<option value="auto">Back to automatic</option>' : ''}</select>`;
+  const pager = pages > 1 ? `<div class="wk-pager"><button class="btn" data-wk-page="-1" ${S.work.page ? '' : 'disabled'}>‹ Newer</button>
+      <span class="muted">Page ${S.work.page + 1} of ${pages}</span><button class="btn" data-wk-page="1" ${S.work.page < pages - 1 ? '' : 'disabled'}>Older ›</button></div>` : '';
+  const writing = t => (Array.isArray(d.writing) ? d.writing : []).includes(t.id);
+  const note = t => {
+    const n = d.notes[t.id];
+    const done = n && /^(nothing|none|n\/a)\.?$/i.test(n.left.trim());
+    if (n) return `<div class="wk-note">${n.recap ? `<div class="nrow recap" title="What the task or problem is"><span class="nlbl">Recap</span><p>${esc(n.recap)}</p></div>` : ''}
+      <div class="nrow" title="What has been done"><span class="nlbl">Current state</span><p>${esc(n.current)}</p></div>
+      <div class="nrow ${done ? 'done' : 'left'}" title="What is left to do, and whether it is still being worked on"><span class="nlbl">What’s left</span><p>${done ? 'Nothing left' : esc(n.left)}</p></div>
+      ${writing(t) ? '<div class="foot">Updating…</div>' : ''}</div>`;
+    if (!insightsOn()) return '<div class="wk-note empty-note">Choose an insights engine in Settings → Models to get a status note on each task.</div>';
+    return `<div class="wk-note empty-note">${writing(t) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
+  };
+  const many = picked.length !== 1;
+  const was = new Map($$('.wk-task[data-id]', el).map(a => [a.dataset.id, a.getBoundingClientRect().top]));
+  el.innerHTML = `<div class="wk-head"><h2>Context</h2>
+      <div class="wk-ctl">${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
+    ${tasks.length ? tasks.map((t, i) => {
+      const prev = i ? tasks[i - 1] : shown[first - 1];
+      const head = many && (!prev || prev.state !== t.state) ? `<h3 class="wk-group" style="--acc:${wkModel(t.state).color}" title="${esc(def(wkModel(t.state)))}">${esc(wkModel(t.state).label)}<span>${count(t.state)}</span></h3>` : '';
+      return `${head}<article class="wk-task" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
+          <div class="wk-main">
+            <header><h4>${esc(t.title)}</h4>${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
+            ${wkSections(t)}
+          </div>
+          ${note(t)}
+          ${wkActions(t)}
+          ${wkAdjacent(t)}
+        </article>`;
+    }).join('') + pager : `<div class="empty">${d.tasks.length ? 'No tasks in the states you chose for this period.' : 'No tasks in this period. Tasks come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
+  const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
+  if (flashed) {
+    if (!fl.shown) { fl.shown = true; fl.t0 = performance.now(); flashed.scrollIntoView({block: 'center'}); }
+    flashed.style.animationDelay = `-${Math.round(performance.now() - fl.t0)}ms`;  // a redraw continues the one pulse
+    flashed.classList.add('wk-flash');
+  }
+  // a card that moved slides from where it was; a card that is new here fades in
+  if (was.size && !matchMedia('(prefers-reduced-motion: reduce)').matches) $$('.wk-task[data-id]', el).forEach(a => {
+    const top = was.get(a.dataset.id);
+    if (top == null) return a.animate([{opacity: 0, transform: 'translateY(10px)'}, {opacity: 1, transform: 'none'}], {duration: 280, easing: 'ease-out'});
+    const dy = top - a.getBoundingClientRect().top;
+    if (Math.abs(dy) > 2) a.animate([{transform: `translateY(${dy}px)`}, {transform: 'none'}], {duration: 450, easing: 'cubic-bezier(.2,.8,.2,1)'});
+  });
+  $$('[data-wk-page]', el).forEach(b => b.onclick = () => { S.work.page += +b.dataset.wkPage; renderWork(); el.scrollTop = 0; askNotes(); });
+  const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('taskStates', [...S.work.states]); renderWork(); askNotes(); };
+  $$('[data-wk-menu]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.menu = !S.work.menu; renderWork(); });
+  $$('[data-wk-st]', el).forEach(c => c.onchange = () => pick(d.states.map(m => m.state).filter(s => s === c.dataset.wkSt ? c.checked : S.work.states.has(s))));
+  $$('[data-wk-st-all]', el).forEach(b => b.onclick = () => pick(d.states.map(m => m.state)));
+  $$('[data-wk-st-none]', el).forEach(b => b.onclick = () => pick([]));
+  $$('.wk-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
+  $$('[data-wk-state]', el).forEach(s => s.onchange = async () => {
+    try {
+      await api('/api/work/state', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: s.dataset.wkState, state: s.value})});
+      toast(s.value === 'auto' ? 'Back to automatic' : `Moved to ${wkModel(s.value).label}`);
+      loadWork();
+    } catch (e) { toast('Could not change it: ' + e.message); }
+  });
+  $$('[data-wk-days]', el).forEach(s => s.onchange = () => { S.work.days = +s.value; S.work.page = 0; store.set('workDays', S.work.days); loadWork(true); });
+  $$('[data-wk-resume]', el).forEach(b => b.onclick = async () => {
+    try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
+    catch (e) { toast('Could not resume it: ' + e.message); }
+  });
+  $$('[data-wk-open]', el).forEach(b => b.onclick = () => { const id = b.dataset.wkOpen; S.work.open[S.work.open.has(id) ? 'delete' : 'add'](id); renderWork(); });
+  $$('[data-wk-file]', el).forEach(b => b.onclick = () => openFile(b.dataset.wkFile));
+  $$('[data-wk-folder]', el).forEach(b => b.onclick = () => api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({id: 'folder:' + b.dataset.wkFolder, action: b.dataset.act})}).catch(e => toast('Could not open it: ' + e.message)));
+  $$('[data-wk-openfile]', el).forEach(b => b.onclick = () => api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({id: 'file:' + b.dataset.wkOpenfile, action: 'open'})}).catch(e => toast('Could not open it: ' + e.message)));
+  $$('[data-wk-copy]', el).forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.wkCopy); toast(`${b.dataset.what || 'Text'} copied`); }
+    catch { toast('Could not copy'); }
+  });
+  $$('[data-wk-adj]', el).forEach(b => b.onclick = async () => {
+    const id = b.dataset.wkAdj;
+    if (S.work.adj[id] && !S.work.adj[id].loading) { delete S.work.adj[id]; return renderWork(); }  // a second click hides it
+    S.work.adj[id] = {loading: true}; renderWork();
+    try { S.work.adj[id] = await api(`/api/work/adjacent?id=${enc(id)}&days=${S.work.days}`); }
+    catch (e) { S.work.adj[id] = {coworkers: [], related: []}; toast('Could not look: ' + e.message); }
+    renderWork();
+  });
+}
 
 /* ============================== insights ============================== */
 async function loadInsights() {
@@ -3455,7 +3854,7 @@ function palRender() {
   } else {
     S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));
   }
-  const cmds = [['Show code', '1', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '2', () => setView('insights')], ['Open Settings', '3', () => setView('settings')],
+  const cmds = [['Go to Context', '1', () => setView('work')], ['Show code', '2', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '3', () => setView('insights')], ['Open Settings', '4', () => setView('settings')],
     ['Toggle light / dark', 'T', toggleTheme], ['Clear all filters', '', clearFilters], ['Fit map to view', 'F', () => gl.fit(visibleIdx())], ['Keyboard shortcuts', '?', () => ($('#helpmodal').hidden = false)]];
   cmds.filter(([t]) => !q || t.toLowerCase().includes(q.replace(/^>/, '').trim())).slice(0, raw ? 3 : 7).forEach(([t, k, run]) => add('Commands', {ic: '›', title: t, rt: k, run}));
   pl.items = items; pl.sel = Math.min(pl.sel, items.length - 1);
@@ -3553,7 +3952,7 @@ document.addEventListener('keydown', e => {
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === '/') { e.preventDefault(); openPalette(); }
-  else if (k === '1') setView(dataType()); else if (k === '2') setView('insights'); else if (k === '3') setView('settings');
+  else if (k === '1') setView('work'); else if (k === '2') setView(dataType()); else if (k === '3') setView('insights'); else if (k === '4') setView('settings');
   else if (k === 'f') gl.fit(visibleIdx());
   else if (k === 't') toggleTheme();
   else if (k === '?') $('#helpmodal').hidden = false;
@@ -3626,6 +4025,10 @@ async function handleEvent(m) {
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); reloadRepoSoon(); }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'upstream') loadUpstream();
+    else if (m.type === 'work') {
+      if (S.view === 'work') loadWork();
+      else if (S.view === 'data' && S.data.colorBy === 'context') loadCards().then(recolor);
+    }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
@@ -3648,6 +4051,7 @@ const reloadFilesSoon = debounce(async () => {
 const pollStatus = debounce(async () => { try { Object.assign(S.status, await api('/api/status')); renderStatus(); renderSyncing(); } catch {} }, 300);
 
 async function init() {
+  if (location.hash.length <= 1) await setView('work');  // first, so the map never shows before it
   try {
     await Promise.all([loadSessions(), loadInsights(), loadData(), api('/api/status').then(s => Object.assign(S.status, s))]);
   } catch (e) { $('#loadingtext').textContent = 'Could not reach the Pensieve server.'; return; }
@@ -3656,15 +4060,13 @@ async function init() {
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
   document.body.dataset.view = S.view;
   syncTabs(S.view);
-  renderToolbar(); buildMap(); refresh();
+  if (S.view !== 'work') { renderToolbar(); buildMap(); refresh(); }
   if (!gl.controls.autoRotate || store.get('hinted', false)) $('#hint').classList.add('gone');
   setTimeout(() => $('#hint').classList.add('gone'), 9000);
   connect();
   await loadRepos().catch(() => {});
   loadUpstream();
-  let v = store.get('view', 'data'); if (LEGACY_TYPE[v]) v = 'data';
   loadScopes(); loadAppearance(); syncThemeLabel(); loadAI().then(() => S.view === 'insights' && renderInsights());
   if (location.hash.length > 1) await route();
-  else if (v !== S.view) await setView(v);
 }
 init();

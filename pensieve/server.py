@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, usage
+from pensieve import actions, config, connections, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, task_states, usage, work
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -119,6 +119,9 @@ async def watcher():
     asyncio.create_task(repo_watcher())
     asyncio.create_task(upstream_watcher())
     asyncio.create_task(model_switcher())
+    asyncio.create_task(connections_worker())
+    work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
+    threading.Thread(target=work.tasks, args=(store, 30), daemon=True).start()  # built now, so the first view of the tab does not wait for git and gh
     last_full = 0
     while True:
         if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
@@ -439,9 +442,12 @@ async def local_only(request: Request, call_next):
     still reach it: through DNS rebinding (its own host name pointed at 127.0.0.1, which the Host header shows) or
     with a cross-site request (which carries the page's Origin)."""
     from urllib.parse import urlsplit
+
+    def local(h):  # names under .localhost always resolve to this Mac (RFC 6761), e.g. pensieve.localhost
+        return h in LOCAL_HOSTS or (h or "").endswith(".localhost")
     host = urlsplit("//" + request.headers.get("host", "")).hostname
     origin = request.headers.get("origin")
-    if host not in LOCAL_HOSTS or (origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS):  # "null" too
+    if not local(host) or (origin is not None and not local(urlsplit(origin).hostname)):  # "null" too
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse("Pensieve only answers requests from this Mac", status_code=403)
     return await call_next(request)
@@ -1251,6 +1257,183 @@ def remove_repos(path: str):
         sources.set_source(f"repos/{root}", False)
         threading.Thread(target=repos.remove, args=(root,), daemon=True).start()
     return sources.catalog(store, repos, files)
+
+
+@app.get("/api/connections")
+def get_connections():
+    """The MCP servers that Pensieve can collect from, each with its tools and which of them are read-only."""
+    return connections.servers()
+
+
+@app.post("/api/connections/discover")
+async def discover_connections():
+    """Read the MCP servers of the insights engine again, and connect to the user's own servers."""
+    await asyncio.to_thread(connections.discover)
+    return sources.catalog(store, repos, files)
+
+
+@app.post("/api/connections/{sid}/collect")
+async def collect_connection(sid: str):
+    """Collect from one connection now, with its read-only tools."""
+    if sid not in {r["id"] for r in connections.servers()}:
+        raise HTTPException(404, f"unknown connection {sid!r}")
+    run = await asyncio.to_thread(connections.collect, sid)
+    wake_files.set()
+    return {"run": run, "sources": sources.catalog(store, repos, files)}
+
+
+class McpServerReq(BaseModel):
+    name: str
+    url: str = ""
+    headers: dict[str, str] = {}
+    command: str = ""
+    args: list[str] = []
+    env: dict[str, str] = {}
+
+
+@app.post("/api/sources/connections")
+async def add_mcp_server(req: McpServerReq):
+    """Add or change one of the MCP servers that Pensieve connects to itself, then list its tools."""
+    x = {"name": req.name, **({"url": req.url, "headers": req.headers} if req.url else
+                               {"command": req.command, "args": req.args, "env": req.env})}
+    cur = [c for c in settings.get("mcp_servers") if c["name"] != req.name.strip()]
+    try:
+        settings.update({"mcp_servers": cur + [x]})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(connections.discover_own)
+    return sources.catalog(store, repos, files)
+
+
+@app.delete("/api/sources/connections")
+def remove_mcp_server(path: str):
+    """✕ on a server that Pensieve connects to itself: forget it and its collected items."""
+    sid = connections.slug(path)
+    settings.update({"mcp_servers": [c for c in settings.get("mcp_servers") if c["name"] != path],
+                     "connections_on": [d for d in settings.get("connections_on") if d != f"connections/{sid}"]})
+    connections.remove(sid)
+    return sources.catalog(store, repos, files)
+
+
+@app.get("/api/work")
+def get_work(days: int = 30):
+    """The Context tab: context cards (tasks) with their state, their data points from every source, and each task's AI note."""
+    ts = work.tasks(store, days)
+    have = work.notes()
+    stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
+    def note(n):  # notes written before the fields were renamed show until they are written again
+        return dict(recap=n.get("recap") or n.get("conjure", ""), current=n.get("current") or n.get("now", ""),
+                    left=n.get("left", ""))
+    return dict(tasks=ts, notes={t["id"]: {**note(have[t["id"]]), "stale": t["id"] in stale}
+                                 for t in ts if t["id"] in have and ("current" in have[t["id"]] or "now" in have[t["id"]])},
+                states=task_states.models(), writing=status.get("work_notes") or [])
+
+
+class TaskStateReq(BaseModel):
+    id: str
+    state: str  # latent | conscious | subconscious | etched | forgotten | auto
+    reason: str = ""
+
+
+@app.post("/api/work/state")
+def set_task_state(req: TaskStateReq):
+    """Set a task's state by hand, or back to automatic with "auto"."""
+    try:
+        r = work.set_state(store, req.id, req.state, "user", req.reason)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    broadcast({"type": "work"})
+    return r
+
+
+_notes_running = threading.Lock()
+
+
+@app.post("/api/work/notes")
+async def write_work_notes(days: int = 30, ids: str = ""):
+    """Write the AI notes that are missing or out of date, for the tasks in `ids` (comma-separated; default: the
+    first 10), in the background."""
+    if _notes_running.locked():
+        return {"started": False}
+
+    async def run():
+        with _notes_running:
+            ts = work.tasks(store, days)
+            todo = work.stale_notes(ts, ids=set(_csv(ids)) or None)
+            status["work_notes"] = [t["id"] for t in todo]  # the notes being written, for their "Updating…" mark
+            for t in todo:
+                try:
+                    await asyncio.to_thread(work.write_note, t, ts)
+                except llm.Offline:
+                    break
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                status["work_notes"] = [x for x in status["work_notes"] if x != t["id"]]
+                broadcast({"type": "work"})
+            status["work_notes"] = []
+            broadcast({"type": "work"})
+    asyncio.create_task(run())
+    return {"started": True}
+
+
+class ResumeReq(BaseModel):
+    session: str
+
+
+@app.post("/api/work/resume")
+def resume_session(req: ResumeReq):
+    """Open Terminal in the session's folder and resume the agent session there."""
+    cmd = work.resume_command(store, req.session)
+    if not cmd:
+        raise HTTPException(404, "can't resume that session: its folder is gone, or its agent has no resume command")
+    script = cmd.replace("\\", "\\\\").replace('"', '\\"')
+    import subprocess
+    subprocess.run(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
+                    "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True)
+    return {"ok": True, "command": cmd}
+
+
+@app.get("/api/work/adjacent")
+async def work_adjacent(id: str, days: int = 30):
+    """For one task: coworkers' recent commits in the same folders, and tickets and threads on the same subject."""
+    t = next((t for t in work.tasks(store, days) if t["id"] == id), None)
+    if not t:
+        raise HTTPException(404, f"unknown task {id!r}")
+    people, rel = await asyncio.gather(asyncio.to_thread(work.coworkers, t), asyncio.to_thread(work.related, t, searcher))
+    return dict(coworkers=people, related=rel)
+
+
+CONNECTIONS_CHECK_SECONDS = 300
+DISCOVER_SECONDS = 6 * 3600
+
+
+async def connections_worker():
+    """Read the engine's MCP servers now and then, and collect from each connection that is on when it is due."""
+    wait = 20  # soon after start, then every CONNECTIONS_CHECK_SECONDS
+    while True:
+        await asyncio.sleep(wait)
+        wait = CONNECTIONS_CHECK_SECONDS
+        if not settings.get("setup_done"):
+            continue
+        try:
+            st = connections._load()
+            if settings.enabled(f"connections/{connections.SESSIONS}") and not st.get("sessions_backfilled"):
+                if await asyncio.to_thread(connections.backfill_sessions):
+                    wake_files.set()
+                    broadcast({"type": "repos"})
+            if (connections.engine() == "claude" or settings.get("mcp_servers")) and \
+                    time.time() - (st.get("discovered") or 0) > DISCOVER_SECONDS:
+                await asyncio.to_thread(connections.discover)
+                broadcast({"type": "repos"})  # the Sources list changed
+            if not llm.on_battery() or settings.get("ai_on_battery"):
+                for sid in connections.due():
+                    await asyncio.to_thread(connections.collect, sid)
+                    wake_files.set()
+                    broadcast({"type": "repos"})
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
 
 def _read_version():

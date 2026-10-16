@@ -15,7 +15,7 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
-               "current_scope", "open", "index_path", "report_feedback", "stale"}
+               "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -479,6 +479,51 @@ def stale(days: int = 14) -> dict:
             "items": [{k: short(v) for k, v in w.items() if v not in (None, False, [], "")} for w in items]}
 
 
+def _tasks_in_scope():
+    from pensieve import work
+    sc = _scope()
+    ts = work.tasks(_c()["store"], 30)
+    if getattr(sc, "repos", None) is None:  # everything
+        return ts
+    return [t for t in ts if any(scopes.repo_allowed(sc, r) for r in t["repos"])]
+
+
+@tool()
+def tasks(state: str = "conscious,subconscious", limit: int = 10) -> str:
+    """The user's tasks (the context cards of the Context tab) of the last 30 days, joined across agent sessions, commits, PRs and
+    tickets, newest first. state: comma-separated, from conscious (being worked on), subconscious (not done and gone
+    quiet: revisit), latent (defined, no material work yet), etched (done), forgotten (unfinished and left), or "all".
+    Within this connection's scope (its repo by default). Call task(id) for one task's folder, branch, PRs and
+    what is left, before you pick it up."""
+    from pensieve import work
+    want = None if state.strip() == "all" else {s.strip() for s in state.split(",") if s.strip()}
+    have = work.notes()
+    ts = [t for t in _tasks_in_scope() if not want or t["state"] in want][:max(1, min(limit, 50))]
+    return "\n".join(work.brief(t, have.get(t["id"], {})) for t in ts) or f"No tasks in state {state}."
+
+
+@tool()
+def task(id: str) -> str:
+    """One task as a card: its state and why, where the work is (folder, branch, uncommitted files), PRs, tickets,
+    what is done and left, the command that resumes its last session, where that session stopped, and its timeline."""
+    from pensieve import task_states, work
+    t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
+    if not t:
+        raise KeyError(id)
+    return work.detail(t, work.notes().get(id, {}), task_states.history(_c()["store"], id))
+
+
+@tool()
+def set_task_state(id: str, state: str, reason: str = "") -> dict:
+    """Mark a task when its state changes: etched when you finished it (say how in reason, e.g. "PR #12 merged"),
+    forgotten when the user decided to leave it, conscious, subconscious or latent, or "auto" to let Pensieve
+    decide again. The user sees the change on the Context tab."""
+    from pensieve import work
+    if not any(x["id"] == id for x in _tasks_in_scope()):
+        raise KeyError(id)
+    return work.set_state(_c()["store"], id, state, "agent", reason)
+
+
 @tool()
 def report_feedback(kind: str, summary: str, details: str = "") -> dict:
     """Report a problem with Pensieve, or an improvement, when you meet one: a tool error, a search that missed
@@ -569,7 +614,7 @@ def update_settings(changes: dict[str, Any]) -> dict:
 
 @tool()
 def list_sources() -> list[dict]:
-    """What Pensieve indexes, by category (agents, files, repos, apps), with on/off state and item counts.
+    """What Pensieve indexes, by category (agents, files, repos, apps, connections), with on/off state and item counts.
     Use the ids with set_source."""
     return [dict(id=c["id"], label=c["label"], enabled=c["enabled"], map=c["map"], count=c["count"],
                  items=[{k: i.get(k) for k in ("id", "label", "detail", "enabled", "map", "available", "count")}

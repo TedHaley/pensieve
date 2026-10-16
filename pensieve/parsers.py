@@ -21,6 +21,7 @@ class Session:
     updated: str = ""
     turns: list = field(default_factory=list)  # (role, text)
     touched: dict = field(default_factory=dict)  # abs path -> edited?
+    mcp: list = field(default_factory=list)  # (full MCP tool name, input, result content) for connections.py
 
 
 def _clean(text: str) -> str:
@@ -61,6 +62,7 @@ def _note_tool(s: Session, name: str, args):
 
 def parse_claude(path: Path) -> Session:
     s = Session(id=f"claude:{path.stem}", source="claude", path=str(path))
+    mcp_uses = {}
     for d in _lines(path):
         t = d.get("type")
         if t == "ai-title":
@@ -73,6 +75,11 @@ def parse_claude(path: Path) -> Session:
             for b in c:
                 if isinstance(b, dict) and b.get("type") == "tool_use":
                     _note_tool(s, b.get("name", ""), b.get("input"))
+                    if b.get("name", "").startswith("mcp__"):
+                        mcp_uses[b.get("id")] = (b["name"], b.get("input") or {})
+                elif isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in mcp_uses \
+                        and not b.get("is_error"):
+                    s.mcp.append((*mcp_uses[b["tool_use_id"]], b.get("content")))
             c = "\n".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
         if isinstance(c, str):
             _add(s, t, c, d.get("timestamp", ""))

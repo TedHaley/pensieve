@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <script>try{const t=localStorage.getItem('pensieve.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
-<body data-view="code">
+<body data-view="work">
 <div id="app">
   <main id="center">
     <section id="stage">
@@ -25,6 +25,7 @@
       <div id="palres" role="listbox" aria-label="Search results" hidden></div>
       <div id="side"></div><div id="legend" class="legend"></div>
     </aside>
+    <section id="work" class="glass sheet" hidden></section>
     <section id="insights" class="glass sheet" hidden></section>
     <section id="settings" class="glass sheet" hidden></section>
   </main>
@@ -40,9 +41,10 @@
       </div>
     </div>
     <nav id="tabs" role="tablist" class="glass">
-      <button role="tab" data-view="data" class="on" title="Code, files and agent sessions on one map (1)">Map</button>
-      <button role="tab" data-view="insights" title="Insights (2)">Insights</button>
-      <button role="tab" data-view="settings" title="Settings (3)">Settings</button>
+      <button role="tab" data-view="work" class="on" title="Context: a card for each piece of your work, with what you need to pick it back up (1)">Context</button>
+      <button role="tab" data-view="data" title="Code, files and agent sessions on one map (2)">Map</button>
+      <button role="tab" data-view="insights" title="Insights (3)">Insights</button>
+      <button role="tab" data-view="settings" title="Settings (4)">Settings</button>
     </nav>
     <div class="top-r">
       <button id="fitbtn" class="iconbtn round glass mapbtn" title="Fit the map to what's shown (F)" aria-label="Fit map"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
@@ -64,7 +66,7 @@
 
 <div id="helpmodal" class="modal" hidden><div class="card help glass"><h3>Keyboard shortcuts</h3><dl>
 <dt><kbd>⌘K</kbd> or <kbd>/</kbd></dt><dd>Search everything</dd>
-<dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Map · Insights · Settings</dd>
+<dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></dt><dd>Context · Map · Insights · Settings</dd>
 <dt><kbd>F</kbd></dt><dd>Fit map to visible points</dd>
 <dt><kbd>T</kbd></dt><dd>Switch between light and dark</dd>
 <dt><kbd>Esc</kbd></dt><dd>Close panel · clear selection</dd>
