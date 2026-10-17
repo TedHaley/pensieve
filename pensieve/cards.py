@@ -1,18 +1,21 @@
 """Context cards as files, in the context-card/1 format (context-card.schema.json).
 
-A card has two parts. `remote` and the top-level fields hold what any reader can fetch again from a server: the git
-remote and branch, PRs, tickets, messages and artifacts. `local` holds what works only on the machine that made it:
-folder paths, the command that resumes a session, session ids. `share` drops `local` and every local path, so a
-shared card carries URLs and commands (`handoff`) instead.
+A local card and a shared card have the same core: the problem, the goal, the state and what is next. They differ
+in their supporting context, the resources (pensieve/resources.py). A local card points to everything, paths
+included. A shared card keeps what its reader can open (PRs, the branch, tickets, messages, public pages) and
+replaces what they can't (transcripts, memory files, uncommitted changes, private artifacts) with summaries that
+were written from the whole document when the card was shared.
 
 Each card has two renderings: `render_html` for people (one page with no outside files that also holds the JSON),
-and `render_agent` for agents (the data as compact JSON, with the commands that refresh it). Agents in a Pensieve
-session get the text card (work.compact) from the MCP tools and the prompt hook."""
+and `render_agent` for agents (the data as compact JSON). Agents in a Pensieve session get the text card
+(work.compact) from the MCP tools and the prompt hook."""
 import html
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+from pensieve import resources as res
 from pensieve import work
 
 SCHEMA = "context-card/1"
@@ -20,8 +23,12 @@ _SECRET = re.compile(
     r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|"
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|"
     r"(?i:(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*)['\"]?[^\s'\"]{6,})")
-_LOCAL_PATH = re.compile(r"(?:/Users/|/home/|~/)[^\s`'\")\]>,;]+")
-_NONE = lambda s: (s or "").strip(" .").lower() in ("", "none")
+_LOCAL_PATH = re.compile(r"(?:/Users/|/home/|~/)[^\s`'\")\]>,;]+|\.claude/worktrees/[^\s`'\")\]>,;]*")
+# a sentence about the owner's own machine (a file to delete on the Desktop, a memory note): kept on the local card,
+# dropped from the shared one
+_OWN_MACHINE = re.compile(r"\b(Desktop|Downloads|Documents folder|MEMORY\.md|memory files?|on (this|my|your|the) "
+                          r"(Mac|machine|laptop)|local (file|folder)s?)\b", re.I)
+SUMMARIES = 6  # local and restricted resources that get a summary when a card is shared, the most useful first
 
 
 def _iso(ts) -> str:
@@ -36,139 +43,117 @@ def _version() -> str:
         return "pensieve"
 
 
+def _clean(d: dict) -> dict:
+    return {k: v for k, v in d.items() if v not in (None, "", [], {})}
+
+
 def _num(url: str) -> int:
     m = re.search(r"/(?:pull|merge_requests)/(\d+)", url)
     return int(m.group(1)) if m else 0
 
 
-def _repo(url: str) -> str:
-    m = re.search(r"https?://[^/]+/([^/]+/[^/]+)/", url)
-    return m.group(1) if m else ""
-
-
-def _clean(d: dict) -> dict:
-    return {k: v for k, v in d.items() if v not in (None, "", [], {})}
-
-
-def _repos(t: dict) -> list[dict]:
-    """The remote of each git folder of the task: clone URL (without credentials), branch, its commit, and whether
-    every commit is pushed."""
-    out = []
-    for p in t.get("places", []):
-        if not p.get("git"):
-            continue
-        root = p["path"]
-        git = re.sub(r"//[^@/]+@", "//", work._git(root, "remote", "get-url", "origin", ttl=3600))
-        if not git:
-            continue
-        branch = p.get("branch") or ""
-        out.append(_clean(dict(name=p.get("repo"), git=git, web=work.web_url(git), branch=branch,
-                               head=work._git(root, "rev-parse", "--short=12", branch or "HEAD"),
-                               pushed=bool(p.get("upstream") and not p.get("ahead")) or None)))
-    return out
-
-
 def build(t: dict, note: dict, hist: list[dict]) -> dict:
-    """The local context-card/1 object of a task. It has the same validation as the text card: summary sentences
+    """The local context-card/1 object of a task. Its core has the same validation as the text card: sentences
     that git or GitHub contradict are marked, and the last session's own question wins over the model's."""
-    note, changed = work.reconcile(note, t) if note else ({}, [])
+    core, changed = work.reconcile(note, t) if note else ({}, [])
     last = max((s["updated"] for s in t.get("sessions", [])), default=0)
-    prs = [(p, False) for p in t["prs"]] + [(p, True) for p in t.get("branch_prs", [])]
-    since = [f"PR #{_num(p['url'])} merged {_iso(p['merged_at'])[:10]}" for p, _ in prs
+    since = [f"PR #{_num(p['url'])} merged {_iso(p['merged_at'])[:10]}" for p in t["prs"] + t.get("branch_prs", [])
              if last and (p.get("merged_at") or 0) > last]
     since += [c for c in changed if not c.startswith("PR #")]
     asked = work.last_question(t.get("last_words") or "")
-    roots = [p["path"] + "/" for p in t.get("places", [])]
-    files, outside, attachments = [], [], []
-    for s in t["sessions"][:5]:
-        for a in s.get("artifacts", []):
-            if a.get("url"):
-                attachments.append(dict(kind="artifact" if "/artifact/" in a["url"] else "page", title=a.get("name"), url=a["url"]))
-                continue
-            f = a.get("path") or ""
-            rel = next((f[len(r):] for r in roots if f.startswith(r)), None)
-            if rel and rel not in files:
-                files.append(rel)
-            elif not rel and f and "/.claude/" not in f and f not in outside:
-                outside.append(f)
-    repos = _repos(t)
-    pulls = [_clean(dict(url=p["url"], repo=_repo(p["url"]), number=_num(p["url"]), title=p.get("title"),
-                         state=p.get("state") or "", checks=p.get("checks"), review=p.get("review"), branch=p.get("head"),
-                         merged_at=_iso(p.get("merged_at")), shared_branch=shared or None)) for p, shared in prs]
-    left = note.get("left") if not _NONE(note.get("left")) else ""
+    if asked:
+        core["question"] = asked
+    if core:
+        core["as_of"] = _iso(last)
+    root = next((p["path"] for p in t.get("places", []) if p.get("git")), "")
     card = dict(
         schema=SCHEMA, id=t["id"], title=t["title"], kind=t.get("kind", "work"), locality="local",
         state=dict(value=t["state"], why=t.get("state_why", ""), set_by=t.get("state_by") or "auto"),
         made_at=_iso(datetime.now().timestamp()), last_activity=_iso(t["updated"]), last_session=_iso(last),
-        origin=_clean(dict(by=_author(t), generator=_version())),
-        summary=_clean(dict(recap=note.get("recap"), current=note.get("current"), left=left,
-                            decisions=None if _NONE(note.get("decisions")) else note.get("decisions"), as_of=_iso(last))),
-        waiting_on_you=asked or ("" if _NONE(note.get("question")) else note.get("question")),
-        since_last_session=since, outdated=changed,
+        origin=_clean(dict(by=work._git(root, "config", "user.name", ttl=3600) if root else "", generator=_version())),
+        core=core, since_last_session=since, outdated=changed,
+        resources=[r.to_dict() for r in res.collect(t)],
         last_words=work._clean_words(t.get("last_words") or ""),
-        remote=_clean(dict(
-            repos=repos, pull_requests=pulls,
-            tickets=[_clean(dict(key=k["key"], status=k["status"], title=k["title"], url=k["url"])) for k in t["tickets"]],
-            links=[_clean(dict(url=i["url"], title=i["title"], source=work._server_label(i["server"]) if i.get("server") else ""))
-                   for i in t.get("items", [])[:10] if i.get("url")])),
-        attachments=attachments[:10],
-        files=files or [f[len(r):] for f in t["files"] for r in roots[:1] if f.startswith(r)],
-        sessions=[dict(agent=s["id"].split(":", 1)[0], title=s["title"], updated=_iso(s["updated"])) for s in t["sessions"][:8]],
         timeline=[dict(at=_iso(e["ts"]), source=e["source"], title=e["title"]) for e in t["events"][:20]],
         history=[dict(at=_iso(h["at"]), state=h["state"], by=h["by"], reason=h["reason"]) for h in hist[-10:]],
-        local=_clean(dict(
-            places=[_clean(dict(path=p["path"], repo=p.get("repo"), branch=p.get("branch"), worktree=p.get("worktree"),
-                                uncommitted=p.get("changed"), unpushed=p.get("ahead"))) for p in t.get("places", [])],
-            resume=(t.get("resume") or {}).get("command", ""),
-            session_ids=[s["id"] for s in t["sessions"][:8]], files=outside)))
-    card["handoff"] = _handoff(card)
+        local=_clean(dict(resume=(t.get("resume") or {}).get("command", ""))))
+    card["handoff"] = handoff(card)
     return _clean(card)
 
 
-def _author(t: dict) -> str:
-    root = next((p["path"] for p in t.get("places", []) if p.get("git")), "")
-    return work._git(root, "config", "user.name", ttl=3600) if root else ""
-
-
-def _handoff(card: dict) -> dict:
-    """What someone on another machine needs: the next step, the commands that get the work, and the commands that
-    get the live state again."""
-    r = card.get("remote", {})
-    pulls, repos = r.get("pull_requests", []), r.get("repos", [])
+def handoff(card: dict) -> dict:
+    """How someone on another machine picks the work up: the next step, the commands that get the work, and the
+    commands that get its live state again."""
+    rs = card.get("resources", [])
+    branch = next((r for r in rs if r["kind"] == "branch"), None)
+    change = next((r for r in rs if r["kind"] == "change"), None)
+    open_pr = next((r for r in rs if r["kind"] == "pr" and r.get("ref", {}).get("state") in ("open", "draft")), None)
+    by = (card.get("origin") or {}).get("by") or "its author"
     start, refresh = [], []
-    open_pr = next((p for p in pulls if p.get("state") in ("open", "draft") and not p.get("shared_branch")), None)
-    for repo in repos:
-        if repo.get("branch") and repo["branch"] not in work.DEFAULT_BRANCHES:
-            if open_pr:
-                start.append(f"gh pr checkout {open_pr['url']}")
-            elif repo.get("pushed"):
-                start.append(f"git fetch {repo['git']} {repo['branch']} && git switch {repo['branch']}")
-            else:
-                start.append(f"# the branch {repo['branch']} is not on the remote: ask {card['origin'].get('by') or 'its author'} to push it")
-            refresh.append(f"git ls-remote {repo['git']} refs/heads/{repo['branch']}")
-        break  # the first repo is where the work is
-    refresh += [f"gh pr view {p['url']} --json state,statusCheckRollup,reviewDecision" for p in pulls
-                if p.get("state") in ("open", "draft", "")][:3]
-    refresh += [f"{k['key']}: read the ticket with your tracker's tool ({k['url']})" for k in r.get("tickets", []) if k.get("url")][:2]
-    refresh += [f"{x.get('source') or 'link'}: {x['url']}" for x in r.get("links", [])][:3]
-    s = card.get("summary", {})
-    return _clean(dict(next=card.get("waiting_on_you") or s.get("left"), start=start, refresh=refresh))
+    if open_pr:
+        start.append(f"gh pr checkout {open_pr['ref']['url']}")
+    elif branch:
+        b = branch["ref"]
+        start.append(f"git fetch {b['git']} {b['branch']} && git switch {b['branch']}")
+    if change:  # uncommitted files or unpushed commits: only on the owner's machine
+        start.append(f"# {change['title']}: only on {by}'s machine; ask {by} to commit and push them")
+    elif change is None and not branch and any(r["kind"] == "folder" for r in rs) and card.get("kind") == "branch":
+        start.append(f"# the branch is not on the remote: ask {by} to push it")
+    if branch:
+        refresh.append(f"git ls-remote {branch['ref']['git']} refs/heads/{branch['ref']['branch']}")
+    refresh += [f"gh pr view {r['ref']['url']} --json state,statusCheckRollup,reviewDecision" for r in rs
+                if r["kind"] == "pr" and r.get("ref", {}).get("state") in ("open", "draft", "")][:3]
+    refresh += [f"{r['ref'].get('source') or 'Tracker'}: {r['ref']['url']}" for r in rs
+                if r["kind"] in ("ticket", "message", "page") and r.get("ref", {}).get("url")][:4]
+    core = card.get("core", {})
+    return _clean(dict(next=core.get("question") or core.get("next"), start=start, refresh=refresh))
 
 
-def share(card: dict) -> dict:
-    """The card to send: no `local` part and no local path anywhere (a path inside the repo becomes relative to it),
-    and secrets replaced by [secret]. The model's summary, the PRs, the tickets and the handoff stay."""
+def draft_share(card: dict, store, include: list[int] | None = None) -> dict:
+    """The shared card to preview: the local card's resources (those in `include`, by position; default all), and
+    a summary of each local or restricted one, written from the whole document now. Nothing leaves the Mac; `share`
+    then makes the card fit to send."""
+    rs = [dict(r) for i, r in enumerate(card.get("resources", [])) if include is None or i in include]
+    todo = sorted((r for r in rs if r["reach"] in (res.LOCAL, res.RESTRICTED) and r["kind"] != "folder"),
+                  key=lambda r: -r.get("relevance", 0))[:SUMMARIES]
+
+    def one(r):
+        obj = res.Resource(r["kind"], r["title"], r.get("ref", {}), relevance=r.get("relevance", 0.5), reach=r["reach"])
+        r["summary"] = res.summarize(obj, res.read_full(obj, store), card)
+    with ThreadPoolExecutor(4) as ex:
+        list(ex.map(one, todo))
+    return share(dict(card, resources=rs))
+
+
+def share(card: dict, ask: str = "") -> dict:
+    """The card to send. No `local` part and no local path anywhere: a local resource keeps its summary and loses its
+    path, or is left out when it has no summary. Secrets become [secret], a branch card's id becomes the same on
+    every machine (b:org/repo@branch), and `ask` (what the sender needs from the reader) leads the card."""
     c = json.loads(json.dumps(card))
-    roots = sorted((p["path"].rstrip("/") + "/" for p in c.get("local", {}).get("places", [])), key=len, reverse=True)
     c.pop("local", None)
-    if c["id"].startswith("b:"):  # b:<folder>@<branch> -> b:<org/repo>@<branch>, the same on every machine
-        repo = next((re.sub(r"^https?://[^/]+/", "", x["web"]) for x in c.get("remote", {}).get("repos", []) if x.get("web")), "")
+    c.pop("last_words", None)  # a transcript's words: the session's summary says what matters
+    c["core"] = {k: v if k == "as_of" else " ".join(s for s in re.split(r"(?<=[.;!?])\s+", v) if not _OWN_MACHINE.search(s))
+                 for k, v in c.get("core", {}).items()}
+    kept = []
+    for r in c.get("resources", []):
+        if r["reach"] == res.LOCAL:
+            if not r.get("summary") or r["kind"] == "folder":
+                continue
+            r.pop("ref", None)
+        elif r.get("ref"):
+            r["ref"] = {k: v for k, v in r["ref"].items() if k not in ("path", "session", "root")}
+        kept.append(r)
+    c["resources"] = kept
+    if c["id"].startswith("b:"):
+        repo = next((re.sub(r"^https?://[^/]+/", "", r["ref"]["web"]).split("/tree/")[0] for r in kept
+                     if r["kind"] == "branch" and r.get("ref", {}).get("web")), "")
         c["id"] = f"b:{repo or c['id'][2:].rsplit('@', 1)[0].rsplit('/', 1)[-1]}@{c['id'].rsplit('@', 1)[-1]}"
+    if ask.strip():
+        c["ask"] = ask.strip()
+    c["handoff"] = handoff(c)
 
     def scrub(x):
         if isinstance(x, str):
-            for r in roots:
-                x = x.replace(r, "")
             return _SECRET.sub("[secret]", _LOCAL_PATH.sub("[local path]", x))
         if isinstance(x, list):
             return [scrub(v) for v in x]
@@ -177,13 +162,14 @@ def share(card: dict) -> dict:
         return x
     c = scrub(c)
     c["locality"] = "shared"
-    return c
+    return _clean(c)
 
 
 def local_parts(card: dict) -> list[str]:
-    """Why a card is not fit to share: its `local` part, and each field that still holds a local path. [] when it is
-    fit. A shared space refuses a card that this finds anything in."""
+    """Why a card is not fit to share: its `local` part, a local resource with a path, and each field that still holds a
+    local path. [] when it is fit. A shared space refuses a card that this finds anything in."""
     found = ["local"] if "local" in card else []
+    found += [f"resources[{i}]" for i, r in enumerate(card.get("resources", [])) if r.get("reach") == res.LOCAL and r.get("ref")]
 
     def walk(x, at):
         if isinstance(x, str) and _LOCAL_PATH.search(x):
@@ -201,24 +187,28 @@ def local_parts(card: dict) -> list[str]:
 def render_agent(card: dict) -> str:
     """The card for an agent: its data as compact JSON, newest timeline first and cut short, with a line on how to
     read it. Agents follow ids, URLs and commands; they don't need layout."""
-    c = dict(card)
-    c["timeline"] = card.get("timeline", [])[:5]
-    c["sessions"] = card.get("sessions", [])[:3]
-    c["history"] = card.get("history", [])[-3:]
-    head = ("Context card (context-card/1). 'summary' is a model's note as of summary.as_of; a sentence marked "
-            "[outdated: …] is wrong now. 'remote' and 'handoff.refresh' say where to get the live state. "
-            + ("'local' works only on this machine." if "local" in card else "Shared: no local paths; start with handoff.start."))
+    c = dict(card, timeline=card.get("timeline", [])[:5], history=card.get("history", [])[-3:])
+    c["resources"] = [{k: v for k, v in r.items() if k != "relevance"} for r in card.get("resources", [])]
+    head = ("Context card (context-card/1). 'core' (problem, goal, state, next, question) is a model's note as of "
+            "core.as_of; a sentence marked [outdated: …] is wrong now. Each resource has a reach: git, mcp and public "
+            "ones can be opened with their ref; local and restricted ones are summarized. 'handoff' says how to start "
+            "and how to get the live state. "
+            + ("'local' works only on this machine." if card.get("locality") == "local" else "Shared: start with 'ask' and handoff.start."))
     return head + "\n" + json.dumps(_clean(c), ensure_ascii=False, separators=(",", ":"))
 
 
 STATE_LABEL = {"latent": "Defined", "conscious": "In progress", "subconscious": "Gone quiet", "etched": "Done",
                "forgotten": "Left"}
+NOTE_LABEL = {"session": "Session", "memory": "Memory", "change": "Changes", "file": "File", "artifact": "Artifact",
+              "message": "Message", "page": "Page", "ticket": "Ticket"}
+REACH_LABEL = {res.LOCAL: "summary", res.GIT: "git", res.MCP: "via MCP", res.RESTRICTED: "may need access", res.PUBLIC: "public"}
 CSS = """
 :root{--bg:#f5f5f7;--card:#fff;--ink:#1d1d1f;--ink-2:#6e6e73;--ink-3:#86868b;--line:rgba(0,0,0,.08);--link:#0066cc;
---good:#1f7a43;--warn:#a34700;--bad:#c4281c;--chip:rgba(0,0,0,.05);--ask:#fff7e6;--ask-line:#f2c46d;--merged:#8250df}
+--good:#1f7a43;--warn:#a34700;--bad:#c4281c;--chip:rgba(0,0,0,.05);--ask:#fff7e6;--ask-line:#f2c46d;--merged:#8250df;
+--req:#eef4ff;--req-line:#9ec1ff}
 @media (prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--ink:#f5f5f7;--ink-2:#a1a1a6;--ink-3:#86868b;
 --line:rgba(255,255,255,.12);--link:#2997ff;--good:#30d158;--warn:#ff9f0a;--bad:#ff453a;--chip:rgba(255,255,255,.08);
---ask:#2b2210;--ask-line:#8a6418;--merged:#bf5af2}}
+--ask:#2b2210;--ask-line:#8a6418;--merged:#bf5af2;--req:#0e1d33;--req-line:#2f5a99}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",
 "Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;padding:32px 16px}
@@ -230,15 +220,17 @@ code,pre{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13px}
 .meta{color:var(--ink-2);font-size:13px}.meta span+span:before{content:"·";margin:0 6px;color:var(--ink-3)}
 .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--chip);margin-right:6px}
 .s-conscious{color:var(--link)}.s-subconscious{color:var(--warn)}.s-etched{color:var(--good)}.s-forgotten,.s-latent{color:var(--ink-2)}
-.ask{margin-top:18px;background:var(--ask);border:1px solid var(--ask-line);border-radius:12px;padding:12px 14px}
-.ask b{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
+.box{margin-top:18px;border-radius:12px;padding:12px 14px}.box b{display:block;font-size:12px;text-transform:uppercase;
+letter-spacing:.06em;margin-bottom:2px}.ask{background:var(--ask);border:1px solid var(--ask-line)}
+.req{background:var(--req);border:1px solid var(--req-line)}
 dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0}dt{color:var(--ink-3)}dd{margin:0}
 .note{font-size:12px;color:var(--warn);white-space:nowrap}
 ul{margin:0;padding-left:18px}li{margin:2px 0}
 .rows{list-style:none;padding:0}.rows li{display:flex;gap:10px;align-items:baseline;padding:7px 0;border-top:1px solid var(--line)}
-.rows li:first-child{border-top:0}.grow{flex:1;min-width:0;overflow-wrap:anywhere}
-.badge{font-size:12px;font-weight:600;white-space:nowrap}.b-merged{color:var(--merged)}.b-open,.b-draft{color:var(--good)}
+.rows li:first-child{border-top:0}.grow{flex:1;min-width:0;overflow-wrap:anywhere}.grow p{margin:3px 0 0;color:var(--ink-2);font-size:14px}
+.badge{font-size:12px;font-weight:600;white-space:nowrap;min-width:64px}.b-merged{color:var(--merged)}.b-open,.b-draft{color:var(--good)}
 .b-closed{color:var(--bad)}.b-failing{color:var(--bad)}.b-passing{color:var(--good)}.b-pending{color:var(--warn)}
+.reach{font-size:11px;color:var(--ink-3);white-space:nowrap}
 .tl{list-style:none;padding:0;border-left:2px solid var(--line);margin-left:4px}.tl li{padding:2px 0 6px 14px;position:relative}
 .tl li:before{content:"";position:absolute;left:-6px;top:9px;width:10px;height:10px;border-radius:50%;background:var(--card);
 border:2px solid var(--ink-3)}.when{color:var(--ink-3);font-size:13px;margin-right:6px;font-variant-numeric:tabular-nums}
@@ -246,10 +238,8 @@ blockquote{margin:0;padding:10px 14px;border-left:3px solid var(--line);color:va
 .cmd{display:flex;gap:8px;align-items:center;background:var(--chip);border-radius:10px;padding:8px 10px;margin:4px 0}
 .cmd code{flex:1;overflow-wrap:anywhere}button{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--card);
 color:var(--ink);border-radius:8px;padding:3px 9px;cursor:pointer}
-.local{border:1px dashed var(--line);border-radius:12px;padding:4px 14px 12px;margin-top:22px}
-.local h2{margin-top:12px}
+.local{border:1px dashed var(--line);border-radius:12px;padding:4px 14px 12px;margin-top:22px}.local h2{margin-top:12px}
 footer{margin-top:26px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
-details summary{cursor:pointer;color:var(--ink-2)}
 @media (max-width:560px){main{padding:20px 16px}dl{grid-template-columns:1fr}dt{margin-top:6px}}
 """
 
@@ -272,72 +262,59 @@ def _cmd(text: str, i: int) -> str:
             f"document.getElementById('c{i}').textContent)\">Copy</button></div>")
 
 
+def _url(r: dict) -> str:
+    ref = r.get("ref", {})
+    return ref.get("url") or ref.get("web") or ""
+
+
 def render_html(card: dict) -> str:
-    """The card for people: one page with no outside files, light and dark, that leads with what needs a decision.
+    """The card for people: one page with no outside files, light and dark, that leads with the ask and the core.
     The page holds the card's JSON in <script type="application/json" id="context-card">, so `from_html` and any
     tool can read it back."""
     e = lambda s: html.escape(str(s or ""))
     day = lambda s: (s or "")[:10]
-    st, r, loc = card.get("state", {}), card.get("remote", {}), card.get("local", {})
+    st, core, rs = card.get("state", {}), card.get("core", {}), card.get("resources", [])
+    shared = card.get("locality") == "shared"
+    by = (card.get("origin") or {}).get("by")
     out = [f'<span class="pill s-{e(st.get("value"))}">{e(STATE_LABEL.get(st.get("value"), st.get("value")))}</span>'
-           + ('<span class="pill">Shared</span>' if card.get("locality") == "shared" else ""),
+           + ('<span class="pill">Shared</span>' if shared else ""),
            f"<h1>{e(card['title'])}</h1>",
            '<div class="meta">' + "".join(f"<span>{x}</span>" for x in [
                e(st.get("why")), f"last session {e(day(card.get('last_session')))}" if card.get("last_session") else "",
-               e((card.get("origin") or {}).get("by")),
-               ", ".join(e(k["key"]) for k in r.get("tickets", []))] if x) + "</div>"]
-    if card.get("waiting_on_you"):
-        out.append(f'<div class="ask"><b>Waiting on you</b>{e(card["waiting_on_you"])}</div>')
-    sm = card.get("summary") or {}
-    if sm:
-        rows = [f"<dt>{label}</dt><dd>{_marked(sm[k])}</dd>" for k, label in (
-            ("recap", "What it is"), ("current", "Done so far"), ("left", "What's left"), ("decisions", "Decided")) if sm.get(k)]
-        out += [f"<h2>Where it stands · as of {e(day(sm.get('as_of')))}</h2>", f"<dl>{''.join(rows)}</dl>"]
+               e(by), ", ".join(e(r["ref"].get("key")) for r in rs if r["kind"] == "ticket" and r.get("ref", {}).get("key"))] if x)
+           + "</div>"]
+    if card.get("ask"):
+        out.append(f'<div class="box req"><b>{e(by or "The sender")} asks you</b>{e(card["ask"])}</div>')
+    if core.get("question"):
+        out.append(f'<div class="box ask"><b>Waiting on {e(by) if shared and by else "you"}</b>{e(core["question"])}</div>')
+    rows = [f"<dt>{label}</dt><dd>{_marked(core[k])}</dd>" for k, label in work.CORE_LABELS[:4] if core.get(k)]
+    if rows:
+        out += [f"<h2>The work · as of {e(day(core.get('as_of')))}</h2>", f"<dl>{''.join(rows)}</dl>"]
     if card.get("since_last_session"):
-        out += ["<h2>Since the last session</h2>", "<ul>" + "".join(f"<li>{e(x)}</li>" for x in card["since_last_session"]) + "</ul>"]
-    if r.get("pull_requests"):
-        out += ["<h2>Pull requests</h2>", '<ul class="rows">' + "".join(
-            f'<li><span class="badge b-{e(p.get("state"))}">{e(p.get("state") or "unknown")}</span>'
-            f'<span class="grow"><a href="{e(p["url"])}">{e(p.get("repo"))}#{e(p.get("number"))}</a> {e(p.get("title"))}'
-            + (' <span class="meta">(shared branch)</span>' if p.get("shared_branch") else "") + "</span>"
-            + (f'<span class="badge b-{e(p["checks"])}">checks {e(p["checks"])}</span>' if p.get("checks") else "")
-            + "</li>" for p in r["pull_requests"]) + "</ul>"]
-    if r.get("repos"):
-        out += ["<h2>Where the work is</h2>", '<ul class="rows">' + "".join(
-            f'<li><span class="grow"><a href="{e(x.get("web") or x["git"])}">{e(x.get("name") or x["git"])}</a>'
-            + (f' on <code>{e(x["branch"])}</code>' if x.get("branch") else "")
-            + (f' at <code>{e(x["head"][:8])}</code>' if x.get("head") else "") + "</span>"
-            + f'<span class="meta">{"pushed" if x.get("pushed") else "not all pushed"}</span></li>' for x in r["repos"]) + "</ul>"]
-    if r.get("tickets"):
-        out += ["<h2>Tickets</h2>", '<ul class="rows">' + "".join(
-            f'<li><span class="badge">{e(k.get("status"))}</span><span class="grow">'
-            + (f'<a href="{e(k["url"])}">{e(k["key"])}</a>' if k.get("url") else e(k["key"])) + f" {e(k.get('title'))}</span></li>"
-            for k in r["tickets"]) + "</ul>"]
-    links = [(x.get("source") or "Link", x) for x in r.get("links", [])] + [
-        ("Artifact" if a.get("kind") == "artifact" else "Page", a) for a in card.get("attachments", [])]
-    if links:
-        out += ["<h2>Links and artifacts</h2>", '<ul class="rows">' + "".join(
-            f'<li><span class="badge">{e(src)}</span><span class="grow"><a href="{e(x["url"])}">{e(x.get("title") or x["url"])}</a></span></li>'
-            for src, x in links) + "</ul>"]
-    h = card.get("handoff", {})
+        out += ["<h2>Since then</h2>", "<ul>" + "".join(f"<li>{e(x)}</li>" for x in card["since_last_session"]) + "</ul>"]
+    h, loc = card.get("handoff", {}), card.get("local", {})
     cmds = ([loc["resume"]] if loc.get("resume") else []) + h.get("start", [])
     if cmds:
         out += ["<h2>Pick it up</h2>"] + [_cmd(c, i) for i, c in enumerate(cmds)]
+    linked = [r for r in rs if r["reach"] != res.LOCAL and _url(r)]
+    if linked:
+        out += ["<h2>Links</h2>", '<ul class="rows">' + "".join(_link_row(r, e) for r in linked) + "</ul>"]
+    notes = [r for r in rs if r.get("summary") and (r["reach"] == res.LOCAL or not _url(r))]
+    if notes:
+        out += ["<h2>From " + ("the owner's notes" if shared else "your sessions and files") + "</h2>",
+                '<ul class="rows">' + "".join(
+                    f'<li><span class="badge">{e(NOTE_LABEL.get(r["kind"], r["kind"]))}</span><span class="grow">'
+                    f'{e(r["title"])}<p>{e(r["summary"])}</p></span></li>' for r in notes) + "</ul>"]
     if card.get("last_words"):
         out += ["<h2>Where the last session stopped</h2>", f"<blockquote>{_md(card['last_words'])}</blockquote>"]
-    if card.get("files"):
-        out += ["<h2>Files</h2>", f"<details><summary>{len(card['files'])} files</summary><ul>"
-                + "".join(f"<li><code>{e(f)}</code></li>" for f in card["files"][:30]) + "</ul></details>"]
     if card.get("timeline"):
         out += ["<h2>Timeline</h2>", '<ul class="tl">' + "".join(
-            f'<li><span class="when">{e(day(x["at"]))}</span>{e(x["source"])}: {e(x["title"])}</li>' for x in card["timeline"]) + "</ul>"]
-    if loc.get("places"):
+            f'<li><span class="when">{e(day(x["at"]))}</span>{e(x["source"])}: {e(x["title"])}</li>' for x in card["timeline"][:12]) + "</ul>"]
+    mine = [r for r in rs if r["reach"] == res.LOCAL and r.get("ref", {}).get("path")]
+    if not shared and mine:
         out += ['<section class="local"><h2>On this Mac only</h2><ul class="rows">' + "".join(
-            f'<li><span class="grow"><code>{e(p["path"])}</code>' + (f' on <code>{e(p["branch"])}</code>' if p.get("branch") else "")
-            + '</span><span class="meta">' + "".join(f"<span>{x}</span>" for x in [
-                "worktree" if p.get("worktree") else "", f"{p['uncommitted']} uncommitted" if p.get("uncommitted") else "",
-                f"{p['unpushed']} not pushed" if p.get("unpushed") else ""] if x) + "</span></li>"
-            for p in loc["places"]) + "</ul></section>"]
+            f'<li><span class="badge">{e(r["kind"])}</span><span class="grow">{e(r["title"])}<p><code>{e(r["ref"]["path"])}</code></p></span></li>'
+            for r in mine) + "</ul></section>"]
     th = card.get("thread") or {}
     foot = (f"Context card · {e(card.get('schema'))} · made {e(day(card.get('made_at')))} by "
             f"{e((card.get('origin') or {}).get('generator'))}"
@@ -349,6 +326,16 @@ def render_html(card: dict) -> str:
             f"<title>{e(card['title'])}</title><style>{CSS}</style></head><body><main>"
             + "".join(out) + f"<footer>{foot}</footer></main>"
             f'<script type="application/json" id="context-card">{data}</script></body></html>')
+
+
+def _link_row(r: dict, e) -> str:
+    ref = r.get("ref", {})
+    state = ref.get("state") or ref.get("status") or ""
+    label = {"pr": state or "PR", "branch": "branch", "code": "file", "ticket": state or "ticket",
+             "message": ref.get("source") or "message", "page": ref.get("source") or "page", "artifact": "artifact",
+             "link": "link"}.get(r["kind"], r["kind"])
+    return (f'<li><span class="badge b-{e(state)}">{e(label)}</span><span class="grow"><a href="{e(_url(r))}">{e(r["title"])}</a>'
+            + (f"<p>{e(r['summary'])}</p>" if r.get("summary") else "") + f'</span><span class="reach">{e(REACH_LABEL[r["reach"]])}</span></li>')
 
 
 def save(card: dict, folder) -> str:

@@ -442,10 +442,10 @@ def matching(ts: list[dict], query: str, notes_: dict) -> list[dict]:
     matched words first (ties keep their order)."""
     words = {w for w in re.findall(r"[a-z0-9][a-z0-9_.-]+", query.lower().replace("#", " ")) if len(w) > 2 or w.isdigit()}
     def text(t):
-        n = notes_.get(t["id"], {})
+        n = core(notes_.get(t["id"], {}))
         return " ".join([t["title"], *t["keys"], *(b["branch"] for b in t["branches"]), *(p["url"] + " " + (p.get("title") or "")
-                         for p in t["prs"]), *(s["title"] for s in t["sessions"][:8]), n.get("recap", ""),
-                         n.get("left", "")]).lower()
+                         for p in t["prs"]), *(s["title"] for s in t["sessions"][:8]), n.get("problem", ""),
+                         n.get("goal", ""), n.get("next", "")]).lower()
     scored = [(sum(1 for w in words if re.search(rf"(?<![a-z0-9]){re.escape(w)}", tx)), i, t)
               for i, t in enumerate(ts) for tx in [text(t)]]
     return [t for s, i, t in sorted(scored, key=lambda x: (-x[0], x[1])) if s]
@@ -480,8 +480,9 @@ def card_for_prompt(ts: list[dict], prompt: str, notes_: dict) -> dict | None:
 
 
 def _words_hit(t, prompt, notes_):
-    n = notes_.get(t["id"], {})
-    text = " ".join([t["title"], *(s["title"] for s in t["sessions"][:8]), n.get("recap", ""), n.get("left", "")]).lower()
+    n = core(notes_.get(t["id"], {}))
+    text = " ".join([t["title"], *(s["title"] for s in t["sessions"][:8]), n.get("problem", ""), n.get("goal", ""),
+                     n.get("next", "")]).lower()
     words = {w for w in re.findall(r"[a-z0-9][a-z0-9_.-]+", prompt.lower()) if len(w) > 3} - _STOP
     return [w for w in words if re.search(rf"(?<![a-z0-9]){re.escape(w)}", text)]
 
@@ -500,7 +501,8 @@ def brief(t: dict, note: dict) -> str:
                                   p.get("ahead") and f"{p['ahead']} not pushed") if x)
     prs = ", ".join(f"PR #{(re.search(r'(\d+)/?$', x['url']) or [0, '?'])[1]} {x['state'] or ''}".strip() for x in t["prs"][:2])
     bits = [f"[{t['state']}]" + (" (session running)" if t.get("active") else ""), t["title"][:90], where, prs,
-            ", ".join(t["keys"][:2]), f"left: {note['left']}" if note.get("left") else "", _ago(t["updated"])]
+            ", ".join(t["keys"][:2]), f"next: {note['next']}" if note.get("next") else "",
+            f"waits on you: {note['question']}" if note.get("question") else "", _ago(t["updated"])]
     return f"{t['id']}  " + " · ".join(b for b in bits if b)
 
 
@@ -527,11 +529,8 @@ def detail(t: dict, note: dict, hist: list[dict]) -> str:
     note = reconcile(note, t)[0] if note else note
     if note:
         out += ["", f"From the sessions (as of {datetime.fromtimestamp(last).strftime('%Y-%m-%d') if last else 'the last session'}; "
-                    "the folders and PRs below are live):",
-                f"Recap: {note.get('recap', '')}", f"Current state: {note.get('current', '')}",
-                f"What's left: {note.get('left', '')}"]
-        out += [f"{label}: {note[k]}" for k, label in (("decisions", "Decided"), ("question", "Waiting on you"))
-                if note.get(k) and note[k].strip(" .").lower() != "none"]
+                    "the folders and PRs below are live):"]
+        out += [f"{label}: {note[k]}" for k, label in CORE_LABELS if note.get(k)]
     since = [p for p in t["prs"] + t.get("branch_prs", []) if last and (p.get("merged_at") or 0) > last]
     if since:
         out += ["", "## Since the last session"] + [
@@ -571,15 +570,21 @@ def detail(t: dict, note: dict, hist: list[dict]) -> str:
     return "\n".join(out)
 
 
-_PUSH = re.compile(r"\b(push|unpushed|not pushed|ahead of)\b", re.I)
+_PUSH = re.compile(r"\b(push|unpushed|not pushed|ahead of|committed locally|local commits?)\b", re.I)
 _UNCOMMITTED = re.compile(r"\buncommitted\b", re.I)
 _PR_OPEN = re.compile(r"(?:PR\s*)?#(\d+)[^.;]*\b(open|draft|review|merge it|to merge|waiting|pending)\b|"
                       r"\b(merge|review|open)\b[^.;]*#(\d+)", re.I)
 
 
+CORE_LABELS = (("problem", "Problem"), ("goal", "Goal"), ("state", "State"), ("next", "Next"), ("question", "Waiting on you"))
+
+
 def reconcile(note: dict, t: dict) -> tuple[dict, list[str]]:
-    """The note with each sentence that the live state contradicts marked as outdated, and what the live state says
-    instead. A note is written from the sessions; git and gh show what happened after them (a push, a merged PR)."""
+    """The note's core (problem, goal, state, next, question) with each sentence that the live state contradicts
+    marked as outdated, and what the live state says instead. A note is written from the sessions; git and gh show
+    what happened after them (a push, a merged PR). A claim about the checkout (pushed, uncommitted) can be outdated
+    anywhere but the problem and goal; a claim that a PR waits, only in what is left to do (next, question)."""
+    note = core(note)
     places = [p for p in t.get("places", []) if p.get("git")]
     pushed = bool(places) and all(p.get("upstream") and not p.get("ahead") for p in places if p.get("branch"))
     clean = bool(places) and not any(p.get("changed") for p in places)
@@ -587,19 +592,17 @@ def reconcile(note: dict, t: dict) -> tuple[dict, list[str]]:
              for m in re.findall(r"/pull/(\d+)", p["url"])}
     changes, out = [], {}
     for k, v in note.items():
-        if k not in ("recap", "current", "left", "decisions", "question") or not isinstance(v, str):
-            continue
         keep = []
         for s in re.split(r"(?<=[.;])\s+", v):
             why = None
-            if k in ("left", "question") and pushed and _PUSH.search(s):
+            if k in ("state", "next", "question") and pushed and clean and _PUSH.search(s):  # uncommitted: a push still waits
                 why = "every commit is pushed now"
-            elif k in ("left", "question") and clean and _UNCOMMITTED.search(s):
+            elif k in ("state", "next", "question") and clean and _UNCOMMITTED.search(s):
                 why = "nothing is uncommitted now"
             else:
                 for m in _PR_OPEN.finditer(s):
                     n = m.group(1) or m.group(4)
-                    if state.get(n) in ("merged", "closed") and k in ("left", "question"):  # work to do, not done
+                    if state.get(n) in ("merged", "closed") and k in ("next", "question"):  # work to do, not done
                         why = f"PR #{n} is {state[n]} now"
             if why:  # marked, not dropped: the rest of the sentence ("push, then deploy") can still be open
                 changes.append(why)
@@ -663,12 +666,9 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
     if since:
         out.append("Since the last session: " + "; ".join(since))
     if note:
-        out += ["", f"As of the last session: {note.get('recap', '')} {note.get('current', '')}".rstrip(),
-                f"Left: {note.get('left', '')}"]
-        if note.get("decisions") and note["decisions"].strip(" .").lower() != "none":
-            out.append(f"Decided: {note['decisions']}")
+        out += ["", "As of the last session:"] + [f"{label}: {note[k]}" for k, label in CORE_LABELS[:4] if note.get(k)]
     asked = last_question(t.get("last_words") or "")  # the session's own words, over the note's
-    if asked or (note.get("question") and note["question"].strip(" .").lower() != "none"):
+    if asked or note.get("question"):
         out.append(f"Waiting on you: {asked or note['question']}")
     if t.get("last_words"):
         out += ["", "Last words of the last session:", _clean_words(t["last_words"])[-450:]]
@@ -903,20 +903,34 @@ Its data points, newest first (date, source, what happened):
 How it ended:
 {last_words}
 
-Answer with five fields, each one short sentence:
-- recap: at most 25 words on what the task or problem is, to bring it back to mind.
-- current: at most 20 words on what has been done so far.
-- left: at most 20 words on what is left to do, and whether someone is still working on it; "Nothing" if it is done.
-- decisions: at most 30 words on what was decided and why (a cause found, an approach chosen or dropped); "None" if
-  the data shows no decision.
+Answer with five fields:
+- problem: at most 25 words on what is wrong or missing, to bring it back to mind.
+- goal: at most 20 words on what "done" looks like, and why it matters.
+- state: at most 40 words on where it stands: what has been done, and what was decided and why (a cause found, an
+  approach chosen or dropped).
+- next: at most 25 words on what needs to be done, and whether someone is still working on it; "Nothing" if it is
+  done.
 - question: at most 20 words on the question that the last session asked the developer and that is not answered;
   "None" if there is no such question.
-State facts from the data above only. Name the real files, PRs, tickets and errors from the data. Say how something
-was done or why it worked only in the data's own words; if the data doesn't say, leave it out."""
-NOTE_SCHEMA = {"type": "object", "properties": {k: {"type": "string"} for k in ("recap", "current", "left", "decisions",
-                                                                                   "question")},
-               "required": ["recap", "current", "left", "decisions", "question"], "additionalProperties": False}
-NOTE_VERSION = 7  # a new version writes every note again; 6: decisions and the open question; 7: the longer ending
+State facts from the data above only. Name the real PRs, tickets, functions and errors from the data, but no local
+folders or file paths: someone on another machine reads this too. Say how something was done or why it worked only
+in the data's own words; if the data doesn't say, leave it out."""
+CORE = ("problem", "goal", "state", "next", "question")
+NOTE_SCHEMA = {"type": "object", "properties": {k: {"type": "string"} for k in CORE},
+               "required": list(CORE), "additionalProperties": False}
+NOTE_VERSION = 8  # a new version writes every note again; 7: the longer ending; 8: problem, goal, state, next
+
+
+def core(note: dict) -> dict:
+    """A note's core (problem, goal, state, next, question), from a note in the format of NOTE_VERSION 8 or older
+    (recap, current, decisions, left). Empty fields and "None" answers are left out."""
+    if not note:
+        return {}
+    if "problem" not in note:
+        note = dict(problem=note.get("recap"), state=" ".join(x for x in (note.get("current"), note.get("decisions"))
+                                                              if x and x.strip(" .").lower() != "none"),
+                    next=note.get("left"), question=note.get("question"))
+    return {k: note[k].strip() for k in CORE if isinstance(note.get(k), str) and note[k].strip(" .").lower() not in ("", "none")}
 NOTE_MIN_AGE = 600  # seconds before a note is written again for new data
 
 

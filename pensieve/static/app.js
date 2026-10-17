@@ -1611,11 +1611,15 @@ function openTopic(entry) {
   $$('[data-twho]', body).forEach(b => b.onclick = () => openPersonPanel(b.dataset.twho));
   $('[data-zoomout]', body).onclick = () => deselectLabel();
 }
+// a card's note, in the order of the core: [field, label, what it says]
+const NOTE_ROWS = [['problem', 'Problem', 'What is wrong or missing'], ['goal', 'Goal', 'What done looks like, and why it matters'],
+  ['state', 'State', 'Where it stands, and what was decided'], ['next', 'Next', 'What needs to be done, and whether someone is still working on it'],
+  ['question', 'Waiting on you', 'The question that the last session asked you']];
 function openCardPanel(t) {
   const D = S.data, m = (D.cards?.states || []).find(x => x.state === t.state) || {label: t.state, color: pal().other};
   const n = D.cards?.notes?.[t.id], p = (t.places || [])[0];
   const prs = t.prs.slice(0, 4).map(r => `<a class="item" href="${esc(r.url)}" target="_blank" rel="noopener"><div class="t"><span class="grow">#${esc(prNum(r.url) || '')} ${esc(r.title || '')}</span><span class="muted">${esc(r.state || '')}</span></div></a>`).join('');
-  const note = n ? [['Recap', n.recap], ['Current state', n.current], ['What’s left', n.left]].filter(([, v]) => v)
+  const note = n ? NOTE_ROWS.map(([k, l]) => [l, n[k]]).filter(([, v]) => v)
     .map(([l, v]) => `<div class="h4">${l}</div><p style="margin:2px 0 0">${esc(v)}</p>`).join('') : '';
   openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${m.color}"></i>${esc(m.label)}</span>${t.active ? 'Session running · ' : ''}${fmtWhen(t.updated)}</div><h2>${esc(t.title)}</h2>`,
     `${p ? `<p class="muted" style="margin:0">${esc(homeTilde(p.path))}${p.branch ? ` · ${esc(p.branch)}` : ''}${p.changed ? ` · ${plural(p.changed, 'uncommitted file')}` : ''}</p>` : ''}
@@ -3355,6 +3359,44 @@ function wkActions(t) {
   const share = `<button class="wk-btn icon" data-wk-share="${esc(t.id)}" title="Share: save this card to Downloads as a page that people open and agents read. Local paths, session ids and secrets are left out.">${WK_IC.share}</button>`;
   return `<div class="wk-bar">${resume}<span class="wk-loc"></span>${adj}${share}</div>`;
 }
+// The Share dialog: Pensieve drafts the shared card (summaries of what the reader can't open, read whole now); the
+// person writes what they need, edits the core, unticks what doesn't belong, and saves the page to Downloads.
+const REACH_TXT = {local: 'summary only', git: 'link (git)', mcp: 'link (via MCP)', restricted: 'link, may need access', public: 'link'};
+async function openShare(id) {
+  const m = document.createElement('div');
+  m.className = 'modal'; m.id = 'sharemodal';
+  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>Share this card</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+    <div class="sh-body"><p class="cap">Reading the sessions, changes and files of this work, and writing a summary of each one that your reader can’t open…</p><div class="shimmer" style="height:160px"></div></div></div>`;
+  document.body.append(m);
+  const close = () => m.remove();
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) close(); };
+  let d;
+  try { d = await api('/api/work/card/draft', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, days: S.work.days})}); }
+  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">Could not draft the card: ${esc(e.message)}</div>`; return; }
+  const c = d.card, core = c.core || {}, rs = c.resources || [];
+  const left = d.resources.filter(r => r.reach === 'local' && r.kind !== 'folder').length - rs.filter(r => r.reach === 'local').length;
+  $('.sh-body', m).innerHTML = `
+    <label class="sh-f"><span>What do you need from them?</span><textarea data-sh="ask" rows="2" placeholder="Can you review #12 before Friday? / It’s yours while I’m away."></textarea></label>
+    ${NOTE_ROWS.map(([k, l, tip]) => `<label class="sh-f"><span title="${tip}">${l}</span><textarea data-sh-core="${k}" rows="${k === 'state' ? 3 : 2}">${esc(core[k] || '')}</textarea></label>`).join('')}
+    <h4>What goes with it</h4><p class="cap">Links stay links for anyone who can open them. What only this Mac has goes as a summary, without its path.${left > 0 ? ` ${plural(left, 'local item')} had nothing worth sending and ${left === 1 ? 'is' : 'are'} left out.` : ''}</p>
+    ${rs.map((r, i) => `<div class="sh-r"><label><input type="checkbox" data-sh-keep="${i}" checked><b>${esc(r.title)}</b><span class="muted">${esc(REACH_TXT[r.reach] || r.reach)}</span></label>
+      ${r.summary || r.reach === 'local' || r.reach === 'restricted' ? `<textarea data-sh-sum="${i}" rows="3">${esc(r.summary || '')}</textarea>` : ''}</div>`).join('')}
+    <div class="sh-foot"><span class="muted">Saved to Downloads as one page: people open it, agents read the data in it.</span><button class="btn" data-close>Cancel</button><button class="btn primary" data-sh-save>Save to Downloads</button></div>`;
+  $('[data-sh-save]', m).onclick = async e => {
+    e.target.disabled = true;
+    const card = JSON.parse(JSON.stringify(c));
+    card.core = {...card.core};
+    $$('[data-sh-core]', m).forEach(t => { const v = t.value.trim(); if (v) card.core[t.dataset.shCore] = v; else delete card.core[t.dataset.shCore]; });
+    card.resources = rs.map((r, i) => ({...r, summary: ($(`[data-sh-sum="${i}"]`, m)?.value ?? r.summary ?? '').trim()}))
+      .filter((r, i) => $(`[data-sh-keep="${i}"]`, m).checked);
+    try {
+      const r = await api('/api/work/card/save', {method: 'POST', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({id, days: S.work.days, card, ask: $('[data-sh="ask"]', m).value})});
+      await api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: 'file:' + r.path, action: 'reveal'})}).catch(() => {});
+      toast(`Saved ${r.path.split('/').pop()} to Downloads`); close();
+    } catch (err) { toast('Could not save the card: ' + err.message); e.target.disabled = false; }
+  };
+}
 const wkSt = (text, kind = '') => `<span class="wk-st ${kind}">${esc(text)}</span>`;
 const PR_ORDER = {open: 0, draft: 1, merged: 2, closed: 3};
 // The card's sections, each only when it has data: where the work is, PRs, tickets, sessions, and all activity
@@ -3460,10 +3502,8 @@ function renderWork() {
   const writing = t => (Array.isArray(d.writing) ? d.writing : []).includes(t.id);
   const note = t => {
     const n = d.notes[t.id];
-    const done = n && /^(nothing|none|n\/a)\.?$/i.test(n.left.trim());
-    if (n) return `<div class="wk-note">${n.recap ? `<div class="nrow recap" title="What the task or problem is"><span class="nlbl">Recap</span><p>${esc(n.recap)}</p></div>` : ''}
-      <div class="nrow" title="What has been done"><span class="nlbl">Current state</span><p>${esc(n.current)}</p></div>
-      <div class="nrow ${done ? 'done' : 'left'}" title="What is left to do, and whether it is still being worked on"><span class="nlbl">What’s left</span><p>${done ? 'Nothing left' : esc(n.left)}</p></div>
+    const done = n && /^(nothing|none|n\/a)\.?$/i.test((n.next || '').trim());
+    if (n) return `<div class="wk-note">${NOTE_ROWS.filter(([k]) => n[k]).map(([k, l, tip]) => `<div class="nrow ${k === 'problem' ? 'recap' : k === 'next' ? (done ? 'done' : 'left') : ''}" title="${tip}"><span class="nlbl">${l}</span><p>${k === 'next' && done ? 'Nothing left' : esc(n[k])}</p></div>`).join('')}
       ${writing(t) ? '<div class="foot">Updating…</div>' : ''}</div>`;
     if (!insightsOn()) return '<div class="wk-note empty-note">Choose a generation model in Settings → Models to get a note on each task.</div>';
     return `<div class="wk-note empty-note">${writing(t) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
@@ -3517,15 +3557,7 @@ function renderWork() {
     try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
     catch (e) { toast('Could not resume it: ' + e.message); }
   });
-  $$('[data-wk-share]', el).forEach(b => b.onclick = async () => {
-    b.disabled = true;
-    try {
-      const r = await api('/api/work/card/save', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkShare, days: S.work.days})});
-      await api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: 'file:' + r.path, action: 'reveal'})}).catch(() => {});
-      toast(`Saved ${r.path.split('/').pop()} to Downloads`);
-    } catch (e) { toast('Could not save the card: ' + e.message); }
-    b.disabled = false;
-  });
+  $$('[data-wk-share]', el).forEach(b => b.onclick = () => openShare(b.dataset.wkShare));
   $$('[data-wk-open]', el).forEach(b => b.onclick = () => { const id = b.dataset.wkOpen; S.work.open[S.work.open.has(id) ? 'delete' : 'add'](id); renderWork(); });
   $$('[data-wk-file]', el).forEach(b => b.onclick = () => openFile(b.dataset.wkFile));
   $$('[data-wk-folder]', el).forEach(b => b.onclick = () => api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'},

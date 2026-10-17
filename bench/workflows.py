@@ -15,6 +15,8 @@ Tasks: bench/out/workflows/tasks.jsonl, one JSON object per line:
 Arms (each a `claude -p` run in the task's repo; sessions are not saved, so they never reach the index):
   base       Read, Grep, Glob and read-only Bash (git, gh, ls, find, cat ...): what Claude Code has without Pensieve
   pensieve   base plus Pensieve's read-only MCP tools and the plugin's session-start instructions
+  teammate   base in a fresh clone, with the owner's Desktop, Documents and ~/.claude closed: someone else's machine
+  +v1, +v2   (suffix) the context card that the owner shared, from the task's "cards", added to the prompt
   +skills    (suffix) also loads the plugin's skills from pensieve/integrations/skills
   +memory    (suffix) keeps Claude Code's auto memory on (it is off otherwise)
   +inject    (suffix) adds what Pensieve's prompt hook adds to the prompt: a context card or code hits
@@ -81,13 +83,16 @@ def skills_plugin():
 
 def arm_config(arm, root):
     base, *extra = arm.split("+")
-    unknown = set(extra) - {"skills", "memory", "inject", "injectjson"}
+    unknown = set(extra) - {"skills", "memory", "inject", "injectjson", "v1", "v2", "v3"}
     if unknown:
         raise SystemExit(f"unknown arm suffix {unknown}")
     c = dict(tools="Read,Grep,Glob,Bash", allowed=["Read", "Grep", "Glob", *READ_ONLY_BASH], mcp={}, system=None,
              memory="memory" in extra, skills="skills" in extra,
-             inject="json" if "injectjson" in extra else "text" if "inject" in extra else None)
-    if base == "pensieve":
+             inject="json" if "injectjson" in extra else "text" if "inject" in extra else None,
+             card=next((x for x in extra if x in ("v1", "v2", "v3")), None))
+    if base == "teammate":  # someone else's machine: no Pensieve, and the owner's folders and agent files are off
+        c["off"] = [f"{tool}(/{_HOME}/{d}/**)" for tool in ("Read", "Grep", "Glob") for d in ("Desktop", ".claude", "Documents")]
+    elif base == "pensieve":
         c["mcp"] = {"pensieve": {"type": "http", "url": f"{API}/mcp?" + urllib.parse.urlencode(dict(scope="auto", cwd=root))}}
         c["allowed"] += PENSIEVE_TOOLS + ["Skill"]
         c["system"] = INSTRUCTIONS  # what the plugin's SessionStart hook adds
@@ -103,7 +108,8 @@ def claude(prompt, cwd, model, c, budget=2.0, timeout=900):
     plugin = skills_plugin() if c["skills"] else None
     cmd = ["claude", "-p", prompt, "--model", model, "--no-session-persistence", "--output-format", "stream-json",
            "--verbose", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": c["mcp"]}),
-           "--tools", c["tools"], "--allowedTools", ",".join(c["allowed"]), "--disallowedTools", OFF,
+           "--tools", c["tools"], "--allowedTools", ",".join(c["allowed"]),
+           "--disallowedTools", ",".join([OFF, *c.get("off", [])]),
            "--setting-sources", "", "--settings", isolation(c["memory"]),
            "--max-budget-usd", str(budget)]
     cmd += ["--append-system-prompt", c["system"]] if c["system"] else []
@@ -182,6 +188,8 @@ def run(a):
         root = str(Path(t["repo"]).expanduser())
         c = arm_config(arm, root)
         prompt = t["prompt"] + PROMPT_TAIL
+        if c["card"]:  # the context card the owner shared, as the reader's agent gets it (tasks-shared.jsonl)
+            prompt += "\n\nTed shared this context card with me:\n" + Path(t["cards"][c["card"]]).read_text()
         r = claude(injected(prompt, root, c["inject"]) if c["inject"] else prompt, root, a.model, c, a.budget)
         rec = dict(task=t["id"], workflow=t["workflow"], arm=arm, rep=rep, **r)
         print(f"{t['id']:<10} {arm:<16} ${r['cost'] or 0:.3f} {len(r['calls']):>2} calls {r['secs']:>6}s"

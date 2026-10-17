@@ -327,7 +327,17 @@ pensieve repo status     # whether Pensieve indexes this repo; also index, skip 
 pensieve card <task id> -o card.html   # a context card as one HTML page; --json or --agent for the data, --share to send it
 ```
 
-A context card follows [`context-card.schema.json`](pensieve/context-card.schema.json) (`context-card/1`). It has a `remote` part, which any reader can fetch again (the git remote and branch, PRs, tickets, links), and a `local` part, which works only on your Mac (folder paths, the command that resumes a session). `--share` drops the `local` part, every local path and secrets, and adds `handoff`: the commands that get the work and its live state. The HTML page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so a tool can read a card that someone sent as a page. The Share button at the bottom right of each card on the Context tab saves its shared page to Downloads. Agents get the same page from the `share_card` MCP tool.
+A context card follows [`context-card.schema.json`](pensieve/context-card.schema.json) (`context-card/1`). Every card has the same core: the **problem**, the **goal**, the **state** and what is **next**, plus the question that waits on you. Its resources are the supporting context, and each one has a reach ([`resources.py`](pensieve/resources.py)):
+
+| Reach | Resources | In a shared card |
+|---|---|---|
+| local | session transcripts, agent memory files, uncommitted or unpushed changes, files outside git, folders | a summary, written from the whole document when you share; no path |
+| git | the branch on the remote, files at a pushed commit, PRs | a link (a permalink at the commit) |
+| mcp | tickets, messages, pages from your connections | a link and its service, with a summary |
+| restricted | Claude artifacts | a link marked "may need access", with a summary |
+| public | public web pages | a link |
+
+The Share button at the bottom right of each card on the Context tab opens a preview. Pensieve reads the local and restricted resources whole and writes a summary of each one. You write what you need from the reader, edit the core and the summaries, untick what doesn't belong, and save one page to Downloads. The page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so the reader's agent reads the same file. A shared card has no local paths, session ids, resume command or secrets, and leaves out sentences about your own machine. Agents share a card with the `share_card` MCP tool.
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
 

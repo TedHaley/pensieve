@@ -586,13 +586,14 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Why:** a card holds what a teammate needs to pick up a piece of work: where it stands, what is left, the
   question that waits on the owner, the PRs and the decisions. Today it lives only in the app and in an agent's
   session.
-- **Built:** `pensieve/cards.py` and `context-card.schema.json` (`context-card/1`). One data model, two renderings:
+- **Built:** `pensieve/cards.py`, `pensieve/resources.py` and `context-card.schema.json` (`context-card/1`). One
+  data model, two renderings:
   - JSON, the source of truth, from the same task and validation as the text card (`work.reconcile`, the last
     question word for word);
   - one HTML page with no outside files, light and dark, that holds the JSON. `cards.from_html` reads it back.
   Agents in a session keep the compact text card: HTML costs several times the tokens for the same facts.
-  `cards.redact` (`--share`) removes local paths, session ids and the resume command, and replaces secrets with
-  `[secret]`. `GET /api/work/card?id=…&format=html|json&share=true` and `pensieve card <id>` make a card.
+  `cards.share` (`--share`) removes local paths, session ids and the resume command, and replaces secrets with
+  `[secret]`. `GET /api/work/card?id=…&format=html|json|agent&share=true` and `pensieve card <id>` make a card.
 - **Questions:**
   - A shared card holds model text and the last session's words, which can name people and internal systems.
     Show a preview before a card leaves the Mac, and let the user edit it.
@@ -609,6 +610,22 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     requests about one piece of work, 3 runs each (Sonnet): the text card got 0.91 facts, 0.13 wrong claims and
     $0.024 a run; the JSON card got 0.94, 0.07 and $0.032. The difference in facts is within noise, and JSON costs a
     third more. The hook keeps the text card (`?card=json` for the JSON one); shared cards go to agents as JSON.
+  - 2026-10-17: a local card and a shared card have the same core (problem, goal, state, next, and the question
+    that waits; notes version 8) and differ in their resources. Each resource has a reach: local, git, mcp,
+    restricted or public (`pensieve/resources.py`). The Share button opens a preview: Pensieve reads each local and
+    restricted resource whole (transcript, diff, memory file, the session text around an artifact) and the insights
+    engine summarizes it for the goal. The person writes the ask, edits the core and the summaries, and unticks what
+    doesn't belong. Saving makes the card fit to send again.
+  - Measured, shared: a teammate's agent in a fresh clone from GitHub, with the owner's folders closed, on 4 pieces
+    of work, 3 runs each (Sonnet). No card: 0.11 facts, 0.83 wrong claims, $0.070 a run. The redacted local card:
+    0.76, 0.00, $0.049. The new shared card: 0.85, 0.00, $0.044. It gains most where the work has uncommitted
+    changes (0.47 to 0.80): only the summaries carry them. A first version lost the follow-ups that a session ended
+    with, and named a key file on the owner's Desktop; session summaries now end with the follow-ups, and a shared
+    core leaves out sentences about the owner's machine.
+  - Measured, local (13 requests whose facts did not change during the day): with the prompt hook, 0.90 facts and
+    no wrong claims, against 0.87 and 0.12 with the old note fields, at $0.033 against $0.024 a run (longer notes).
+  - Open: a card's id changes when its branch becomes long-lived (more than 4 days of sessions), which a shared
+    thread can't follow.
 
 ## E. Connections
 

@@ -296,8 +296,9 @@ def prompt_context(prompt: str, cwd: str, card_format: str = "text") -> str:
     if not found:
         return ""
     head = {
-        "card": "Pensieve found the context card of the work this prompt is about. Its recap is as of the last "
-                "session; the folders and PRs are live. Use it, and look up only what it doesn't answer.",
+        "card": "Pensieve found the context card of the work this prompt is about. Its problem, goal, state and next "
+                "are as of the last session; the folders and PRs are live. Use it, and look up only what it doesn't "
+                "answer.",
         "tasks": "Pensieve listed the user's tasks for this prompt.",
         "people": "Pensieve looked up who knows the code this prompt is about.",
         "sessions": f"Pensieve searched the past agent sessions in {sc.name} for this prompt. read(id) shows one; "
@@ -611,16 +612,19 @@ def task(id: str, full: bool = False) -> str:
 
 
 @tool()
-def share_card(id: str) -> dict:
-    """A task's card made fit to send, as the Share button on the Context tab makes it: no local paths, session ids,
-    resume command or secrets. Saves it as one HTML page in ~/Downloads, which people open and agents read (the
-    page holds the card's JSON), and returns the file's path and the card's data. To send it, attach the file with
-    your Slack, email or PR tool, and write your own message: the user approves what you send."""
+def share_card(id: str, ask: str = "") -> dict:
+    """A task's card made fit to send, as the Share button on the Context tab makes it: the problem, goal, state and
+    next, the links its reader can open, and summaries (read from the whole documents now) of what they can't, such
+    as transcripts and uncommitted changes. No local paths, session ids or secrets. ask: what the user needs from
+    the reader, in their words. Saves one HTML page in ~/Downloads, which people open and agents read (the page holds
+    the card's JSON), and returns the file's path and the card. To send it, attach the file with your Slack, email or
+    PR tool, and write your own message: the user approves what you send."""
     from pensieve import cards, task_states, work
     t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
     if not t:
         raise KeyError(id)
-    card = cards.share(cards.build(t, work.notes().get(id, {}), task_states.history(_c()["store"], id)))
+    store = _c()["store"]
+    card = cards.share(cards.draft_share(cards.build(t, work.notes().get(id, {}), task_states.history(store, id)), store), ask)
     return {"file": cards.save(card, Path.home() / "Downloads"), "card": cards.render_agent(card)}
 
 

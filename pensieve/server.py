@@ -1368,45 +1368,65 @@ def get_work(days: int = 30):
     ts = work.tasks(store, days)
     have = work.notes()
     stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
-    def note(n):  # notes written before the fields were renamed show until they are written again
-        return dict(recap=n.get("recap") or n.get("conjure", ""), current=n.get("current") or n.get("now", ""),
-                    left=n.get("left", ""))
-    return dict(tasks=ts, notes={t["id"]: {**note(have[t["id"]]), "stale": t["id"] in stale}
-                                 for t in ts if t["id"] in have and ("current" in have[t["id"]] or "now" in have[t["id"]])},
+    # each note's core (problem, goal, state, next, question); notes in an older format show until written again
+    return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "stale": t["id"] in stale}
+                                 for t in ts if work.core(have.get(t["id"], {}))},
                 states=task_states.models(), writing=status.get("work_notes") or [])
 
 
 @app.get("/api/work/card")
 def get_work_card(id: str, format: str = "html", share: bool = False, days: int = 30):
     """One task as a context card (context-card/1). `format`: html (the page for people, which holds the JSON),
-    agent (compact JSON with a line on how to read it) or json. `share`: the card to send, with no local part, local
-    paths or secrets."""
+    agent (compact JSON with a line on how to read it) or json. `share`: the card to send: no local part or path,
+    and a summary of each local or restricted resource, read whole now (this takes a few model calls)."""
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     from pensieve import cards
-    t = next((x for x in work.tasks(store, days) if x["id"] == id), None)
-    if not t:
-        raise HTTPException(404, f"no task {id}")
-    card = cards.build(t, work.notes().get(id, {}), task_states.history(store, id))
-    card = cards.share(card) if share else card
+    card = _local_card(id, days)
+    card = cards.draft_share(card, store) if share else card
     if format == "html":
         return HTMLResponse(cards.render_html(card))
     return PlainTextResponse(cards.render_agent(card)) if format == "agent" else JSONResponse(card)
 
 
-class CardSaveReq(BaseModel):
+def _local_card(task_id: str, days: int) -> dict:
+    from pensieve import cards
+    t = next((x for x in work.tasks(store, days) if x["id"] == task_id), None)
+    if not t:
+        raise HTTPException(404, f"no task {task_id}")
+    return cards.build(t, work.notes().get(task_id, {}), task_states.history(store, task_id))
+
+
+class CardDraftReq(BaseModel):
     id: str
     days: int = 30  # the Context tab's period, where the id comes from
+    include: list[int] | None = None  # the local card's resources to keep, by position; default all
+
+
+@app.post("/api/work/card/draft")
+def draft_work_card(req: CardDraftReq):
+    """The Share button's preview: the local card's resources (what the person can untick) and the shared card
+    drafted from them, with a summary of each local or restricted one. Nothing is saved."""
+    from pensieve import cards
+    card = _local_card(req.id, req.days)
+    return {"resources": [{k: r.get(k) for k in ("kind", "title", "reach")} for r in card.get("resources", [])],
+            "card": cards.draft_share(card, store, req.include)}
+
+
+class CardSaveReq(BaseModel):
+    id: str
+    days: int = 30
+    card: dict | None = None  # the shared card as the person edited it; default: a draft of the whole card
+    ask: str = ""
 
 
 @app.post("/api/work/card/save")
 def save_work_card(req: CardSaveReq):
-    """The Share button: the task's shared card as an HTML page in ~/Downloads (the app's web view can't download).
-    Returns the file's path."""
+    """The Share button's save: the shared card as an HTML page in ~/Downloads (the app's web view can't download).
+    An edited card is made fit to send again, and refused if it still holds anything local. Returns the file's path."""
     from pensieve import cards
-    t = next((x for x in work.tasks(store, req.days) if x["id"] == req.id), None)
-    if not t:
-        raise HTTPException(404, f"no task {req.id}")
-    card = cards.share(cards.build(t, work.notes().get(req.id, {}), task_states.history(store, req.id)))
+    card = cards.share(req.card if req.card else cards.draft_share(_local_card(req.id, req.days), store), req.ask)
+    if cards.local_parts(card):
+        raise HTTPException(422, f"the card still holds something local: {', '.join(cards.local_parts(card)[:5])}")
     return {"path": cards.save(card, Path.home() / "Downloads")}
 
 
