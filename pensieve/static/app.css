@@ -948,6 +948,42 @@ body[data-view=insights] #gl .labels,body[data-view=settings] #gl .labels{displa
 .priv.cloud{background:color-mix(in srgb,var(--warn) 22%,transparent);color:color-mix(in srgb,var(--warn) 70%,var(--text))}
 .ai-setup h3{font-size:14px}
 .ai-sheet{width:min(760px,calc(100vw - 2 * var(--gap)))}
+/* Settings → Models: the embedding model (1) and the generation model (2) */
+.set-card.mdl{padding:16px 18px 10px}
+.mdl-h{display:flex;align-items:flex-start;gap:12px;margin-bottom:8px}
+.mdl-n{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--accent);color:#fff;margin-top:1px}
+.mdl-t{flex:1;min-width:0}
+.mdl-t h3{margin:0 0 2px;font-size:15px}
+.mdl-t p{margin:0;font-size:12.5px;color:var(--text-2);line-height:1.45}
+.mdl .set-row{grid-template-columns:minmax(0,1fr) minmax(0,260px)}
+.mdl .set-row select.set-in{width:100%}
+.mdl-seg.seg{display:flex;width:100%;background:var(--card-2);box-shadow:inset 0 0 0 1px var(--line);border-radius:999px;padding:3px;margin:4px 0 12px}
+.mdl-seg.seg button{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.mdl-dot{width:6px;height:6px;border-radius:50%;background:var(--good);display:inline-block}
+.mdl-seg button.on .mdl-dot{background:#fff}
+.mdl-panel p{margin:0 0 6px;font-size:12.5px;color:var(--text-2);line-height:1.45}
+.mdl-panel .set-row:first-of-type{border-top:0}
+.mdl-act{display:flex;justify-content:flex-end;align-items:center;padding:4px 0 2px}
+.mdl .ai-opt{background:none;box-shadow:none;padding:0}
+.mdl .ai-opt.on{background:none;box-shadow:none}
+.mdl .ai-opt>.ai-opt-h{display:none}
+.mdl-sub{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--text-3);border-top:1px solid var(--line);margin-top:12px;padding-top:12px}
+.mdl-mcp-note{margin:4px 0 8px;font-size:12.5px;color:var(--text-2);line-height:1.45}
+.mdl-mcp{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.mdl-srv{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 10px;border-radius:999px;background:var(--card-2);box-shadow:inset 0 0 0 1px var(--line);color:var(--text-2)}
+.mdl-srv i{width:6px;height:6px;border-radius:50%;background:var(--text-3)}
+.mdl-srv.on{color:var(--text)}
+.mdl-srv.on i{background:var(--good)}
+.mdl-srv small{color:var(--text-3);font-variant-numeric:tabular-nums}
+.ct-chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.ct-chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;padding:4px 11px;border-radius:999px;background:var(--card-2);box-shadow:inset 0 0 0 1px var(--line);cursor:pointer;color:var(--text-2)}
+.ct-chip input{position:absolute;opacity:0;pointer-events:none}
+.ct-chip.on{background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent);color:var(--text)}
+.ct-chip.err{box-shadow:inset 0 0 0 1px var(--critical)}
+.ct-chip:has(input:disabled){cursor:default;opacity:.6}
+.ct-chip.on:has(input:disabled){opacity:1}
+.ct-chip small{color:var(--text-3);font-size:11px}
+.ct-chip:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 .ai-sheet-b{padding:22px 24px 18px;max-height:76vh;overflow:auto}
 .ai-sheet-h{display:flex;gap:14px;align-items:flex-start;margin-bottom:8px}
 .ai-sheet-h h2{margin:0 0 4px;font-size:19px;font-weight:700;letter-spacing:-.015em}

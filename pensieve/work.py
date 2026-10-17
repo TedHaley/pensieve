@@ -758,7 +758,7 @@ def write_note(task: dict, all_tasks: list[dict]) -> str:
                                           last_words=task.get("last_words") or "(none)",
                                           last_title=(task["sessions"] or [{}])[0].get("title", "(none)"),
                                           last_summary=task.get("last_summary") or ""),
-                       max_tokens=200, schema=NOTE_SCHEMA)
+                       max_tokens=200, schema=NOTE_SCHEMA, kind="task note")
     cur = notes()
     cur[task["id"]] = dict(recap=str(ans.get("recap", "")).strip(), current=str(ans.get("current", "")).strip(),
                            left=str(ans.get("left", "")).strip(), sig=_signature(task), at=time.time(), v=NOTE_VERSION)

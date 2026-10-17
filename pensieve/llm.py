@@ -4,8 +4,9 @@
     server   any OpenAI-compatible server, local (LM Studio, Ollama…) or hosted, at llm_url / llm_model (+ llm_key)
     cli      an AI command-line tool (cli_command, e.g. `claude -p …`, `codex exec …`, `ollama run …`), run once per
              job; text leaves this Mac unless the tool runs locally (cli_privacy)
-    none     no AI: maps, search, activity, keyword topics and team commits still work
-    auto     not chosen yet: use `server` if one is running, otherwise nothing (and the UI asks)
+    agent    the agent connected over MCP: jobs wait in a queue until it answers them (see agent_jobs). Nothing runs
+             in the background. A saved `none` (the old Off) loads as agent.
+    auto     not chosen yet: use `server` if one is running, otherwise nothing (provider `none`, and the UI asks)
 """
 import json
 import os
@@ -27,6 +28,10 @@ OWN_PREFIX = "pensieve-ai-"
 
 class Offline(Exception):
     """The chosen engine isn't available right now (not running, not chosen, still downloading)."""
+
+
+class Queued(Offline):
+    """The job waits in the queue for your agent. Callers that run several jobs go on to the next one."""
 
 
 BUILTIN_PORT = 8766
@@ -127,8 +132,11 @@ def options():
                          "Pensieve runs the command once per job, in an empty folder, and reads its answer.",
              note=(f"Runs {_exe(s['cli_command'])}." if _exe(s["cli_command"]) else
                    f"Can't find {_argv(s['cli_command'])[0]}.") if s["cli_command"].strip() else "Pick a template or type a command."),
-        dict(id="none", label="Off", privacy="local", available=True,
-             description="No AI. Maps, search, activity, keyword topics and team commits still work.", note=""),
+        dict(id="agent", label="Your agent", privacy="cloud", available=True,
+             description="The agent you work with, connected to Pensieve over MCP, writes the notes and insights with "
+                         "its own model. Pensieve keeps the jobs in a queue until you ask your agent to do Pensieve's "
+                         "pending work. Nothing runs in the background.",
+             note=""),
     ]
 
 
@@ -151,6 +159,7 @@ def provider() -> str:
 def status() -> dict:
     a = settings.get("ai")
     p = provider()
+    agent = None
     if p == "none":
         st, detail = "off", ("Not set up yet." if a == "auto" else "AI is off.")
     elif p == "server":
@@ -161,12 +170,19 @@ def status() -> dict:
         if st == "off":
             st, detail = ("ready", "Loads when there's work, and unloads after 10 minutes idle.") if _have_weights() \
                 else ("downloading", "Waiting to download…")
+    elif p == "agent":
+        from pensieve import agent_jobs
+        agent_jobs.queue_test()
+        n, live = sum(agent_jobs.counts().values()), agent_jobs.sessions()
+        waiting = f"{n} {'job' if n == 1 else 'jobs'} waiting" if n else "Nothing waiting"
+        st, detail = ("ready", waiting) if live else ("waiting", "No session has answered a job today")
+        agent = dict(sessions=live, jobs=n)
     else:
         cmd = settings.get("cli_command")
         st, detail = ("ready", cmd) if _exe(cmd) else ("error", f"Can't find {_argv(cmd)[0]}" if cmd.strip() else "No command set")
-    why = paused() if p != "none" else None
+    why = paused() if p not in ("none", "agent") else None
     return dict(setting=a, provider=p, configured=a != "auto", status=st, detail=detail, options=options(),
-                enabled=p != "none", paused=why, progress=_builtin["progress"] if p == "builtin" else None,
+                enabled=p != "none", paused=why, progress=_builtin["progress"] if p == "builtin" else None, agent=agent,
                 on_battery_setting=settings.get("ai_on_battery"))
 
 
@@ -353,9 +369,17 @@ def busy() -> bool:
     return _running["n"] > 0
 
 
-def complete(prompt: str, system: str = "", max_tokens: int = 200, temperature: float = 0.2, schema: dict | None = None):
+def complete(prompt: str, system: str = "", max_tokens: int = 200, temperature: float = 0.2, schema: dict | None = None,
+             kind: str = "text"):
     """One-shot completion with the chosen engine. With `schema`, returns the parsed JSON object.
-    Raises Offline when no engine is available, so callers can skip AI work quietly."""
+    Raises Offline when no engine is available, so callers can skip AI work quietly, and Queued when the job waits
+    for your agent. `kind` names the job for the agent."""
+    if provider() == "agent":
+        from pensieve import agent_jobs
+        t = agent_jobs.take(prompt, system, schema, kind, max_tokens)
+        if t is None:
+            raise Queued("Waiting for your agent")
+        return _json_from(t) if schema else _strip_think(t).strip()
     with _running["lock"]:
         _running["n"] += 1
     try:

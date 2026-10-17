@@ -93,7 +93,8 @@ DESCRIPTIONS = {
     "appearance": "System, light or dark. System follows macOS.",
     "embed_model": "The model that turns text into vectors for search. Switching embeds the text already indexed "
                    "again with the new model, in the background; search keeps working meanwhile.",
-    "ai": "What writes summaries and insights: builtin, server, claude, codex or none (auto = not chosen yet).",
+    "ai": "What writes summaries and insights: builtin, server, cli or agent (your agent over MCP; auto = not chosen "
+          "yet).",
     "builtin_model": "The MLX model the built-in engine runs.",
     "agent_model": "Model of the old Claude Code engine; cli_command holds it now.",
     "cli_command": "The AI command-line tool that writes summaries and insights when ai is cli. It gets the prompt on "
@@ -168,6 +169,8 @@ def load() -> dict:
             if _data["ai"] in ("claude", "codex"):  # the engines before cli: the same CLI through its template
                 t = cli_template(_data["ai"], _data["agent_model"])
                 _data.update(ai="cli", cli_command=t["command"], cli_privacy=t["privacy"])
+            if _data["ai"] == "none":  # Off became Your agent: neither runs anything in the background
+                _data["ai"] = "agent"
             c = _data["cli_command"]
             if c.startswith("claude -p ") and "--strict-mcp-config" not in c:  # with tools to call (the user's MCP
                 # servers, newer built-in tools), the engine tried to act instead of answering and hit --max-turns 1
@@ -252,8 +255,10 @@ def update(changes: dict) -> dict:
             t = cli_template(v, cur["agent_model"])
             clean.update(cli_command=t["command"], cli_privacy=t["privacy"])
             v = "cli"
-        if k == "ai" and v not in ("auto", "builtin", "server", "cli", "none"):
-            raise ValueError("ai must be auto, builtin, server, cli or none")
+        if k == "ai" and v == "none":
+            v = "agent"
+        if k == "ai" and v not in ("auto", "builtin", "server", "cli", "agent"):
+            raise ValueError("ai must be auto, builtin, server, cli or agent")
         if k == "cli_privacy" and v not in ("local", "cloud"):
             raise ValueError("cli_privacy must be local or cloud")
         if k == "llm_url" and not v.startswith(("http://", "https://")):
