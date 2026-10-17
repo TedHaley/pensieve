@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pensieve: local code search and MCP context for AI coding agents</title>
-<meta name="description" content="Free Mac app: search files, git repos and Claude Code or Codex sessions by meaning or exact words. MCP context that helps AI agents find code in fewer calls.">
+<title>Pensieve: one place for all your information, for context engineering</title>
+<meta name="description" content="Free Mac app: your files, git repos, agent sessions, tickets and messages in one place. Search by meaning, pick up any task, and give AI agents the right context over MCP.">
 <meta name="robots" content="index,follow,max-image-preview:large">
 <meta name="keywords" content="semantic code search, MCP server, Claude Code, Codex, AI coding agents, local search Mac, code search tool, git blame ownership, knowledge gaps">
 <link rel="canonical" href="https://pensieve.tools/">
@@ -12,16 +12,16 @@
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Pensieve">
-<meta property="og:title" content="Pensieve: local code search and MCP context for AI coding agents">
-<meta property="og:description" content="Search everything on your Mac by meaning. Give your agents the best context in one search instead of a disk-wide grep. See who owns what, and find knowledge gaps. Free and local.">
+<meta property="og:title" content="Pensieve: one place for all your information, for context engineering">
+<meta property="og:description" content="Your files, repos, agent sessions, tickets and messages in one place, on your Mac. Pick up any task where you left it, and give your agents the right context in one search. Free and local.">
 <meta property="og:url" content="https://pensieve.tools/">
 <meta property="og:image" content="https://pensieve.tools/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Pensieve: one search across your files, repos and agent sessions, on your Mac">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pensieve: local code search and MCP context for AI coding agents">
-<meta name="twitter:description" content="Search everything locally, give your agents the right context in fewer tool calls, and know who to ask. Free for Mac.">
+<meta name="twitter:title" content="Pensieve: one place for all your information, for context engineering">
+<meta name="twitter:description" content="All your information in one place: pick up any task, give your agents the right context in fewer tool calls, and know who to ask. Free for Mac.">
 <meta name="twitter:image" content="https://pensieve.tools/og.png">
 <meta name="twitter:image:alt" content="Pensieve: one search across your files, repos and agent sessions, on your Mac">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23121211'/%3E%3Ccircle cx='12' cy='12' r='8.2' fill='none' stroke='%23f4f3ee' stroke-width='1.6'/%3E%3Ccircle cx='9.5' cy='10.4' r='1.4' fill='%23f4f3ee'/%3E%3Ccircle cx='14.4' cy='9.6' r='1.05' fill='%23f4f3ee'/%3E%3Ccircle cx='12.8' cy='14.6' r='1.65' fill='%23f4f3ee'/%3E%3C/svg%3E">
@@ -32,9 +32,11 @@
  "name": "Pensieve",
  "applicationCategory": "DeveloperApplication",
  "operatingSystem": "macOS 14 or later (Apple Silicon)",
- "description": "Local search across your files, git repositories and AI agent sessions, by meaning or exact words. An MCP server that helps coding agents find the right code in fewer tool calls: in benchmarks, more tasks solved with 43% fewer tool calls and 18% lower cost per lookup than grep. Code ownership from git blame, and knowledge gaps where the people who wrote the code are no longer active.",
+ "description": "One place for all your information, for context engineering. Local search across your files, git repositories, AI agent sessions, tickets and messages, by meaning or exact words. A Context tab with one card for each task. An MCP server that helps coding agents find the right code in fewer tool calls: in benchmarks, more tasks solved with 43% fewer tool calls and 18% lower cost per lookup than grep. Code ownership from git blame, and knowledge gaps where the people who wrote the code are no longer active.",
  "featureList": [
   "Local semantic and exact search over files, folders, git repositories and AI agent sessions",
+  "Context tab: one card per task with its sessions, branch, worktree, pull requests, tickets and messages, a state and an AI note",
+  "Read-only connections that collect tickets and messages from MCP servers such as Jira, Linear and Slack",
   "Spotlight-style search panel on Control+Shift",
   "MCP server that points coding agents to the most relevant passages, scoped to the repo they work in",
   "Code ownership and domain knowledge from git blame and team activity",
@@ -74,7 +76,7 @@
    "name": "What does Pensieve search?",
    "acceptedAnswer": {
     "@type": "Answer",
-    "text": "Your files and folders (Documents, Desktop, Downloads and any folder you add), your git repositories including uncommitted changes and worktrees, and your Claude Code, Codex and Qwen Code sessions. Obsidian vaults too, and optionally Apple Notes. Everything is indexed and searched on your Mac."
+    "text": "Your files and folders (Documents, Desktop, Downloads and any folder you add), your git repositories including uncommitted changes and worktrees, and your Claude Code, Codex and Qwen Code sessions. Obsidian vaults too, and optionally Apple Notes. With connections, also tickets and messages from MCP servers such as Jira, Linear or Slack. Everything is indexed and searched on your Mac."
    }
   },
   {
@@ -423,6 +425,28 @@ ul.method li{margin:4px 0}
 .ba .track i{display:block;height:100%;border-radius:4px}
 @media (max-width:560px){.ba pre{font-size:11.5px;padding:14px}.ba .g{display:none}}
 .illus{text-align:center;font-size:12.5px;color:var(--ink-3);margin-top:16px}
+.ctx{display:grid;grid-template-columns:1.5fr 1fr;gap:0;margin:56px auto 0;max-width:900px;background:var(--glass-strong);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);border-radius:24px;box-shadow:var(--shadow),inset 0 0 0 1px var(--glass-edge);overflow:hidden;min-width:0}
+@media (max-width:760px){.ctx{grid-template-columns:1fr}}
+.ctx .main{padding:22px 22px 18px;min-width:0}
+.ctx .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.ctx .top b{font-size:18px;letter-spacing:-.02em;flex:1;min-width:0}
+.ctx .st{flex:none;font-size:11.5px;font-weight:700;border-radius:999px;padding:3px 10px;background:color-mix(in srgb,var(--c) 18%,transparent);color:var(--c)}
+.ctx .sec{border-top:1px solid var(--line);padding:9px 0;font-size:13.5px;min-width:0}
+.ctx .sec .h{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);margin-bottom:4px}
+.ctx .sec div{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;overflow-wrap:anywhere}
+.ctx .sec small{color:var(--ink-2);font-size:12.5px}
+.ctx .tag{font-size:11px;font-weight:600;border-radius:6px;padding:1px 7px;background:var(--bg-alt);color:var(--ink-2)}
+.ctx .tag.ok{background:rgba(52,199,89,.16);color:#248a3d}
+.ctx .tag.open{background:rgba(0,113,227,.12);color:var(--link)}
+@media (prefers-color-scheme:dark){.ctx .tag.ok{color:#30d158}}
+.ctx .resume{display:inline-block;margin-top:10px;font-size:13px;font-weight:600;color:#fff;background:var(--link);border-radius:999px;padding:6px 14px}
+.ctx .cnote{background:var(--bg-alt);padding:22px;font-size:13.5px;line-height:1.45;min-width:0}
+.ctx .cnote .h{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);margin:12px 0 3px}
+.ctx .cnote .h:first-child{margin-top:0}
+.ctx .cnote p{margin:0;color:var(--ink-2)}
+.states{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 22px;margin-top:28px;font-size:13.5px;color:var(--ink-2)}
+.states span{display:inline-flex;align-items:center;gap:7px}
+.states span::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--c)}
 /* knowledge gaps */
 .gapwrap{display:grid;grid-template-columns:1.15fr 1fr;gap:20px;margin-top:56px;align-items:start}
 @media (max-width:860px){.gapwrap{grid-template-columns:1fr}}
@@ -551,7 +575,7 @@ ul.method li{margin:4px 0}
 <nav class="top" aria-label="Main">
   <div class="wide">
     <a class="brand" href="/"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve</a>
-    <div class="links"><a href="#search">Search</a><a href="#agents">Agents</a><a href="#owners">Owners</a><a href="#gaps">Gaps</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a><a href="https://github.com/TedHaley/pensieve">GitHub</a></div>
+    <div class="links"><a href="#context">Context</a><a href="#search">Search</a><a href="#agents">Agents</a><a href="#owners">Owners</a><a href="#gaps">Gaps</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a><a href="https://github.com/TedHaley/pensieve">GitHub</a></div>
     <a class="pill" href="#get">Install</a>
   </div>
 </nav>
@@ -561,10 +585,10 @@ ul.method li{margin:4px 0}
   <div class="wrap">
     <div class="eyebrow"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve for Mac</div>
     <h1>Supercharges you<br>and <span class="grad">your agents.</span></h1>
-    <p class="sub">Search your files, repos and agent sessions, locally, and give your agents the best context for the job. One search points them to the few passages that matter, instead of grepping the whole disk. Fewer tool calls, lower cost.</p>
+    <p class="sub">One place for all your information, for context engineering. Your files, repos, agent sessions, tickets and messages, on your Mac. Pick up any task where you left it, and give your agents the right context in one search instead of grepping the whole disk.</p>
     <div class="cta">
       <a class="btn" href="#get"><svg aria-hidden="true"><use href="#apple"/></svg>Install with your agent</a>
-      <a class="link-more" href="#search">See how it works</a>
+      <a class="link-more" href="#context">See how it works</a>
       <div class="fine">Apple Silicon · macOS 14 or later · free and open source</div>
     </div>
   </div>
@@ -590,7 +614,44 @@ ul.method li{margin:4px 0}
   </div>
 </header>
 
-<section id="search">
+<section id="context">
+  <div class="wrap">
+    <div class="head rv">
+      <div class="kicker">Pick up where you left off</div>
+      <h2>Every task, in context.</h2>
+      <p>The Context tab puts each task on one card: its agent sessions, branch and worktree, pull requests, tickets and messages. A short AI note says what the task is, what is done and what is left. Resume the last session with one click.</p>
+    </div>
+    <div class="ctx rv" role="img" aria-label="Example context card for a fictional task">
+      <div class="main">
+        <div class="top"><b>Retry declined card payments</b><span class="st" style="--c:#34c759">Conscious</span></div>
+        <div class="sec"><div class="h">Working in</div><div>acme-app · <code>fix-card-retries</code> <small>worktree · 3 files changed · 2 ahead</small></div></div>
+        <div class="sec"><div class="h">Pull requests</div><div>#412 Retry declined cards with backoff <span class="tag open">Open</span><span class="tag ok">Checks pass</span><small>review requested</small></div></div>
+        <div class="sec"><div class="h">Tickets</div><div>PAY-142 Card retries stop after a decline <span class="tag">In progress</span><small>you</small></div></div>
+        <div class="sec"><div class="h">Sessions</div><div>Add backoff to card retries <small>Claude Code · 20 min ago · 4 files made</small></div><span class="resume">Resume last session</span></div>
+      </div>
+      <div class="cnote">
+        <span class="h">Recap</span><p>Card payments are not retried after a soft decline, so renewals fail.</p>
+        <span class="h">Current state</span><p>Backoff added in <code>payments/retry.py</code>. PR #412 is open and its checks pass.</p>
+        <span class="h">What’s left</span><p>Get the review on #412, then close PAY-142.</p>
+      </div>
+    </div>
+    <div class="states">
+      <span style="--c:#34c759" title="You are working on it now.">Conscious</span>
+      <span style="--c:#ff9f0a" title="Work that is not done and has gone quiet: revisit it.">Subconscious</span>
+      <span style="--c:#5e5ce6" title="A ticket you have not started.">Latent</span>
+      <span style="--c:#8e8e93" title="Done.">Etched</span>
+      <span style="--c:#ff453a" title="Not finished, and it will likely stay that way.">Forgotten</span>
+    </div>
+    <div class="tiles three">
+      <div class="tile rv"><div class="glyph" style="background:#34c759"><svg><use href="#chatic"/></svg></div><h3>States by themselves</h3><p>Pensieve sets each card’s state from its sessions, PRs and tickets. Change it by hand, or let your agent change it over MCP.</p></div>
+      <div class="tile rv"><div class="glyph" style="background:#0a84ff"><svg><use href="#hex"/></svg></div><h3>Connections, read-only</h3><p>Pensieve reads tickets and messages from the MCP servers you already use, such as Jira, Linear or Slack. It never writes to them.</p></div>
+      <div class="tile rv"><div class="glyph" style="background:#9a3fc8"><svg><use href="#codeic"/></svg></div><h3>Context for your agent</h3><p>Your agent asks for the open tasks, or for one card in full, and starts with everything it needs to pick the work back up.</p></div>
+    </div>
+    <p class="illus">Example with a fictional task.</p>
+  </div>
+</section>
+
+<section id="search" class="band-alt">
   <div class="wrap">
     <div class="head rv">
       <div class="kicker">Search everything, locally</div>
@@ -802,7 +863,7 @@ Agents load MCP servers when they start: restart any that are open to give them 
         <li><i>1</i><b>Run the command</b>It installs the app. You don't need git, Python or Xcode.</li>
         <li><i>2</i><b>Paste the prompt</b>Your agent connects Pensieve to every agent on your Mac.</li>
         <li><i>3</i><b>Choose what to index</b>Your agent asks, and tells you how long it takes. Indexing uses a lot of energy, so plug in.</li>
-        <li><i>4</i><b>Tap Control+Shift</b>Search from anywhere, also while it indexes. Choose Open Map in the menu bar to explore.</li>
+        <li><i>4</i><b>Tap Control+Shift</b>Search from anywhere, also while it indexes. Choose Open App in the menu bar to see your tasks and the map.</li>
       </ol>
       <div class="fine" style="margin-top:22px"><span id="relver"></span>Apple Silicon · macOS 14 or later · <a href="https://github.com/TedHaley/pensieve/releases/latest/download/Pensieve.dmg">Download the app</a> instead</div>
     </div>
@@ -813,7 +874,8 @@ Agents load MCP servers when they start: restart any that are open to give them 
   <div class="wrap">
     <div class="head rv"><h2>Questions.</h2></div>
     <div class="faq">
-      <details><summary>What does Pensieve search?</summary><p>Your files and folders (Documents, Desktop, Downloads and any folder you add), your git repositories including uncommitted changes and worktrees, and your Claude Code, Codex and Qwen Code sessions. Obsidian vaults too, and optionally Apple Notes. Everything is indexed and searched on your Mac.</p></details>
+      <details><summary>What does Pensieve search?</summary><p>Your files and folders (Documents, Desktop, Downloads and any folder you add), your git repositories including uncommitted changes and worktrees, and your Claude Code, Codex and Qwen Code sessions. Obsidian vaults too, and optionally Apple Notes. With connections, also tickets and messages from MCP servers such as Jira, Linear or Slack. Everything is indexed and searched on your Mac.</p></details>
+      <details><summary>What is the Context tab?</summary><p>One card for each task you work on, joined across agent sessions, branches, commits, pull requests, tickets and messages. Each card shows where the work is, the state of its PRs and tickets, and an AI note with a recap, the current state and what is left. A state (Conscious, Subconscious, Latent, Etched or Forgotten) sorts the cards. Agents read the same cards over MCP with the <code>tasks</code> and <code>task</code> tools.</p></details>
       <details><summary>How does Pensieve help my agent?</summary><p>Without it, a coding agent often greps the repo and reads many whole files to find what matters, and every file it reads costs tokens. With Pensieve connected over MCP, the agent asks one question and gets back the most relevant passages with their file and line, so it starts on the right code in fewer tool calls. In our benchmark that made each lookup 18% cheaper and 21% faster. The numbers are below.</p></details>
       <details><summary>Does Pensieve make Claude Code cheaper?</summary><p>In our benchmark, Claude Code with Pensieve found the right file in 131 of 144 runs, against 123 with grep alone, with 43% fewer tool calls. Each lookup cost 18% less overall, and 6–28% less in each of four repos from 504 to 34,847 files. The benchmark scripts are open source, so you can run them on your own code.</p></details>
       <details class="numbers"><summary>How well does it work? The numbers</summary><div class="nums"><p>We ran two tests in four real repos, from 500 to 35,000 files: Claude Code finding code with and without Pensieve, and Pensieve searching on its own.</p>
