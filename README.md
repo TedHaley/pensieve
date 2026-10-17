@@ -327,7 +327,7 @@ pensieve repo status     # whether Pensieve indexes this repo; also index, skip 
 pensieve card <task id> -o card.html   # a context card as one HTML page; --json or --agent for the data, --share to send it
 ```
 
-A context card follows [`context-card.schema.json`](pensieve/context-card.schema.json) (`context-card/1`). It has a `remote` part, which any reader can fetch again (the git remote and branch, PRs, tickets, links), and a `local` part, which works only on your Mac (folder paths, the command that resumes a session). `--share` drops the `local` part, every local path and secrets, and adds `handoff`: the commands that get the work and its live state. The HTML page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so a tool can read a card that someone sent as a page.
+A context card follows [`context-card.schema.json`](pensieve/context-card.schema.json) (`context-card/1`). It has a `remote` part, which any reader can fetch again (the git remote and branch, PRs, tickets, links), and a `local` part, which works only on your Mac (folder paths, the command that resumes a session). `--share` drops the `local` part, every local path and secrets, and adds `handoff`: the commands that get the work and its live state. The HTML page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so a tool can read a card that someone sent as a page. The Share button at the bottom right of each card on the Context tab saves its shared page to Downloads. Agents get the same page from the `share_card` MCP tool.
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
 

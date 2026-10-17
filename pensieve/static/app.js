@@ -3339,6 +3339,7 @@ const WK_SRC = {session: 'Session', commit: 'Commit', ticket: 'Ticket', pr: 'PR'
 const homeTilde = p => p.replace(/^\/Users\/[^/]+/, '~');
 const WK_IC = {
   play: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/></svg>',
+  share: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 14.5V3.5M8 7.5l4-4 4 4M7.5 10.5H6.5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   term: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="3.5" y="5" width="17" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   folder: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>',
   copy: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 8.5V6.2a1.7 1.7 0 0 0-1.7-1.7H6.2a1.7 1.7 0 0 0-1.7 1.7v7.6a1.7 1.7 0 0 0 1.7 1.7h2.3" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
@@ -3351,7 +3352,8 @@ const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
 function wkActions(t) {
   const resume = t.resume ? `<button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
-  return `<div class="wk-bar">${resume}<span class="wk-loc"></span>${adj}</div>`;
+  const share = `<button class="wk-btn icon" data-wk-share="${esc(t.id)}" title="Share: save this card to Downloads as a page that people open and agents read. Local paths, session ids and secrets are left out.">${WK_IC.share}</button>`;
+  return `<div class="wk-bar">${resume}<span class="wk-loc"></span>${adj}${share}</div>`;
 }
 const wkSt = (text, kind = '') => `<span class="wk-st ${kind}">${esc(text)}</span>`;
 const PR_ORDER = {open: 0, draft: 1, merged: 2, closed: 3};
@@ -3514,6 +3516,15 @@ function renderWork() {
   $$('[data-wk-resume]', el).forEach(b => b.onclick = async () => {
     try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
     catch (e) { toast('Could not resume it: ' + e.message); }
+  });
+  $$('[data-wk-share]', el).forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const r = await api('/api/work/card/save', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkShare, days: S.work.days})});
+      await api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: 'file:' + r.path, action: 'reveal'})}).catch(() => {});
+      toast(`Saved ${r.path.split('/').pop()} to Downloads`);
+    } catch (e) { toast('Could not save the card: ' + e.message); }
+    b.disabled = false;
   });
   $$('[data-wk-open]', el).forEach(b => b.onclick = () => { const id = b.dataset.wkOpen; S.work.open[S.work.open.has(id) ? 'delete' : 'add'](id); renderWork(); });
   $$('[data-wk-file]', el).forEach(b => b.onclick = () => openFile(b.dataset.wkFile));

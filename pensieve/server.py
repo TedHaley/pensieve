@@ -1393,6 +1393,23 @@ def get_work_card(id: str, format: str = "html", share: bool = False, days: int 
     return PlainTextResponse(cards.render_agent(card)) if format == "agent" else JSONResponse(card)
 
 
+class CardSaveReq(BaseModel):
+    id: str
+    days: int = 30  # the Context tab's period, where the id comes from
+
+
+@app.post("/api/work/card/save")
+def save_work_card(req: CardSaveReq):
+    """The Share button: the task's shared card as an HTML page in ~/Downloads (the app's web view can't download).
+    Returns the file's path."""
+    from pensieve import cards
+    t = next((x for x in work.tasks(store, req.days) if x["id"] == req.id), None)
+    if not t:
+        raise HTTPException(404, f"no task {req.id}")
+    card = cards.share(cards.build(t, work.notes().get(req.id, {}), task_states.history(store, req.id)))
+    return {"path": cards.save(card, Path.home() / "Downloads")}
+
+
 class TaskStateReq(BaseModel):
     id: str
     state: str  # latent | conscious | subconscious | etched | forgotten | auto

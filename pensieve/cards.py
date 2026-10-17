@@ -351,6 +351,16 @@ def render_html(card: dict) -> str:
             f'<script type="application/json" id="context-card">{data}</script></body></html>')
 
 
+def save(card: dict, folder) -> str:
+    """Write the card's HTML page into folder, named after its title; returns the path."""
+    from pathlib import Path
+    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:60] or "context-card"
+    path = Path(folder).expanduser() / f"{slug}.context-card.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_html(card))
+    return str(path)
+
+
 def from_html(page: str) -> dict:
     """The card that an HTML card page carries."""
     m = re.search(r'<script type="application/json" id="context-card">(.*?)</script>', page, re.S)

@@ -16,7 +16,8 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
-               "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state"}
+               "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state",
+               "share_card"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -607,6 +608,20 @@ def task(id: str, full: bool = False) -> str:
     if not t:
         raise KeyError(id)
     return (work.detail if full else work.compact)(t, work.notes().get(id, {}), task_states.history(_c()["store"], id))
+
+
+@tool()
+def share_card(id: str) -> dict:
+    """A task's card made fit to send, as the Share button on the Context tab makes it: no local paths, session ids,
+    resume command or secrets. Saves it as one HTML page in ~/Downloads, which people open and agents read (the
+    page holds the card's JSON), and returns the file's path and the card's data. To send it, attach the file with
+    your Slack, email or PR tool, and write your own message: the user approves what you send."""
+    from pensieve import cards, task_states, work
+    t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
+    if not t:
+        raise KeyError(id)
+    card = cards.share(cards.build(t, work.notes().get(id, {}), task_states.history(_c()["store"], id)))
+    return {"file": cards.save(card, Path.home() / "Downloads"), "card": cards.render_agent(card)}
 
 
 @tool()
