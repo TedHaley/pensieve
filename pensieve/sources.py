@@ -33,7 +33,8 @@ def connection_items() -> list[dict]:
     rank = {"connected": 0, "pending": 1, "failed": 2, "unknown": 3}
     for r in sorted(connections.servers(), key=lambda r: (rank.get(r["status"], 4), r["name"].lower())):
         reads, total = sum(t["read"] for t in r["tools"]), len(r["tools"])
-        via = "via Claude Code" if r["origin"] == "engine" else "Pensieve connects itself"
+        via = "via Claude Code" if r["origin"] == "engine" else \
+            f"from the {' and '.join(r.get('agents') or [])} config" if r["origin"] == "agent" else "added here"
         if r["status"] == "connected":
             parts = [f"{reads} of {total} tools read-only", via]
             if r.get("error"):
@@ -61,16 +62,13 @@ def connection_items() -> list[dict]:
 
 def connections_note() -> str:
     st = connections._load()
-    eng = connections.engine()
-    when = f" Checked {_ago(st['discovered'])}." if st.get("discovered") else " Not checked yet."
+    when = f" Checked {_ago(st['discovered'])}." if st.get("discovered") else " Checking soon."
     if st.get("discover_error"):
         when += f" The last check failed: {st['discover_error']}"
-    if eng == "claude":
-        return "These are the MCP servers of your insights engine, Claude Code, and the servers you add here." + when
-    if eng == "codex":
-        return "Pensieve cannot list the MCP servers of Codex yet. Add a server here with its URL or command." + when
-    return ("Your insights engine has no MCP servers of its own. Add a server here with its URL and headers, or its "
-            "command and environment. Pensieve connects to it itself." + when)
+    agents = "Claude Code, Codex, Cursor, Gemini CLI and your other agents" if connections.claude_code() else \
+        "Codex, Cursor, Gemini CLI and your other agents"
+    return (f"Every MCP server that {agents} can use, found by itself, and the servers you add here. Pensieve calls "
+            "only read-only tools." + when)
 
 
 def _home(p) -> str:
