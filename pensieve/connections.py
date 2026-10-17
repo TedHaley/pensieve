@@ -1,11 +1,14 @@
 """Connections: MCP servers whose data Pensieve collects, read-only, and indexes like a folder.
 
-There are two kinds of server:
-- engine: the MCP servers of the insights engine when it is Claude Code (`ai: cli` with a `claude` command). This
-  includes its config, its plugins and the claude.ai connectors of the account. Pensieve reads the list from the
-  engine's startup event. To collect, it runs the engine with only the read tools of one server allowed.
-- own: the servers in the `mcp_servers` setting, with the credentials given there. Use them with any engine, also
-  the built-in one. Pensieve connects to them itself, asks the engine which read calls to make, and makes them.
+There are three kinds of server. Pensieve finds the first two by itself, whatever the generation model is:
+- engine: the MCP servers of Claude Code, when it is on this Mac. This includes its config, its plugins and the
+  claude.ai connectors of the account. Pensieve reads the list from Claude Code's startup event. To collect, it runs
+  Claude Code headless with only the read tools of one server allowed.
+- agent: the servers in the MCP config of the other agents (Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude
+  Desktop, VS Code), with the credentials written there. A server that Claude Code also has is left to Claude Code.
+- own: the servers in the `mcp_servers` setting, with the credentials given there.
+For agent and own servers, Pensieve connects itself, asks the generation model which read calls to make, and makes
+them.
 
 Collected items are written as Markdown to ~/.pensieve/connections/<server>/, and the file indexer indexes them. The
 raw JSON of each item is in .raw/ and its field changes over time are in .history/ (hidden folders: not indexed).
@@ -85,17 +88,17 @@ def _update(fn):
         return st
 
 
-def engine() -> str | None:
-    """'claude' when the insights engine is Claude Code, 'codex' for Codex, else None (no MCP servers of its own)."""
-    s = settings.load()
-    if s["ai"] != "cli" or not s["cli_command"].strip():
-        return None
-    name = Path(llm._argv(s["cli_command"])[0]).name
-    return name if name in ("claude", "codex") else None
+def claude_code() -> bool:
+    """Whether Claude Code is on this Mac. Its MCP servers are listed and collected from whatever the generation model
+    is: Pensieve runs it headless, with only the read-only tools of one server at a time."""
+    return bool(llm._exe("claude"))
 
 
 def _engine_model() -> str:
+    """The Claude model for collection: the one in the command-line template when that runs Claude Code, else Haiku."""
     argv = llm._argv(settings.get("cli_command"))
+    if not argv or Path(argv[0]).name != "claude":
+        return "haiku"
     return argv[argv.index("--model") + 1] if "--model" in argv[:-1] else "haiku"
 
 
@@ -103,8 +106,10 @@ def servers() -> list[dict]:
     """Every known server: {id, name, origin, status, tools: [{name, read}], collected, items, error}."""
     st = _load()
     out = []
-    if engine() == "claude":
+    if claude_code():
         out += [{**r, "id": k, "origin": "engine"} for k, r in st.get("engine", {}).items() if k != "pensieve"]
+    seen = {r["id"] for r in out} | {slug(c["name"]) for c in settings.get("mcp_servers")}
+    out += [{**r, "id": k, "origin": "agent"} for k, r in st.get("agents", {}).items() if k not in seen]
     for c in settings.get("mcp_servers"):
         k = slug(c["name"])
         r = st.get("own", {}).get(k, {})
@@ -122,6 +127,11 @@ def _count(sid: str) -> int:
     return sum(1 for _ in d.glob("*.md")) if d.is_dir() else 0
 
 
+# Headless Claude Code starts before slow MCP servers connect, and lists them as pending with no tools; this makes it
+# wait for them.
+_WAIT_FOR_MCP = {**os.environ, "MCP_CONNECTION_NONBLOCKING": "false"}
+
+
 def _claude_init(timeout=90) -> dict:
     """Claude Code's startup event in an empty folder: the MCP servers with their status, and every tool name. The
     process stops at that event, before the model answers."""
@@ -131,7 +141,7 @@ def _claude_init(timeout=90) -> dict:
     with tempfile.TemporaryDirectory(prefix=llm.OWN_PREFIX) as tmp:
         p = subprocess.Popen([exe, "-p", "--model", _engine_model(), "--output-format", "stream-json", "--verbose",
                               "--tools", "", "--max-turns", "1"], cwd=tmp, stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=_WAIT_FOR_MCP)
         timer = threading.Timer(timeout, p.kill)
         timer.start()
         try:
@@ -152,8 +162,8 @@ def _claude_init(timeout=90) -> dict:
 
 
 def discover_engine() -> list[dict]:
-    """Read the engine's MCP servers and tools. A server that is still connecting keeps the tools seen last time."""
-    if engine() != "claude":
+    """Read Claude Code's MCP servers and tools. A server that is still connecting keeps the tools seen last time."""
+    if not claude_code():
         return []
     d = _claude_init()
     tools = {}
@@ -223,6 +233,63 @@ def discover_own() -> list[dict]:
     return servers()
 
 
+def _server_cfg(c: dict) -> dict | None:
+    """One server entry of an agent's config, in the form `_open` takes. Agents name the fields differently."""
+    url = c.get("url") or c.get("serverUrl") or c.get("httpUrl")
+    if url:
+        headers = dict(c.get("headers") or c.get("http_headers") or {})
+        token = c.get("bearer_token_env_var")  # Codex: the token is in an environment variable
+        if token and os.environ.get(token):
+            headers["Authorization"] = "Bearer " + os.environ[token]
+        return dict(url=url, headers=headers)
+    if c.get("command"):  # the app's PATH misses ~/.local/bin, Homebrew and the like
+        return dict(command=llm._exe(c["command"]) or c["command"], args=[str(a) for a in c.get("args") or []],
+                    env={k: str(v) for k, v in (c.get("env") or {}).items()})
+    return None
+
+
+def agent_configs() -> dict[str, dict]:
+    """The MCP servers in the other agents' config files, by id: {name, agents: [label], cfg}. Pensieve is left out."""
+    import tomllib
+
+    from pensieve import integrations
+    out = {}
+    for item, (label, f, key, _) in integrations.MCP.items():
+        if item == "claude-mcp" or not f.exists():  # Claude Code's servers come from its startup event
+            continue
+        try:
+            text = f.read_text()
+            table = (tomllib.loads(text).get("mcp_servers") if f.suffix == ".toml" else
+                     json.loads(text or "{}").get(key or "mcpServers")) or {}
+        except (OSError, ValueError):
+            continue
+        for name, c in table.items():
+            cfg = _server_cfg(c) if isinstance(c, dict) else None
+            if not cfg or name == "pensieve" or (cfg.get("args") or [None])[0] == "mcp" and \
+                    Path(cfg.get("command") or "").name == "pensieve":
+                continue
+            r = out.setdefault(slug(name), dict(name=name, agents=[], cfg=cfg))
+            if label not in r["agents"]:
+                r["agents"].append(label)
+    return out
+
+
+def discover_agents() -> list[dict]:
+    """Connect to each server in the other agents' configs that Claude Code does not have, and list its tools."""
+    skip = set(_load().get("engine", {})) if claude_code() else set()
+    found = {}
+    for k, a in agent_configs().items():
+        if k in skip:
+            continue
+        try:
+            tools = asyncio.run(asyncio.wait_for(_own_tools(a["cfg"]), 60))
+            found[k] = dict(name=a["name"], agents=a["agents"], status="connected", tools=tools, error=None, at=time.time())
+        except Exception as e:
+            found[k] = dict(name=a["name"], agents=a["agents"], status="failed", tools=[], error=_err(e), at=time.time())
+    _update(lambda st: st.__setitem__("agents", found))
+    return servers()
+
+
 def _err(e: BaseException) -> str:
     while isinstance(e, BaseExceptionGroup) and e.exceptions:  # anyio wraps errors from the transport
         e = e.exceptions[0]
@@ -231,7 +298,7 @@ def _err(e: BaseException) -> str:
 
 def discover() -> list[dict]:
     errors = []
-    for fn in (discover_engine, discover_own):
+    for fn in (discover_engine, discover_agents, discover_own):
         try:
             fn()
         except Exception as e:
@@ -283,7 +350,7 @@ def _collect_engine(r: dict, calls: int) -> list[tuple]:
             "--max-turns", str(calls + 2), "--allowedTools", ",".join(reads), "--disallowedTools", ",".join(deny)]
     prompt = PROMPT.format(name=r["name"], since=_since(r["id"]), calls=calls)
     with tempfile.TemporaryDirectory(prefix=llm.OWN_PREFIX) as tmp:
-        p = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=900, cwd=tmp)
+        p = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=900, cwd=tmp, env=_WAIT_FOR_MCP)
     uses, out = {}, []
     for line in p.stdout.splitlines():
         try:
@@ -327,7 +394,7 @@ async def _collect_own_async(cfg: dict, r: dict, calls: int) -> list[tuple]:
                   "Plan only the search and list calls whose arguments you know now. Pensieve then fetches the "
                   "details of each item that they find. Give each call's arguments as a JSON object in args_json. "
                   "Do not call any tool yourself: answer only with the plan.")
-        plan = await asyncio.to_thread(llm.complete, prompt, max_tokens=1500, schema=PLAN_SCHEMA)
+        plan = await asyncio.to_thread(llm.complete, prompt, max_tokens=1500, schema=PLAN_SCHEMA, kind="collection plan")
         names = {t.name for t in tools}
 
         async def call(tool, args):
@@ -393,6 +460,9 @@ def collect(sid: str, calls: int = 8) -> dict:
     try:
         if r["origin"] == "engine":
             results = _collect_engine(r, calls)
+        elif r["origin"] == "agent":
+            cfg = agent_configs()[sid]["cfg"]
+            results = asyncio.run(asyncio.wait_for(_collect_own_async(cfg, r, calls), 900))
         else:
             cfg = next(c for c in settings.get("mcp_servers") if slug(c["name"]) == sid)
             results = asyncio.run(asyncio.wait_for(_collect_own_async(cfg, r, calls), 900))

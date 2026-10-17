@@ -19,6 +19,8 @@ AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "un
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
+# Only while the generation model is your agent: the queue of notes, summaries and insights that it writes.
+WORK_TOOLS = {"pending_work", "submit_work"}
 tool_profile = contextvars.ContextVar("tool_profile", default="agent")
 agent_cwd = contextvars.ContextVar("agent_cwd", default=None)  # where the agent runs (?cwd=), for relative paths
 agent_client = contextvars.ContextVar("agent_client", default=None)  # ?client=: the agent's name, e.g. claude-code
@@ -30,7 +32,8 @@ class _Server(MCPServer):
         tools = await super().list_tools()
         if tool_profile.get() == "all":
             return tools
-        shown = AGENT_TOOLS | (set() if settings.get("setup_done") else SETUP_TOOLS)
+        shown = AGENT_TOOLS | (set() if settings.get("setup_done") else SETUP_TOOLS) | \
+            (WORK_TOOLS if settings.get("ai") == "agent" else set())
         return [t for t in tools if t.name in shown]
 
 
@@ -525,6 +528,36 @@ def set_task_state(id: str, state: str, reason: str = "") -> dict:
 
 
 @tool()
+def pending_work(limit: int = 5, kind: str = "") -> str:
+    """Pensieve's generation jobs that wait for you: task notes, session summaries, topic names, insights, team
+    summaries and collection plans. Call it when the user asks you to do Pensieve's pending work. For each job, follow
+    its instructions, answer from its data only, and send the answer with submit_work. kind: one kind only, e.g.
+    "task note". The jobs are yours for 10 minutes: other sessions get different ones. The list is empty when nothing
+    waits."""
+    from pensieve import agent_jobs
+    jobs = agent_jobs.pending(max(1, min(limit, 20)), kind, agent_conn.get() or agent_client.get() or "")
+    left = sum(agent_jobs.counts().values())
+    if not jobs:
+        return "Nothing waits. Pensieve adds jobs in the background while your agent is the generation model."
+    out = [f"{left} {'job waits' if left == 1 else 'jobs wait'}; here are {len(jobs)}. Answer each job from its Data "
+           "only: do not search, read or call other tools. Then send each answer with submit_work."]
+    for j in jobs:
+        out += [f"\n## Job {j['id']} · {j['kind']}", f"### Instructions\n{j['system'] or '(none)'}", f"### Data\n{j['prompt']}"]
+        out.append("### Answer\n" + ("A JSON object that matches this schema: " + json.dumps(j["schema"]) if j["schema"]
+                                     else f"Plain text, at most about {j['max_tokens']} tokens."))
+    return "\n".join(out)
+
+
+@tool()
+def submit_work(id: str, answer: str) -> dict:
+    """Send your answer to one job from pending_work: id is the job id, answer is the text or JSON object that the
+    job asks for. Pensieve uses it in its next pass, within a minute, and the user sees the result."""
+    from pensieve import agent_jobs
+    agent_jobs.submit(id, answer, agent_conn.get() or "", agent_client.get())
+    return {"saved": id, "left": sum(agent_jobs.counts().values())}
+
+
+@tool()
 def report_feedback(kind: str, summary: str, details: str = "") -> dict:
     """Report a problem with Pensieve, or an improvement, when you meet one: a tool error, a search that missed
     code you then found another way, a wrong or stale result, something slow, or a tool that would have saved you
@@ -685,7 +718,8 @@ def setup_guide() -> dict:
        or repos it missed.
     5. Ask which of images, video and audio to read by what they show or say (`content`: each entry's note says
        what it costs). All three are off by default: then those files are found by name.
-    6. Ask which insights engine to use (`ai`; "none" is fine, it can change later in Settings).
+    6. Ask which generation model to use (`ai`; "agent" means you write the notes and insights when asked, with
+       nothing in the background; it can change later in Settings).
     7. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
     return onboarding.guide()
 
@@ -710,7 +744,7 @@ def setup_add_source(kind: str, path: str) -> dict:
 def setup_start(sources: list[str] | None = None, recommended: bool = False, ai: str | None = None,
                 content: list[str] | None = None) -> dict:
     """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
-    ones); everything else is switched off. `ai` sets the insights engine (an id from setup_guide's `ai`, or "none").
+    ones); everything else is switched off. `ai` sets the generation model (an id from setup_guide's `ai`).
     `content`: which of "images", "video" and "audio" to read by what they show or say (this selects the
     EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by name.
     Indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left, counting only what isn't
@@ -793,7 +827,8 @@ async def _scoped(scope, receive, send):
     ptoken = tool_profile.set("all" if q.get("tools") == "all" else "agent")
     ctoken = agent_cwd.set(q.get("cwd"))
     ktoken = agent_client.set(q.get("client") or _http_clients.get(ua) or "http")
-    ntoken = agent_conn.set(q.get("conn"))
+    hdr = dict(scope.get("headers") or [])
+    ntoken = agent_conn.set(q.get("conn") or hdr.get(b"mcp-session-id", b"").decode() or None)  # one per session
     try:
         await _endpoint(scope, receive, send)
     finally:

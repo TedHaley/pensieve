@@ -65,7 +65,7 @@ def summarize_session(store, sid):
     if not s or not s["turns"]:
         return
     d = llm.complete(_transcript([(t["role"], t["text"]) for t in s["turns"]]), SESSION_SYS, max_tokens=300,
-                     schema=SESSION_SCHEMA)
+                     schema=SESSION_SCHEMA, kind="session summary")
     with store.lock:
         store.db.execute("UPDATE sessions SET summary=?, tags=? WHERE id=?",
                          (d["summary"].strip(), ",".join(t.strip().lower() for t in d["tags"][:6]), sid))
@@ -73,7 +73,7 @@ def summarize_session(store, sid):
 
 
 def summarize_chunk(store, cid, text):
-    out = llm.complete(text[:3000], CHUNK_SYS, max_tokens=60).split("\n")[0].strip()
+    out = llm.complete(text[:3000], CHUNK_SYS, max_tokens=60, kind="moment summary").split("\n")[0].strip()
     with store.lock:
         store.db.execute("UPDATE chunks SET summary=? WHERE id=?", (out, cid))
         store.db.commit()
@@ -87,7 +87,7 @@ def name_topic(store, topic, key=None):
             "ORDER BY updated DESC LIMIT 15", topic["sessions"]).fetchall()
     body = f"Keywords: {topic['keywords']}\n\nSessions:\n" + "\n".join(
         f"- [{p}] {t}: {(s or '')[:220]}" for t, s, p in rows)
-    d = llm.complete(body, TOPIC_SYS, max_tokens=150, temperature=0.3, schema=TOPIC_SCHEMA)
+    d = llm.complete(body, TOPIC_SYS, max_tokens=150, temperature=0.3, schema=TOPIC_SCHEMA, kind="topic name")
     with store.lock:
         if key:
             store.meta(key, json.dumps(dict(name=d["name"].strip()[:48], description=d["description"].strip())))
@@ -116,7 +116,7 @@ def name_data_topic(datamap, topic):
         lines.append(f"- [{kinds.get(p['type'], p['type'])}] {p['title']} ({where})"
                      + (f": {p['summary'][:200]}" if p.get("summary") else ""))
     body = f"Keywords: {topic['keywords']}\n\nMost central items:\n" + "\n".join(lines)
-    d = llm.complete(body, DATA_TOPIC_SYS, max_tokens=200, temperature=0.3, schema=TOPIC_SCHEMA)
+    d = llm.complete(body, DATA_TOPIC_SYS, max_tokens=200, temperature=0.3, schema=TOPIC_SCHEMA, kind="map topic name")
     if topic.get("key"):  # a topic within a filtered view
         datamap.set_scoped_name(topic, d["name"], d["description"])
     else:
@@ -176,7 +176,8 @@ def generate_insights(store, scope=None, sids=None, topics=None, codebase=""):
         for i, r in enumerate(rows)]
     if codebase:
         lines += ["", "CODEBASE:", codebase]
-    d = llm.complete("\n".join(lines), INSIGHT_SYS, max_tokens=3000, temperature=0.5, schema=INSIGHT_SCHEMA)
+    d = llm.complete("\n".join(lines), INSIGHT_SYS, max_tokens=3000, temperature=0.5, schema=INSIGHT_SCHEMA,
+                     kind="insights")
 
     tname = {f"T{t['id'] + 1}": t["name"] for t in topics}
     stitle = {k: next((r[1] for r in rows if r[0] == v), k) for k, v in sid.items()}
@@ -223,7 +224,8 @@ def summarize_team(store, team, key, top=10):
         body.append(f"P{i + 1} {p['name']} - {p['commits']} commits; areas: "
                     + ", ".join(f"{a['area']} ({a['commits']})" for a in p["areas"]))
         body += [f"  - {c['subject'][:110]}" for c in p["subjects"][:12]]
-    d = llm.complete("\n".join(body), TEAM_SYS, max_tokens=2200, temperature=0.3, schema=TEAM_SCHEMA)
+    d = llm.complete("\n".join(body), TEAM_SYS, max_tokens=2200, temperature=0.3, schema=TEAM_SCHEMA,
+                     kind="team summary")
     ids = {f"P{i + 1}": p["email"] for i, p in enumerate(ppl)}
     out = {ids[x["id"].strip()]: dict(focus=x["focus"].strip(), summary=x["summary"].strip())
            for x in d.get("people", []) if x.get("id", "").strip() in ids}

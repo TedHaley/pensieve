@@ -249,7 +249,7 @@ def index(path: str, cwd=None) -> dict:
 def start(chosen=None, recommended=False, ai=None, embed_model=None, kinds=None) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
     switched off, then indexing starts. Categories that were never scanned are switched off whole. `ai` picks the
-    insights engine (an id from guide()["ai"], or "none"); `embed_model` the search model (guide()["embed_models"]).
+    generation model (an id from guide()["ai"]; "none" is taken as "agent"); `embed_model` the search model (guide()["embed_models"]).
     On an empty index the search model changes at once; otherwise the switch runs in the background (reembed).
     `kinds`: which of images, video and audio to read by content (content.KINDS); the others are found by name. None
     leaves them as they are. They need the EmbeddingGemma 2 search model: with kinds and no `embed_model`, that

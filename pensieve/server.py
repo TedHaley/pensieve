@@ -290,6 +290,8 @@ async def run_insights(scope=None, sids=None):
             return summarize.generate_insights(store, scope, set(sids) if sids is not None else None, topics, ground)
         await loop.run_in_executor(None, job)
         broadcast({"type": "insights", "scope": scope})
+    except llm.Queued:  # it waits for your agent
+        pass
     except Exception as e:
         msg = ("Choose an AI model in Settings → Models to generate insights." if isinstance(e, llm.Offline)
                else f"Insight generation failed: {e!r}"[:200])
@@ -328,6 +330,34 @@ async def summarize_team(team, key):
         inflight.discard(key)
 
 
+AGENT_BATCH = 10  # jobs of each kind that wait for the agent at a time
+
+
+async def agent_pass(loop, pool):
+    """With your agent as the generation model: ask for every kind of job at once. A job that the agent answered
+    is used now; the others wait in its queue. Moment summaries are left out: there are thousands."""
+    def ok(res):
+        return any(not isinstance(r, BaseException) for r in res)
+    run = lambda fn, *a: loop.run_in_executor(pool, fn, *a)  # noqa: E731
+    sess, topics, _ = summarize.pending(store)
+    data_topics = [t for t in await _run(datamap.pending_topics) if t["sig"] not in failed_topics]
+    res = await asyncio.gather(*[run(summarize.name_data_topic, datamap, t) for t in data_topics[:AGENT_BATCH]],
+                               return_exceptions=True)
+    failed_topics.update(t["sig"] for t, r in zip(data_topics, res) if isinstance(r, Exception) and not isinstance(r, llm.Offline))
+    if ok(res):
+        broadcast({"type": "data_topics"})
+    if ok(await asyncio.gather(*[run(summarize.summarize_session, store, s) for s in sess[:AGENT_BATCH]], return_exceptions=True)):
+        broadcast({"type": "summaries"})
+    if ok(await asyncio.gather(*[run(summarize.name_topic, store, t) for t in topics[:AGENT_BATCH]], return_exceptions=True)):
+        broadcast({"type": "topics"})
+    if not status["insights_running"] and store.topics() and await _run(_insights_due):
+        await run_insights()
+    ts = await asyncio.to_thread(work.tasks, store, 30)
+    todo = [t for t in work.stale_notes(ts, limit=AGENT_BATCH * 3) if t["state"] in ("conscious", "subconscious")][:AGENT_BATCH]
+    if ok(await asyncio.gather(*[asyncio.to_thread(work.write_note, t, ts) for t in todo], return_exceptions=True)):
+        broadcast({"type": "work"})
+
+
 async def enricher():
     """Low-priority LLM work: session summaries -> topic names -> first insights -> chunk summaries."""
     loop = asyncio.get_running_loop()
@@ -336,6 +366,10 @@ async def enricher():
         try:
             llm.sweep()  # unload the built-in model after 10 idle minutes
             if llm.paused():  # e.g. on battery: background AI work waits
+                await asyncio.sleep(30)
+                continue
+            if llm.provider() == "agent":
+                await agent_pass(loop, pool)
                 await asyncio.sleep(30)
                 continue
             if llm.provider() == "none":  # not chosen yet, or off: nothing to do (and nothing to report as broken)
@@ -1364,6 +1398,8 @@ async def write_work_notes(days: int = 30, ids: str = ""):
             for t in todo:
                 try:
                     await asyncio.to_thread(work.write_note, t, ts)
+                except llm.Queued:  # it waits for your agent; the next one can too
+                    pass
                 except llm.Offline:
                     break
                 except Exception:
@@ -1422,7 +1458,7 @@ async def connections_worker():
                 if await asyncio.to_thread(connections.backfill_sessions):
                     wake_files.set()
                     broadcast({"type": "repos"})
-            if (connections.engine() == "claude" or settings.get("mcp_servers")) and \
+            if (connections.claude_code() or settings.get("mcp_servers") or connections.agent_configs()) and \
                     time.time() - (st.get("discovered") or 0) > DISCOVER_SECONDS:
                 await asyncio.to_thread(connections.discover)
                 broadcast({"type": "repos"})  # the Sources list changed

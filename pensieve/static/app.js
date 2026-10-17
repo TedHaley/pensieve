@@ -2302,7 +2302,7 @@ async function openSetup() {
   try { setupState.guide = await api('/api/setup?scan=0'); }
   catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
   const ai = setupState.guide.ai;
-  setupState.ai = ai.find(o => o.id === 'builtin' && o.available) ? 'builtin' : 'none';
+  setupState.ai = ai.find(o => o.id === 'builtin' && o.available) ? 'builtin' : 'agent';
   setupState.embed = setupState.guide.embed_model;
   setupState.kinds = new Set((setupState.guide.content || []).filter(c => c.id !== 'text' && c.on).map(c => c.id));
   renderSetup();
@@ -2357,11 +2357,11 @@ function renderSetup() {
       ${btns('ai', 'Next', picked.length > 0)}`;
   } else if (step === 'ai') {
     body = `<h1>Choose your models</h1>
-      <h3 class="setup-h">Search model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
-      <div class="ai-opts" role="radiogroup" aria-label="Search model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
+      <h3 class="setup-h">Embedding model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
+      <div class="ai-opts" role="radiogroup" aria-label="Embedding model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
         <div class="ai-opt-h"><b>${esc(m.label)}</b><span class="priv local">Local</span></div><p>${esc(m.about)}</p></button>`).join('')}</div>
-      <h3 class="setup-h">AI model</h3><p class="sub">Optional. Writes summaries, topic names and insights about your work. ${esc(NO_AI_WORKS)}</p>
-      <div class="ai-opts" role="radiogroup" aria-label="AI model">${g.ai.map(o => `<button class="ai-opt ${st.ai === o.id ? 'on' : ''}" data-setup-ai="${esc(o.id)}" role="radio" aria-checked="${st.ai === o.id}" ${o.available ? '' : 'disabled'}>
+      <h3 class="setup-h">Generation model</h3><p class="sub">Writes task notes, summaries, topic names and insights. With Your agent, nothing runs in the background: your coding agent writes them when you ask.</p>
+      <div class="ai-opts" role="radiogroup" aria-label="Generation model">${g.ai.map(o => `<button class="ai-opt ${st.ai === o.id ? 'on' : ''}" data-setup-ai="${esc(o.id)}" role="radio" aria-checked="${st.ai === o.id}" ${o.available ? '' : 'disabled'}>
         <div class="ai-opt-h"><b>${esc(o.id === 'none' ? 'Not now' : o.label)}</b>${o.privacy && o.id !== 'none' ? `<span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span>` : ''}</div>
         <p>${esc(o.id === 'none' ? 'Turn insights on later in Settings → Models.' : o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}</button>`).join('')}</div>
       ${btns('start', 'Next', !!st.ai)}`;
@@ -2681,29 +2681,25 @@ async function renderModels() {
   let d;
   try { d = await api('/api/embed_models'); } catch { box.innerHTML = '<p class="sc-p">Could not load the models.</p>'; return; }
   const p = d.progress, switching = d.wanted !== d.current;
-  box.innerHTML = `<div class="ai-opts" role="radiogroup" aria-label="Search model">${d.models.map(m => {
-    const now = m.id === d.current, next = switching && m.id === d.wanted;
-    const note = now ? (switching ? 'In use until the switch is done' : '')
-      : next ? (p ? `Embedding: ${Math.round(100 * p.done / Math.max(p.total, 1))}%${p.seconds_left ? `, ${dur(p.seconds_left)} left` : ''}. Pensieve restarts when it is done.` : 'Starting…')
-      : `Switching takes ${dur(m.switch_seconds)} on this Mac, for ${d.chunks.toLocaleString()} pieces of text.`;
-    return `<button class="ai-opt ${now && !switching || next ? 'on' : ''}" data-model="${esc(m.id)}" role="radio" aria-checked="${now}">
-      <div class="ai-opt-h"><b>${esc(m.label)}</b>${now ? '<span class="priv local">In use</span>' : ''}</div><p>${esc(m.about)}</p>${note ? `<p class="note">${esc(note)}</p>` : ''}</button>`;
-  }).join('')}</div>${switching ? `<p class="sc-p">Choose ${esc(d.models.find(m => m.id === d.current)?.label || 'the current model')} to stop the switch.</p>` : ''}
+  const cur = d.models.find(m => m.id === d.current), want = d.models.find(m => m.id === d.wanted) || cur;
+  const prog = switching ? (p ? `Switching to ${want.label}: ${Math.round(100 * p.done / Math.max(p.total, 1))}%${p.seconds_left ? `, ${dur(p.seconds_left)} left` : ''}. Search keeps using ${cur?.label} until then. Choose it again to stop.` : `Switching to ${want.label}…`) : '';
+  box.innerHTML = `<div class="set-row" style="border-top:0"><div><div class="k">Model</div><div class="d">${esc(want?.about || '')}</div>${prog ? `<div class="d ct-state">${esc(prog)}</div>` : ''}</div>
+    <div><select class="set-in" data-model-sel aria-label="Embedding model">${d.models.map(m => `<option value="${esc(m.id)}" ${m.id === d.wanted ? 'selected' : ''}>${esc(m.label)}${m.id === d.current ? ' · in use' : ''}</option>`).join('')}</select></div></div>
     <div id="modelconfirm"></div>`;
   const choose = async id => {
     const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({embed_model: id})});
     toast(!r.ok ? 'Could not change the model' : id === d.current ? 'Switch stopped' : 'Re-indexing with the new model in the background');
     setTimeout(() => { renderModels(); renderContent(); }, 600);
   };
-  $$('[data-model]', box).forEach(b => b.onclick = () => {
-    const id = b.dataset.model; if (id === d.wanted) return;
+  $$('[data-model-sel]', box).forEach(b => b.onchange = () => {
+    const id = b.value; if (id === d.wanted) return;
     if (id === d.current) return choose(id);  // back to the model in use: stops a switch, nothing to re-index
     const m = d.models.find(x => x.id === id), c = $('#modelconfirm', box);
     c.innerHTML = `<div class="set-card danger" style="margin-top:10px"><div class="set-row" style="border-top:0"><div>
       <div class="k">Re-index with ${esc(m.label)}?</div>
       <div class="d">Pensieve embeds all ${d.chunks.toLocaleString()} pieces of text it has indexed again with the new model: ${dur(m.switch_seconds)} on this Mac. It uses a lot of energy while it runs, so plug in if you can. Your files are not read again, and search keeps working with the current model until the new one is ready; then Pensieve restarts.</div></div>
       <div style="display:flex;gap:8px;align-self:center"><button class="btn" data-mc="no">Cancel</button><button class="btn primary" data-mc="yes">Re-index</button></div></div></div>`;
-    $('[data-mc=no]', c).onclick = () => { c.innerHTML = ''; };
+    $('[data-mc=no]', c).onclick = () => { c.innerHTML = ''; b.value = d.wanted; };
     $('[data-mc=yes]', c).onclick = () => choose(id);
   });
   if (switching) setTimeout(() => { if ($('#modelbox') === box && !$('#modelconfirm', box)?.innerHTML) renderModels(); }, 5000);
@@ -2739,7 +2735,7 @@ async function renderContent() {
   const gemma = d.model === d.needs_model;
   const state = k => {
     if (k.locked) return 'Always on.';
-    if (k.needs === 'model') return 'Needs the EmbeddingGemma 2 search model (above).';
+    if (k.needs === 'model') return 'Needs the EmbeddingGemma 2 embedding model.';
     if (k.needs === 'decoder') return 'Needs the Pensieve app’s video and sound decoder, or PyAV (pip install av).';
     if (k.error) return `The download failed: ${k.error}. Switch it off and on to try again.`;
     if (k.installing) { const p = k.installing; return `Downloading ${fmtBytes(p.done)} of ${fmtBytes(p.total)}. Until it is done, these files are found by name.`; }
@@ -2747,9 +2743,12 @@ async function renderContent() {
     if (k.on) return 'Starting the download…';
     return `Off: found by name. Switching on downloads ${fmtBytes(k.size_mb * 1e6)}${k.installed ? ' (already here)' : ''}.`;
   };
-  box.innerHTML = d.kinds.map(k => `<div class="set-row ct-row"><div><div class="k">${esc(k.label)}</div><div class="d">${esc(k.description)}</div>
-      <div class="d ct-state ${k.error ? 'err' : ''}">${esc(state(k))}</div>${k.installing ? `<div class="ct-bar"><i style="width:${Math.round(100 * k.installing.done / Math.max(k.installing.total, 1))}%"></i></div>` : ''}</div>
-    <div><label class="tog"><input type="checkbox" data-content="${esc(k.id)}" ${k.on ? 'checked' : ''} ${k.locked || (!gemma && !k.on) ? 'disabled' : ''}></label></div></div>`).join('');
+  const short = k => k.locked ? '' : k.error ? 'failed' : k.installing ? `${Math.round(100 * k.installing.done / Math.max(k.installing.total, 1))}%`
+    : k.on ? (k.ready ? '' : 'starting') : !gemma || k.needs ? '' : fmtBytes(k.size_mb * 1e6);
+  box.innerHTML = `<div class="ct-chips">${d.kinds.map(k => `<label class="ct-chip ${k.on ? 'on' : ''} ${k.error ? 'err' : ''}" title="${esc(k.description + ' ' + state(k))}">
+      <input type="checkbox" data-content="${esc(k.id)}" ${k.on ? 'checked' : ''} ${k.locked || (!gemma && !k.on) ? 'disabled' : ''}>${esc(k.label)}${short(k) ? `<small>${esc(short(k))}</small>` : ''}</label>`).join('')}</div>
+    ${!gemma ? '<div class="d" style="margin-top:6px">Images, video and audio need the EmbeddingGemma 2 model.</div>' : ''}
+    ${d.kinds.filter(k => k.error || k.needs === 'decoder').map(k => `<div class="d ct-state err">${esc(k.label)}: ${esc(state(k))}</div>`).join('')}`;
   $$('[data-content]', box).forEach(c => c.onchange = async () => {
     const r = await fetch('/api/content', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: c.dataset.content, on: c.checked})});
     const j = await r.json().catch(() => ({}));
@@ -2875,9 +2874,12 @@ async function renderSettings() {
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
     </div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
-  else if (tab === 'ai') body = bar('Models', 'The search model that finds things by meaning, and the optional AI model that writes summaries, topic names and insights.') + `
-    <div class="set-card" id="set-Search-model"><h3>Search model</h3><p class="sc-p">Turns your files, code and sessions into vectors, so search finds them by meaning. It runs on this Mac.</p><div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div></div>
-    <div class="set-card" id="set-What-it-reads"><h3>What the search model reads</h3><p class="sc-p">Text is always read. Images, video and audio are found by name until you switch them on. Switching one on downloads its part of the model, then reads those files in your folders (and images in your git repos).</p><div id="contentbox"><div class="spinner" style="margin:8px 0"></div></div></div>` + aiSettingsHtml();
+  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. A generation model writes notes and insights. MCP servers bring in tickets and messages.') + `
+    <div class="set-card mdl" id="set-Embedding-model">
+      <div class="mdl-h"><span class="mdl-n">1</span><div class="mdl-t"><h3>Embedding model</h3><p>Finds your files, code and sessions by meaning. Always on.</p></div><span class="priv local">Local</span></div>
+      <div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div>
+      <div class="set-row"><div><div class="k">Reads</div><div class="d">Text always. Images, video and audio are found by name until you switch them on.</div></div><div id="contentbox"></div></div>
+    </div>` + aiSettingsHtml();
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/usage.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
@@ -2983,7 +2985,7 @@ window.addEventListener('hashchange', route);
 
 /* ============================== AI engine (optional: summaries, topic names, insights) ============================== */
 const aiState = {data: null, timer: null, busy: null, err: null};
-const AI_STATUS = {ready: ['live', 'Ready'], starting: ['busy', 'Starting…'], downloading: ['busy', 'Downloading…'], offline: ['warn', 'Not reachable'], off: ['off', 'Off'], error: ['off', 'Error']};
+const AI_STATUS = {ready: ['live', 'Ready'], starting: ['busy', 'Starting…'], downloading: ['busy', 'Downloading…'], offline: ['warn', 'Not reachable'], waiting: ['warn', 'Waiting for a session'], off: ['off', 'Off'], error: ['off', 'Error']};
 const aiPreparing = d => !!d && ['downloading', 'starting'].includes(d.status);
 // Insights are "on" once an engine is enabled and ready; until then the tab is greyed and shows the setup page
 const insightsOn = () => { const d = aiState.data; return !d || (d.enabled && !aiPreparing(d)); };
@@ -3067,25 +3069,53 @@ function aiSettingsHtml() {
   const d = aiState.data;
   if (!d) { loadAI().then(() => S.setTab === 'ai' && renderSettings()); return '<div class="set-card"><p class="sc-p">Checking…</p></div>'; }
   const bat = !!S.set?.orig?.ai_on_battery;
-  return `<div class="set-card ai-set"><h3>AI model</h3><p class="sc-p">Optional: writes summaries, topic names and insights. ${esc(NO_AI_WORKS)}</p>
-      ${aiStatusHtml(d)}${aiProgressHtml(d)}
-      <div class="ai-opts" role="radiogroup" aria-label="AI model">${d.options.filter(o => o.id !== 'none').map(o => {
-        const on = d.setting === o.id || (d.setting === 'auto' && d.provider === o.id);
-        if (o.id === 'server') return aiServerCard(o, on, d.setting === 'auto');
-        if (o.id === 'cli') return aiCliCard(o, on);
-        return `<button class="ai-opt ${on ? 'on' : ''}" data-ai="${esc(o.id)}" role="radio" aria-checked="${on}" ${o.available ? '' : 'disabled'}>
-          <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
-          <p>${esc(o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}
-          ${on ? `<span class="ai-check">✓ ${d.setting === 'auto' ? 'In use (picked automatically)' : 'Selected'}</span>` : ''}</button>`;
-      }).join('')}</div>${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
-      <div class="cmd-l" style="margin-top:14px">Built-in model</div>${setRow('builtin_model')}</div>
-    <div class="set-card ai-set"><div class="set-row" style="border-top:0"><div><div class="k">Keep working on battery power</div><div class="d">Off by default: background insight work pauses until your Mac is plugged in.</div></div>
-      <div><label class="tog"><input type="checkbox" data-aibat ${bat ? 'checked' : ''}></label></div></div>
-    <div class="set-row"><div><div class="k">Refresh insights automatically</div><div class="d">When the sessions or topics behind them have changed a lot, insights are rewritten in the background, at most every 6 hours.</div></div>
-      <div><label class="tog"><input type="checkbox" data-aiauto ${S.set?.orig?.insights_auto !== false ? 'checked' : ''}></label></div></div>
-      ${d.setting === 'none' ? `<div class="set-row"><div><div class="k">Insights are off</div><div class="d">Pick an engine above to turn them on. ${esc(NO_AI_WORKS)}</div></div><div></div></div>`
-        : `<div class="set-row"><div><div class="k">Turn off insights</div><div class="d">Stops all AI work. ${esc(NO_AI_WORKS)}</div></div>
-      <div><button class="btn" data-ai="none">Turn off</button></div></div>`}</div>`;
+  const cur = d.setting === 'auto' ? d.provider || 'none' : d.setting, auto = d.setting === 'auto';
+  const view = aiState.eng && d.options.some(o => o.id === aiState.eng) ? aiState.eng : cur === 'none' ? 'builtin' : cur;
+  const opt = id => d.options.find(o => o.id === id);
+  const SHORT = {builtin: 'Built-in', server: 'Model server', cli: 'Command line', agent: 'Your agent'};
+  const seg = `<div class="seg mdl-seg" role="radiogroup" aria-label="Generation model">${['builtin', 'server', 'cli', 'agent'].filter(opt).map(id =>
+    `<button class="${view === id ? 'on' : ''}" data-eng="${id}" role="radio" aria-checked="${view === id}">${SHORT[id]}${cur === id ? ' <i class="mdl-dot"></i>' : ''}</button>`).join('')}</div>`;
+  const o = opt(view), using = view === cur;
+  const useBtn = id => using ? `<span class="ai-check">✓ In use${auto ? ' (picked automatically)' : ''}</span>`
+    : `<button class="btn primary" data-ai="${id}" ${opt(id).available ? '' : 'disabled'}>${aiState.busy === id ? 'Saving…' : 'Use this'}</button>`;
+  let panel;
+  if (view === 'server') { aiState.srvOpen = true; panel = aiServerCard(o, using, auto); }
+  else if (view === 'cli') panel = aiCliCard(o, using);
+  else if (view === 'agent') {
+    const live = d.agent?.sessions || [];
+    const who = s => s.client ? s.client.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'An agent';
+    const names = [...new Set(live.map(who))].join(', ');
+    panel = `<div class="mdl-panel"><p>${esc(o.description)}</p>
+      <div class="mdl-act">${!using ? useBtn('agent')
+        : live.length ? `<span class="ai-check" title="${esc(live.map(s => `${who(s)}: ${plural(s.answers, 'job')}, last ${rel(s.at * 1000)}`).join('\n'))}">✓ ${live.length === 1 ? 'Active session' : `${live.length} active sessions`}</span><span class="muted" style="font-size:12px;margin-left:8px">${esc(names)}</span>`
+        : '<span class="muted" style="font-size:12px">Waiting for a session: ask your agent to “do Pensieve’s pending work”.</span>'}</div></div>`;
+  }
+  else panel = `<div class="mdl-panel"><p>${esc(o.description)}${o.note ? ` <span class="muted">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</span>` : ''}</p>
+      <div class="mdl-act">${useBtn('builtin')}</div></div>`;
+  const privOf = id => id === 'cli' ? (opt('cli')?.privacy || 'cloud') : id === 'server' ? (isLocalUrl(opt('server')?.url || '') ? 'local' : 'cloud') : opt(id)?.privacy || 'local';
+  return `<div class="set-card mdl ai-set" id="set-Generation-model">
+      <div class="mdl-h"><span class="mdl-n">2</span><div class="mdl-t"><h3>Generation model</h3><p>Writes task notes, summaries, topic names and insights.</p></div>
+        ${cur !== 'none' ? `<span class="priv ${privOf(cur)}">${privOf(cur) === 'cloud' ? 'Cloud' : 'Local'}</span>` : ''}</div>
+      ${cur !== 'none' ? aiStatusHtml(d) : ''}${aiProgressHtml(d)}
+      ${seg}${panel}${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
+      <details class="src-opts"><summary>Options</summary>
+        <div class="set-row"><div><div class="k">Keep working on battery power</div><div class="d">Off: background work pauses until your Mac is plugged in.</div></div>
+          <div><label class="tog"><input type="checkbox" data-aibat ${bat ? 'checked' : ''}></label></div></div>
+        <div class="set-row"><div><div class="k">Refresh insights automatically</div><div class="d">When the sessions or topics behind them change a lot, at most every 6 hours.</div></div>
+          <div><label class="tog"><input type="checkbox" data-aiauto ${S.set?.orig?.insights_auto !== false ? 'checked' : ''}></label></div></div></details>
+    </div>${mcpCardHtml()}`;
+}
+function mcpCardHtml() {
+  const c = (srcState.cat || []).find(x => x.id === 'connections');
+  if (!srcState.cat) loadSources().then(() => S.setTab === 'ai' && refreshAIViews());
+  const servers = (c?.items || []).filter(i => i.id !== 'connections/agent_sessions' && i.available);
+  const on = servers.filter(i => i.enabled).length;
+  return `<div class="set-card mdl" id="set-MCP-servers">
+      <div class="mdl-h"><span class="mdl-n">3</span><div class="mdl-t"><h3>MCP servers</h3><p>Where tickets and messages come from. Pensieve uses only read-only tools.</p></div>
+        ${servers.length ? `<span class="muted" style="font-size:12px">${on} of ${servers.length} on</span>` : ''}</div>
+      ${c?.note ? `<p class="mdl-mcp-note">${esc(c.note)}</p>` : ''}
+      ${servers.length ? `<div class="mdl-mcp">${servers.slice(0, 12).map(i => `<span class="mdl-srv ${i.enabled ? 'on' : ''}" title="${esc(i.detail || '')}"><i></i>${esc(i.label)}${i.count ? `<small>${i.count.toLocaleString()}</small>` : ''}</span>`).join('')}${servers.length > 12 ? `<span class="muted" style="font-size:12px;align-self:center">and ${servers.length - 12} more</span>` : ''}</div>` : ''}
+      <div style="padding:2px 0 8px"><button class="linkbtn" data-goto-conn>${servers.length ? 'Switch servers on in Sources' : 'Add a server in Sources'} ›</button></div></div>`;
 }
 // The local-or-hosted server option: URL, model and an optional API key, with a connection test that lists models.
 const isLocalUrl = u => { try { const h = new URL(u).hostname; return ['localhost', '127.0.0.1', '[::1]'].includes(h) || h.endsWith('.local'); } catch { return true; } };
@@ -3225,6 +3255,8 @@ function bindAICli(root) {
 }
 function bindAISettings(root) {
   bindAIButtons(root);
+  $$('[data-eng]', root).forEach(b => b.onclick = () => { aiState.eng = b.dataset.eng; aiState.err = null; refreshAIViews(); });
+  $('[data-goto-conn]', root)?.addEventListener('click', () => { setTab('sources'); setTimeout(() => $('.conn-add')?.closest('.src-card')?.scrollIntoView({block: 'start', behavior: 'smooth'}), 300); });
   bindAIServer(root);
   bindAICli(root);
   const bat = $('[data-aibat]', root);
@@ -3431,7 +3463,7 @@ function renderWork() {
       <div class="nrow" title="What has been done"><span class="nlbl">Current state</span><p>${esc(n.current)}</p></div>
       <div class="nrow ${done ? 'done' : 'left'}" title="What is left to do, and whether it is still being worked on"><span class="nlbl">What’s left</span><p>${done ? 'Nothing left' : esc(n.left)}</p></div>
       ${writing(t) ? '<div class="foot">Updating…</div>' : ''}</div>`;
-    if (!insightsOn()) return '<div class="wk-note empty-note">Choose an insights engine in Settings → Models to get a status note on each task.</div>';
+    if (!insightsOn()) return '<div class="wk-note empty-note">Choose a generation model in Settings → Models to get a note on each task.</div>';
     return `<div class="wk-note empty-note">${writing(t) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
   };
   const many = picked.length !== 1;
