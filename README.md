@@ -337,7 +337,7 @@ A context card follows [`context-card.schema.json`](pensieve/context-card.schema
 | restricted | Claude artifacts | a link marked "may need access", with a summary |
 | public | public web pages | a link |
 
-The Share button at the bottom right of each card on the Context tab opens a preview. Pensieve reads the local and restricted resources whole and writes a summary of each one. You write what you need from the reader, edit the core and the summaries, untick what doesn't belong, and save one page to Downloads. The page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so the reader's agent reads the same file. A shared card has no local paths, session ids, resume command or secrets, and leaves out sentences about your own machine. Agents share a card with the `share_card` MCP tool.
+On the Context tab, the eye button shows a card's page, and the Compact view lists one card a line (a click opens it in full). The Share button at the bottom right of each card opens a preview. Pensieve reads the local and restricted resources whole and writes a summary of each one. You write what you need from the reader, edit the core and the summaries, untick what doesn't belong, and save one page to Downloads. The page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so the reader's agent reads the same file. A shared card has no local paths, session ids, resume command or secrets, and leaves out sentences about your own machine. Agents share a card with the `share_card` MCP tool.
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
 

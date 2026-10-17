@@ -3332,8 +3332,9 @@ $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'da
 /* ============================== data tab ============================== */
 // Each task: its data points from every source, newest first, and an AI note on how it stands and is moving.
 S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, asked: new Set(), menu: false,
-          states: new Set((() => { const v = store.get('taskStates', ['conscious', 'subconscious']); return Array.isArray(v) ? v : [v]; })())};
-const WK_PAGE = 10;
+          states: new Set((() => { const v = store.get('taskStates', ['conscious', 'subconscious']); return Array.isArray(v) ? v : [v]; })()),
+          view: store.get('workView', 'expanded'), full: new Set()};  // compact view: one row a card; full: the rows opened
+const wkPageSize = () => S.work.view === 'compact' ? 40 : 10;
 const wkModel = s => (S.work.data?.states || []).find(m => m.state === s) || {label: s, color: '#8e8e93', meaning: ''};
 const wkShown = () => (S.work.data?.tasks || []).filter(t => !S.work.states.size || S.work.states.has(t.state));
 const closeWkMenu = () => { if (S.work.menu) { S.work.menu = false; renderWork(); } };
@@ -3344,6 +3345,9 @@ const homeTilde = p => p.replace(/^\/Users\/[^/]+/, '~');
 const WK_IC = {
   play: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/></svg>',
   share: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 14.5V3.5M8 7.5l4-4 4 4M7.5 10.5H6.5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
+  rows: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  cards: '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="3.5" y="4" width="17" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3.5" y="13" width="17" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
   term: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="3.5" y="5" width="17" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   folder: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>',
   copy: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 8.5V6.2a1.7 1.7 0 0 0-1.7-1.7H6.2a1.7 1.7 0 0 0-1.7 1.7v7.6a1.7 1.7 0 0 0 1.7 1.7h2.3" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
@@ -3356,8 +3360,41 @@ const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
 function wkActions(t) {
   const resume = t.resume ? `<button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
-  const share = `<button class="wk-btn icon" data-wk-share="${esc(t.id)}" title="Share: save this card to Downloads as a page that people open and agents read. Local paths, session ids and secrets are left out.">${WK_IC.share}</button>`;
-  return `<div class="wk-bar">${resume}<span class="wk-loc"></span>${adj}${share}</div>`;
+  return `<div class="wk-bar">${resume}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
+}
+// A card on one line: where, its PRs and what is next. A click opens it in full, in place.
+function wkRow(t, n) {
+  const p = (t.places || [])[0] || {};
+  const where = [p.repo || (p.path || '').split('/').pop(), p.branch].filter(Boolean).join(' · ');
+  const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).slice(0, 2)
+    .map(r => `<a class="wk-st pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener">#${esc(prNum(r.url) || '')} ${esc(r.state || '')}</a>`).join('');
+  const next = n ? (n.question ? `Waiting on you: ${n.question}` : n.next || '') : '';
+  return `<article class="wk-task wk-row-c" data-id="${esc(t.id)}" data-wk-row="${esc(t.id)}" style="--acc:${wkModel(t.state).color}" title="Show this card in full">
+    <div class="c-main"><div class="c-l1"><h4>${esc(t.title)}</h4>${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
+      <div class="c-l2">${where ? `<span class="c-where">${esc(where)}</span>` : ''}${next ? `<span class="c-next">${esc(next)}</span>` : ''}</div></div>
+    <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>
+    <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}${wkCardBtns(t)}</div>
+  </article>`;
+}
+function wkCardBtns(t) {
+  return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this card as a page">${WK_IC.eye}</button>`
+    + `<button class="wk-btn icon" data-wk-share="${esc(t.id)}" title="Share: preview what goes, then save a page to Downloads that people open and agents read">${WK_IC.share}</button>`;
+}
+// The page in an iframe's srcdoc: the Mac app's web view can't open a second window
+async function openPreview(load, title) {
+  const m = document.createElement('div');
+  m.className = 'modal'; m.id = 'previewmodal';
+  m.innerHTML = `<div class="palette preview-dlg"><div class="sh-head"><h3>${esc(title)}</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+    <div class="pv-body"><div class="shimmer" style="height:240px;margin:18px"></div></div></div>`;
+  document.body.append(m);
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
+  try {
+    const r = await load();
+    if (!r.ok) throw new Error(`${r.status}`);
+    const f = document.createElement('iframe');
+    f.title = title; f.srcdoc = await r.text();
+    $('.pv-body', m).replaceChildren(f);
+  } catch (e) { $('.pv-body', m).innerHTML = `<div class="empty">Could not show the card: ${esc(e.message)}</div>`; }
 }
 // The Share dialog: Pensieve drafts the shared card (summaries of what the reader can't open, read whole now); the
 // person writes what they need, edits the core, unticks what doesn't belong, and saves the page to Downloads.
@@ -3381,14 +3418,20 @@ async function openShare(id) {
     <h4>What goes with it</h4><p class="cap">Links stay links for anyone who can open them. What only this Mac has goes as a summary, without its path.${left > 0 ? ` ${plural(left, 'local item')} had nothing worth sending and ${left === 1 ? 'is' : 'are'} left out.` : ''}</p>
     ${rs.map((r, i) => `<div class="sh-r"><label><input type="checkbox" data-sh-keep="${i}" checked><b>${esc(r.title)}</b><span class="muted">${esc(REACH_TXT[r.reach] || r.reach)}</span></label>
       ${r.summary || r.reach === 'local' || r.reach === 'restricted' ? `<textarea data-sh-sum="${i}" rows="3">${esc(r.summary || '')}</textarea>` : ''}</div>`).join('')}
-    <div class="sh-foot"><span class="muted">Saved to Downloads as one page: people open it, agents read the data in it.</span><button class="btn" data-close>Cancel</button><button class="btn primary" data-sh-save>Save to Downloads</button></div>`;
-  $('[data-sh-save]', m).onclick = async e => {
-    e.target.disabled = true;
+    <div class="sh-foot"><span class="muted">Saved to Downloads as one page: people open it, agents read the data in it.</span><button class="btn" data-close>Cancel</button><button class="btn" data-sh-preview>Preview</button><button class="btn primary" data-sh-save>Save to Downloads</button></div>`;
+  const edited = () => {  // the card as the person edited it in this dialog
     const card = JSON.parse(JSON.stringify(c));
     card.core = {...card.core};
     $$('[data-sh-core]', m).forEach(t => { const v = t.value.trim(); if (v) card.core[t.dataset.shCore] = v; else delete card.core[t.dataset.shCore]; });
     card.resources = rs.map((r, i) => ({...r, summary: ($(`[data-sh-sum="${i}"]`, m)?.value ?? r.summary ?? '').trim()}))
       .filter((r, i) => $(`[data-sh-keep="${i}"]`, m).checked);
+    return card;
+  };
+  $('[data-sh-preview]', m).onclick = () => openPreview(() => fetch('/api/work/card/render', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({card: edited(), ask: $('[data-sh="ask"]', m).value})}), 'Preview: the page you would send');
+  $('[data-sh-save]', m).onclick = async e => {
+    e.target.disabled = true;
+    const card = edited();
     try {
       const r = await api('/api/work/card/save', {method: 'POST', headers: {'content-type': 'application/json'},
         body: JSON.stringify({id, days: S.work.days, card, ask: $('[data-sh="ask"]', m).value})});
@@ -3443,7 +3486,7 @@ async function loadWork(first = false) {
   askNotes();
   if (S.view === 'work') renderWork();
 }
-const wkPageTasks = () => wkShown().slice(S.work.page * WK_PAGE, (S.work.page + 1) * WK_PAGE);
+const wkPageTasks = () => wkShown().slice(S.work.page * wkPageSize(), (S.work.page + 1) * wkPageSize());
 // The notes of the page in view that are missing or out of date: written by the server in the background, once per page
 function askNotes() {
   const d = S.work.data, key = `${S.work.days}:${[...S.work.states].sort()}:${S.work.page}`;
@@ -3479,11 +3522,11 @@ function renderWork() {
   if (fl && !fl.shown) {  // a card opened from the map: its state into the filter, its page in view
     if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('taskStates', [...S.work.states]); }
     const at = wkShown().findIndex(x => x.id === fl.id);
-    if (at >= 0) S.work.page = Math.floor(at / WK_PAGE);
+    if (at >= 0) S.work.page = Math.floor(at / wkPageSize());
   }
-  const shown = wkShown(), pages = Math.max(1, Math.ceil(shown.length / WK_PAGE));
+  const shown = wkShown(), pages = Math.max(1, Math.ceil(shown.length / wkPageSize()));
   S.work.page = Math.min(S.work.page, pages - 1);
-  const tasks = wkPageTasks(), first = S.work.page * WK_PAGE;
+  const tasks = wkPageTasks(), first = S.work.page * wkPageSize();
   const count = s => d.tasks.filter(t => t.state === s).length;
   const def = m => `${m.meaning} ${m.rule}`;
   const picked = d.states.filter(m => S.work.states.has(m.state));
@@ -3511,11 +3554,13 @@ function renderWork() {
   const many = picked.length !== 1;
   const was = new Map($$('.wk-task[data-id]', el).map(a => [a.dataset.id, a.getBoundingClientRect().top]));
   el.innerHTML = `<div class="wk-head"><h2>Context</h2>
-      <div class="wk-ctl">${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
+      <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>
+        `<button data-wk-view="${v}" class="${S.work.view === v ? 'on' : ''}" role="radio" aria-checked="${S.work.view === v}" title="${l} view">${ic}${l}</button>`).join('')}</div>${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
     ${tasks.length ? tasks.map((t, i) => {
       const prev = i ? tasks[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== t.state) ? `<h3 class="wk-group" style="--acc:${wkModel(t.state).color}" title="${esc(def(wkModel(t.state)))}">${esc(wkModel(t.state).label)}<span>${count(t.state)}</span></h3>` : '';
-      return `${head}<article class="wk-task" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
+      if (S.work.view === 'compact' && !S.work.full.has(t.id)) return head + wkRow(t, d.notes[t.id]);
+      return `${head}<article class="wk-task${S.work.view === 'compact' ? ' opened' : ''}" data-id="${esc(t.id)}" ${S.work.view === 'compact' ? `data-wk-row="${esc(t.id)}"` : ''} style="--acc:${wkModel(t.state).color}">
           <div class="wk-main">
             <header><h4>${esc(t.title)}</h4>${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
             ${wkSections(t)}
@@ -3557,7 +3602,19 @@ function renderWork() {
     try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
     catch (e) { toast('Could not resume it: ' + e.message); }
   });
-  $$('[data-wk-share]', el).forEach(b => b.onclick = () => openShare(b.dataset.wkShare));
+  $$('[data-wk-share]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openShare(b.dataset.wkShare); });
+  $$('[data-wk-preview]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const t = d.tasks.find(x => x.id === b.dataset.wkPreview);
+    openPreview(() => fetch(`/api/work/card?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Context card');
+  });
+  $$('[data-wk-view]', el).forEach(b => b.onclick = () => {
+    S.work.view = b.dataset.wkView; S.work.page = 0; S.work.full.clear(); store.set('workView', S.work.view); renderWork(); askNotes();
+  });
+  $$('[data-wk-row]', el).forEach(r => r.onclick = e => {
+    if (e.target.closest('button, a, select')) return;
+    const id = r.dataset.wkRow; S.work.full[S.work.full.has(id) ? 'delete' : 'add'](id); renderWork();
+  });
   $$('[data-wk-open]', el).forEach(b => b.onclick = () => { const id = b.dataset.wkOpen; S.work.open[S.work.open.has(id) ? 'delete' : 'add'](id); renderWork(); });
   $$('[data-wk-file]', el).forEach(b => b.onclick = () => openFile(b.dataset.wkFile));
   $$('[data-wk-folder]', el).forEach(b => b.onclick = () => api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'},

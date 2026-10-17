@@ -1412,6 +1412,19 @@ def draft_work_card(req: CardDraftReq):
             "card": cards.draft_share(card, store, req.include)}
 
 
+class CardRenderReq(BaseModel):
+    card: dict
+    ask: str = ""
+
+
+@app.post("/api/work/card/render")
+def render_work_card(req: CardRenderReq):
+    """The Share dialog's preview: the edited card's page exactly as saving would write it (made fit to send)."""
+    from fastapi.responses import HTMLResponse
+    from pensieve import cards
+    return HTMLResponse(cards.render_html(cards.share(req.card, req.ask)))
+
+
 class CardSaveReq(BaseModel):
     id: str
     days: int = 30
