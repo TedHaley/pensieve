@@ -43,6 +43,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D4 | Find people with similar or complementary work | Product | idea |
 | D5 | The Context tab: context cards across sources, in five states | Product | testing |
 | D6 | Context cards as files to share | Product | testing |
+| D7 | Threads: one goal followed over time | Product | idea |
 | E1 | Connections as one list | Connections | idea |
 | E2 | Remote disks | Connections | idea |
 | E3 | Database metadata | Connections | idea |
@@ -626,6 +627,21 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     no wrong claims, against 0.87 and 0.12 with the old note fields, at $0.033 against $0.024 a run (longer notes).
   - Open: a card's id changes when its branch becomes long-lived (more than 4 days of sessions), which a shared
     thread can't follow.
+
+### D7. Threads: one goal followed over time
+
+- **Why:** a card's id is a snapshot of its members, so it changes when a member comes or goes. A hand-set state,
+  a note and a published copy need an id that stays. Today two goals on one long-lived branch can join into one
+  card, and one goal can change its id.
+- **Spec:** [`docs/threads.md`](docs/threads.md). The goal is the identity of a thread; members (tickets, PRs,
+  branches, commits, sessions) are its evidence, in a set order; embeddings can split or suggest, never join.
+  A session can be a member of several threads. An ended thread can start again, with no time limit.
+- **Try:** a thread id next to the snapshot id. Link each new snapshot to its best match by weighted member
+  overlap and goal distance, and record start, continue, split, merge, fork, end and revive.
+- **Measure:** replay the last 30 days, as of each day. Label a sample of links as same work or different work.
+  Compare members only, embeddings only and both, by wrong joins and wrong splits, and set the thresholds.
+- **Status:** idea
+- **Notes:**
 
 ## E. Connections
 
