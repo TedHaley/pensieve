@@ -1346,6 +1346,32 @@ class Repos:
         return [l.split("\x1f") for l in out.strip().split("\n") if l.count("\x1f") == 3]
 
     @locked
+    def _experts_by_path(self, q, repo, allow):
+        """experts() for the files and folders that the topic names by path, or None when it names none."""
+        paths = [t.strip("./`'\"").rstrip("/") for t in re.findall(r"[\w./-]*/[\w./-]+|[\w-]+\.[a-z]{1,5}\b", q)]
+        paths = [p for p in paths if len(p) > 3]
+        if not paths:
+            return None
+        allowed = set(int(x) for x in allow) if allow is not None else None
+        with self.lock:
+            root = self._root(repo) if repo and repo != ALL else None
+            rows = []
+            for p in paths[:4]:
+                like = "%/" + p if "/" not in p else p  # a bare file name matches it in any folder
+                rows += self.db.execute(
+                    "SELECT id, repo, path, start, end FROM code_chunks WHERE (path = ? OR path LIKE ? OR path LIKE ?)"
+                    + (" AND repo = ?" if root else "") + " LIMIT 3000",
+                    (p, like, p + "/%") + ((root,) if root else ())).fetchall()
+        rows = [r for r in rows if allowed is None or r[0] in allowed]
+        if not rows:
+            return None
+        seen, chunks = set(), []
+        for cid, rp, path, start, end in rows:
+            if path not in seen and len(chunks) < 10:
+                seen.add(path)
+                chunks.append(dict(id=cid, repo=Path(rp).name, path=path, start=start, end=end, score=1.0))
+        return dict(chunks=chunks, experts=self._experts_from([(r[0], 1.0) for r in rows]), hit_ids=[r[0] for r in rows])
+
     def _experts_from(self, hits):
         """hits: [(chunk_id, similarity)] -> ranked people by similarity-weighted blamed lines."""
         score, files, last = Counter(), defaultdict(Counter), {}
@@ -1364,7 +1390,11 @@ class Repos:
                      files=[f for f, _ in files[a].most_common(4)]) for a, s in score.most_common(8)]
 
     def experts(self, q=None, vec=None, repo=None, k=40, allow=None):
-        """`allow`: optional chunk-id allowlist (a scope); `repo` narrows further to one repo."""
+        """`allow`: optional chunk-id allowlist (a scope); `repo` narrows further to one repo. A topic that names a
+        file or folder of the code ("src/billing", "invoice.py") counts the blame of every chunk under it."""
+        named = self._experts_by_path(q, repo, allow) if q else None
+        if named:
+            return named
         if vec is None:
             vec = embed([q], query=CODE_QUERY)
         qv = vec.reshape(1, -1).astype(np.float32)

@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pensieve.tools/schema/context-card.v1.json",
+  "title": "Context card",
+  "description": "One piece of work joined across agent sessions, git, pull requests, tickets and messages: what it is, where it stands, what is left and how to pick it up. A card has two parts. 'remote' and the top-level fields hold what any reader can fetch again from a server (git remote, GitHub, Jira, Slack). 'local' holds what works only on the machine that made the card (folder paths, the command that resumes a session); a shared card has no 'local'. The summary is written by a model from the sessions and dated; everything else is data.",
+  "type": "object",
+  "required": ["schema", "id", "title", "state", "made_at", "locality"],
+  "properties": {
+    "schema": {"const": "context-card/1"},
+    "id": {"type": "string", "description": "Stable id of the work, e.g. t:ABC-12 (ticket), b:<repo>@<branch> (branch) or s:<agent>:<session>"},
+    "title": {"type": "string"},
+    "kind": {"enum": ["ticket", "branch", "work"]},
+    "locality": {"enum": ["local", "shared"], "description": "local: made for the machine it was made on, with 'local'; shared: fit to send, with no local paths, session ids or secrets"},
+    "state": {
+      "type": "object",
+      "required": ["value"],
+      "properties": {
+        "value": {"enum": ["latent", "conscious", "subconscious", "etched", "forgotten"],
+                  "description": "latent: defined, no material work; conscious: worked on now; subconscious: not done and quiet; etched: done; forgotten: unfinished and left"},
+        "why": {"type": "string"},
+        "set_by": {"type": "string", "description": "auto, user or agent"}
+      }
+    },
+    "made_at": {"type": "string", "format": "date-time"},
+    "last_activity": {"type": "string", "format": "date-time"},
+    "last_session": {"type": "string", "format": "date-time"},
+    "origin": {
+      "type": "object",
+      "description": "Who made the card, and with what",
+      "properties": {"by": {"type": "string", "description": "the git user name of the person whose work it is"},
+                     "generator": {"type": "string", "description": "e.g. pensieve 0.9.0"}}
+    },
+    "thread": {
+      "type": "object",
+      "description": "Set when the card is published to a shared space: the thread it updates",
+      "properties": {"id": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "revision": {"type": "integer"}}
+    },
+    "summary": {
+      "type": "object",
+      "description": "Written by a model from the sessions, as of 'as_of'. A sentence that the live state contradicts ends with [outdated: what is true now].",
+      "properties": {
+        "recap": {"type": "string"},
+        "current": {"type": "string"},
+        "left": {"type": "string"},
+        "decisions": {"type": "string"},
+        "as_of": {"type": "string", "format": "date-time"}
+      }
+    },
+    "waiting_on_you": {"type": "string", "description": "The question that the last session asked and that is not answered, in its own words when it can be"},
+    "since_last_session": {"type": "array", "items": {"type": "string"}, "description": "What git and GitHub show after the last session: merges, pushes"},
+    "outdated": {"type": "array", "items": {"type": "string"}, "description": "Summary claims that the live state contradicts, with what is true now"},
+    "last_words": {"type": "string", "description": "The end of the last session's last message; in a shared card, without local paths or secrets"},
+    "remote": {
+      "type": "object",
+      "description": "Where the work lives on servers: enough to get it and its live state again from anywhere",
+      "properties": {
+        "repos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["git"],
+            "properties": {
+              "name": {"type": "string"},
+              "git": {"type": "string", "description": "the clone URL of the remote (origin)"},
+              "web": {"type": "string", "format": "uri"},
+              "branch": {"type": "string"},
+              "head": {"type": "string", "description": "the commit the branch was at when the card was made"},
+              "pushed": {"type": "boolean", "description": "true when every commit of the branch is on the remote, so head can be fetched"}
+            }
+          }
+        },
+        "pull_requests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+              "url": {"type": "string", "format": "uri"},
+              "repo": {"type": "string"},
+              "number": {"type": "integer"},
+              "title": {"type": "string"},
+              "state": {"enum": ["open", "draft", "merged", "closed", ""]},
+              "checks": {"enum": ["passing", "failing", "pending"]},
+              "review": {"type": "string"},
+              "branch": {"type": "string"},
+              "merged_at": {"type": "string", "format": "date-time"},
+              "shared_branch": {"type": "boolean", "description": "a PR of a branch that other work also uses"}
+            }
+          }
+        },
+        "tickets": {
+          "type": "array",
+          "items": {"type": "object", "required": ["key"],
+                    "properties": {"key": {"type": "string"}, "status": {"type": "string"}, "title": {"type": "string"},
+                                   "url": {"type": "string"}}}
+        },
+        "links": {
+          "type": "array",
+          "description": "Messages, pages and documents about the work (a Slack thread, a Notion page), from Pensieve's connections",
+          "items": {"type": "object", "required": ["url"],
+                    "properties": {"url": {"type": "string"}, "title": {"type": "string"},
+                                   "source": {"type": "string", "description": "the server, e.g. Slack"}}}
+        }
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "description": "What the work made that people open: Claude artifacts, published pages, designs",
+      "items": {"type": "object", "required": ["url"],
+                "properties": {"kind": {"enum": ["artifact", "page", "file"]}, "title": {"type": "string"},
+                               "url": {"type": "string", "format": "uri"}}}
+    },
+    "handoff": {
+      "type": "object",
+      "description": "How someone on another machine picks the work up",
+      "properties": {
+        "next": {"type": "string", "description": "the next step: the question that waits, or what is left"},
+        "start": {"type": "array", "items": {"type": "string"}, "description": "shell commands that get the work, e.g. gh pr checkout 12"},
+        "refresh": {"type": "array", "items": {"type": "string"}, "description": "commands that get the live state the card was made from"}
+      }
+    },
+    "files": {"type": "array", "items": {"type": "string"}, "description": "The main files the work changed, relative to the repo"},
+    "sessions": {
+      "type": "array",
+      "items": {"type": "object", "properties": {"agent": {"type": "string"}, "title": {"type": "string"},
+                                                 "updated": {"type": "string", "format": "date-time"}}}
+    },
+    "timeline": {
+      "type": "array",
+      "items": {"type": "object", "properties": {"at": {"type": "string", "format": "date-time"},
+                                                 "source": {"type": "string"}, "title": {"type": "string"}}}
+    },
+    "history": {
+      "type": "array",
+      "description": "State changes made by hand",
+      "items": {"type": "object", "properties": {"at": {"type": "string", "format": "date-time"}, "state": {"type": "string"},
+                                                 "by": {"type": "string"}, "reason": {"type": "string"}}}
+    },
+    "local": {
+      "type": "object",
+      "description": "Only on the machine that made the card. A shared card has none of it.",
+      "properties": {
+        "places": {
+          "type": "array",
+          "items": {"type": "object", "required": ["path"],
+                    "properties": {"path": {"type": "string"}, "repo": {"type": "string"}, "branch": {"type": "string"},
+                                   "worktree": {"type": "boolean"}, "uncommitted": {"type": "integer"},
+                                   "unpushed": {"type": "integer"}}}
+        },
+        "resume": {"type": "string", "description": "the shell command that resumes the last session"},
+        "session_ids": {"type": "array", "items": {"type": "string"}},
+        "files": {"type": "array", "items": {"type": "string"}, "description": "files outside the repo that the sessions made"}
+      }
+    }
+  }
+}

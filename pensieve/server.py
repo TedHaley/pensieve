@@ -415,6 +415,17 @@ async def enricher():
 
 
 @asynccontextmanager
+def _drop_plugin_duplicates():
+    from pensieve import integrations
+    try:
+        gone = integrations.drop_plugin_duplicates(config.PORT)
+        if gone:
+            print(f"Removed hooks that the Pensieve plugin already has: {', '.join(gone)}", flush=True)
+    except Exception:  # a settings file we can't read or write: leave it as it is
+        import traceback
+        traceback.print_exc()
+
+
 async def lifespan(app):
     global store, repos, files, searcher, datamap
     store = Store()
@@ -457,6 +468,7 @@ async def lifespan(app):
     if settings.get("ai") == "builtin":
         llm.start_download()
     loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
+    loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
     tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher())]
     async with mcp_server.mcp.session_manager.run():
@@ -1097,7 +1109,8 @@ async def hook_prompt_context(request: Request):
     """Claude Code's UserPromptSubmit hook posts its JSON here; the answer adds Pensieve's matches for the prompt."""
     try:
         body = await request.json()
-        text = await asyncio.to_thread(mcp_server.prompt_context, body.get("prompt") or "", body.get("cwd") or "")
+        text = await asyncio.to_thread(mcp_server.prompt_context, body.get("prompt") or "", body.get("cwd") or "",
+                                       request.query_params.get("card", "text"))
     except Exception:  # Claude Code adds whatever the hook prints to the prompt: never an error page
         import traceback
         traceback.print_exc()
@@ -1361,6 +1374,23 @@ def get_work(days: int = 30):
     return dict(tasks=ts, notes={t["id"]: {**note(have[t["id"]]), "stale": t["id"] in stale}
                                  for t in ts if t["id"] in have and ("current" in have[t["id"]] or "now" in have[t["id"]])},
                 states=task_states.models(), writing=status.get("work_notes") or [])
+
+
+@app.get("/api/work/card")
+def get_work_card(id: str, format: str = "html", share: bool = False, days: int = 30):
+    """One task as a context card (context-card/1). `format`: html (the page for people, which holds the JSON),
+    agent (compact JSON with a line on how to read it) or json. `share`: the card to send, with no local part, local
+    paths or secrets."""
+    from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+    from pensieve import cards
+    t = next((x for x in work.tasks(store, days) if x["id"] == id), None)
+    if not t:
+        raise HTTPException(404, f"no task {id}")
+    card = cards.build(t, work.notes().get(id, {}), task_states.history(store, id))
+    card = cards.share(card) if share else card
+    if format == "html":
+        return HTMLResponse(cards.render_html(card))
+    return PlainTextResponse(cards.render_agent(card)) if format == "agent" else JSONResponse(card)
 
 
 class TaskStateReq(BaseModel):

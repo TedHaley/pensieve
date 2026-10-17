@@ -158,18 +158,25 @@ pensieve integrate claude --remove    # removes exactly what was added
 - **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.
 - **`claude-hook`** (recommended): a `PostToolUse` hook in `~/.claude/settings.json`. After each Edit or Write, it sends the changed path to Pensieve. The agent's next search then always finds the new code, even when the file system event comes late. The hook adds about 50 ms to each edit.
 - **`claude-repo-check`** (recommended): a `SessionStart` hook. When a session starts in a repo that Pensieve does not index, Claude asks you once whether to index it. If you say yes, Claude runs `pensieve repo index`. If you say no, Claude runs `pensieve repo skip` and uses grep in that repo. Pensieve keeps the answer as the repo's switch in Settings → Sources, so Claude does not ask again. To change it, use that switch or `pensieve repo index`.
-- **`claude-prompt-search`**: a `UserPromptSubmit` hook. When you send a prompt in a repo that Pensieve indexes, Pensieve searches the prompt and adds its 5 best code matches to it, as the `search` tool shows them. Claude then often starts on the right file without a search of its own. The hook adds about 300 ms and 400 tokens to each prompt. Slash commands, prompts of 1 or 2 words and folders that Pensieve does not index get nothing.
+- **`claude-prompt-search`** (recommended): a `UserPromptSubmit` hook. When you send a prompt in a repo that Pensieve indexes, Pensieve adds what the prompt needs:
+  - a prompt about one piece of work ("where did I leave off on ABC-12", a branch, a PR number): its context card;
+  - a standup or "what's still open": the list of your tasks;
+  - "who knows this code" or "who should review": the people from `who_knows`;
+  - "why did we …": the past agent sessions that match;
+  - any other prompt: the 5 best code matches, as the `search` tool shows them.
+
+  The hook adds about 300 ms and 400 to 1,500 tokens to each prompt. Slash commands, prompts of 1 or 2 words and folders that Pensieve does not index get nothing.
 
 ### Claude Code plugin
 
-The plugin gives Claude Code the MCP server, the three skills, the instructions block and the two recommended hooks. It does not change your config files. Install Pensieve first, because the plugin starts `~/.local/bin/pensieve`.
+The plugin gives Claude Code the MCP server, the three skills, the instructions block and the three recommended hooks. It does not change your config files. Install Pensieve first, because the plugin starts `~/.local/bin/pensieve`.
 
 ```
 /plugin marketplace add TedHaley/pensieve
 /plugin install pensieve@pensieve
 ```
 
-- Use the plugin or `pensieve integrate` for Claude Code, not both. When the plugin is installed, `pensieve integrate` does not add the Claude Code MCP server, instructions block, hooks or skill link.
+- Use the plugin or `pensieve integrate` for Claude Code, not both. When the plugin is installed, `pensieve integrate` does not add the Claude Code MCP server, instructions block, hooks or skill link. When Pensieve starts, it removes the hooks that `pensieve integrate` added before, so that Claude Code does not run each hook twice.
 - The plugin's tools are named `mcp__plugin_pensieve_pensieve__*`.
 - If you run the backend on another port, set `PENSIEVE_PORT` in the environment that starts Claude Code.
 
@@ -317,7 +324,10 @@ pensieve mcp             # MCP over stdio (--all-tools to include the settings t
 pensieve integrate       # agent add-ons: instructions block, skills and the edit hook
 pensieve search "retry failed webhook delivery" --kind code   # what an agent's search returns, scoped to this repo
 pensieve repo status     # whether Pensieve indexes this repo; also index, skip (stop syncing it) or remove (drop it from the index)
+pensieve card <task id> -o card.html   # a context card as one HTML page; --json or --agent for the data, --share to send it
 ```
+
+A context card follows [`context-card.schema.json`](pensieve/context-card.schema.json) (`context-card/1`). It has a `remote` part, which any reader can fetch again (the git remote and branch, PRs, tickets, links), and a `local` part, which works only on your Mac (folder paths, the command that resumes a session). `--share` drops the `local` part, every local path and secrets, and adds `handoff`: the commands that get the work and its live state. The HTML page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so a tool can read a card that someone sent as a page.
 
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
 

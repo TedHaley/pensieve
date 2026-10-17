@@ -49,9 +49,10 @@ HOOKS = {  # id -> (label, what it does, recommended)
     "claude-repo-check": ("Ask before indexing a new repo",
                           "When a session starts in a repo Pensieve doesn't index, Claude asks you once whether to "
                           "index it. If you say no, it uses grep there and doesn't ask again.", True),
-    "claude-prompt-search": ("Search each prompt first",
-                             "When you send Claude Code a prompt in an indexed repo, Pensieve searches it and adds the "
-                             "best matches to the prompt. Claude often starts on the right file without searching.", False),
+    "claude-prompt-search": ("Add context to each prompt",
+                             "When you send Claude Code a prompt in an indexed repo, Pensieve adds what it needs: the "
+                             "context card of the work it names, your task list for a standup, who knows the code, or "
+                             "the best code matches. Claude starts with the answer instead of looking it up.", True),
 }
 HOOK_SPEC = {  # id -> (Claude Code hook event, matcher or None, the URL path the hook posts its JSON to)
     "claude-hook": ("PostToolUse", "Edit|MultiEdit|Write|NotebookEdit", "/api/touched"),
@@ -258,9 +259,21 @@ def hook_state(hook: str, port: int) -> str:
     return "on" if mine == [_hook_entry(hook, port)] else "stale"
 
 
+def drop_plugin_duplicates(port: int) -> list[str]:
+    """The hooks that `pensieve integrate` put in ~/.claude/settings.json and that the installed plugin has too
+    (since 0.10.0 also the prompt hook), removed so that Claude Code doesn't run each one twice. Only Pensieve's own
+    entries go. Returns the hooks removed."""
+    if not claude_plugin():
+        return []
+    gone = [h for h in HOOK_SPEC if hook_state(h, port) != "off"]
+    for h in gone:
+        set_hook(h, False, port)
+    return gone
+
+
 def set_hook(hook: str, on: bool, port: int) -> str:
     event, _, url = HOOK_SPEC[hook]
-    if on and hook != "claude-prompt-search" and claude_plugin():
+    if on and claude_plugin():
         raise ValueError(PLUGIN_HAS)
     s = _claude_settings()
     hooks = s.setdefault("hooks", {})

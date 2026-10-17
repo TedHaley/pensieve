@@ -25,8 +25,13 @@ import webbrowser
 
 def main():
     ap = argparse.ArgumentParser(prog="pensieve", description="One place for all your information, for context engineering: files, git repos, AI agent sessions, tickets and messages.")
-    ap.add_argument("command", nargs="?", choices=["serve", "mcp", "integrate", "repo", "setup", "search", "open"],
-                    default="serve")
+    ap.add_argument("command", nargs="?", default="serve",
+                    choices=["serve", "mcp", "integrate", "repo", "setup", "search", "open", "card"])
+    ap.add_argument("--json", action="store_true", help="card only: the card as JSON instead of an HTML page")
+    ap.add_argument("--agent", action="store_true", help="card only: the card for an agent (compact JSON)")
+    ap.add_argument("--share", action="store_true",
+                    help="card only: the card to send (no local paths, session ids, resume command or secrets)")
+    ap.add_argument("-o", "--out", help="card only: the file to write (default: print it)")
     ap.add_argument("--kind", help="search only: code, doc, session, folder, repo or person")
     ap.add_argument("--limit", type=int, default=8, help="search only: how many results")
     ap.add_argument("items", nargs="*", help="integrate: what to install (no items: show what's available); "
@@ -62,6 +67,8 @@ def main():
         return setup(a.port, a.items)
     if a.command == "search":
         return search(a.port, " ".join(a.items), a.kind, a.limit, a.scope)
+    if a.command == "card":
+        return card(a.port, " ".join(a.items), "json" if a.json else "agent" if a.agent else "html", a.share, a.out)
     if a.command == "open":  # names under .localhost reach this Mac in Chrome, Firefox and curl
         url = f"http://pensieve.localhost:{a.port}/"
         print(url)
@@ -281,6 +288,27 @@ def search(port, query, kind=None, limit=8, scope="auto"):
     print(text)
     if res.get("isError"):
         sys.exit(1)
+
+
+def card(port, task_id, fmt="html", share=False, out=None):
+    """A task's context card as an HTML page, JSON or the agent's text, from the running server."""
+    import httpx
+    if not task_id.strip():
+        sys.exit("usage: pensieve card <task id> [--json | --agent] [--share] [-o card.html]   (task ids: the tasks MCP tool)")
+    base = f"http://127.0.0.1:{port}"
+    _start_server(base, port)
+    try:
+        r = httpx.get(f"{base}/api/work/card", params=dict(id=task_id, format=fmt, share=str(share).lower()), timeout=120)
+    except httpx.HTTPError as e:
+        sys.exit(f"Couldn't reach Pensieve ({e}). Open the Pensieve app, then try again.")
+    if r.status_code >= 400:
+        sys.exit(r.text)
+    if out:
+        with open(out, "w") as f:
+            f.write(r.text)
+        print(out)
+    else:
+        print(r.text)
 
 
 def stdio_bridge(port, scope="auto", all_tools=False):

@@ -11,6 +11,10 @@ agent sessions, scoped to the repo you started in.
   both before you choose. Grep afterwards only to list every usage of a name you already know.
 - **Before writing new code,** search for code that already does something similar and call `similar(id)` on the
   best hit: reuse its patterns rather than add a second copy.
+- **"Where did I leave off on X?", "what's still open?", a standup:** call `tasks` (with `query` for one piece of
+  work, `state="all"` for a standup) and then `task(id)`. A card joins the sessions, branch, worktree, PRs and
+  tickets of one piece of work, with what was left and where the last session stopped. Its recap is as of the last
+  session: check what changed since with one `git status` or `gh pr view` before you report it as current.
 - **"What did we decide / try before?"** Search `kind:session`. **Who knows this area?** `who_knows("<topic>")`.
 - **For an overview of a repo that has no CLAUDE.md,** call `overview` first. It shows where things are, not what they
   do: read a part's main files before you describe it, and name only paths that it lists or that you opened.

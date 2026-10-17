@@ -236,10 +236,15 @@ def _tasks(store, days):
     for repo, sha, ts, author, subject in commits:
         for key in keys_in(subject):
             home[key].add(repo)
+    # a key with no home repo of its own: the repos where its project's other keys live (ABC-12 lives where ABC-7 does)
+    home_project = defaultdict(set)
+    for key, repos in home.items():
+        home_project[key.split("-")[0]] |= repos
+    homes = lambda k: home[k] or home_project[k.split("-")[0]]
     for s in S.values():
         found = Counter(keys_in("\n".join(texts.get(s["id"], []))))
         strong = set(keys_in(s["title"] + " " + s["branch"]))
-        weak = {k for k in found if k not in strong and s["repo"] and (not home[k] or s["repo"] in home[k])}
+        weak = {k for k in found if k not in strong and s["repo"] and (not homes(k) or s["repo"] in homes(k))}
         # one ticket per session from its text, so a session that mentions two tickets doesn't merge them; more than
         # three keys: a list of tickets, not one task
         pick = strong or ({max(weak, key=lambda k: found[k])} if weak and len(found) <= 3 else set())
@@ -325,8 +330,10 @@ def _tasks(store, days):
         prs += [dict(url=u_, title="", state="", source="session") for u_ in ranked[:4] if u_ not in {p["url"] for p in prs}]
         out.append(dict(
             prs=prs[:4], _sessions=ss, _named=named,
-            last_words=(texts.get(ss[0]["id"]) or [""])[-1][-600:] if ss else "",  # where the last session stopped
+            last_words=_tail((texts.get(ss[0]["id"]) or [""])[-1]) if ss else "",  # where the last session stopped
+            ending=_tail("\n".join(texts.get(ss[0]["id"], [])[-2:]), 2400) if ss else "",  # what the note reads
             last_summary=(ss[0]["summary"] or "")[:800] if ss else "",
+            earlier=[(s["title"], (s["summary"] or "")[:400]) for s in ss[1:3]],  # what the note's decisions come from
             events=_events(ss, its, cs),
             id=_task_id(keys, brs, ss), title=title, kind="ticket" if keys else "branch" if brs else "work",
             keys=keys, status=main["status"] if main else "", updated=updated,
@@ -383,7 +390,11 @@ def _own_prs(ts: list[dict]):
                 owner.setdefault(p["url"], t["id"])
     for t in ts:
         named = t.get("_named", set())
-        t["prs"] = [p for p in t["prs"] if owner.get(p["url"], t["id"]) == t["id"] or p["url"].rstrip("/").rsplit("/", 1)[-1] in named]
+        keep = [p for p in t["prs"] if owner.get(p["url"], t["id"]) == t["id"] or p["url"].rstrip("/").rsplit("/", 1)[-1] in named]
+        # another task's PR from a branch where this task's work is too: shown on the card, but it doesn't set the state
+        places = {p.get("branch") for p in t.get("places", []) if p.get("branch") not in DEFAULT_BRANCHES}
+        t["branch_prs"] = [p for p in t["prs"] if p not in keep and p.get("head") in places]
+        t["prs"] = keep
         for p in t["prs"]:
             p["own"] = owner.get(p["url"]) == t["id"]
 
@@ -426,22 +437,105 @@ def _ago(ts: float) -> str:
         else f"{int(s // 86400)} days ago"
 
 
+def matching(ts: list[dict], query: str, notes_: dict) -> list[dict]:
+    """The tasks whose title, keys, branches, PRs, session titles or note contain words of the query, the most
+    matched words first (ties keep their order)."""
+    words = {w for w in re.findall(r"[a-z0-9][a-z0-9_.-]+", query.lower().replace("#", " ")) if len(w) > 2 or w.isdigit()}
+    def text(t):
+        n = notes_.get(t["id"], {})
+        return " ".join([t["title"], *t["keys"], *(b["branch"] for b in t["branches"]), *(p["url"] + " " + (p.get("title") or "")
+                         for p in t["prs"]), *(s["title"] for s in t["sessions"][:8]), n.get("recap", ""),
+                         n.get("left", "")]).lower()
+    scored = [(sum(1 for w in words if re.search(rf"(?<![a-z0-9]){re.escape(w)}", tx)), i, t)
+              for i, t in enumerate(ts) for tx in [text(t)]]
+    return [t for s, i, t in sorted(scored, key=lambda x: (-x[0], x[1])) if s]
+
+
+RESUME_WORDS = re.compile(r"\b(left off|left over|leftover|pick (it |this |that )?(back )?up|continue|resume|status of|"
+                          r"where (are|were) we|where did (i|we)|what'?s left|what was left|follow[- ]?up)\b", re.I)
+# a prompt about all of the user's work, not one piece of it
+LIST_WORDS = re.compile(r"\b(standup|stand-up|unfinished|open loops|still open|in progress|my (open|unfinished|recent) "
+                        r"work|what (have|did) i (do|done|work|ship)|last \d+ days|this week)\b", re.I)
+STANDUP_WORDS = re.compile(r"\b(standup|stand-up|what (have|did) i|last \d+ days|this week)\b", re.I)
+
+
+def card_for_prompt(ts: list[dict], prompt: str, notes_: dict) -> dict | None:
+    """The task that a prompt is about, or None: a prompt that names its ticket key, branch or PR number, or one that
+    asks to pick work up ("where did I leave off on …") and matches one task clearly better than the next."""
+    low = prompt.lower()
+    for t in ts:
+        names = [k.lower() for k in t["keys"]] + [b["branch"].lower() for b in t["branches"] if len(b["branch"]) > 5]
+        nums = {m for p in t["prs"] for m in re.findall(r"/pull/(\d+)", p["url"])}
+        if any(re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", low) for n in names) or \
+                any(re.search(rf"(?:#|\bpr\s*#?)\s*{n}\b", low) for n in nums):
+            return t
+    if not RESUME_WORDS.search(prompt):
+        return None
+    ranked = sorted(((len(_words_hit(t, prompt, notes_)), -i, t) for i, t in enumerate(ts)), key=lambda x: x[:2],
+                    reverse=True)
+    if not ranked:
+        return None
+    first, second = ranked[0][0], ranked[1][0] if len(ranked) > 1 else 0
+    return ranked[0][2] if first >= 2 and first > second else None
+
+
+def _words_hit(t, prompt, notes_):
+    n = notes_.get(t["id"], {})
+    text = " ".join([t["title"], *(s["title"] for s in t["sessions"][:8]), n.get("recap", ""), n.get("left", "")]).lower()
+    words = {w for w in re.findall(r"[a-z0-9][a-z0-9_.-]+", prompt.lower()) if len(w) > 3} - _STOP
+    return [w for w in words if re.search(rf"(?<![a-z0-9]){re.escape(w)}", text)]
+
+
+_STOP = {"where", "what", "with", "that", "this", "from", "back", "left", "pick", "work", "working", "tell", "have",
+         "were", "still", "open", "continue", "resume", "status", "last", "session", "about", "want", "need", "done",
+         "folder", "branch", "state", "there", "which", "when", "they", "them", "then", "does", "into", "anything"}
+
+
 def brief(t: dict, note: dict) -> str:
     """One line for an agent: id, state, title, where, PRs and what is left."""
+    note = reconcile(note, t)[0] if note else note
     p = (t.get("places") or [{}])[0]
-    where = ", ".join(x for x in (Path(p.get("path", "")).name, p.get("branch", "")) if x)
+    where = ", ".join(x for x in (Path(p.get("path", "")).name, p.get("branch", ""),
+                                  p.get("changed") and f"{p['changed']} uncommitted",
+                                  p.get("ahead") and f"{p['ahead']} not pushed") if x)
     prs = ", ".join(f"PR #{(re.search(r'(\d+)/?$', x['url']) or [0, '?'])[1]} {x['state'] or ''}".strip() for x in t["prs"][:2])
     bits = [f"[{t['state']}]" + (" (session running)" if t.get("active") else ""), t["title"][:90], where, prs,
             ", ".join(t["keys"][:2]), f"left: {note['left']}" if note.get("left") else "", _ago(t["updated"])]
     return f"{t['id']}  " + " · ".join(b for b in bits if b)
 
 
+_NOISE = re.compile(r"^\s*(tip: .*|to get shorter replies.*|.*/output-style.*|the messages after this summary.*)$", re.I)
+
+
+def _clean_words(text: str) -> str:
+    """The last session's last words without the agent's tips and the notes that compaction adds."""
+    return "\n".join(x for x in text.strip().splitlines() if not _NOISE.match(x)).strip()
+
+
+def _tail(text: str, n: int = 600) -> str:
+    """The last n characters of text, from the start of a line when the cut falls inside one."""
+    if len(text) <= n:
+        return text
+    cut = text[-n:]
+    return cut.split("\n", 1)[1] if "\n" in cut[:n // 2] else cut
+
+
 def detail(t: dict, note: dict, hist: list[dict]) -> str:
     """The whole card for an agent, as Markdown: enough to pick the task up and finish it."""
     out = [f"# {t['title']}", f"id: {t['id']} · state: {t['state']} ({t['state_why']}) · last activity {_ago(t['updated'])}"]
+    last = max((s["updated"] for s in t.get("sessions", [])), default=0)
+    note = reconcile(note, t)[0] if note else note
     if note:
-        out += ["", f"Recap: {note.get('recap', '')}", f"Current state: {note.get('current', '')}",
+        out += ["", f"From the sessions (as of {datetime.fromtimestamp(last).strftime('%Y-%m-%d') if last else 'the last session'}; "
+                    "the folders and PRs below are live):",
+                f"Recap: {note.get('recap', '')}", f"Current state: {note.get('current', '')}",
                 f"What's left: {note.get('left', '')}"]
+        out += [f"{label}: {note[k]}" for k, label in (("decisions", "Decided"), ("question", "Waiting on you"))
+                if note.get(k) and note[k].strip(" .").lower() != "none"]
+    since = [p for p in t["prs"] + t.get("branch_prs", []) if last and (p.get("merged_at") or 0) > last]
+    if since:
+        out += ["", "## Since the last session"] + [
+            f"- {p['url']} merged {datetime.fromtimestamp(p['merged_at']).strftime('%Y-%m-%d')}" for p in since]
     if t.get("places"):
         out += ["", "## Where the work is"] + [
             f"- {p['path']}" + (f" (branch {p.get('branch')}" + (", worktree" if p.get("worktree") else "") +
@@ -454,12 +548,16 @@ def detail(t: dict, note: dict, hist: list[dict]) -> str:
         out += ["", "## Pull requests"] + [
             f"- {p['url']} {p['state'] or 'state unknown'}" + (f", checks {p['checks']}" if p.get("checks") else "") +
             (f", {p['review']}" if p.get("review") else "") + (f": {p['title']}" if p.get("title") else "") for p in t["prs"]]
+    if t.get("branch_prs"):
+        out += ["", "## Pull requests of the branch (shared with other work)"] + [
+            f"- {p['url']} {p['state'] or 'state unknown'} (branch {p['head']})" + (f": {p['title']}" if p.get("title") else "")
+            for p in t["branch_prs"]]
     if t["tickets"]:
         out += ["", "## Tickets"] + [f"- {k['key']} {k['status']}: {k['title']} {k['url']}".rstrip() for k in t["tickets"]]
     if t.get("resume"):
         out += ["", "## Resume the last session", f"`{t['resume']['command']}`"]
     if t.get("last_words"):
-        out += ["", "## Where the last session stopped", t["last_words"].strip()]
+        out += ["", "## Where the last session stopped", _clean_words(t["last_words"])]
     made = [(s["title"], a) for s in t["sessions"][:5] for a in s.get("artifacts", [])]
     if made:
         out += ["", "## What its sessions made"] + [f"- {a.get('path') or a.get('url')} (session: {title})" for title, a in made[:20]]
@@ -470,6 +568,125 @@ def detail(t: dict, note: dict, hist: list[dict]) -> str:
     if hist:
         out += ["", "## State changes"] + [f"- {datetime.fromtimestamp(h['at']).strftime('%Y-%m-%d %H:%M')} {h['state']} by "
                                            f"{h['by']}" + (f": {h['reason']}" if h["reason"] else "") for h in hist[-5:]]
+    return "\n".join(out)
+
+
+_PUSH = re.compile(r"\b(push|unpushed|not pushed|ahead of)\b", re.I)
+_UNCOMMITTED = re.compile(r"\buncommitted\b", re.I)
+_PR_OPEN = re.compile(r"(?:PR\s*)?#(\d+)[^.;]*\b(open|draft|review|merge it|to merge|waiting|pending)\b|"
+                      r"\b(merge|review|open)\b[^.;]*#(\d+)", re.I)
+
+
+def reconcile(note: dict, t: dict) -> tuple[dict, list[str]]:
+    """The note with each sentence that the live state contradicts marked as outdated, and what the live state says
+    instead. A note is written from the sessions; git and gh show what happened after them (a push, a merged PR)."""
+    places = [p for p in t.get("places", []) if p.get("git")]
+    pushed = bool(places) and all(p.get("upstream") and not p.get("ahead") for p in places if p.get("branch"))
+    clean = bool(places) and not any(p.get("changed") for p in places)
+    state = {m: (p.get("state") or "") for p in t["prs"] + t.get("branch_prs", [])
+             for m in re.findall(r"/pull/(\d+)", p["url"])}
+    changes, out = [], {}
+    for k, v in note.items():
+        if k not in ("recap", "current", "left", "decisions", "question") or not isinstance(v, str):
+            continue
+        keep = []
+        for s in re.split(r"(?<=[.;])\s+", v):
+            why = None
+            if k in ("left", "question") and pushed and _PUSH.search(s):
+                why = "every commit is pushed now"
+            elif k in ("left", "question") and clean and _UNCOMMITTED.search(s):
+                why = "nothing is uncommitted now"
+            else:
+                for m in _PR_OPEN.finditer(s):
+                    n = m.group(1) or m.group(4)
+                    if state.get(n) in ("merged", "closed") and k in ("left", "question"):  # work to do, not done
+                        why = f"PR #{n} is {state[n]} now"
+            if why:  # marked, not dropped: the rest of the sentence ("push, then deploy") can still be open
+                changes.append(why)
+                s = f"{s.rstrip()} [outdated: {why}]"
+            keep.append(s)
+        out[k] = " ".join(keep).strip()
+    return out, list(dict.fromkeys(changes))
+
+
+def last_question(words: str) -> str:
+    """The question that a session's last message ends with ("Should I add the fix to #2069, or open a follow-up?"),
+    with the sentence before it when the question alone is short ("Want me to build it?"), or ""."""
+    text = _clean_words(words).strip()
+    if not text.endswith("?"):
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", text))
+    q = parts[-1]
+    if len(q.split()) < 8 and len(parts) > 1:
+        q = f"{parts[-2]} {q}"
+    return q[-300:]
+
+
+def _pr_short(p: dict) -> str:
+    """owner/repo#12 draft, checks failing: title"""
+    m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", p["url"])
+    name = f"{m.group(1)}#{m.group(2)}" if m else p["url"]
+    return (f"{name} {p.get('state') or 'state unknown'}" + (f", checks {p['checks']}" if p.get("checks") else "") +
+            (f", {p['review']}" if p.get("review") else "") + (f": {p['title'][:80]}" if p.get("title") else ""))
+
+
+def compact(t: dict, note: dict, hist: list[dict]) -> str:
+    """The card in about a quarter of the tokens of `detail`: its state, where the work is, PRs, what changed since
+    the last session, what is left, the last session's last words, the main files and the resume command."""
+    home = str(Path.home())
+    day = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+    last = max((s["updated"] for s in t.get("sessions", [])), default=0)
+    out = [f"# {t['title']}", f"id: {t['id']} · {t['state']} ({t['state_why']})" +
+           (f" · last session {day(last)}" if last else "") + f" · last activity {_ago(t['updated'])}"]
+    feature = [p for p in t.get("places", []) if p.get("branch") not in DEFAULT_BRANCHES]
+    for p in t.get("places", []):
+        if feature and p not in feature and not p.get("changed"):
+            continue  # the main checkout, when the work has its own branch
+        if p.get("branch") in DEFAULT_BRANCHES:
+            p = dict(p, behind=0)  # how far main is behind its remote says nothing about the work
+        flags = [x for x in (p.get("branch") and f"branch {p['branch']}", p.get("worktree") and "worktree",
+                             p.get("head") and f"checked out now: {p['head']}",
+                             p.get("changed") and f"{p['changed']} uncommitted",
+                             p.get("ahead") and f"{p['ahead']} commits not pushed",
+                             p.get("upstream") and not p.get("ahead") and "every commit pushed",
+                             p.get("behind") and f"{p['behind']} behind") if x]
+        out.append(f"Where: {p['path'].replace(home, '~')}" + (f" ({', '.join(flags)})" if flags else ""))
+    prs = t["prs"] + [dict(p, title="(shared branch) " + (p.get("title") or "")) for p in t.get("branch_prs", [])]
+    if prs:
+        out.append("PRs: " + "; ".join(_pr_short(p) for p in prs[:5]))
+    if t["tickets"]:
+        out.append("Tickets: " + "; ".join(f"{k['key']} {k['status']}".strip() + (f": {k['title'][:60]}" if k["title"] else "")
+                                           for k in t["tickets"][:3]))
+    note, changed = reconcile(note, t) if note else ({}, [])
+    since = [f"{_pr_short(p).split(' ')[0]} merged {day(p['merged_at'])}" for p in prs if last and (p.get("merged_at") or 0) > last]
+    since += [c for c in changed if not c.startswith("PR #")]  # a PR's state is on the PRs line already
+    if since:
+        out.append("Since the last session: " + "; ".join(since))
+    if note:
+        out += ["", f"As of the last session: {note.get('recap', '')} {note.get('current', '')}".rstrip(),
+                f"Left: {note.get('left', '')}"]
+        if note.get("decisions") and note["decisions"].strip(" .").lower() != "none":
+            out.append(f"Decided: {note['decisions']}")
+    asked = last_question(t.get("last_words") or "")  # the session's own words, over the note's
+    if asked or (note.get("question") and note["question"].strip(" .").lower() != "none"):
+        out.append(f"Waiting on you: {asked or note['question']}")
+    if t.get("last_words"):
+        out += ["", "Last words of the last session:", _clean_words(t["last_words"])[-450:]]
+    roots = [p["path"] + "/" for p in t.get("places", [])]
+    files = Counter()
+    for s in t["sessions"][:5]:
+        for a in s.get("artifacts", []):
+            f = a.get("path") or ""
+            if f and "/.claude/" not in f:
+                files[next((f[len(r):] for r in roots if f.startswith(r)), f.replace(home, "~"))] += 1
+    files = [f for f, _ in files.most_common()] or [f for f in t["files"] if "/.claude/" not in f]
+    if files:
+        out += ["", "Files: " + ", ".join(files[:6]) + (f" (+{len(files) - 6} more)" if len(files) > 6 else "")]
+    if t.get("resume"):
+        out.append(f"Resume: `{t['resume']['command']}`")
+    if hist:
+        h = hist[-1]
+        out.append(f"Marked {h['state']} by {h['by']} on {day(h['at'])}" + (f": {h['reason']}" if h["reason"] else ""))
     return "\n".join(out)
 
 
@@ -603,13 +820,15 @@ def _pickup(task: dict, wts: dict):
             p["worktree"] = root in wts
             ab = _git(root, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
             if len(ab) == 2 and ab[0].isdigit():  # commits behind and ahead of the branch's upstream
-                p["behind"], p["ahead"] = int(ab[0]), int(ab[1])
+                p["behind"], p["ahead"], p["upstream"] = int(ab[0]), int(ab[1]), True
             p["repo"] = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600) or root).parent.name
             web = web_url(_git(root, "remote", "get-url", "origin", ttl=3600))
             if web and p["branch"] not in DEFAULT_BRANCHES and _git(root, "rev-parse", "--verify", "--quiet",
                                                                       f"refs/remotes/origin/{p['branch']}"):
                 p["remote_url"] = _branch_url(web, p["branch"])
-            if web and "github.com" in web and p["branch"] in feature:
+            # the PRs of the branch where the work is: the task's own branch, or a long-lived one that its sessions used
+            # (a merged PR there is often the end of the work)
+            if web and "github.com" in web and (p["branch"] in feature or p["branch"] not in DEFAULT_BRANCHES):
                 for pr in _gh_prs(root, p["branch"]):
                     if pr["url"] not in {x["url"] for x in task["prs"]}:
                         task["prs"].insert(0, pr)
@@ -679,20 +898,25 @@ Pull requests: {prs}
 Working folders: {places}
 Its data points, newest first (date, source, what happened):
 {events}
-The last agent session: "{last_title}"
+{earlier}The last agent session: "{last_title}"
 {last_summary}
 How it ended:
 {last_words}
 
-Answer with three fields, each one short sentence:
+Answer with five fields, each one short sentence:
 - recap: at most 25 words on what the task or problem is, to bring it back to mind.
 - current: at most 20 words on what has been done so far.
 - left: at most 20 words on what is left to do, and whether someone is still working on it; "Nothing" if it is done.
-State facts from the data above only. Name the real files, PRs, tickets and errors from the data."""
-NOTE_SCHEMA = {"type": "object", "properties": {"recap": {"type": "string"}, "current": {"type": "string"},
-                                                "left": {"type": "string"}},
-               "required": ["recap", "current", "left"], "additionalProperties": False}
-NOTE_VERSION = 5  # a new version writes every note again; 5: example sentences out, a small model copied them
+- decisions: at most 30 words on what was decided and why (a cause found, an approach chosen or dropped); "None" if
+  the data shows no decision.
+- question: at most 20 words on the question that the last session asked the developer and that is not answered;
+  "None" if there is no such question.
+State facts from the data above only. Name the real files, PRs, tickets and errors from the data. Say how something
+was done or why it worked only in the data's own words; if the data doesn't say, leave it out."""
+NOTE_SCHEMA = {"type": "object", "properties": {k: {"type": "string"} for k in ("recap", "current", "left", "decisions",
+                                                                                   "question")},
+               "required": ["recap", "current", "left", "decisions", "question"], "additionalProperties": False}
+NOTE_VERSION = 7  # a new version writes every note again; 6: decisions and the open question; 7: the longer ending
 NOTE_MIN_AGE = 600  # seconds before a note is written again for new data
 
 
@@ -750,18 +974,20 @@ def write_note(task: dict, all_tasks: list[dict]) -> str:
     events = "\n".join(f"- {day(e['ts'])} {e['source']}: {e['title'][:140]}" + (f" ({e['detail'][:60]})" if e.get("detail") else "")
                        for e in task["events"][:25])
     prs = "; ".join(f"{p['url']} ({p['state'] or 'state unknown'})" for p in task["prs"]) or "none"
-    places = "; ".join(f"{p['path']}" + (f" on {p['branch']}, {p['changed']} uncommitted files" if p.get("git") else "")
+    places = "; ".join(f"{p['path']}" + (f" on {p['branch']}, {p['changed']} uncommitted files" if p.get("branch") else "")
                        for p in task.get("places", [])) or "none"
     ans = llm.complete(NOTE_PROMPT.format(title=task["title"], keys=f" [{', '.join(task['keys'][:3])}]" if task["keys"] else "",
                                           status=f", ticket status {task['status']}" if task["status"] else "",
                                           prs=prs, places=places, events=events,
-                                          last_words=task.get("last_words") or "(none)",
+                                          last_words=task.get("ending") or task.get("last_words") or "(none)",
                                           last_title=(task["sessions"] or [{}])[0].get("title", "(none)"),
-                                          last_summary=task.get("last_summary") or ""),
-                       max_tokens=200, schema=NOTE_SCHEMA, kind="task note")
+                                          last_summary=task.get("last_summary") or "",
+                                          earlier="".join(f'An earlier session: "{title}"\n{summary}\n'
+                                                          for title, summary in task.get("earlier", []) if summary)),
+                       max_tokens=320, schema=NOTE_SCHEMA, kind="task note")
     cur = notes()
-    cur[task["id"]] = dict(recap=str(ans.get("recap", "")).strip(), current=str(ans.get("current", "")).strip(),
-                           left=str(ans.get("left", "")).strip(), sig=_signature(task), at=time.time(), v=NOTE_VERSION)
+    cur[task["id"]] = dict({k: str(ans.get(k, "")).strip() for k in NOTE_SCHEMA["required"]},
+                           sig=_signature(task), at=time.time(), v=NOTE_VERSION)
     path = _notes_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cur))

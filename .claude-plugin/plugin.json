@@ -31,6 +31,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/prompt-context 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|MultiEdit|Write|NotebookEdit",
