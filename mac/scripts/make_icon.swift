@@ -1,5 +1,5 @@
-// Draws the app icon into an .iconset: the Pensieve mark from pensieve.tools (a ring with three dots,
-// SVG viewBox 0 0 24 24) in the site's light ink on its dark background, on Apple's icon grid.
+// Draws the app icon into an .iconset: the Pensieve mark from pensieve.tools (a P of three circles filled
+// even-odd, SVG viewBox 0 0 24 24) in the site's light ink on its dark background, on Apple's icon grid.
 // Usage: make_icon <out.iconset>
 import AppKit
 
@@ -37,23 +37,21 @@ func draw(_ px: Int) -> Data {
     NSGraphicsContext.restoreGraphicsState()
     NSGradient(colors: [bgTop, bgBottom])!.draw(in: body, angle: -90)
 
-    // The mark, y-down like the SVG. Small sizes get a heavier ring so it doesn't vanish at 16 px.
-    let side: CGFloat = 560
+    // The mark, y-down like the SVG.
+    let side: CGFloat = 652
     let m = NSRect(x: 512 - side / 2, y: 512 - side / 2, width: side, height: side)
-    let weight: CGFloat = px <= 16 ? 1.8 : px <= 32 ? 1.45 : px <= 64 ? 1.15 : 1
     ctx.saveGState()
     ctx.translateBy(x: 0, y: 1024)
     ctx.scaleBy(x: 1, y: -1)
     let s = side / 24
     ink.set()
-    let ring = NSBezierPath(ovalIn: NSRect(x: m.minX + 2 * s, y: m.minY + 2 * s, width: 20 * s, height: 20 * s))
-    ring.lineWidth = 1.6 * s * weight
-    ring.stroke()
-    for (x, y, r) in [(9.0, 10.0, 1.6), (15.0, 9.0, 1.2), (13.0, 15.0, 1.9)] {
-        let rr = CGFloat(r) * s * (weight > 1 ? 1 + (weight - 1) * 0.5 : 1)
-        NSBezierPath(ovalIn: NSRect(x: m.minX + CGFloat(x) * s - rr, y: m.minY + CGFloat(y) * s - rr,
-                                    width: 2 * rr, height: 2 * rr)).fill()
+    let mark = NSBezierPath()
+    mark.windingRule = .evenOdd
+    for (x, y, r) in [(7.97, 5.06, 3.06), (7.97, 18.94, 3.06), (12.97, 8.11, 6.11)] {
+        mark.appendOval(in: NSRect(x: m.minX + CGFloat(x - r) * s, y: m.minY + CGFloat(y - r) * s,
+                                   width: CGFloat(2 * r) * s, height: CGFloat(2 * r) * s))
     }
+    mark.fill()
     ctx.restoreGState()
 
     // Hairline edge so the dark tile reads on a dark Dock.

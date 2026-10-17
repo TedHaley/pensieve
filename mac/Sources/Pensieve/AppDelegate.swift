@@ -171,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var syncTimer: Timer?
     private var spin = 0.0
 
-    /// While anything is indexing, the dots swirl in the ring; the menu lists what is being indexed.
+    /// While anything is indexing, the mark turns; the menu lists what is being indexed.
     private func showSyncing(_ jobs: [Backend.SyncJob]) {
         syncJobs = jobs
         if jobs.isEmpty {

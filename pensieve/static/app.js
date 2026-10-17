@@ -2329,7 +2329,7 @@ function renderSetup() {
   const secs = picked.reduce((a, i) => a + (i.seconds || 0), 0), mins = Math.max(1, Math.round(secs / 60));
   let body;
   if (step === 'about') {
-    body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg>
+    body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg>
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
       <p class="sub">Setup takes a minute: tell Pensieve how you work, choose what it indexes, and pick an engine for insights.</p>${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
@@ -3044,7 +3044,7 @@ function aiOffPage() {
   const prep = aiPreparing(d), opts = d.options.filter(o => o.id !== 'none');
   const builtin = opts.find(o => o.id === 'builtin'), others = opts.filter(o => o.id !== 'builtin');
   return `<div class="ai-off">
-    <div class="ai-off-h"><span class="brand"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg></span>
+    <div class="ai-off-h"><span class="brand"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg></span>
       <div><h1>${prep ? 'Getting insights ready' : 'Insights are off'}</h1><p>${esc(NO_AI_WORKS)} Insights add:</p>
       <ul>${INSIGHTS_ADD.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div></div>
     ${prep ? `<div class="card ai-rec">${aiProgressHtml(d)}</div>` : ''}

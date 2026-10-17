@@ -14,17 +14,17 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> NSColor {
 }
 let ink = rgb(0x1E1E1C)
 
-/// The mark (ring and three dots, SVG viewBox 0 0 24 24) in a y-down context.
-func mark(in r: NSRect, color: NSColor, stroke: CGFloat = 1.6) {
+/// The mark (a P of three circles filled even-odd, SVG viewBox 0 0 24 24) in a y-down context.
+func mark(in r: NSRect, color: NSColor) {
     let s = r.width / 24
     color.set()
-    let ring = NSBezierPath(ovalIn: NSRect(x: r.minX + 2 * s, y: r.minY + 2 * s, width: 20 * s, height: 20 * s))
-    ring.lineWidth = stroke * s
-    ring.stroke()
-    for (x, y, d) in [(9.0, 10.0, 1.6), (15.0, 9.0, 1.2), (13.0, 15.0, 1.9)] {
-        NSBezierPath(ovalIn: NSRect(x: r.minX + CGFloat(x - d) * s, y: r.minY + CGFloat(y - d) * s,
-                                    width: CGFloat(2 * d) * s, height: CGFloat(2 * d) * s)).fill()
+    let path = NSBezierPath()
+    path.windingRule = .evenOdd
+    for (x, y, d) in [(7.97, 5.06, 3.06), (7.97, 18.94, 3.06), (12.97, 8.11, 6.11)] {
+        path.appendOval(in: NSRect(x: r.minX + CGFloat(x - d) * s, y: r.minY + CGFloat(y - d) * s,
+                                   width: CGFloat(2 * d) * s, height: CGFloat(2 * d) * s))
     }
+    path.fill()
 }
 
 func text(_ s: String, size: CGFloat, weight: NSFont.Weight, color: NSColor, centerX: CGFloat, y: CGFloat) {
