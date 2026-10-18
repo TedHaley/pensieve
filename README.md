@@ -1,6 +1,6 @@
 # Pensieve
 
-One place for all your information, for context engineering: your files, repositories, agent sessions, tickets and messages, so that you and your agents get the right context for each task.
+One place for all your information, for context engineering: your files, repositories, agent sessions, tickets and messages, so that you and your agents get the right context for each task. Your context is your own: Pensieve reads only what you can access, it only reads, and it keeps everything on your Mac.
 
 - **Find anything:** press **Control+Shift** anywhere on your Mac and search your documents, folders, code and past agent sessions by meaning or by exact words.
 - **Superpowers for your agents:** agents connect over MCP and get the few most relevant files and passages instead of grepping your disk, which saves time and tokens. Each agent is scoped to what it's working on (by default, the repo it runs in).
