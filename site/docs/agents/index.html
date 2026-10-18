@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect Pensieve to your AI coding agent over MCP</title>
+<meta name="description" content="Connect Pensieve to Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop or VS Code as an MCP server. One command, scopes, skills, hooks and the instructions block.">
+<link rel="canonical" href="https://pensieve.tools/docs/agents/">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Connect Pensieve to your AI coding agent over MCP">
+<meta property="og:description" content="Connect Pensieve to Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop or VS Code as an MCP server. One command, scopes, skills, hooks and the instructions block.">
+<meta property="og:url" content="https://pensieve.tools/docs/agents/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/docs/docs.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Connect your agent","description":"Connect Pensieve to Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop or VS Code as an MCP server. One command, scopes, skills, hooks and the instructions block.","url":"https://pensieve.tools/docs/agents/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="/" aria-label="Pensieve home"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve <span>Docs</span></a>
+  <nav aria-label="Site">
+    <a class="chip gh" href="https://github.com/TedHaley/pensieve"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+    <a class="chip solid" href="/docs/install/">Install</a>
+  </nav>
+</header>
+<div class="layout">
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/" aria-current="page">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<main>
+<p class="crumb">Docs</p>
+<h1>Connect your agent</h1>
+<p class="lede">This page tells you how to give your coding agents Pensieve as an MCP server, and what each add-on does.</p>
+<h2 id="one-command">One command for every agent</h2>
+<pre><code>pensieve integrate recommended</code></pre>
+<p>This command finds the agents on your computer. An agent counts as installed when its settings folder exists.
+For each agent, the command adds:</p>
+<ul>
+  <li>Pensieve as an MCP server, for every project.</li>
+  <li>The “search before you grep” instructions block, where the agent has a global instructions file.</li>
+  <li>The <code>pensieve-search</code> skill.</li>
+  <li>For Claude Code, three hooks (see <a href="/docs/agents/claude-code/#hooks">Claude Code</a>).</li>
+</ul>
+<p>Restart each agent that is open. To see what is available and what is installed, run
+<code>pensieve integrate</code> with no items.</p>
+
+<h2 id="clients">Each agent</h2>
+<div class="tbl"><table><thead><tr><th>Agent</th><th>MCP id</th><th>MCP settings file</th><th>Instructions</th></tr></thead><tbody><tr><td><a href="/docs/agents/claude-code/">Claude Code</a></td><td><code>claude-mcp</code></td><td><code>~/.claude.json</code> (through <code>claude mcp add --scope user</code>)</td><td><code>~/.claude/CLAUDE.md</code></td></tr><tr><td><a href="/docs/agents/codex/">Codex</a></td><td><code>codex-mcp</code></td><td><code>~/.codex/config.toml</code></td><td><code>~/.codex/AGENTS.md</code></td></tr><tr><td><a href="/docs/agents/cursor/">Cursor</a></td><td><code>cursor-mcp</code></td><td><code>~/.cursor/mcp.json</code></td><td>Copy into the agent's rules</td></tr><tr><td><a href="/docs/agents/gemini-cli/">Gemini CLI</a></td><td><code>gemini-mcp</code></td><td><code>~/.gemini/settings.json</code></td><td><code>~/.gemini/GEMINI.md</code></td></tr><tr><td><a href="/docs/agents/qwen-code/">Qwen Code</a></td><td><code>qwen-mcp</code></td><td><code>~/.qwen/settings.json</code></td><td><code>~/.qwen/QWEN.md</code></td></tr><tr><td><a href="/docs/agents/windsurf/">Windsurf</a></td><td><code>windsurf-mcp</code></td><td><code>~/.codeium/windsurf/mcp_config.json</code></td><td>Copy into the agent's rules</td></tr><tr><td><a href="/docs/agents/claude-desktop/">Claude Desktop</a></td><td><code>claude-desktop-mcp</code></td><td><code>~/Library/Application Support/Claude/claude_desktop_config.json</code></td><td>Copy into the agent's rules</td></tr><tr><td><a href="/docs/agents/vs-code/">VS Code</a></td><td><code>vscode-mcp</code></td><td><code>~/Library/Application Support/Code/User/mcp.json</code></td><td>Copy into the agent's rules</td></tr></tbody></table></div>
+<p>Any other MCP client can use Pensieve too. It speaks stdio through <code>pensieve mcp</code>, and streamable HTTP
+at <code>http://127.0.0.1:8765/mcp</code>. <code>pensieve mcp</code> starts the backend if it is not running.</p>
+<pre><code>{&quot;mcpServers&quot;: {&quot;pensieve&quot;: {&quot;command&quot;: &quot;pensieve&quot;, &quot;args&quot;: [&quot;mcp&quot;]}}}</code></pre>
+
+<h2 id="scope">Scopes</h2>
+<p>Each agent connection works in a scope: a part of the index. Every tool obeys the scope. Pensieve refuses an item
+outside it.</p>
+<ul>
+  <li><strong>auto</strong> is the default for <code>pensieve mcp</code>. It uses the folder that the agent started in. If a named scope includes that repo, the agent gets that scope. If not, it gets the repo, its worktrees and the agent sessions in it. Outside a repo, <code>auto</code> is everything.</li>
+  <li><strong>Named scopes</strong> are lists of sources, for example the repos and documents of one project. Make them in Settings → Scopes. A scope only filters the index, so nothing is indexed twice.</li>
+  <li><strong>HTTP connections</strong> cannot see the agent's folder. Give a scope in the URL: <code>?scope=payments</code>. With no scope, an HTTP connection gets everything.</li>
+</ul>
+<pre><code>pensieve mcp --scope payments     <span class="c"># stdio, one named scope</span>
+pensieve mcp --all-tools          <span class="c"># also the tools that change Pensieve&#x27;s settings</span></code></pre>
+<p>In a repo that Pensieve does not index, <code>search</code> tells the agent to use grep. It does not return code
+from your other repos.</p>
+
+<h2 id="add-ons">Add-ons</h2>
+<p>Agents grep by habit, also with Pensieve connected. The add-ons make them use it. Install them from
+Settings → Agents → Agent add-ons, or with <code>pensieve integrate</code>.</p>
+<div class="tbl"><table><thead><tr><th>Id</th><th>What it does</th><th>Recommended</th></tr></thead><tbody><tr><td><code>claude-mcp</code>, <code>codex-mcp</code>, <code>cursor-mcp</code>, <code>gemini-mcp</code>, <code>qwen-mcp</code>, <code>windsurf-mcp</code>, <code>claude-desktop-mcp</code>, <code>vscode-mcp</code></td><td>Pensieve as the agent's MCP server, for every project. In each settings file, Pensieve changes only its own entry.</td><td>Yes</td></tr><tr><td><code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>qwen</code></td><td>The <a href="https://github.com/TedHaley/pensieve/blob/main/pensieve/integrations/instructions.md">instructions block</a> in the agent's global instructions file.</td><td>Yes</td></tr><tr><td><code>pensieve-search</code></td><td>A skill: query styles, when to use grep, similar code before new code, past sessions.</td><td>Yes</td></tr><tr><td><code>pensieve-teammates</code></td><td>A skill: who knows an area, from git blame, and a draft question. It never sends a message.</td><td>No</td></tr><tr><td><code>pensieve-plan</code></td><td>A skill: plans for new code list code to reuse, earlier attempts, people to ask and knowledge risks.</td><td>No</td></tr><tr><td><code>claude-hook</code>, <code>claude-repo-check</code>, <code>claude-prompt-search</code></td><td>Claude Code hooks (see <a href="/docs/agents/claude-code/#hooks">Claude Code</a>).</td><td>Yes</td></tr></tbody></table></div>
+<p>Skills go once into <code>~/.agents/skills</code>, the user skills folder that many agents read. Claude Code reads
+only its own folder, so it gets a link in <code>~/.claude/skills</code>. Pensieve makes no folder for an agent that
+is not installed.</p>
+<pre><code>pensieve integrate cursor-mcp codex                  <span class="c"># only these</span>
+pensieve integrate pensieve-teammates pensieve-plan  # the optional skills
+pensieve integrate claude --remove                   <span class="c"># removes exactly what was added</span></code></pre>
+<nav class="pager" aria-label="Pages"><a class="prev" href="/docs/install/"><small>Previous</small>Install</a><a class="next" href="/docs/agents/claude-code/"><small>Next</small>Claude Code</a></nav>
+<p class="edit">Something wrong or missing? <a href="https://github.com/TedHaley/pensieve/issues/new/choose">Tell us on GitHub</a>.</p>
+</main>
+</div>
+<footer>
+  <div class="in">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <nav><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/TedHaley/pensieve">GitHub</a><a href="https://github.com/TedHaley/pensieve/releases">Releases</a><a href="https://github.com/TedHaley/pensieve/issues/new/choose">Feedback</a></nav>
+  </div>
+</footer>
+<script>
+// on a phone the docs menu starts closed, so the page starts with its own text
+if (matchMedia('(max-width: 860px)').matches) document.getElementById('docnav').removeAttribute('open');
+</script>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</body>
+</html>
