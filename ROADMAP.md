@@ -657,7 +657,10 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     agent (the one of the card's last session) starts in the work's folder. Tested headless on a saved card: the
     agent read it, reported the problem, the fix and the open question, and tried the refresh, in 4 calls.
   - A hand-set state stays keyed by task: it describes the current snapshot, and it resets when the work changes.
-  - Not built: a thread id on the Context tab and in the MCP tools.
+  - Thread ids on the Context tab and in the MCP tools: each card has a thread chip (its short id and number of
+    saves) that opens the thread's history, where each save has Preview and "New session from this card". `tasks`
+    lines end with the thread id, `task` takes a thread id too, and `thread_history` lists a thread's saves or
+    returns one as an agent card. `/api/work` returns `threads` ({task: {id, saves}}).
 
 ## E. Connections
 

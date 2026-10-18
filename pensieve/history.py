@@ -32,8 +32,25 @@ EVENTS = {"start", "fork", "split", "merge", "revive"}
 ENDED = {"etched", "forgotten"}
 
 
+current = None  # the server's Keeper, once it runs: its of_task maps each current task to its thread
+
+
 def _dir() -> Path:
     return config.DATA_DIR / "threads"
+
+
+def thread_of(task_id: str) -> str:
+    return current.of_task.get(task_id, "") if current else ""
+
+
+def task_of(thread: str) -> str:
+    """The current task of a thread, or "" (the thread ended or merged, or the keeper hasn't run yet)."""
+    return next((t for t, th in (current.of_task.items() if current else []) if th == thread), "")
+
+
+def saves(thread: str) -> int:
+    f = _dir() / f"{Path(thread).name}.jsonl"
+    return sum(1 for x in f.read_text().splitlines() if x.strip()) if f.exists() else 0
 
 
 class Keeper:

@@ -414,18 +414,15 @@ async def enricher():
             await asyncio.sleep(30)
 
 
-keeper = None  # history.Keeper: links the cards to threads and saves the ones that changed
-
-
 async def card_keeper():
-    """Every history.CHECK seconds: save the cards that changed to their threads' history; once a day, prune it."""
+    """Every history.CHECK seconds: link the cards to threads (history.current) and save the ones that changed;
+    once a day, prune the history."""
     from pensieve import history
-    global keeper
     await asyncio.sleep(60)  # after the first index pass has settled
-    keeper, pruned = history.Keeper(store), 0.0
+    history.current, pruned = history.Keeper(store), 0.0
     while True:
         try:
-            saved = await asyncio.to_thread(keeper.run_once)
+            saved = await asyncio.to_thread(history.current.run_once)
             if saved:
                 print(f"Saved {len(saved)} context cards to their threads' history", flush=True)
             if time.time() - pruned > 86400:
@@ -1387,13 +1384,17 @@ def remove_mcp_server(path: str):
 
 @app.get("/api/work")
 def get_work(days: int = 30):
-    """The Context tab: context cards (tasks) with their state, their data points from every source, and each task's AI note."""
+    """The Context tab: context cards (tasks) with their state, their data points from every source, each task's AI
+    note, and its thread (id and number of saved cards) once the card keeper has linked it."""
+    from pensieve import history
     ts = work.tasks(store, days)
     have = work.notes()
     stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
+    of = {t["id"]: history.thread_of(t["id"]) for t in ts}
     # each note's core (problem, goal, state, next, question); notes in an older format show until written again
     return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "stale": t["id"] in stale}
                                  for t in ts if work.core(have.get(t["id"], {}))},
+                threads={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
                 states=task_states.models(), writing=status.get("work_notes") or [])
 
 
@@ -1440,15 +1441,16 @@ def get_threads():
     """The threads with saved cards: id, title, number of saves, first and last save; and which thread each current
     task belongs to."""
     from pensieve import history
-    return {"threads": history.listing(), "of_task": keeper.of_task if keeper else {}}
+    return {"threads": history.listing(), "of_task": history.current.of_task if history.current else {}}
 
 
 @app.post("/api/threads/save")
 async def save_threads():
     """Save the cards that changed now, as the keeper does every history.CHECK seconds. Returns what was saved."""
-    if keeper is None:
+    from pensieve import history
+    if history.current is None:
         raise HTTPException(503, "the card keeper starts a minute after Pensieve")
-    return {"saved": await asyncio.to_thread(keeper.run_once)}
+    return {"saved": await asyncio.to_thread(history.current.run_once)}
 
 
 @app.get("/api/threads/{thread}")

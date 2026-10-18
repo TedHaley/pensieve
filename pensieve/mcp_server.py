@@ -17,7 +17,7 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
                "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state",
-               "share_card"}
+               "share_card", "thread_history"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -596,19 +596,44 @@ def tasks(state: str = "conscious,subconscious", limit: int = 10, query: str = "
     else:  # a session that only asked questions (no edits, branch, PR, ticket or commit) is not work to list
         ts = [t for t in ts if t["files"] or t["branches"] or t["prs"] or t["keys"] or t["commits"]]
     ts = ts[:max(1, min(limit, 50))]
-    return "\n".join(work.brief(t, have.get(t["id"], {})) for t in ts) or f"No tasks in state {state}."
+    from pensieve import history
+    return "\n".join(work.brief(t, have.get(t["id"], {})) + (f" · {th}" if (th := history.thread_of(t["id"])) else "")
+                     for t in ts) or f"No tasks in state {state}."
 
 
 @tool()
 def task(id: str, full: bool = False) -> str:
     """One task as a card: its state and why, where the work is (folder, branch, uncommitted files), PRs, tickets,
     what changed since the last session, what is left, where that session stopped, its main files and the command
-    that resumes it. full=true adds every file its sessions made and its timeline."""
-    from pensieve import task_states, work
+    that resumes it. id: a task id, or a thread id (th_…) for the thread's card now. full=true adds every file its
+    sessions made and its timeline."""
+    from pensieve import history, task_states, work
+    if id.startswith("th_"):
+        id = history.task_of(id) or id
     t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
     if not t:
-        raise KeyError(id)
-    return (work.detail if full else work.compact)(t, work.notes().get(id, {}), task_states.history(_c()["store"], id))
+        raise KeyError(f"{id}: no current card; thread_history shows a thread's saved cards")
+    card = (work.detail if full else work.compact)(t, work.notes().get(id, {}), task_states.history(_c()["store"], id))
+    th = history.thread_of(id)
+    return card + (f"\nThread: {th} · {history.saves(th)} saved cards (thread_history)" if th else "")
+
+
+@tool()
+def thread_history(thread: str, n: int | None = None) -> str:
+    """A thread's saved cards: Pensieve saves a thread's card when it changes (a PR, a commit, a state, what is
+    next), so the history shows how one goal moved over time. Without n: each save, oldest first (number, date, why
+    it was saved, what was next then). With n: that save's whole card, for an agent (n=-1 is the last). Use it to see
+    how work got where it is, or to start ended work again from its last card."""
+    from datetime import datetime
+    from pensieve import cards, history
+    saves = history.history(thread)
+    if not saves:
+        raise KeyError(f"{thread}: no saved cards")
+    if n is not None:
+        return cards.render_agent(saves[n]["card"])
+    return "\n".join(f"{i} · {datetime.fromtimestamp(s['at']).strftime('%Y-%m-%d %H:%M')} · {', '.join(s['reasons'])} · "
+                     f"{s['card'].get('state', {}).get('value', '')} · next: {(s['card'].get('core', {}).get('next') or '')[:140]}"
+                     for i, s in enumerate(saves))
 
 
 @tool()

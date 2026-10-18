@@ -3372,11 +3372,35 @@ function wkRow(t, n) {
     .map(r => `<a class="wk-st pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener">#${esc(prNum(r.url) || '')} ${esc(r.state || '')}</a>`).join('');
   const next = n ? (n.question ? `Waiting on you: ${n.question}` : n.next || '') : '';
   return `<article class="wk-task wk-row-c" data-id="${esc(t.id)}" data-wk-row="${esc(t.id)}" style="--acc:${wkModel(t.state).color}" title="Show this card in full">
-    <div class="c-main"><div class="c-l1"><h4>${esc(t.title)}</h4>${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
+    <div class="c-main"><div class="c-l1"><h4>${esc(t.title)}</h4>${wkThread(S.work.data?.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
       <div class="c-l2">${where ? `<span class="c-where">${esc(where)}</span>` : ''}${next ? `<span class="c-next">${esc(next)}</span>` : ''}</div></div>
     <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>
     <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}<button class="wk-btn icon" data-wk-revive="${esc(t.id)}" title="Start a new agent session that reads this card first">${WK_IC.spark}</button>${wkCardBtns(t)}</div>
   </article>`;
+}
+const wkThread = th => th ? `<button class="wk-thread" data-wk-thread="${esc(th.id)}" title="Thread ${esc(th.id)}: one goal over time. Pensieve saves its card when it changes; click for its ${plural(th.saves, 'saved card')}">${WK_IC.branch}${esc(th.id.slice(3, 9))}<span>${th.saves}</span></button>` : '';
+async function openThread(tid, title) {
+  const m = document.createElement('div');
+  m.className = 'modal'; m.id = 'threadmodal';
+  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>${esc(title)}</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+    <div class="sh-body"><div class="shimmer" style="height:120px"></div></div></div>`;
+  document.body.append(m);
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
+  let saves;
+  try { saves = await api(`/api/threads/${enc(tid)}`); }
+  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">No saved cards yet: ${esc(e.message)}</div>`; return; }
+  $('.sh-body', m).innerHTML = `<p class="cap">Thread <code>${esc(tid)}</code>. Pensieve saves this card when its PRs, commits, sessions, state or what’s next change.</p>`
+    + saves.map((s, i) => ({s, i})).reverse().map(({s, i}) => `<div class="sh-r th-save">
+      <label><b>${esc(new Date(s.at * 1000).toLocaleString())}</b><span class="muted">${esc(s.reasons.join(', '))} · ${esc(wkModel(s.card.state?.value || '').label || s.card.state?.value || '')}</span></label>
+      <p class="cap">${esc((s.card.core?.next || s.card.core?.state || '').slice(0, 220))}</p>
+      <div class="th-btns"><button class="btn" data-th-preview="${i}">Preview</button><button class="btn" data-th-revive="${i}">New session from this card</button></div></div>`).join('')
+    + `<p class="cap">${plural(saves.length, 'saved card')}.</p>`;
+  $$('[data-th-preview]', m).forEach(b => b.onclick = () => openPreview(() => fetch(`/api/threads/${enc(tid)}?format=html&n=${b.dataset.thPreview}`),
+    `${title} · ${new Date(saves[+b.dataset.thPreview].at * 1000).toLocaleDateString()}`));
+  $$('[data-th-revive]', m).forEach(b => b.onclick = async () => {
+    try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, n: +b.dataset.thRevive})}); toast('Starting a new session from this card in Terminal'); }
+    catch (err) { toast('Could not start it: ' + err.message); }
+  });
 }
 function wkCardBtns(t) {
   return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this card as a page">${WK_IC.eye}</button>`
@@ -3564,7 +3588,7 @@ function renderWork() {
       if (S.work.view === 'compact' && !S.work.full.has(t.id)) return head + wkRow(t, d.notes[t.id]);
       return `${head}<article class="wk-task${S.work.view === 'compact' ? ' opened' : ''}" data-id="${esc(t.id)}" ${S.work.view === 'compact' ? `data-wk-row="${esc(t.id)}"` : ''} style="--acc:${wkModel(t.state).color}">
           <div class="wk-main">
-            <header><h4>${esc(t.title)}</h4>${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
+            <header><h4>${esc(t.title)}</h4>${wkThread(d.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
             ${wkSections(t)}
           </div>
           ${note(t)}
@@ -3605,6 +3629,11 @@ function renderWork() {
     catch (e) { toast('Could not resume it: ' + e.message); }
   });
   $$('[data-wk-share]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openShare(b.dataset.wkShare); });
+  $$('[data-wk-thread]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const t = d.tasks.find(x => d.threads?.[x.id]?.id === b.dataset.wkThread);
+    openThread(b.dataset.wkThread, t ? t.title : 'Thread');
+  });
   $$('[data-wk-revive]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
     try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkRevive, days: S.work.days})}); toast('Starting a new session from this card in Terminal'); }
