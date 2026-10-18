@@ -3360,9 +3360,9 @@ const WK_IC = {
 const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
 // The bar at the foot of a card: resume the last session, and see coworkers and related work
 function wkActions(t) {
-  const resume = t.resume ? `<button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button>` : '';
+  const resume = t.resume ? `<button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button><button class="wk-btn icon" data-wk-resume-copy="${esc(t.resume.command)}" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
-  const fresh = `<button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new agent session that reads this card first">${WK_IC.spark}New session from card</button>`;
+  const fresh = `<button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new agent session that reads this card first">${WK_IC.spark}New session from card</button><button class="wk-btn icon" data-wk-revive-copy="${esc(t.id)}" title="Copy a prompt with this card in it, to start the work in any agent">${WK_IC.copy}</button>`;
   const open = S.work.details.has(t.id);
   const details = `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
   return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
@@ -3414,13 +3414,19 @@ async function openThread(tid, title) {
     + saves.map((s, i) => ({s, i})).reverse().map(({s, i}) => `<div class="sh-r th-save">
       <label><b>${esc(new Date(s.at * 1000).toLocaleString())}</b><span class="muted">${esc(s.reasons.join(', '))} · ${esc(wkModel(s.card.state?.value || '').label || s.card.state?.value || '')}</span></label>
       <p class="cap">${esc((s.card.core?.next || s.card.core?.state || '').slice(0, 220))}</p>
-      <div class="th-btns"><button class="btn" data-th-preview="${i}">Preview</button><button class="btn" data-th-revive="${i}">New session from this card</button></div></div>`).join('')
+      <div class="th-btns"><button class="btn" data-th-preview="${i}">Preview</button><button class="btn" data-th-revive="${i}">New session from this card</button><button class="btn" data-th-copy="${i}" title="Copy a prompt with this card in it, to start the work in any agent">Copy prompt</button></div></div>`).join('')
     + `<p class="cap">${plural(saves.length, 'saved card')}.</p>`;
   $$('[data-th-preview]', m).forEach(b => b.onclick = () => openPreview(() => fetch(`/api/threads/${enc(tid)}?format=html&n=${b.dataset.thPreview}`),
     `${title} · ${new Date(saves[+b.dataset.thPreview].at * 1000).toLocaleDateString()}`));
   $$('[data-th-revive]', m).forEach(b => b.onclick = async () => {
     try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, n: +b.dataset.thRevive})}); toast('Starting a new session from this card in Terminal'); }
     catch (err) { toast('Could not start it: ' + err.message); }
+  });
+  $$('[data-th-copy]', m).forEach(b => b.onclick = async () => {
+    try {
+      const r = await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, n: +b.dataset.thCopy, run: false})});
+      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the card copied: paste it into any agent');
+    } catch (err) { toast('Could not copy it: ' + err.message); }
   });
 }
 function wkCardBtns(t) {
@@ -3663,6 +3669,16 @@ function renderWork() {
     e.stopPropagation();
     try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkRevive, days: S.work.days})}); toast('Starting a new session from this card in Terminal'); }
     catch (err) { toast('Could not start it: ' + err.message); }
+  });
+  $$('[data-wk-resume-copy]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation(); navigator.clipboard?.writeText(b.dataset.wkResumeCopy); toast('Resume command copied');
+  });
+  $$('[data-wk-revive-copy]', el).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try {
+      const r = await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkReviveCopy, days: S.work.days, run: false})});
+      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the card copied: paste it into any agent');
+    } catch (err) { toast('Could not copy it: ' + err.message); }
   });
   $$('[data-wk-preview]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();

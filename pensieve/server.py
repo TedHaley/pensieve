@@ -415,13 +415,14 @@ async def enricher():
 
 
 async def card_keeper():
-    """Every history.CHECK seconds: link the cards to threads (history.current) and save the ones that changed;
-    once a day, prune the history."""
-    from pensieve import history
+    """Every history.CHECK seconds: mark what later commits did (work.check_done), link the cards to threads
+    (history.current) and save the ones that changed; once a day, prune the history."""
+    from pensieve import history, work
     await asyncio.sleep(60)  # after the first index pass has settled
     history.current, pruned = history.Keeper(store), 0.0
     while True:
         try:
+            await asyncio.to_thread(lambda: work.check_done(work.tasks(store, 30)))
             saved = await asyncio.to_thread(history.current.run_once)
             if saved:
                 print(f"Saved {len(saved)} context cards to their threads' history", flush=True)
@@ -1551,15 +1552,18 @@ async def write_work_notes(days: int = 30, ids: str = ""):
 
 class ResumeReq(BaseModel):
     session: str
+    run: bool = True  # false: only the command, to copy
 
 
 @app.post("/api/work/resume")
 def resume_session(req: ResumeReq):
-    """Open Terminal in the session's folder and resume the agent session there."""
+    """Open Terminal in the session's folder and resume the agent session there. Only the agent that wrote a
+    session can resume it."""
     cmd = work.resume_command(store, req.session)
     if not cmd:
         raise HTTPException(404, "can't resume that session: its folder is gone, or its agent has no resume command")
-    _terminal(cmd)
+    if req.run:
+        _terminal(cmd)
     return {"ok": True, "command": cmd}
 
 
@@ -1576,12 +1580,13 @@ class ReviveReq(BaseModel):
     days: int = 30
     thread: str = ""  # or a thread's saved card (history), save n (default the last)
     n: int = -1
+    run: bool = True  # false: only the prompt with the card in it, to paste into any agent
 
 
 @app.post("/api/work/revive")
 def revive_card(req: ReviveReq):
     """Start a new agent session in Terminal with a card as its first context: a task's card now, or a card that
-    the history saved, such as one from work that ended."""
+    the history saved, such as one from work that ended. With run=false, the prompt with the card in it."""
     from pensieve import cards, history
     if req.thread:
         saves = history.history(req.thread)
@@ -1590,6 +1595,8 @@ def revive_card(req: ReviveReq):
         card = saves[req.n]["card"]
     else:
         card = _local_card(req.id, req.days)
+    if not req.run:
+        return {"ok": True, "prompt": cards.revive_prompt(card)}
     cmd = cards.revive_command(card, config.DATA_DIR / "threads" / "revive")
     _terminal(cmd)
     return {"ok": True, "command": cmd}

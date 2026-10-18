@@ -39,7 +39,7 @@ A member is work done for the goal. A reference only mentions the thread. The ca
 |---|---|
 | Ticket, PR, feature branch | One thread at a time |
 | Commit | The thread of its branch |
-| Agent session | One or more threads. A session can work toward several goals, one after the other. |
+| Agent session | One or more threads. A session can work toward several goals, one after the other (rule 10). |
 | Edited file | No owner. A file is evidence only (rule 4). |
 
 When two threads claim one ticket, PR or branch, the claim becomes a split or a merge (rule 7). Two threads never share it silently.
@@ -98,6 +98,14 @@ A thread is the smallest unit that you hand off or report in a standup. These it
 - An epic or a project. It is a collection.
 - A ticket with no work yet. It is a latent thread: a goal with no members.
 
+### 10. A goal in a session becomes a thread when data outside the session supports it
+
+A long session can work toward several goals. Each goal that has its own PR, ticket or commit is a thread, and has its own card. A goal that only the session talks about is a line on the card of the main goal ("Also in these sessions"). It becomes a thread when its first PR, ticket or commit appears.
+
+The main goal is the goal that the last session worked toward. A question asked on the way is not a goal. A step that serves a goal (a change it needs, a revert, a CI fix, a review round) is part of that goal (rule 1).
+
+Pensieve finds the goals in the note that the model writes for each task: each goal names its evidence (PR numbers, ticket keys, commit hashes). Pensieve keeps only the evidence that is real: a PR or ticket of the task, or a commit that git has in the task's repos. A model cannot add a member.
+
 ## History
 
 The snapshots of a thread form its history, as commits form the history of a branch. The history shows how the goal, the state and the next step changed over time.
@@ -136,9 +144,10 @@ Pensieve saves each thread's card when it changes (`pensieve/history.py`). It ch
 - the linker records an event (start, fork, split, merge, revive);
 - the state of the thread changes;
 - a ticket, PR, branch, commit or session comes or goes (edited files alone do not count);
+- a push: the remote branch of one of its folders moves;
 - the embedding of the problem and goal moves 0.05 or more since the last save.
 
-A thread is saved at most once in 30 minutes, except for an event or a state change. A save on a timer alone gives no new information: in the replay, a save at every 12-hour build made 1,365 copies, and the rules above made 29. After 30 days, one save a day is kept for each thread, with every event and state change.
+A thread is saved at most once in 30 minutes, except for an event, a state change or a push. A save on a timer alone gives no new information: in the replay, a save at every 12-hour build made 1,365 copies, and the rules above made 29. After 30 days, one save a day is kept for each thread, with every event and state change.
 
 ## Examples
 

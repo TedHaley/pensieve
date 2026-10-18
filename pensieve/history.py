@@ -6,13 +6,15 @@ when one of these is true:
   - an event: the thread started, forked, split, merged or came back from done or left (revive);
   - its state changed (in progress, gone quiet, done, left);
   - a ticket, PR, branch, commit or session came or went (edited files alone don't count);
+  - a push: the remote branch of one of its folders moved;
   - the embedding of its core (problem and goal) moved DRIFT or more since the last save: the note says something new.
-A thread is saved at most once every GAP seconds, except for an event or a state change.
+A thread is saved at most once every GAP seconds, except for an event, a state change or a push.
 
 A 30-day replay of one Mac's work (bench/threads_replay.py backup) gave 29 saves with these rules, against 1,365 for a
 save at every 12-hour build: most cards don't change from one day to the next.
 
-Files: <data>/threads/state.json (the linker and the last save of each thread) and <data>/threads/<thread>.jsonl (one
+Files: <data>/threads/state.json (the linker and the last save of each thread), tasks.json (each current task's
+thread, for the MCP server) and <data>/threads/<thread>.jsonl (one
 line a save: time, reasons, snapshot, the local card). After KEEP_DAYS, one save a day is kept for each thread, and
 every save with an event or a state change."""
 import hashlib
@@ -39,13 +41,30 @@ def _dir() -> Path:
     return config.DATA_DIR / "threads"
 
 
+def _of_task() -> dict:
+    """Each current task's thread: the server's Keeper's, or in another process (the MCP server) the one it saved."""
+    if current:
+        return current.of_task
+    f = _dir() / "tasks.json"
+    try:
+        m = f.stat().st_mtime
+        if _saved[0] != m:
+            _saved[:] = [m, json.loads(f.read_text())]
+    except (OSError, ValueError):
+        return {}
+    return _saved[1]
+
+
+_saved = [None, {}]
+
+
 def thread_of(task_id: str) -> str:
-    return current.of_task.get(task_id, "") if current else ""
+    return _of_task().get(task_id, "")
 
 
 def task_of(thread: str) -> str:
     """The current task of a thread, or "" (the thread ended or merged, or the keeper hasn't run yet)."""
-    return next((t for t, th in (current.of_task.items() if current else []) if th == thread), "")
+    return next((t for t, th in _of_task().items() if th == thread), "")
 
 
 def saves(thread: str) -> int:
@@ -97,6 +116,7 @@ class Keeper:
             self.of_task[t["id"]] = tid
             last = self.last.get(tid)
             structural = sorted(k for k in s["members"] if not k.startswith("file:"))
+            pushed = sorted({p["pushed"] for p in t.get("places", []) if p.get("pushed")})
             why = set(events.get(tid, set()) & EVENTS)
             if last and last.get("state") in ENDED and t["state"] not in ENDED:
                 why.add("revive")
@@ -106,11 +126,13 @@ class Keeper:
                     why.add("state")
                 if last.get("structural") != structural:
                     why.add("members")
+                if pushed and last.get("pushed", pushed) != pushed:
+                    why.add("push")
                 if 1 - float(np.asarray(last["vec"], dtype=np.float32) @ s["vec"]) >= DRIFT:
                     why.add("goal")
             elif not why:
                 why.add("start")
-            if not why or (last and now - last["at"] < GAP and not why & (EVENTS | {"state"})):
+            if not why or (last and now - last["at"] < GAP and not why & (EVENTS | {"state", "push"})):
                 continue
             note = notes.get(t["id"], {})
             card = dict(cards.build(t, note, task_states.history(self.store, t["id"])), thread_id=tid)
@@ -118,11 +140,12 @@ class Keeper:
             _dir().mkdir(parents=True, exist_ok=True)
             with (_dir() / f"{tid}.jsonl").open("a") as f:
                 f.write(json.dumps(line) + "\n")
-            self.last[tid] = dict(at=now, snapshot=s["snapshot"], structural=structural, state=t["state"],
+            self.last[tid] = dict(at=now, snapshot=s["snapshot"], structural=structural, state=t["state"], pushed=pushed,
                                   vec=[round(float(x), 5) for x in s["vec"]])
             saved.append(dict(thread=tid, task=t["id"], reasons=sorted(why)))
         threads.save(self.linker, _dir() / "state.json")
         (_dir() / "last.json").write_text(json.dumps(self.last))
+        (_dir() / "tasks.json").write_text(json.dumps(self.of_task))
         return saved
 
 

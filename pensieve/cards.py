@@ -344,6 +344,11 @@ REVIVE_PROMPT = ("Pick up this work. Its context card is {path}: read it first. 
                  "next, before you change anything.")
 
 
+def revive_prompt(card: dict) -> str:
+    """REVIVE_PROMPT with the card in it, not in a file: for any agent, also one that can't read this Mac's files."""
+    return REVIVE_PROMPT.format(path="below") + "\n\n" + render_agent(card)
+
+
 def revive_command(card: dict, folder) -> str:
     """The shell command that starts a new agent session with a card as its first context: the card goes into a file
     for the agent, and the agent starts in the work's folder (this Mac's checkout, or the home folder when it is
