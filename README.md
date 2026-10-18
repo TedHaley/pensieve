@@ -182,17 +182,17 @@ The plugin gives Claude Code the MCP server, the three skills, the instructions 
 
 ### Does it help? The benchmark
 
-[`bench/`](bench) measures it with Claude Code itself. Tasks are generated from your indexed code (a chunk is described in plain words, or by a name it defines, an error string from it, or a mix), and Claude Sonnet runs headless with and without Pensieve; the answer is the file. These are the 72 held-out tasks across four repos (504 to 34,847 files), each run twice, both setups in one batch, with Pensieve 0.5.6:
+[`bench/`](bench) measures it with Claude Code itself. Tasks are generated from your indexed code (a chunk is described in plain words, or by a name it defines, an error string from it, or a mix), and Claude Sonnet runs headless with and without Pensieve; the answer is the file. These are the 72 held-out tasks across four repos (504 to 34,847 files), each run twice, both setups in one batch. This is the latest batch (v8, October 2026), with the Mac's own Claude Code settings kept out:
 
 | | Grep, Glob, Read | With Pensieve + instructions block |
 |---|---|---|
-| Tasks solved | 123 / 144 (85%) | **131 / 144 (91%)** |
-| Tool calls per lookup | 3.44 | **1.97** (−43%) |
-| Cost per lookup | $0.050 | **$0.041** (−18%) |
-| Tokens per lookup | 67k | **57k** (−16%) |
-| Time per lookup | 10.9 s | **8.6 s** (−21%) |
+| Tasks solved | 129 / 144 (90%) | **129 / 144 (90%)** |
+| Tool calls per lookup | 3.42 | **1.81** (−47%) |
+| Cost per lookup | $0.051 | **$0.039** (−23%) |
+| Tokens per lookup | 74k | **52k** (−30%) |
+| Time per lookup | 9.5 s | **6.8 s** (−29%) |
 
-Pensieve solved as many or more tasks and cost less in every repo: 15% less in the 504-file repo, 6–14% less in the 1,783 and 2,383-file repos, and 28% less in the 34,847-file monorepo, where it also needed 47% fewer tool calls. In 82 of the 144 runs the agent answered after a single search. Pensieve's search alone puts the right file first for 94% of names, 88% of error strings, 74% of name-and-description mixes and 58% of descriptions (a single grep: 54%, 92%, 0%, 0%).
+Pensieve solves as many tasks as grep, with about half the tool calls. It needs fewer tool calls in every repo (33% to 55% fewer) and costs less in every repo (8% to 33% less). The largest saving is in the 34,847-file monorepo. In 88 of the 144 runs, the agent answers with one tool call or none (grep: 46). An earlier batch (v5test, Pensieve 0.5.6) solved 131 tasks against 123 with grep, but the two later clean batches show the same accuracy as grep. Pensieve's search alone puts the right file first for 94% of names, 88% of error strings, 74% of name-and-description mixes and 58% of descriptions (a single grep: 54%, 92%, 0%, 0%).
 
 Costs are Claude Code's reported API costs. They depend on how warm Claude's prompt cache is, so compare them only within one batch. Run it on your repos:
 
