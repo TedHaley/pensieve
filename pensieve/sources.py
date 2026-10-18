@@ -2,7 +2,7 @@
 item. Switching a source off removes what it had indexed on the next sweep."""
 from pathlib import Path
 
-from pensieve import apps, config, connections, settings
+from pensieve import apps, config, connections, connectors, settings
 
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
 CATEGORIES = [
@@ -33,8 +33,7 @@ def connection_items() -> list[dict]:
     rank = {"connected": 0, "pending": 1, "failed": 2, "unknown": 3}
     for r in sorted(connections.servers(), key=lambda r: (rank.get(r["status"], 4), r["name"].lower())):
         reads, total = sum(t["read"] for t in r["tools"]), len(r["tools"])
-        via = "via Claude Code" if r["origin"] == "engine" else \
-            f"from the {' and '.join(r.get('agents') or [])} config" if r["origin"] == "agent" else "added here"
+        via = _via(r)
         if r["status"] == "connected":
             parts = [f"{reads} of {total} tools read-only", via]
             if r.get("error"):
@@ -45,6 +44,10 @@ def connection_items() -> list[dict]:
                     parts.append(f"{r['tokens'] / 1000:,.0f}k tokens a run" +
                                  (f" (${r['cost_usd']:.2f} at API prices)" if r.get("cost_usd") else ""))
             detail = " · ".join(parts)
+        elif r["status"] == "needs-auth" and r["origin"] == "own":
+            detail = "Needs sign-in: use Sign in under Cloud connectors"
+        elif r["status"] == "needs-auth" and r["origin"] == "cli":
+            detail = "Needs sign-in: run gh auth login in a terminal"
         elif r["status"] == "needs-auth":
             detail = "Needs sign-in: sign in to it in Claude Code (/mcp) or on claude.ai"
         elif r["status"] == "pending":
@@ -58,6 +61,52 @@ def connection_items() -> list[dict]:
                         collect=r["status"] == "connected" and reads > 0,
                         remove=dict(kind="connections", path=r["name"]) if r["origin"] == "own" else None))
     return out
+
+
+def _via(r: dict) -> str:
+    return {"engine": "via Claude Code", "cli": "through the gh command line", "own": "added here"}.get(
+        r["origin"]) or f"from the {' and '.join(r.get('agents') or [])} config"
+
+
+_RANK = {"connected": 0, "pending": 1, "needs-auth": 2, "failed": 3}
+
+
+def connector_rows() -> list[dict]:
+    """The cloud connectors that Pensieve knows (connectors.PROFILES), each with its state on this Mac: the servers
+    found for it (through Claude Code, another agent's config, gh, or added here), whether one is on, and the ways to
+    add it as one of Pensieve's own servers."""
+    from pensieve import mcp_oauth
+    found = connections.servers()
+    rows = []
+    for pid in connectors.ORDER:
+        p = connectors.PROFILES[pid]
+        mine = sorted((r for r in found if connectors.match(r["name"], r["id"]) == pid),
+                      key=lambda r: (not settings.enabled(f"connections/{r['id']}"), _RANK.get(r["status"], 4)))
+        best = mine[0] if mine else None
+        on = bool(best) and settings.enabled(f"connections/{best['id']}")
+        if not best:
+            state, detail = "none", "Not connected"
+        elif best["status"] == "connected":
+            state = "on" if on else "found"
+            detail = f"{'Collecting' if on else 'Found'} {_via(best)}" + ("" if on else ": switch it on below")
+        elif best["status"] == "needs-auth" or best.get("oauth"):
+            state, detail = "needs-auth", f"Needs sign-in ({_via(best)})"
+        else:
+            state, detail = best["status"], f"{best['status'].capitalize()} ({_via(best)})"
+        if best and len(mine) > 1:
+            detail += f" · also {', '.join(_via(r) for r in mine[1:])}"
+        signin = next((r["id"] for r in mine if r.get("oauth") and r["status"] != "connected"), None)
+        folders = [str(f) for f in connectors.drive_folders()] if pid == "drive" else []
+        if folders and not best:
+            have = {str(Path(f).expanduser()) for f in settings.get("folders")}
+            state = "on" if any(f in have for f in folders) else "folder"
+            detail = "Your Drive for desktop folder is in Files & folders" if state == "on" else \
+                "Drive for desktop is on this Mac: add its folder"
+        rows.append(dict(id=pid, label=p["label"], state=state, detail=detail, sid=best["id"] if best else None,
+                         items=sum(r["items"] for r in mine), signin=signin, folders=folders,
+                         signed_in=bool(signin) and mcp_oauth.signed_in(signin),
+                         add=[{k: v for k, v in a.items() if k not in ("command", "args")} for a in p["add"]]))
+    return rows
 
 
 def connections_note() -> str:
@@ -165,7 +214,8 @@ def catalog(store, repos, files) -> list[dict]:
         it["map"] = settings.on_map(it["id"])
     return [dict(id=c, label=label, description=desc, enabled=on(c), map=settings.on_map(c), items=items[c],
                  count=sum(i.get("count", 0) for i in items[c] if i.get("kind") not in ("rule", "worktree")),
-                 addable=c != "apps", **({"note": connections_note()} if c == "connections" else {}))
+                 addable=c != "apps",
+                 **({"note": connections_note(), "connectors": connector_rows()} if c == "connections" else {}))
             for c, label, desc in CATEGORIES]
 
 

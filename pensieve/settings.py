@@ -63,6 +63,7 @@ DEFAULTS = {
     # Connections (connections.py): MCP servers whose data Pensieve collects with read-only tools. Each one is off
     # until it is in `connections_on`. `mcp_servers` are the servers that Pensieve connects to itself:
     # {"name", "url", "headers": {}} or {"name", "command", "args": [], "env": {}}. Secret values stay in this file.
+    # A URL server with "oauth": true signs in through the browser; its tokens are in connections/.oauth/.
     "connections_on": [],
     "mcp_servers": [],
     "connections_every_hours": 6,  # how often to collect from each connection that is on; 0 = only on request
@@ -311,6 +312,10 @@ def _mcp_servers(v, cur: list) -> list:
         old = saved.get(name, {}).get(f, {})
         x = {"name": name, "url": url} if url else {"name": name, "command": command, "args": args}
         x[f] = {a: b or old.get(a, "") for a, b in vals.items()}
+        if url and c.get("oauth"):  # signs in with OAuth (mcp_oauth); the tokens are kept outside this file
+            x["oauth"] = True
+            if isinstance(c.get("scope"), str) and c["scope"]:
+                x["scope"] = c["scope"]
         out.append(x)
     return out
 

@@ -246,10 +246,24 @@ Pensieve finds your MCP servers by itself, whatever the generation model is:
 - **Your other agents' servers:** Pensieve reads the MCP config of Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code, and connects to those servers itself, with the credentials in that config. A server that Claude Code also has is left to Claude Code.
 - **Your own servers:** add a server in Sources. Give a URL with headers (for example `Authorization: Bearer …`), or a command with environment variables. Pensieve connects to it itself. Pensieve never shows the header or environment values again. They stay in `~/.pensieve/settings.json`, which only you can read.
 
-For the servers that Pensieve connects to itself, the generation model chooses the search calls, and Pensieve makes them.
+- **GitHub through `gh`:** when the `gh` command line is signed in, Pensieve reads the issues and pull requests that involve you, with their comments and reviews. It uses only `gh search` and GET calls of `gh api`.
 - **From your agent sessions:** the results that your agents already got from MCP tools. Pensieve fetches nothing new for this source.
 
-A tool is read-only if its name has a read verb (get, list, search, read, fetch and others) and no write verb (create, update, send, delete and others). A server's `readOnlyHint: false` or `destructiveHint: true` makes a tool a write tool. Pensieve never calls a write tool. Each connection that is on is collected every 6 hours (`connections_every_hours`); **Collect now** collects at once. The first collection goes back 30 days (`connections_days`). Items are Markdown files in `~/.pensieve/connections`.
+**Cloud connectors.** Sources → Connections lists Notion, Slack, Google Drive, HubSpot, GitHub, Granola and Linear, with the state of each one on this Mac. You do not need Claude Code to add one:
+
+| Connector | How to add it without Claude Code |
+|---|---|
+| Notion | Sign in to Notion's MCP server in the browser (OAuth), or give an integration token to a local server |
+| Linear | Sign in to Linear's MCP server (OAuth, read scope only), or give a personal API key |
+| Granola | Sign in to Granola's MCP server (OAuth) |
+| GitHub | The `gh` command line, or a token for GitHub's MCP server in read-only mode |
+| Slack | A Slack app token for a local server. Slack's own MCP server has no open app sign-up. |
+| HubSpot | A private app token for a local server. HubSpot's MCP server needs an app registered in HubSpot. |
+| Google Drive | Add your Drive for desktop folder in Files & folders. Google has no MCP server for Drive to sign in to. |
+
+OAuth tokens are in `~/.pensieve/connections/.oauth/`, which only you can read. For each connector, Pensieve knows the read tools, the calls to make, the follow-up call for each item (a Slack thread, a GitHub discussion), and the fields of an item. The generation model plans the calls only for other servers. Each item keeps its people (author, assignee, owner, attendees, commenters) in the front matter of its Markdown file, with the service and the id of each person there.
+
+A tool is read-only if its name has a read verb (get, list, search, read, fetch and others) and no write verb (create, update, send, delete and others). A connector can also name read tools whose names do not pass this rule (Notion's `API-post-search`). A server's `readOnlyHint: false` or `destructiveHint: true` makes a tool a write tool. Pensieve never calls a write tool. Each connection that is on is collected every 6 hours (`connections_every_hours`); **Collect now** collects at once. The first collection goes back 30 days (`connections_days`). Items are Markdown files in `~/.pensieve/connections`.
 
 Repos are indexed as they are on disk: committed, staged, modified and untracked files, with uncommitted lines credited to you in blame. **Linked worktrees** (including `.claude/worktrees`) are indexed too: files that differ from the main checkout show up tagged with their branch, and disappear when the worktree is removed. Clones of the same remote count as one repo. Repos your agents work in, and repos you add, are indexed at any size. A repo that only the sweep found, with more than 5,000 tracked files and no agent use, is listed in Sources for you to switch on instead of being indexed on its own.
 

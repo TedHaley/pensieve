@@ -26,11 +26,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from pensieve import config, llm, settings
+from pensieve import config, connectors, llm, mcp_oauth, settings
 
 DIR = config.DATA_DIR / "connections"
 STATE = DIR / "state.json"
 SESSIONS = "agent_sessions"  # the source of MCP results found in agent transcripts
+GH = "github_cli"  # GitHub issues and pull requests that involve the user, read with the gh command line
 _lock = threading.Lock()
 
 READ = {"get", "list", "search", "read", "fetch", "lookup", "find", "query", "describe", "view", "show", "retrieve",
@@ -59,6 +60,17 @@ def is_read(name: str, annotations=None) -> bool:
         return False
     w = words(name)
     return not WRITE.intersection(w) and bool(READ.intersection(w))
+
+
+def read_tool(server: str, name: str, annotations=None) -> bool:
+    """`is_read`, and also a tool that the server's connector profile knows as a read tool although its name fails
+    the verb rule (Notion's `API-post-search`). The server's own hints can still make it a write tool."""
+    if is_read(name, annotations):
+        return True
+    a = annotations if isinstance(annotations, dict) else (annotations.model_dump() if annotations else {})
+    if a.get("readOnlyHint") is False or a.get("destructiveHint") is True:
+        return False
+    return connectors.known_read(connectors.match(server), name)
 
 
 PRIVATE = {"private", "dm", "dms", "im", "mpim", "direct"}
@@ -162,7 +174,11 @@ def servers() -> list[dict]:
         k = slug(c["name"])
         r = st.get("own", {}).get(k, {})
         out.append(dict(id=k, name=c["name"], origin="own", status=r.get("status", "unknown"), tools=r.get("tools", []),
-                        error=r.get("error")))
+                        error=r.get("error"), oauth=bool(c.get("oauth"))))
+    gh = st.get("gh")
+    if gh:
+        out.append(dict(id=GH, name="GitHub (gh)", origin="cli", status=gh["status"], error=gh.get("error"),
+                        tools=[dict(name=t, read=True) for t in ("gh search issues", "gh api comments", "gh api reviews")]))
     runs = st.get("runs", {})
     for r in out:
         r.update(runs.get(r["id"], {}))
@@ -227,27 +243,29 @@ def discover_engine() -> list[dict]:
             k = slug(s["name"])
             names = tools.get(k) or [t["name"] for t in old.get(k, {}).get("tools", [])]
             new[k] = dict(name=s["name"], status=s.get("status", "unknown"),
-                          tools=[dict(name=n, read=is_read(n)) for n in names], at=time.time())
+                          tools=[dict(name=n, read=read_tool(s["name"], n)) for n in names], at=time.time())
         st["engine"] = new
     _update(apply)
     return servers()
 
 
 @asynccontextmanager
-async def _open(cfg: dict):
-    """An MCP client session to one of the user's own servers: `url` (streamable HTTP, with `headers`) or `command`
-    (stdio, with `args` and `env`)."""
+async def _open(cfg: dict, on_url=None):
+    """An MCP client session to one of the user's own servers: `url` (streamable HTTP, with `headers`, or with
+    `oauth` sign-in) or `command` (stdio, with `args` and `env`). `on_url` gets the sign-in page when the user started
+    a sign-in (mcp_oauth)."""
     from mcp import ClientSession
     if cfg.get("url"):
         from mcp.client import streamable_http as h
-        if hasattr(h, "streamable_http_client"):  # mcp 2: headers go on the HTTP client
-            async with h.create_mcp_http_client(headers=cfg.get("headers") or None) as http, \
+        auth = mcp_oauth.provider(slug(cfg["name"]), cfg, on_url) if cfg.get("oauth") else None
+        if hasattr(h, "streamable_http_client"):  # mcp 2: headers and auth go on the HTTP client
+            async with h.create_mcp_http_client(headers=cfg.get("headers") or None, auth=auth) as http, \
                     h.streamable_http_client(cfg["url"], http_client=http) as streams:
                 async with ClientSession(streams[0], streams[1]) as s:
                     await s.initialize()
                     yield s
         else:
-            async with h.streamablehttp_client(cfg["url"], headers=cfg.get("headers") or None) as streams:
+            async with h.streamablehttp_client(cfg["url"], headers=cfg.get("headers") or None, auth=auth) as streams:
                 async with ClientSession(streams[0], streams[1]) as s:
                     await s.initialize()
                     yield s
@@ -261,23 +279,68 @@ async def _open(cfg: dict):
                 yield s
 
 
-async def _own_tools(cfg: dict) -> list[dict]:
-    async with _open(cfg) as s:
+async def _own_tools(cfg: dict, name: str, on_url=None) -> list[dict]:
+    async with _open(cfg, on_url) as s:
         r = await s.list_tools()
-        return [dict(name=t.name, read=is_read(t.name, t.annotations)) for t in r.tools]
+        return [dict(name=t.name, read=read_tool(name, t.name, t.annotations)) for t in r.tools]
+
+
+def _own_status(c: dict, on_url=None, timeout=60) -> dict:
+    """Connect to one of the user's own servers and list its tools: the server's record in the state."""
+    try:
+        tools = asyncio.run(asyncio.wait_for(_own_tools(c, c["name"], on_url), timeout))
+        return dict(name=c["name"], status="connected", tools=tools, error=None, at=time.time())
+    except Exception as e:
+        signin = _cause(e, mcp_oauth.NeedsSignIn)
+        return dict(name=c["name"], status="needs-auth" if signin else "failed", tools=[],
+                    error=_err(signin or e), at=time.time())
+
+
+def _cause(e: BaseException | None, kind):
+    """The first exception of `kind` in an exception, its groups and its causes."""
+    seen = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, kind):
+            return e
+        if isinstance(e, BaseExceptionGroup):
+            for x in e.exceptions:
+                if (f := _cause(x, kind)):
+                    return f
+        e = e.__cause__ or e.__context__
+    return None
 
 
 def discover_own() -> list[dict]:
     """Connect to each server in `mcp_servers` and list its tools."""
-    found = {}
-    for c in settings.get("mcp_servers"):
-        k = slug(c["name"])
-        try:
-            found[k] = dict(name=c["name"], status="connected", tools=asyncio.run(asyncio.wait_for(_own_tools(c), 60)),
-                            error=None, at=time.time())
-        except Exception as e:
-            found[k] = dict(name=c["name"], status="failed", tools=[], error=_err(e), at=time.time())
+    found = {slug(c["name"]): _own_status(c) for c in settings.get("mcp_servers")}
     _update(lambda st: st.__setitem__("own", found))
+    return servers()
+
+
+def sign_in(sid: str) -> dict:
+    """Start the OAuth sign-in of one of the user's own servers: {url} of the sign-in page, {done}, or {error}.
+    When the user comes back from the sign-in page, the server's tools are listed and saved."""
+    c = next((c for c in settings.get("mcp_servers") if slug(c["name"]) == sid and c.get("oauth")), None)
+    if not c:
+        raise ValueError(f"no server {sid!r} that signs in with OAuth")
+
+    def run(on_url):
+        r = _own_status(c, on_url, timeout=mcp_oauth.WAIT_SECONDS + 60)
+        _update(lambda st: st.setdefault("own", {}).__setitem__(sid, r))
+        if r["status"] != "connected":
+            raise RuntimeError(r["error"])
+    return mcp_oauth.start(sid, run)
+
+
+def discover_gh() -> list[dict]:
+    """Whether gh can read GitHub as the user. Nothing is listed when gh is not installed."""
+    ok, why = connectors.gh_ready()
+    if ok or why != "gh is not installed":
+        _update(lambda st: st.__setitem__("gh", dict(status="connected" if ok else "needs-auth", error=why or None,
+                                                     at=time.time())))
+    else:
+        _update(lambda st: st.pop("gh", None))
     return servers()
 
 
@@ -330,7 +393,7 @@ def discover_agents() -> list[dict]:
         if k in skip:
             continue
         try:
-            tools = asyncio.run(asyncio.wait_for(_own_tools(a["cfg"]), 60))
+            tools = asyncio.run(asyncio.wait_for(_own_tools(a["cfg"], a["name"]), 60))
             found[k] = dict(name=a["name"], agents=a["agents"], status="connected", tools=tools, error=None, at=time.time())
         except Exception as e:
             found[k] = dict(name=a["name"], agents=a["agents"], status="failed", tools=[], error=_err(e), at=time.time())
@@ -346,7 +409,7 @@ def _err(e: BaseException) -> str:
 
 def discover() -> list[dict]:
     errors = []
-    for fn in (discover_engine, discover_agents, discover_own):
+    for fn in (discover_engine, discover_agents, discover_own, discover_gh):
         try:
             fn()
         except Exception as e:
@@ -359,14 +422,23 @@ PROMPT = """You collect data for the user's personal search index, with the {nam
 Find the items that the user created, owns, is assigned to, took part in, or is mentioned in, and that changed
 since {since}. Then fetch the full details of the most useful ones: the description, comments and status.
 Make at most {calls} tool calls. Do not summarize, and do not change anything: Pensieve keeps the tool results.
-When you are done, reply DONE."""
+When you are done, reply DONE.{hint}"""
+
+
+def _since_time(sid: str) -> datetime:
+    """Where a collection starts: an hour before the last one, or `connections_days` back for the first one."""
+    last = _load().get("runs", {}).get(sid, {}).get("collected")
+    return datetime.fromtimestamp(last, timezone.utc) - timedelta(hours=1) if last else \
+        datetime.now(timezone.utc) - timedelta(days=settings.get("connections_days"))
 
 
 def _since(sid: str) -> str:
-    last = _load().get("runs", {}).get(sid, {}).get("collected")
-    t = datetime.fromtimestamp(last, timezone.utc) - timedelta(hours=1) if last else \
-        datetime.now(timezone.utc) - timedelta(days=settings.get("connections_days"))
-    return t.strftime("%Y-%m-%dT%H:%MZ")
+    return _since_time(sid).strftime("%Y-%m-%dT%H:%MZ")
+
+
+def _prompt(r: dict, calls: int) -> str:
+    h = connectors.hint(connectors.match(r["name"], r["id"]), _since_time(r["id"]))
+    return PROMPT.format(name=r["name"], since=_since(r["id"]), calls=calls, hint=f"\n{h}" if h else "")
 
 
 _SAVED = re.compile(r"Output has been saved to (\S+?\.txt)")
@@ -398,7 +470,7 @@ def _collect_engine(r: dict, calls: int, prompt: str | None = None, only=None) -
         raise llm.Offline("Can't find claude")
     argv = [exe, "-p", "--model", _engine_model(), "--output-format", "stream-json", "--verbose", "--tools", "",
             "--max-turns", str(calls + 2), "--allowedTools", ",".join(reads), "--disallowedTools", ",".join(deny)]
-    prompt = prompt or PROMPT.format(name=r["name"], since=_since(r["id"]), calls=calls)
+    prompt = prompt or _prompt(r, calls)
     with tempfile.TemporaryDirectory(prefix=llm.OWN_PREFIX) as tmp:
         p = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=900, cwd=tmp, env=_WAIT_FOR_MCP)
     uses, out = {}, []
@@ -433,47 +505,65 @@ PLAN_SCHEMA = {"type": "object", "properties": {"calls": {"type": "array", "item
 
 
 async def _collect_own_async(cfg: dict, r: dict, calls: int) -> list[tuple]:
+    """Collect from a server that Pensieve connects to itself. When the server's connector profile has a recipe whose
+    tools the server has, Pensieve makes those calls; else the generation model plans the calls. Then Pensieve
+    makes the follow-up call for each item found: the profile's (a Slack thread, a GitHub discussion), or the
+    server's get tool."""
     out = []
+    pid = connectors.match(r["name"], r["id"])
     async with _open(cfg) as s:
-        tools = [t for t in (await s.list_tools()).tools if is_read(t.name, t.annotations)]
+        tools = [t for t in (await s.list_tools()).tools if read_tool(r["name"], t.name, t.annotations)]
         if not tools:
             raise RuntimeError("no read-only tools")
-        menu = "\n".join(f"- {t.name}: {(t.description or '')[:300]} Input schema: {json.dumps(_attr(t, 'input_schema'))[:600]}"
-                         for t in tools)
-        prompt = (PROMPT.format(name=r["name"], since=_since(r["id"]), calls=calls) + f"\n\nThe tools:\n{menu}\n\n"
-                  "Plan only the search and list calls whose arguments you know now. Pensieve then fetches the "
-                  "details of each item that they find. Give each call's arguments as a JSON object in args_json. "
-                  "Do not call any tool yourself: answer only with the plan.")
-        plan = await asyncio.to_thread(llm.complete, prompt, max_tokens=1500, schema=PLAN_SCHEMA, kind="collection plan")
         names = {t.name for t in tools}
 
-        async def call(tool, args):
+        async def call(tool, args) -> bool:
+            if tool not in names:  # never a tool that is not on the read-only list
+                return False
             try:
                 res = await s.call_tool(tool, args)
             except Exception:
-                return
-            if not _attr(res, "is_error"):
-                text = "\n".join(getattr(b, "text", "") for b in res.content)
-                if _attr(res, "structured_content") and not text:
-                    text = json.dumps(_attr(res, "structured_content"))
-                out.append((tool, args, text))
-        for c in (plan or {}).get("calls", [])[:calls]:
-            if c.get("tool") not in names:  # never a tool that is not on the read-only list
-                continue
-            try:
-                args = json.loads(c.get("args_json") or "{}")
-            except ValueError:
-                continue
-            if isinstance(args, dict) and "<" not in json.dumps(args):  # "<" marks a placeholder, not a value
-                await call(c["tool"], args)
-        found = list({str(i.get(_id_key(i))): i for _, _, text in list(out) for i in split(_json(text))}.values())
+                return False
+            if _attr(res, "is_error"):
+                return False
+            text = "\n".join(getattr(b, "text", "") for b in res.content)
+            if _attr(res, "structured_content") and not text:
+                text = json.dumps(_attr(res, "structured_content"))
+            out.append((tool, args, text))
+            return True
+        recipe = [(t, connectors.fill(a, _since_time(r["id"]))) for t, a in
+                  (connectors.PROFILES[pid]["recipe"] if pid else []) if t in names]
+        done = [await call(t, a) for t, a in recipe[:calls]]
+        if not any(done):
+            menu = "\n".join(f"- {t.name}: {(t.description or '')[:300]} Input schema: "
+                             f"{json.dumps(_attr(t, 'input_schema'))[:600]}" for t in tools)
+            prompt = (_prompt(r, calls) + f"\n\nThe tools:\n{menu}\n\n"
+                      "Plan only the search and list calls whose arguments you know now. Pensieve then fetches the "
+                      "details of each item that they find. Give each call's arguments as a JSON object in args_json. "
+                      "Do not call any tool yourself: answer only with the plan.")
+            plan = await asyncio.to_thread(llm.complete, prompt, max_tokens=1500, schema=PLAN_SCHEMA,
+                                           kind="collection plan")
+            for c in (plan or {}).get("calls", [])[:calls]:
+                try:
+                    args = json.loads(c.get("args_json") or "{}")
+                except ValueError:
+                    continue
+                if isinstance(args, dict) and "<" not in json.dumps(args):  # "<" marks a placeholder, not a value
+                    await call(c.get("tool"), args)
+        found = {}
+        for tool, args, text in list(out):
+            data = _json(text)
+            for i in connectors.parse(pid, tool, args, data) or split(data):
+                found.setdefault(str(i.get(_id_key(i))), i)
         getter = _getter(tools)
-        for item in found[:max(0, calls * 2 - len(out))]:
-            if getter:
+        for item in list(found.values())[:max(0, calls * 2 - len(out))]:
+            nxt = connectors.follow(pid, item, names)
+            if not nxt and getter and not (pid and connectors.PROFILES[pid].get("follow")):
                 tool, param = getter
                 value = item.get(param) or item.get(_id_key(item))
-                if isinstance(value, (str, int)):
-                    await call(tool, {param: value})
+                nxt = (tool, {param: value}) if isinstance(value, (str, int)) else None
+            if nxt:
+                await call(*nxt)
     return out
 
 
@@ -510,6 +600,8 @@ def collect(sid: str, calls: int = 8) -> dict:
     try:
         if r["origin"] == "engine":
             results = _collect_engine(r, calls)
+        elif r["origin"] == "cli":
+            results = connectors.collect_gh(_since(sid))
         elif r["origin"] == "agent":
             cfg = agent_configs()[sid]["cfg"]
             results = asyncio.run(asyncio.wait_for(_collect_own_async(cfg, r, calls), 900))
@@ -670,7 +762,7 @@ def _title(d: dict, key: str) -> str:
 
 
 def _fname(key_name: str, key: str) -> str:
-    raw = key if key_name in ("key", "identifier") else f"{key_name}-{key}"
+    raw = key if key_name in ("key", "identifier", "_key") else f"{key_name}-{key}"
     s = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("_")[:100]
     return s if s and s == raw[:100] else f"{s[:80]}-{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
 
@@ -684,15 +776,19 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
         data = json.loads(text)
     except ValueError:
         data = None
-    items = [_flat(i) for i in split(data)] if data is not None else []
+    pid = connectors.match(sid, label, tool)
+    items = connectors.parse(pid, tool, args, data) if data is not None else None
+    if items is None:
+        items = [_flat(i) for i in split(data)] if data is not None else []
     if not items:
         if len(text.strip()) < 40:
             return 0
         h = hashlib.sha1(json.dumps([tool, args], sort_keys=True).encode()).hexdigest()[:12]
         items = [{"id": f"{tool}-{h}", "title": f"{tool} {json.dumps(args)[:100]}",
                   "content": data if isinstance(data, (dict, list)) else text[:50000]}]
-    chat, all_private = bool(CHAT.search(f"{sid} {tool}")), private_tool(tool)
+    chat, all_private = bool(CHAT.search(f"{sid} {tool}")) or pid == "slack", private_tool(tool)
     for i in items:
+        i.update(connectors.normalize(pid, i))
         if all_private or private_item(i, chat):
             i["_private"] = True
     root = DIR / sid
@@ -701,7 +797,7 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
     n = 0
     for item in items:
-        kn = _id_key(item)
+        kn = "_key" if item.get("_key") else _id_key(item)
         key = str(item[kn])
         name = _fname(kn, key)
         raw_p, hist_p = root / ".raw" / f"{name}.json", root / ".history" / f"{name}.jsonl"
@@ -715,6 +811,7 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
         if merged == old:
             continue
         changes = {k: [_render(old[k]), _render(v)] for k, v in item.items() if k in old and not _NOISE.search(k)
+                   and not k.startswith("_")
                    and k not in _VOLATILE and _simple(v) and _simple(old[k]) and _render(old[k]) != _render(v)
                    and len(_render(v)) < 300}
         if changes:
@@ -727,15 +824,32 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
 
 
 def markdown(label: str, tool: str, key_name: str, key: str, d: dict, hist_p: Path) -> str:
-    url = next((d[k] for k in ("webUrl", "url", "permalink", "html_url", "link") if isinstance(d.get(k), str)
-                and d[k].startswith("http")), "")
-    head = [f"# {_title(d, key)}", "", f"- Source: {label} ({tool})", f"- {key_name}: {key}"]
+    url = next((d[k] for k in ("html_url", "webUrl", "url", "permalink", "link") if isinstance(d.get(k), str)
+                and d[k].startswith("http") and "://api." not in d[k]), "")
+    title = d.get("_title") or _title(d, key)
+    front = {"source": label, "tool": tool, "connector": d.get("_connector"), "key": key, "title": title, "url": url,
+             "created": d.get("_created"), "updated": d.get("_updated"), "private": bool(d.get("_private")) or None}
+    lines = ["---"] + [f"{k}: {json.dumps(v)}" for k, v in front.items() if v]
+    if d.get("_people"):  # each person with the service and id, for a people graph to join identities later
+        lines.append("people:")
+        lines += [f"  - {json.dumps(p)}" for p in d["_people"]]
+    head = lines + ["---", "", f"# {title}", "", f"- Source: {label} ({tool})", f"- {key_name.lstrip('_')}: {key}"]
     if url:
         head.append(f"- URL: {url}")
+    roles = {}
+    for p in d.get("_people") or []:
+        roles.setdefault(p["role"], []).append(p.get("name") or p.get("email") or p.get("id"))
+    for role, names in roles.items():
+        head.append(f"- {role}{'s' if len(names) > 1 else ''}: {', '.join(dict.fromkeys(names))}")
     shown = {key_name, "webUrl", "url"}
-    for k in ("status", "assignee", "reporter", "creator", "owner", "author", "user", "created", "updated",
+    if roles:  # the people lines above name them already
+        shown |= {k for ks in connectors.ROLES.values() for k in ks}
+    if d.get("_created") or d.get("_updated"):
+        head += [f"- {k}: {d['_' + k]}" for k in ("created", "updated") if d.get("_" + k)]
+        shown |= {"created", "updated", "created_at", "updated_at", "createdAt", "updatedAt"}
+    for k in ("status", "state", "assignee", "reporter", "creator", "owner", "author", "user", "created", "updated",
               "created_at", "updated_at"):
-        if d.get(k) not in (None, "", [], {}):
+        if k not in shown and d.get(k) not in (None, "", [], {}):
             head.append(f"- {k}: {_render(d[k])}")
             shown.add(k)
     if d.get("_seen_in"):
@@ -759,7 +873,7 @@ def from_session(session_id: str, results: list[tuple]) -> int:
     n = 0
     for full, args, content in results:
         _, srv, tool = (full.split("__", 2) + ["", ""])[:3]
-        if not tool or srv == "pensieve" or not is_read(tool):
+        if not tool or srv == "pensieve" or not read_tool(srv, tool):
             continue
         n += store(SESSIONS, "Agent sessions", f"{srv}.{tool}", args, _result_text(content), session=session_id)
     return n
@@ -793,4 +907,5 @@ def roots(enabled) -> list[Path]:
 def remove(sid: str):
     import shutil
     shutil.rmtree(DIR / sid, ignore_errors=True)
+    mcp_oauth.forget(sid)
     _update(lambda st: st.get("runs", {}).pop(sid, None))

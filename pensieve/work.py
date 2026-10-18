@@ -103,13 +103,18 @@ def _items() -> list[dict]:
                         and raw[k].startswith("http")), "")
             head = raw.get("head") if isinstance(raw.get("head"), dict) else {}
             branch = raw.get("headRefName") or head.get("ref") or raw.get("source_branch") or ""  # a PR or MR
+            title = re.search(r"^# (.+)$", text, re.M)  # after the front matter, when there is one
+            assignees = [p.get("name") or p.get("email") or p.get("id") for p in raw.get("_people") or []
+                         if p.get("role") == "assignee"]
             out.append(dict(path=str(md), server=d.name, key=key if KEY.fullmatch(key) else "",
-                            title=text.split("\n", 1)[0].lstrip("# ").strip(), url=url,
+                            title=raw.get("_title") or (title.group(1).strip() if title else md.stem), url=url,
                             branch=branch if isinstance(branch, str) else "",
                             pr=bool(PR_URL.fullmatch(url)) if url else False,
                             status=connections._render(raw.get("status") or raw.get("state")) if raw.get("status") or raw.get("state") else "",
-                            assignee=connections._render(raw.get("assignee")) if raw.get("assignee") else "",
-                            updated=_ts(raw.get("updated") or raw.get("updated_at") or md.stat().st_mtime), text=text,
+                            assignee=", ".join(assignees) if assignees else
+                            connections._render(raw.get("assignee")) if raw.get("assignee") else "",
+                            updated=_ts(raw.get("_updated") or raw.get("updated") or raw.get("updated_at")
+                                        or md.stat().st_mtime), text=text,
                             private=private))
     return out
 

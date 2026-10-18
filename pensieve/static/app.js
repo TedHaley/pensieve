@@ -1996,6 +1996,47 @@ function connAddHtml() {
       <button class="btn" data-conn-add>Add server</button></div>
     <div class="err" data-src-add-err="connections">${esc(srcState.addErr.connections || '')}</div>`;
 }
+// The cloud connectors (Notion, Slack …): each one's state on this Mac, and the ways to add it as one of Pensieve's
+// own servers. cxOpen: the connector whose ways to add are shown; cxSignin: {id, url} of a sign-in in the browser.
+const CX_STATE = {on: 'Collecting', found: 'Found', 'needs-auth': 'Needs sign-in', failed: 'Failed', none: 'Not connected', folder: 'Folder found'};
+function cxAddHtml(c) {
+  return c.add.map((a, i) => {
+    const docs = a.docs ? ` <a href="${esc(a.docs)}" target="_blank" rel="noopener">Where to get it</a>` : '';
+    const act = a.kind === 'oauth' ? `<button class="btn primary" data-cx-add="${c.id}" data-kind="oauth">${esc(a.label)}</button>`
+      : a.kind === 'gh' ? `<button class="btn" data-cx-add="${c.id}" data-kind="gh">Check gh</button>`
+      : a.kind === 'folder' ? (c.folders || []).map(f => `<button class="btn" data-cx-folder="${esc(f)}">Add ${esc(f.split('/').pop())}</button>`).join('')
+      : `<input class="set-in" type="password" autocomplete="off" placeholder="${esc(a.placeholder || 'Token')}" data-cx-secret="${c.id}-${i}">
+         ${a.env_more ? `<input class="set-in" autocomplete="off" placeholder="${esc(a.env_more)}" data-cx-secret2="${c.id}-${i}">` : ''}
+         <button class="btn" data-cx-add="${c.id}" data-kind="${a.kind}" data-i="${i}">Connect</button>`;
+    return `<div class="cx-way"><div class="cx-way-h">${esc(a.label)}</div><div class="cx-help">${esc(a.help)}${docs}</div>${act ? `<div class="set-add cx-act">${act}</div>` : ''}</div>`;
+  }).join('');
+}
+function connectorsHtml(cat) {
+  const rows = cat.connectors || [];
+  if (!rows.length) return '';
+  const sg = srcState.cxSignin;
+  return `<details class="src-opts cx" ${srcState.cxShown ?? !rows.some(c => c.state === 'on') ? 'open' : ''} data-cx-details><summary>Cloud connectors · ${rows.filter(c => c.state === 'on').length} of ${rows.length} collecting</summary>
+    <div class="cx-intro">Read-only, from your own account. Each one is off until you switch it on in the list above.</div>
+    ${rows.map(c => `<div class="cx-row">
+      <div class="src-tx"><div class="src-l">${esc(c.label)}</div><div class="cx-d"><span class="cx-st cx-${esc(c.state)}">${esc(CX_STATE[c.state] || c.state)}</span> ${esc(c.detail)}</div></div>
+      <div class="src-n">${c.items ? srcCount(c.items, 'items') : ''}</div>
+      <div>${c.signin ? `<button class="btn" data-cx-signin="${esc(c.signin)}" data-pid="${c.id}">Sign in</button>` : ''}
+        <button class="linkbtn" data-cx-open="${c.id}">${srcState.cxOpen === c.id ? 'Close' : c.state === 'none' || c.state === 'folder' ? 'Add' : 'Other ways'}</button></div>
+      ${sg && sg.id === c.id ? `<div class="cx-panel">${sg.url ? `<a class="btn primary" href="${esc(sg.url)}" target="_blank" rel="noopener">Open the ${esc(c.label)} sign-in page</a> <span class="muted">Pensieve waits for you to come back.</span>` : esc(sg.error || '')}</div>` : ''}
+      ${srcState.cxOpen === c.id ? `<div class="cx-panel">${cxAddHtml(c)}<div class="err">${esc(srcState.addErr['cx-' + c.id] || '')}</div></div>` : ''}
+    </div>`).join('')}</details>`;
+}
+// While a sign-in waits in the browser: reload the sources now and then until the connector is found.
+async function cxWait(pid) {
+  for (let i = 0; i < 120 && srcState.cxSignin?.id === pid; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    const cat = await api('/api/sources').catch(() => null);
+    const c = cat?.find(x => x.id === 'connections')?.connectors?.find(x => x.id === pid);
+    if (c && c.state !== 'needs-auth' && c.state !== 'none' && !c.signin) {
+      srcState.cat = cat; srcState.cxSignin = null; renderSources(); toast(`${c.label} is connected. Switch it on to collect from it`); return;
+    }
+  }
+}
 const srcState = {cat: null, types: null, hints: new Map(), err: null, opts: new Set(), addErr: {}};  // opts: cards with Options open
 async function loadSources() {
   const [cat, types] = await Promise.all([api('/api/sources').catch(() => null), api('/api/filetypes').catch(() => null)]);
@@ -2109,7 +2150,7 @@ function sourcesHtml() {
         ${rules.length ? `<div class="src-rules">${rules.map(i => tree(i)).join('')}</div>` : ''}
         ${rest.length ? `<div class="src-items">${rest.map(i => tree(i)).join('')}</div>` : c.items.some(i => i.parent) ? '' : `<div class="src-items"><div class="muted" style="font-size:12px;padding:6px 0">${c.id === 'repos' ? 'No repositories found yet.' : 'Nothing here yet.'}</div></div>`}
         ${folded.length ? `<details class="src-opts"><summary>${plural(folded.length, 'more server')} to sign in to first</summary><div class="src-items">${folded.map(i => tree(i)).join('')}</div></details>` : ''}
-        ${c.id === 'connections' ? connAddHtml() : c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="${SRC_ADD[c.id][0]}" data-src-add-in="${c.id}"><button class="btn" data-src-add="${c.id}">${SRC_ADD[c.id][1]}</button></div><div class="err" data-src-add-err="${c.id}">${esc(srcState.addErr[c.id] || '')}</div>` : ''}
+        ${c.id === 'connections' ? connectorsHtml(c) + connAddHtml() : c.addable ? `<div class="set-add src-add"><input class="set-in" placeholder="${SRC_ADD[c.id][0]}" data-src-add-in="${c.id}"><button class="btn" data-src-add="${c.id}">${SRC_ADD[c.id][1]}</button></div><div class="err" data-src-add-err="${c.id}">${esc(srcState.addErr[c.id] || '')}</div>` : ''}
         ${(SRC_OPTS[c.id] || []).some(k => S.set && k in S.set.draft) ? `<details class="src-opts" data-opts="${c.id}" ${srcState.opts.has(c.id) ? 'open' : ''}><summary>Options</summary>${SRC_OPTS[c.id].map(setRow).join('')}</details>` : ''}
       </div>`;
     }).join('')}</div>${byNameHtml()}${fileTypesHtml()}`;
@@ -2208,6 +2249,40 @@ function renderSources() {
     srcState.cat = j; renderSources(); toast('Added. Switch it on to collect from it');
   });
   $$('[data-src-add-in]', box).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add(i.dataset.srcAddIn); } });
+  $$('[data-cx-details]', box).forEach(d => d.ontoggle = () => { srcState.cxShown = d.open; });
+  $$('[data-cx-open]', box).forEach(b => b.onclick = () => { srcState.cxOpen = srcState.cxOpen === b.dataset.cxOpen ? null : b.dataset.cxOpen; renderSources(); });
+  const signedIn = (pid, r) => {
+    srcState.cxSignin = {id: pid, url: r.signin_url, error: r.error};
+    if (r.sources) srcState.cat = r.sources;
+    srcState.cxOpen = null; renderSources();
+    if (r.signin_url) cxWait(pid);
+    else if (!r.error) { srcState.cxSignin = null; toast('Connected. Switch it on to collect from it'); }
+  };
+  $$('[data-cx-add]', box).forEach(b => b.onclick = async () => {
+    const pid = b.dataset.cxAdd, kind = b.dataset.kind, k = `${pid}-${b.dataset.i}`;
+    const secret = $(`[data-cx-secret="${k}"]`, box)?.value.trim() || '', secret2 = $(`[data-cx-secret2="${k}"]`, box)?.value.trim() || '';
+    b.disabled = true; b.textContent = kind === 'oauth' ? 'Starting sign-in…' : 'Connecting…';
+    const r = await fetch(`/api/connectors/${enc(pid)}/add`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind, secret, secret2})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { srcState.addErr['cx-' + pid] = typeof j.detail === 'string' ? j.detail : 'Could not add it'; return renderSources(); }
+    delete srcState.addErr['cx-' + pid];
+    if (kind === 'oauth') return signedIn(pid, j);
+    srcState.cat = j.sources; srcState.cxOpen = null; renderSources();
+    const c = j.sources.find(x => x.id === 'connections')?.connectors?.find(x => x.id === pid);
+    toast(c && (c.state === 'found' || c.state === 'on') ? `${c.label} is connected. Switch it on to collect from it` : `Could not connect: ${c?.detail || 'see the list above'}`);
+  });
+  $$('[data-cx-signin]', box).forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Starting sign-in…';
+    try { signedIn(b.dataset.pid, await api(`/api/connectors/signin/${enc(b.dataset.cxSignin)}`, {method: 'POST'})); }
+    catch (e) { srcState.err = 'Could not start the sign-in: ' + e.message; renderSources(); }
+  });
+  $$('[data-cx-folder]', box).forEach(b => b.onclick = async () => {
+    try {
+      srcState.cat = await api('/api/sources/folders', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({path: b.dataset.cxFolder})});
+      srcState.cxOpen = null; toast('Added. Indexing it now');
+    } catch (e) { srcState.err = 'Could not add the folder: ' + e.message; }
+    renderSources();
+  });
 }
 const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await Promise.all([loadSources(), loadScopes()]); renderSources(); renderScopes(); }, 1200);
 
