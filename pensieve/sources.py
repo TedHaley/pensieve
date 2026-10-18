@@ -77,11 +77,13 @@ def connector_rows() -> list[dict]:
     add it as one of Pensieve's own servers."""
     from pensieve import mcp_oauth
     found = connections.servers()
+    skip = connections.covered(found)
     rows = []
     for pid in connectors.ORDER:
         p = connectors.PROFILES[pid]
         mine = sorted((r for r in found if connectors.match(r["name"], r["id"]) == pid),
-                      key=lambda r: (not settings.enabled(f"connections/{r['id']}"), _RANK.get(r["status"], 4)))
+                      key=lambda r: (not settings.enabled(f"connections/{r['id']}"), r["id"] in skip,
+                                     _RANK.get(r["status"], 4)))
         best = mine[0] if mine else None
         on = bool(best) and settings.enabled(f"connections/{best['id']}")
         if not best:
@@ -94,7 +96,7 @@ def connector_rows() -> list[dict]:
         else:
             state, detail = best["status"], f"{best['status'].capitalize()} ({_via(best)})"
         if best and len(mine) > 1:
-            detail += f" · also {', '.join(_via(r) for r in mine[1:])}"
+            detail += f" · also {', '.join(_via(r) + (' (not collected: one copy is enough)' if r['id'] in skip else '') for r in mine[1:])}"
         signin = next((r["id"] for r in mine if r.get("oauth") and r["status"] != "connected"), None)
         folders = [str(f) for f in connectors.drive_folders()] if pid == "drive" else []
         if folders and not best:

@@ -672,8 +672,29 @@ async def _lookup_own(cfg: dict, ids: list[str]) -> list[tuple]:
     return out
 
 
+_PREFER = {"own": 0, "cli": 1, "agent": 2, "engine": 3}
+
+
+def covered(found: list[dict] | None = None) -> dict[str, str]:
+    """Switched-on servers that another switched-on server already collects for the same connector: {sid: keeper}.
+    One connector is collected once. The keeper is the server added here, then gh, then another agent's config, then
+    Claude Code, which costs a model run for each collection. Only a connected server can be the keeper."""
+    groups = {}
+    for r in found if found is not None else servers():
+        pid = connectors.match(r["name"], r["id"])
+        if pid and settings.enabled(f"connections/{r['id']}"):
+            groups.setdefault(pid, []).append(r)
+    out = {}
+    for rs in groups.values():
+        live = sorted((r for r in rs if r["status"] == "connected"), key=lambda r: _PREFER.get(r["origin"], 9))
+        if live:
+            out.update({r["id"]: live[0]["id"] for r in rs if r["id"] != live[0]["id"]})
+    return out
+
+
 def due() -> list[str]:
-    """Switched-on servers whose last collection is older than `connections_every_hours`."""
+    """Switched-on servers whose last collection is older than `connections_every_hours`. A server that another one
+    covers (see `covered`) is never due."""
     every = settings.get("connections_every_hours") * 3600
     if not every:
         return []
@@ -682,8 +703,10 @@ def due() -> list[str]:
     def last(sid):
         r = runs.get(sid, {})
         return max(r.get("collected") or 0, r.get("failed") or 0)
-    return [r["id"] for r in servers() if settings.enabled(f"connections/{r['id']}") and r["status"] == "connected"
-            and time.time() - last(r["id"]) > every]
+    found = servers()
+    skip = covered(found)
+    return [r["id"] for r in found if settings.enabled(f"connections/{r['id']}") and r["status"] == "connected"
+            and r["id"] not in skip and time.time() - last(r["id"]) > every]
 
 
 _KEYS = ("key", "identifier", "gid", "number", "ts", "id", "url", "permalink", "webUrl")
@@ -898,10 +921,14 @@ def backfill_sessions() -> int:
 
 
 def roots(enabled) -> list[Path]:
-    """The folders of switched-on connections, for the file indexer."""
+    """The folders of switched-on connections, for the file indexer. The folder of a covered server is left out once
+    its keeper has collected, so that the index holds each item once."""
     if not DIR.is_dir():
         return []
-    return [p for p in DIR.iterdir() if p.is_dir() and not p.name.startswith(".") and enabled(f"connections/{p.name}")]
+    runs = _load().get("runs", {})
+    skip = {sid for sid, keeper in covered().items() if runs.get(keeper, {}).get("collected")}
+    return [p for p in DIR.iterdir() if p.is_dir() and not p.name.startswith(".") and enabled(f"connections/{p.name}")
+            and p.name not in skip]
 
 
 def remove(sid: str):
