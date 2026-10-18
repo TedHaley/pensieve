@@ -1373,6 +1373,75 @@ async def add_mcp_server(req: McpServerReq):
     return sources.catalog(store, repos, files)
 
 
+class ConnectorReq(BaseModel):
+    kind: str            # one of the profile's `add` kinds: oauth, header, env or gh
+    secret: str = ""     # the token, for header and env
+    secret2: str = ""    # a second value that the server needs (the Slack team id)
+
+
+@app.post("/api/connectors/{pid}/add")
+async def add_connector(pid: str, req: ConnectorReq):
+    """Add a cloud connector (Notion, Linear …) as one of Pensieve's own servers, in the way the user chose. For
+    OAuth, this starts the sign-in and returns the sign-in page as `signin_url`."""
+    from pensieve import connectors
+    p = connectors.PROFILES.get(pid)
+    a = next((a for a in (p or {}).get("add", []) if a["kind"] == req.kind), None)
+    if not a:
+        raise HTTPException(404, f"no way to add {pid!r} with {req.kind!r}")
+    if a["kind"] == "gh":
+        await asyncio.to_thread(connections.discover_gh)
+        return {"sources": sources.catalog(store, repos, files)}
+    if a["kind"] in ("header", "env") and not req.secret.strip():
+        raise HTTPException(400, "Paste the token first.")
+    name = p["label"]
+    if a["kind"] == "oauth":
+        x = {"name": name, "url": a["url"], "headers": {}, "oauth": True, **({"scope": a["scope"]} if a.get("scope") else {})}
+    elif a["kind"] == "header":
+        x = {"name": name, "url": a["url"], "headers": {a["header"]: a.get("prefix", "") + req.secret.strip(), **a.get("extra", {})}}
+    elif a["kind"] == "env":
+        env = {a["env"]: req.secret.strip(), **({a["env_more"]: req.secret2.strip()} if a.get("env_more") and req.secret2.strip() else {})}
+        x = {"name": name, "command": a["command"], "args": a["args"], "env": env}
+    else:
+        raise HTTPException(400, f"{p['label']} is added in another way: {a['help']}")
+    try:
+        settings.update({"mcp_servers": [c for c in settings.get("mcp_servers") if c["name"] != name] + [x]})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    sid = connections.slug(name)
+    out = {}
+    if a["kind"] == "oauth":
+        r = await asyncio.to_thread(connections.sign_in, sid)
+        out = {"signin_url": r.get("url"), "error": r.get("error")}
+    else:
+        await asyncio.to_thread(connections.discover_own)
+    return {**out, "sid": sid, "sources": sources.catalog(store, repos, files)}
+
+
+@app.post("/api/connectors/signin/{sid}")
+async def connector_signin(sid: str):
+    """Sign in again to one of Pensieve's own servers that uses OAuth: returns the sign-in page as `signin_url`."""
+    try:
+        r = await asyncio.to_thread(connections.sign_in, sid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"signin_url": r.get("url"), "error": r.get("error"), "sources": sources.catalog(store, repos, files)}
+
+
+@app.get("/api/connectors/callback")
+def connector_callback(state: str = "", code: str = "", error: str = "", error_description: str = "", iss: str = ""):
+    """Where the browser comes back after an OAuth sign-in. The code goes to the sign-in that waits for it."""
+    from fastapi.responses import HTMLResponse
+    from pensieve import mcp_oauth
+    ok = mcp_oauth.finish(state, code or None, (error_description or error) or None, iss or None)
+    msg = ("Pensieve is finishing the sign-in. Go back to Pensieve: the connector shows as found when it is done, "
+           "and you can switch it on there."
+           if ok and code else f"The sign-in did not work: {error_description or error or 'no sign-in waits for this page'}.")
+    import html
+    return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>Pensieve</title>"
+                        f"<body style='font:15px -apple-system,sans-serif;padding:40px'><p>{html.escape(msg)}</p>"
+                        f"<p>You can close this tab.</p></body>")
+
+
 @app.delete("/api/sources/connections")
 def remove_mcp_server(path: str):
     """✕ on a server that Pensieve connects to itself: forget it and its collected items."""
