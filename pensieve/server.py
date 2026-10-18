@@ -123,6 +123,8 @@ async def watcher():
     work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
     from pensieve import people
     people.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "people"}))
+    from pensieve import team_projects
+    team_projects.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "projects"}))
     threading.Thread(target=work.tasks, args=(store, 30), daemon=True).start()  # built now, so the first view of the tab does not wait for git and gh
     last_full = 0
     while True:
@@ -646,9 +648,9 @@ def delete_part(part: str):
     return get_content()
 
 
-@app.get("/api/projects")
-def projects():
-    """Projects are canonical repos (clones and worktrees merged); non-repo folders stay as-is."""
+@app.get("/api/session-projects")
+def session_projects():
+    """The session map's projects: canonical repos (clones and worktrees merged); non-repo folders stay as-is."""
     scope = repos.session_scope()
     by = {}
     with store.lock:
@@ -667,6 +669,53 @@ def projects():
     # `path`: where most of a project's sessions ran (a folder that isn't an indexed repo shows where it is)
     return [{**{k: v for k, v in e.items() if k != "where"}, "folders": sorted(e["folders"]), "path":e["where"].most_common(1)[0][0] if e["where"] else None}
             for e in sorted(by.values(), key=lambda e: -e["sessions"])]
+
+
+async def _name_projects():
+    """AI names for the nearest projects, as the Map's topics get them (cached by membership)."""
+    from pensieve import team_projects
+    if await _run(llm.provider) == "none" or await _run(llm.paused):
+        return
+    todo = await _run(team_projects.unnamed, datamap)
+    if todo:
+        await name_data_scoped(todo)
+        broadcast({"type": "projects"})
+
+
+@app.get("/api/projects")
+async def get_projects(q: str = "", refresh: bool = False):
+    """The Projects tab: clusters of recent work (code, documents, sessions) with their pull requests, tickets and
+    people, nearest to the user first (`relevance` 0..1, `near`: the band nearest to the user). Served from the last
+    build; a build older than half an hour, or older than the People graph, starts a new one in the background."""
+    from pensieve import team_projects
+    team_projects.rebuild(store, datamap, force=refresh)
+    res = await _run(team_projects.summary, datamap, q)
+    if res["projects"] and "projects" not in inflight:
+        inflight.add("projects")
+        task = asyncio.create_task(_name_projects())
+        task.add_done_callback(lambda _: inflight.discard("projects"))
+    return res
+
+
+class ProjectMatchReq(BaseModel):
+    ids: list[str]  # Map point ids (file:…, code:…, session:…)
+
+
+@app.post("/api/projects/match")
+def match_projects(req: ProjectMatchReq):
+    """The projects that hold most of these Map items: the Map topic panel's "Open as project"."""
+    from pensieve import team_projects
+    return {"projects": team_projects.best_for(datamap, req.ids[:5000])}
+
+
+@app.get("/api/projects/{pid}")
+def get_project(pid: str):
+    """One project: members, pull requests, tickets, context cards, sessions, files and recent commits."""
+    from pensieve import team_projects
+    p = team_projects.project(datamap, pid)
+    if p is None:
+        raise HTTPException(404, f"unknown project {pid!r}")
+    return p
 
 
 @app.get("/api/points")

@@ -319,7 +319,7 @@ function itemColor(it) {
 }
 
 function buildMap() {
-  if (S.view === 'work' || S.view === 'people') return;
+  if (S.view === 'work' || S.view === 'people' || S.view === 'projects') return;
   mapPts =S.view === 'data' ? S.data.points : S.view === 'code' ? S.code.points : S.view === 'files' ? S.files.points : S.level === 'chunk' ? (S.chunks || []) : S.sessions;
   const n = mapPts.length, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n), st = new Float32Array(n);
   const c = new THREE.Color();
@@ -1544,13 +1544,14 @@ function openTopic(entry) {
      ${central.length ? `<div class="h4">Most typical</div><div class="list">${central.map(itemRow).join('')}</div>` : ''}
      ${recent.length ? `<div class="h4">Recently changed</div><div class="list">${recent.map(itemRow).join('')}</div>` : ''}
      <p class="muted" style="font-size:12px;margin:12px 0 0">The map now shows the finer topics inside this one; click a label to go deeper.</p>
-     <div class="actions"><button class="btn" data-zoomout>Zoom back out</button></div>`);
+     <div class="actions"><button class="btn" data-zoomout>Zoom back out</button><button class="btn" data-asproject title="The project in the Projects tab that holds most of this topic's recent items">Open as project</button></div>`);
   D.drawerTopic = entry;
   const body = $('#drawer-body');
   $$('[data-open]', body).forEach(b => b.onclick = () => openItem(b.dataset.open));
   $$('[data-place]', body).forEach(b => b.onclick = () => selectLabel('folder', b.dataset.place));
   $$('[data-twho]', body).forEach(b => b.onclick = () => openPersonPanel(b.dataset.twho));
   $('[data-zoomout]', body).onclick = () => deselectLabel();
+  $('[data-asproject]', body).onclick = () => openTopicAsProject(entry.members);
 }
 // a card's note, in the order of the core: [field, label, what it says]
 const NOTE_ROWS = [['problem', 'Problem', 'What is wrong or missing'], ['goal', 'Goal', 'What done looks like, and why it matters'],
@@ -2935,8 +2936,140 @@ async function saveSettings() {
   if (S.view === 'settings') renderSettings();
 }
 
+// `far`: the "Further away" band is open. `sel`, `card`: the project in the panel.
+S.proj = {data: null, err: null, q: store.get('projQ', ''), sel: null, card: null, far: store.get('projFar', false), stale: true};
+const PJ_ROLE = {lead: 'You lead this', contributor: 'You work on this', occasional: 'You touched this', none: ''};
+async function loadProjects(refresh = false) {
+  try { S.proj.data = await api(`/api/projects${refresh ? '?refresh=true' : ''}`); S.proj.err = null; S.proj.stale = false; }
+  catch (e) { S.proj.err = e.message; }
+  if (S.view !== 'projects') return;
+  renderProjects();
+  const ps = S.proj.data?.projects || [];
+  if (S.proj.sel && ps.some(p => p.id === S.proj.sel)) openProject(S.proj.sel, {quiet: true});
+  else if (!S.proj.sel && ps.length && innerWidth >= 860) openProject(ps[0].id, {quiet: true});
+}
+function pjMatch(p, q) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const t = [p.name, p.description, p.keywords, ...p.areas, ...p.repos, ...p.prefixes, ...p.members.map(m => m.name)].join(' ').toLowerCase();
+  return words.every(w => t.includes(w));
+}
+function pjWhy(p) {
+  const near = p.members.filter(m => !m.me && m.closeness >= 0.25).slice(0, 2).map(m => esc(ppShort(m.name)));
+  const role = PJ_ROLE[p.role];
+  return [role, near.length ? `with ${near.join(', ')}` : ''].filter(Boolean).join(' ') || (p.counts.people ? `${plural(p.counts.people, 'person')} work here` : '');
+}
+function pjCard(p) {
+  const c = p.counts, bits = [c.code && plural(c.code, 'file'), c.docs && plural(c.docs, 'document'), c.sessions && plural(c.sessions, 'session'),
+    c.prs && plural(c.prs, 'PR'), c.tickets && plural(c.tickets, 'ticket')].filter(Boolean).slice(0, 4).join(' · ');
+  const others = p.members.filter(m => !m.me).slice(0, 5);
+  return `<button class="pj-card ${S.proj.sel === p.id ? 'sel' : ''}" data-pj="${esc(p.id)}" style="--rel:${Math.max(0.04, p.relevance)}">
+    <div class="pj-top"><b class="pj-name">${esc(p.name)}</b><span class="pj-when">${p.last ? rel(p.last * 1000) : ''}</span></div>
+    <div class="pj-desc">${esc(p.description || p.areas.slice(0, 2).join(' · ') || p.keywords)}</div>
+    <div class="pj-foot"><span class="pj-avs">${others.map(m => ppAv(m, 22)).join('')}${c.people > others.length ? `<span class="pj-more">+${c.people - others.length}</span>` : ''}</span>
+      <span class="pj-why">${pjWhy(p)}</span></div>
+    <div class="pj-meta">${esc(bits)}${p.prefixes.length ? ` · ${p.prefixes.map(esc).join(', ')}` : ''}</div>
+    <i class="pj-bar"></i></button>`;
+}
+function renderProjects() {
+  const el = $('#projects'); if (!el) return;
+  const P = S.proj, d = P.data, all = d?.projects || [];
+  const ps = P.q.trim() ? all.filter(p => pjMatch(p, P.q)) : all;
+  const near = ps.filter(p => p.near), far = ps.filter(p => !p.near);
+  const list = !d ? (P.err ? `<div class="empty">Could not load projects: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
+    : !all.length ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Finding the projects around you…' : d.error ? 'Could not build the projects: ' + esc(d.error) : 'No projects yet. Pensieve finds them in the code, documents and sessions that changed in the last four months.'}</div>`
+    : !ps.length ? `<div class="empty">No project matches “${esc(P.q)}”.</div>`
+    : `${near.length ? `<div class="wk-group" style="--acc:var(--accent)">Near you <span>${near.length}</span></div><div class="pj-grid">${near.map(pjCard).join('')}</div>` : ''}
+       ${far.length ? `<details class="pj-far" ${P.far || !near.length || P.q.trim() ? 'open' : ''}><summary class="wk-group">Further away <span>${far.length}</span></summary><div class="pj-grid">${far.map(pjCard).join('')}</div></details>` : ''}
+       <div class="pj-note">${d.building ? 'Updating · ' : ''}From ${plural(d.items || 0, 'item')} changed in the last four months${d.built ? ' · ' + rel(d.built * 1000) : ''}</div>`;
+  el.innerHTML = `<div class="wk-head pp-head"><h2>Projects</h2>
+      <div class="wk-ctl"><div class="pp-find"><input id="pjq" type="search" placeholder="Filter projects" aria-label="Filter projects" autocomplete="off" spellcheck="false" value="${esc(P.q)}"></div>
+        <button class="wk-btn icon" data-pj-refresh title="Build again now" aria-label="Build again now"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
+    <div class="pp-body pj-body">
+      <div class="pj-list" id="pjlist">${list}</div>
+      <aside class="pp-card" id="pjcard">${P.card ? pjPanelHtml(P.card) : '<div class="empty">Click a project to see who works on it and what is in it.</div>'}</aside>
+    </div>`;
+  bindProjects(el);
+  bindProjectPanel();
+}
+function bindProjects(el) {
+  const P = S.proj;
+  $('[data-pj-refresh]', el)?.addEventListener('click', () => { toast('Finding the projects again…'); loadProjects(true); });
+  const q = $('#pjq', el);
+  q.oninput = debounce(() => {
+    P.q = q.value; store.set('projQ', P.q);
+    const pos = q.selectionStart; renderProjects(); const n = $('#pjq'); n.focus(); n.setSelectionRange(pos, pos);
+  }, 150);
+  $('.pj-far', el)?.addEventListener('toggle', e => { if (!P.q.trim()) { P.far = e.target.open; store.set('projFar', P.far); } });
+  $$('[data-pj]', el).forEach(b => b.onclick = () => openProject(b.dataset.pj));
+}
+async function openProject(id, {quiet = false} = {}) {
+  const P = S.proj;
+  P.sel = id;
+  $$('#pjlist [data-pj]').forEach(b => b.classList.toggle('sel', b.dataset.pj === id));
+  let card;
+  try { card = await api('/api/projects/' + enc(id)); } catch { if (!quiet) toast('That project is no longer there. The list was built again.'); P.sel = null; return; }
+  P.card = card;
+  if (S.view !== 'projects') return;
+  const box = $('#pjcard'); if (!box) return renderProjects();
+  box.innerHTML = pjPanelHtml(card); box.scrollTop = 0; bindProjectPanel();
+  if (!quiet && innerWidth < 860) box.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function pjPanelHtml(p) {
+  const when = ts => ts ? `<span class="muted">${rel(ts * 1000)}</span>` : '';
+  const link = (u, t, extra = '', attrs = '') => u ? `<a class="item" href="${esc(u)}" target="_blank" rel="noopener"><div class="t"><span class="grow">${esc(t)}</span>${extra}</div></a>`
+    : `<button class="item" ${attrs}><div class="t"><span class="grow">${esc(t)}</span>${extra}</div></button>`;
+  const c = p.counts, role = PJ_ROLE[p.role];
+  const lead = `<b>#${p.rank}</b> ${p.near ? 'near you' : 'further away'}. ${role ? role + `: ${Math.round(p.me_share * 100)}% of the recent activity is yours.` : 'You have no recent work here.'}`;
+  const members = p.members.slice(0, 12);
+  return `<div class="meta"><span class="badge">Project</span>${p.repos.map(esc).join(' · ')}</div>
+    <h2 class="pj-h">${esc(p.name)}</h2>
+    ${p.description ? `<p class="pp-lead" style="margin-top:6px">${esc(p.description)}</p>` : ''}
+    <p class="pp-lead">${lead}</p>
+    <div class="kpis pp-kpis"><div class="kpi"><div class="l">Near you</div><div class="v">${Math.round(p.relevance * 100)}%</div></div>
+      <div class="kpi"><div class="l">People</div><div class="v">${c.people}</div></div>
+      <div class="kpi"><div class="l">Last active</div><div class="v sm">${p.last ? rel(p.last * 1000) : '–'}</div></div></div>
+    ${members.length ? `<div class="h4">Who works on it</div><div class="list">${members.map(m => `<button class="item pj-mem" data-pj-person="${esc(m.id)}" title="Open their card in People"><div class="t">${ppAv(m, 24)}<span class="grow">${esc(m.me ? 'You' : m.name)}</span><span class="muted">${Math.round(m.weight * 100)}%${m.last ? ' · ' + rel(m.last * 1000) : ''}</span></div><div class="hbar"><i style="width:${Math.max(2, Math.round(m.weight * 100))}%"></i></div></button>`).join('')}</div>` : ''}
+    ${p.tasks.length ? `<div class="h4">Your context cards</div><div class="list">${p.tasks.map(t => `<button class="item" data-pj-task="${esc(t.id)}"><div class="t"><span class="grow">${esc(t.title || 'Task')}</span>${when(t.ts)}</div>${t.keys.length || t.state ? `<div class="s">${esc([t.state, ...t.keys].filter(Boolean).join(' · '))}</div>` : ''}</button>`).join('')}</div>` : ''}
+    ${p.prs.length ? `<div class="h4">Pull requests</div><div class="list">${p.prs.map(x => link(x.url, x.title || x.url.replace(/^https:\/\/[^/]+\//, ''), `${x.state ? `<span class="pp-st ${esc(x.state.toLowerCase())}">${esc(x.state)}</span>` : ''}${when(x.ts)}`)).join('')}</div>` : ''}
+    ${p.tickets.length ? `<div class="h4">Tickets</div><div class="list">${p.tickets.map(x => link(x.url, [x.key, x.title].filter(Boolean).join(' '), `${x.status ? `<span class="pp-st">${esc(x.status)}</span>` : ''}${when(x.ts)}`, `data-pj-file="${esc(x.path || '')}"`)).join('')}</div>` : ''}
+    ${p.sessions.length ? `<div class="h4">Agent sessions</div><div class="list">${p.sessions.map(s => `<button class="item" data-pj-open="session:${esc(s.id)}"><div class="t"><span class="grow">${esc(s.title)}</span>${when(s.ts)}</div>${s.repo ? `<div class="s">${esc(s.repo)}</div>` : ''}</button>`).join('')}</div>` : ''}
+    ${p.files.length ? `<div class="h4">Recently changed</div><div class="list">${p.files.map(f => `<button class="item" data-pj-open="${esc(f.open)}"><div class="t"><span class="grow">${esc(f.title)}</span>${when(f.ts)}</div><div class="s">${esc(f.display.replace(/\/[^/]*$/, ''))}</div></button>`).join('')}</div>` : ''}
+    ${p.commits.length ? `<div class="h4">Recent commits</div><div class="list">${p.commits.slice(0, 6).map(x => `<div class="item"><div class="t"><span class="grow">${esc(x.subject)}</span>${when(x.ts)}</div><div class="s">${esc(x.author)} · ${esc(x.repo)}</div></div>`).join('')}</div>` : ''}
+    ${p.areas.length ? `<div class="h4">Where it lives</div><div class="chips">${p.areas.map(a => `<span class="chip">${esc(a)}</span>`).join('')}</div>` : ''}
+    ${p.keywords ? `<div class="h4">Distinctive words</div><div class="chips">${p.keywords.split(',').map(w => `<span class="chip">${esc(w.trim())}</span>`).join('')}</div>` : ''}
+    <div class="actions">${p.topic != null ? '<button class="btn" data-pj-map>Show its topic on the map</button>' : ''}</div>`;
+}
+function bindProjectPanel() {
+  const box = $('#pjcard'), p = S.proj.card; if (!box || !p) return;
+  $$('[data-pj-person]', box).forEach(b => b.onclick = async () => { S.people.sel = b.dataset.pjPerson; await setView('people'); openPeopleCard(b.dataset.pjPerson); });
+  $$('[data-pj-open]', box).forEach(b => b.onclick = () => openItem(b.dataset.pjOpen));
+  $$('[data-pj-file]', box).forEach(b => b.onclick = () => b.dataset.pjFile ? openFile(b.dataset.pjFile) : null);
+  $$('[data-pj-task]', box).forEach(b => b.onclick = async () => {
+    const id = b.dataset.pjTask;
+    await setView('work');
+    if (!S.work.data) await loadWork();
+    const t = S.work.data?.tasks.find(x => x.id === id);
+    if (!t) return toast('That card is not in the Context tab now.');
+    S.work.q = ''; S.work.hits = null; S.work.flash = {id, state: t.state, until: Date.now() + 6000}; renderWork();
+  });
+  $('[data-pj-map]', box)?.addEventListener('click', async () => {
+    await setView('data');
+    if (dataTopics().has(p.topic)) selectLabel('topic', p.topic); else toast('That topic is not on the map now.');
+  });
+}
+// Items that changed before the projects' window are in no project.
+async function openTopicAsProject(ids) {
+  let r;
+  try { r = await api('/api/projects/match', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids: [...ids].slice(0, 5000)})}); }
+  catch (e) { return toast('Could not find its project: ' + e.message); }
+  const best = r.projects[0];
+  if (!best) return toast('None of this topic changed recently, so it is in no project.');
+  S.proj.sel = best.id; S.proj.q = ''; store.set('projQ', '');
+  await setView('projects');
+}
+
 /* ============================== deep links (#open=, #view=, #settings) ============================== */
-const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings', tasks: 'work', people: 'people'};
+const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings', tasks: 'work', people: 'people', projects: 'projects'};
 async function openItem(id) {
   const i = id.indexOf(':'), kind = id.slice(0, i), ref = id.slice(i + 1);
   if (kind === 'file') return openFile(ref);
@@ -2969,6 +3102,7 @@ async function route() {
   if (h === 'settings') return setView('settings');
   if (['context', 'currents', 'tasks', 'work'].includes(h)) return setView('work');
   if (h === 'people') return setView('people');
+  if (h === 'projects') return setView('projects');
   if (h === 'map' || h === 'mind') return setView(dataType());
   if (h === 'setup') return openSetup();
   if (['sources', 'scopes', 'agents', 'ai', 'general', 'usage', 'feedback', ...Object.keys(OLD_TABS)].includes(h)) {
@@ -3292,15 +3426,16 @@ function dataFollowInsights() {
 async function setView(v, repo) {
   if (LEGACY_TYPE[v] && v !== 'data') { setTypes(LEGACY_TYPE[v]); v = 'data'; }
   if (S.view === v && !repo) return;
-  if (!['insights', 'settings', 'work', 'people'].includes(S.view)) cams[camKey()] = gl.saveCam();
+  if (!['insights', 'settings', 'work', 'people', 'projects'].includes(S.view)) cams[camKey()] = gl.saveCam();
   const prev = S.view;
   S.view = v; store.set('view', v);
   syncTabs(v);
-  const page = v === 'insights' || v === 'settings' || v === 'work' || v === 'people';
+  const page = v === 'insights' || v === 'settings' || v === 'work' || v === 'people' || v === 'projects';
   if (prev !== 'settings' && prev !== v) S.prevView = prev;
   document.body.dataset.view = v;  // the map stays as the backdrop; CSS shows the right floating panels
   $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings'; $('#work').hidden = v !== 'work';
   $('#people').hidden = v !== 'people';
+  $('#projects').hidden = v !== 'projects';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
   renderSidebar();  // now, not after the loads below: the panel would show the previous view's until then
   if (!page) renderToolbar();  // the same for the toolbar, while the map loads
@@ -3313,7 +3448,7 @@ async function setView(v, repo) {
   if (v === 'data' && (!S.data.loaded || S.data.stale)) { $('#loading').classList.remove('gone'); $('#loadingtext').textContent = 'Loading your map…'; await loadData(); }
   if (v === 'files' && (!S.files.loaded || S.files.stale)) await loadFiles();
   if (v === 'files') $('#loadingtext').textContent = S.files.points.length ? '' : 'Indexing your files — the map appears once the first batch is laid out…';
-  gl.paused = v === 'work' || v === 'people';
+  gl.paused = v === 'work' || v === 'people' || v === 'projects';
   if (gl.paused) gl.release();
   if (!page) {  // without a saved camera, buildMap fits the map and plays the intro once
     renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]);
@@ -3323,6 +3458,7 @@ async function setView(v, repo) {
   if (v === 'settings') renderSettings();
   if (v === 'work') { renderWork(); loadWork(true); }
   if (v === 'people') { renderPeople(); loadPeople(); }
+  if (v === 'projects') { renderProjects(); loadProjects(); }
 }
 $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'data' ? dataType() : b.dataset.view));
 
@@ -4340,7 +4476,7 @@ function palRender() {
   } else {
     S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));
   }
-  const cmds = [['Go to Context', '1', () => setView('work')], ['Go to People', '2', () => setView('people')], ['Show code', '3', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '4', () => setView('insights')], ['Open Settings', '5', () => setView('settings')],
+  const cmds = [['Go to Context', '1', () => setView('work')], ['Go to Projects', '2', () => setView('projects')], ['Go to People', '3', () => setView('people')], ['Show code', '4', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '5', () => setView('insights')], ['Open Settings', '6', () => setView('settings')],
     ['Toggle light / dark', 'T', toggleTheme], ['Clear all filters', '', clearFilters], ['Fit map to view', 'F', () => gl.fit(visibleIdx())], ['Keyboard shortcuts', '?', () => ($('#helpmodal').hidden = false)]];
   cmds.filter(([t]) => !q || t.toLowerCase().includes(q.replace(/^>/, '').trim())).slice(0, raw ? 3 : 7).forEach(([t, k, run]) => add('Commands', {ic: '›', title: t, rt: k, run}));
   pl.items = items; pl.sel = Math.min(pl.sel, items.length - 1);
@@ -4438,7 +4574,7 @@ document.addEventListener('keydown', e => {
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === '/') { e.preventDefault(); openPalette(); }
-  else if (k === '1') setView('work'); else if (k === '2') setView('people'); else if (k === '3') setView(dataType()); else if (k === '4') setView('insights'); else if (k === '5') setView('settings');
+  else if (k === '1') setView('work'); else if (k === '2') setView('projects'); else if (k === '3') setView('people'); else if (k === '4') setView(dataType()); else if (k === '5') setView('insights'); else if (k === '6') setView('settings');
   else if (k === 'f') gl.fit(visibleIdx());
   else if (k === 't') toggleTheme();
   else if (k === '?') $('#helpmodal').hidden = false;
@@ -4464,7 +4600,7 @@ $('#statuspill').onclick = () => toast(S.status.llm_offline ? $('#statuspill').t
 
 /* ============================== data loading + live updates ============================== */
 async function loadSessions() {
-  const [pts, topics, projects] = await Promise.all([api('/api/points?level=session'), api('/api/topics'), api('/api/projects')]);
+  const [pts, topics, projects] = await Promise.all([api('/api/points?level=session'), api('/api/topics'), api('/api/session-projects')]);
   const prev = new Map(S.sessions.map(s => [s.id, s.updated]));
   S.sessions = pts.points.map(s => ({...s, t0: T(s.started), t1: T(s.updated) || T(s.started)}));
   S.byId = new Map(S.sessions.map(s => [s.id, s]));
@@ -4513,6 +4649,7 @@ async function handleEvent(m) {
     else if (m.type === 'upstream') loadUpstream();
     else if (m.type === 'work') { if (S.view === 'work') loadWork(); }
     else if (m.type === 'people') { if (S.view === 'people') loadPeople(); else S.people.stale = true; }
+    else if (m.type === 'projects') { if (S.view === 'projects') loadProjects(); else S.proj.stale = true; }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
@@ -4544,7 +4681,7 @@ async function init() {
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
   document.body.dataset.view = S.view;
   syncTabs(S.view);
-  if (S.view !== 'work' && S.view !== 'people') { renderToolbar(); buildMap(); refresh(); }
+  if (!['work', 'people', 'projects'].includes(S.view)) { renderToolbar(); buildMap(); refresh(); }
   if (!gl.controls.autoRotate || store.get('hinted', false)) $('#hint').classList.add('gone');
   setTimeout(() => $('#hint').classList.add('gone'), 9000);
   connect();
