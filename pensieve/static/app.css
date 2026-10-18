@@ -584,6 +584,59 @@ body[data-view=insights] #hint,body[data-view=settings] #hint,body[data-view=ins
 body[data-view=work] .toolbar,body[data-view=work] #timeline,body[data-view=work] #hint,body[data-view=work] #drawer,
 body[data-view=work] #sidepanel,body[data-view=work] #sidetoggle,body[data-view=work] .mapbtn,body[data-view=work] #gl,
 body[data-view=work] #loading{display:none!important}
+body[data-view=people] .toolbar,body[data-view=people] #timeline,body[data-view=people] #hint,body[data-view=people] #drawer,
+body[data-view=people] #sidepanel,body[data-view=people] #sidetoggle,body[data-view=people] .mapbtn,body[data-view=people] #gl,
+body[data-view=people] #loading{display:none!important}
+#people{top:var(--top-h);left:var(--gap);right:var(--gap);bottom:var(--gap);padding:26px 30px 22px;display:flex;flex-direction:column;overflow:hidden}
+.pp-head{flex:none}
+.pp-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,400px);gap:16px;margin-top:16px}
+.pp-graph,.pp-card{border-radius:20px;background:var(--card);box-shadow:inset 0 0 0 .5px var(--line);min-height:0}
+.pp-graph{position:relative;overflow:hidden}
+.pp-graph svg{display:block;width:100%;height:100%}
+.pp-graph .empty{position:absolute;inset:0;display:grid;place-content:center;padding:30px}
+.pp-card{overflow:auto;padding:18px 20px 24px}
+.pp-ring{fill:none;stroke:var(--line-2);stroke-dasharray:2 6}
+.pp-l{stroke:var(--text-3);transition:opacity .15s}
+.pp-pl{stroke:var(--text-3);stroke-opacity:.1;transition:opacity .15s}
+.pp-n{cursor:pointer;transition:opacity .15s;outline:none}
+.pp-n .halo{fill:var(--card);stroke:var(--line-2);stroke-width:1.5}
+.pp-n:hover .halo,.pp-n:focus-visible .halo{stroke:var(--text-2);stroke-width:2}
+.pp-n.me .halo{stroke:var(--accent);stroke-width:2.5}
+.pp-n.sel .halo{stroke:var(--c-context);stroke-width:3}
+.pp-n .ini{fill:#fff;font-weight:600;text-anchor:middle;dominant-baseline:central;pointer-events:none}
+.pp-n .nm{fill:var(--text-2);font-size:11.5px;font-weight:500;text-anchor:middle;paint-order:stroke;stroke:var(--card);stroke-width:3px;stroke-linejoin:round;pointer-events:none}
+.pp-n.me .nm{fill:var(--text);font-weight:600}
+svg.hl .pp-n:not(.on){opacity:.28}
+svg.hl .pp-l:not(.on),svg.hl .pp-pl:not(.on){opacity:.05}
+svg.hl .pp-pl.on{stroke-opacity:.55}
+.pp-foot{position:absolute;left:16px;bottom:12px;font-size:11.5px;color:var(--text-3);max-width:calc(100% - 200px)}
+.pp-more{position:absolute;right:12px;bottom:10px;display:flex;gap:6px}
+.pp-banner{position:absolute;top:12px;left:12px;right:12px;padding:9px 14px;border-radius:12px;background:var(--accent-soft);font-size:13px;z-index:1}
+.pp-find{position:relative}
+.pp-find input{height:30px;width:200px;padding:0 12px;border:0;border-radius:999px;background:var(--card);box-shadow:inset 0 0 0 .5px var(--line);color:var(--text);font-size:13px;outline:0}
+.pp-find input:focus{box-shadow:inset 0 0 0 1.5px var(--accent)}
+.pp-hits{position:absolute;right:0;top:36px;width:260px;padding:6px;border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm),inset 0 0 0 .5px var(--line);z-index:3}
+.pp-hit{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:6px 8px;border-radius:9px;color:var(--text);font-size:13px;text-align:left}
+.pp-hit span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pp-hit:hover{background:var(--surface-2)}
+.pp-av{border-radius:50%;object-fit:cover;display:inline-grid;place-items:center;color:#fff;font-weight:600;flex:none;background:var(--surface-3)}
+.pp-id{display:flex;gap:14px;align-items:center;margin-top:10px}
+.pp-id h2{margin:0;font-size:19px;letter-spacing:-.01em;overflow-wrap:anywhere}
+.pp-fn{color:var(--text-2);font-size:13px;margin-top:3px}
+.pp-fn i{color:var(--text-3);font-style:normal;font-size:11.5px}
+.pp-lead{font-size:13px;line-height:1.5;color:var(--text-2);margin:14px 0 12px}
+.pp-kpis{grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin-bottom:4px}
+.pp-kpis .kpi{padding:10px 12px}.pp-kpis .v{font-size:20px}.pp-kpis .v.sm{font-size:14px;margin-top:6px}
+.pp-card a.item{text-decoration:none}
+.pp-st{font-size:11px;font-weight:600;text-transform:lowercase;color:var(--text-3)}
+.pp-st.open{color:#30a14e}.pp-st.merged{color:#a855f7}
+.pp-idrow{display:flex;gap:10px;align-items:center;font-size:12.5px;padding:6px 0;border-top:1px solid var(--line)}
+.pp-idrow:first-child{border-top:0}
+.pp-idrow .k{width:52px;flex:none;color:var(--text-3);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.pp-idrow .v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px var(--mono)}
+.pp-idrow .linkbtn{font-size:12px;color:var(--text-3)}.pp-idrow .linkbtn:hover{color:var(--critical)}
+@media (max-width:860px){#people{padding:20px 16px 16px;overflow:auto}.pp-body{display:flex;flex-direction:column}
+  .pp-graph{height:62vh;flex:none}.pp-card{overflow:visible}.pp-find input{width:150px}.pp-hits{left:0;right:auto;width:min(260px,80vw)}}
 /* ---- Data tab: tasks, each with its data points (left) and an AI note (right) ---- */
 #work{top:var(--top-h);left:var(--gap);right:var(--gap);bottom:var(--gap);padding:30px 32px 56px}
 #work>*{max-width:1080px;margin-left:auto;margin-right:auto}
