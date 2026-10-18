@@ -636,7 +636,15 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .pp-hits{position:absolute;right:0;top:36px;width:260px;padding:6px;border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm),inset 0 0 0 .5px var(--line);z-index:3}
 .pp-hit{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:6px 8px;border-radius:9px;color:var(--text);font-size:13px;text-align:left}
 .pp-hit span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pp-hit:hover{background:var(--surface-2)}
+.pp-hit:hover,.pp-hit.on{background:var(--surface-2)}
+.pp-hits{width:300px;max-height:min(460px,70vh);overflow:auto}
+.pp-hit small{display:block;color:var(--text-3);font-size:11.5px;overflow:hidden;text-overflow:ellipsis}
+.pp-hit .pp-src{flex:none;font-size:10.5px;font-weight:600;border-radius:999px;padding:1px 7px;background:var(--surface-3);color:var(--text-2)}
+.pp-hit.note{color:var(--text-3);font-size:12.5px;cursor:default}
+.pp-hit.note:hover{background:none}
+.pp-hit.note .spinner{width:12px;height:12px;border-width:2px;flex:none;margin:0 5px}
+.pp-hit.deep{border-top:1px solid var(--line);border-radius:0 0 9px 9px;margin-top:4px}
+.pp-av.pp-deep{background:var(--accent-soft);color:var(--accent);font-size:12px}
 .pp-av{border-radius:50%;object-fit:cover;display:inline-grid;place-items:center;color:#fff;font-weight:600;flex:none;background:var(--surface-3)}
 .pp-id{display:flex;gap:14px;align-items:center;margin-top:10px}
 .pp-id h2{margin:0;font-size:19px;letter-spacing:-.01em;overflow-wrap:anywhere}
