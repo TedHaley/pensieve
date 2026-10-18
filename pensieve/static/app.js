@@ -617,15 +617,7 @@ function renderToolbar() {
       <button class="btn" data-act="overlaps">Overlaps</button>
       <span style="flex:1"></span>`;
     $$('#ccolor button', tb).forEach(b => b.onclick = () => { S.code.colorBy = b.dataset.v; renderToolbar(); recolor(); });
-  } else {
-    tb.innerHTML = `<button class="btn only-xs" data-act="side">☰ Filters</button>
-      <div class="seg" id="lvl"><button data-v="session" class="${S.level === 'session' ? 'on' : ''}" title="One point per session">Sessions</button><button data-v="chunk" class="${S.level === 'chunk' ? 'on' : ''}" title="One point per conversation moment">Moments</button></div>
-      <div class="seg" id="mcolor"><span class="seg-label">Color</span>${[['area', 'Code area'], ['topic', 'Topic'], ['project', 'Project'], ['agent', 'Agent'], ['recency', 'Recency']].map(([k, l]) => `<button data-v="${k}" class="${S.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-      <span style="flex:1"></span>
-      ${S.highlight ? `<button class="btn on" data-act="clearhl">✕ Clear highlight (${S.highlight.size})</button>` : ''}`;
-    $$('#lvl button', tb).forEach(b => b.onclick = () => setLevel(b.dataset.v));
-    $$('#mcolor button', tb).forEach(b => b.onclick = () => { S.colorBy = b.dataset.v; store.set('mapColor', S.colorBy); renderToolbar(); recolor(); renderTimeline(); });
-  }
+  } else tb.innerHTML = '';  // Context, Insights and Settings have no map toolbar
   // the type switch lives under the search field; with the panel collapsed a compact picker stands in here
   $$('[data-act]', tb).forEach(b => b.onclick = () => ({
     fit: () => gl.fit(visibleIdx()),
@@ -636,16 +628,6 @@ function renderToolbar() {
     who: () => openPalette('who: '),
     overlaps: showOverlaps,
   })[b.dataset.act]());
-}
-
-async function setLevel(l) {
-  cams[camKey()] = gl.saveCam();
-  S.level = l;
-  if (l === 'chunk' && !S.chunks) {
-    $('#loading').classList.remove('gone'); $('#loadingtext').textContent = 'Loading conversation moments…';
-    S.chunks = (await api('/api/points?level=chunk')).points;
-  }
-  renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]);
 }
 
 /* ============================== sidebar ============================== */
@@ -3243,6 +3225,7 @@ async function setView(v, repo) {
   $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings'; $('#work').hidden = v !== 'work';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
   renderSidebar();  // now, not after the loads below: the panel would show the previous view's until then
+  if (!page) renderToolbar();  // the same for the toolbar, while the map loads
   if (!page && !S.mapShown) { S.mapShown = true; if (innerWidth >= 860) toggleSide(true); }  // the map opens with its panel
   if (v === 'code') {
     if (!S.code.repos.length) await loadRepos();
