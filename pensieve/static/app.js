@@ -2956,7 +2956,7 @@ function pjMatch(p, q) {
 function pjWhy(p) {
   const near = p.members.filter(m => !m.me && m.closeness >= 0.25).slice(0, 2).map(m => esc(ppShort(m.name)));
   const role = PJ_ROLE[p.role];
-  return [role, near.length ? `with ${near.join(', ')}` : ''].filter(Boolean).join(' ') || (p.counts.people ? `${plural(p.counts.people, 'person')} work here` : '');
+  return [role, near.length ? `with ${near.join(', ')}` : ''].filter(Boolean).join(' ') || (p.counts.people ? (p.counts.people === 1 ? '1 person works here' : `${p.counts.people.toLocaleString()} people work here`) : '');
 }
 function pjCard(p) {
   const c = p.counts, bits = [c.code && plural(c.code, 'file'), c.docs && plural(c.docs, 'document'), c.sessions && plural(c.sessions, 'session'),
