@@ -156,12 +156,22 @@ def tasks(store, days: int = 30) -> list[dict]:
     return hit[1]
 
 
-def _tasks(store, days):
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+def tasks_at(store, until: float, days: int = 30) -> list[dict]:
+    """The tasks as they were at `until` (a past time), for a replay: only the sessions that had started, and the
+    commits and connection items from before it. A session that ran on past `until` keeps its later text (chunks
+    have no time). No git or gh calls: folders and PR states are not part of a replay."""
+    return _tasks(store, days, until)
+
+
+def _tasks(store, days, until: float | None = None):
+    end = datetime.fromtimestamp(until, timezone.utc) if until else datetime.now(timezone.utc)
+    since = (end - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+    upto = end.strftime("%Y-%m-%dT%H:%M:%S.999Z")
     with store.lock:
         db = store.db
         sess = db.execute("SELECT id, project, title, summary, updated, started, path FROM sessions WHERE updated > ? "
-                          "AND n_chunks > 0 AND path NOT LIKE '%.md' ORDER BY updated DESC", (since,)).fetchall()
+                          "AND coalesce(started, updated) <= ? AND n_chunks > 0 AND path NOT LIKE '%.md' "
+                          "ORDER BY updated DESC", (since, upto)).fetchall()
         ids = [s[0] for s in sess]
         texts = defaultdict(list)
         for sid, t in db.execute(f"SELECT session_id, text FROM chunks WHERE session_id IN "
@@ -174,9 +184,9 @@ def _tasks(store, days):
                 edits[sid].add(p)
         roots = [r[0] for r in db.execute("SELECT root FROM repos").fetchall()]
         wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
-        commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ?",
-                             (_ts(since + "+00:00"),)).fetchall()
-    items = _items()
+        commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
+                             (_ts(since + "+00:00"), end.timestamp())).fetchall()
+    items = [i for i in _items() if not until or i["updated"] <= until]
 
     def repo_of(cwd):
         for w, (r, b) in wts.items():
@@ -193,7 +203,7 @@ def _tasks(store, days):
             continue
         repo, wt_branch = repo_of(project or "")
         branch = wt_branch or (_branch(path) if sid.startswith("claude:") else "")
-        S[sid] = dict(id=sid, title=title or "", summary=summary or "", updated=_ts(updated), started=_ts(started),
+        S[sid] = dict(id=sid, title=title or "", summary=summary or "", updated=min(_ts(updated), until or 9e18), started=_ts(started),
                       project=project or "", repo=repo, branch=branch, edited=edits.get(sid, set()), path=path)
         prefixes |= {m.group(1) for m in KEY.finditer(branch)}
     # ticket links in the sessions' text teach each project prefix and its site, so a key alone becomes a link
@@ -351,8 +361,12 @@ def _tasks(store, days):
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(8) as pool:  # git and gh calls, each cached
-        list(pool.map(lambda t: _pickup(t, wts), out))
+    if until is None:  # a replay has no live folders or PR states
+        with ThreadPoolExecutor(8) as pool:  # git and gh calls, each cached
+            list(pool.map(lambda t: _pickup(t, wts), out))
+    else:
+        for t in out:
+            t["places"] = []
     _own_prs(out)
     have, manual = notes(), task_states.latest(store)
     for t in out:

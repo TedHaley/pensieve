@@ -117,7 +117,26 @@ The snapshots of a thread form its history, as commits form the history of a bra
 4. It compares the embeddings of problem and goal for each match, and applies rule 6.
 5. It records the event (rule 7), and keeps the thread id.
 
-The thresholds for overlap and for embedding distance come from a replay of past days. Pensieve builds the snapshots as of each day, links them, and compares the links with labels of "same work" and "different work".
+The thresholds for overlap and for embedding distance come from a replay of past days (`bench/threads_replay.py`). Pensieve builds the snapshots as of each day, links them, and compares the links with labels of "same work" and "different work". On one Mac, over 30 days and 551 labelled pairs:
+
+| Linker | Wrong joins | Wrong splits | F1 for "same goal" |
+|---|---:|---:|---:|
+| Members only (overlap 0.4) | 9 | 7 | 0.74 |
+| Goals only (similarity 0.8) | 6 | 10 | 0.71 |
+| Both (overlap 0.4, similarity 0.6) | 9 | 7 | 0.74 |
+
+Members do the work. The goal check adds nothing on this data, and it stays as a guard for forks. A suggestion at similarity 0.85 finds one missed link, with no wrong suggestion. Most wrong joins come from snapshots that join two goals on one branch before the linker sees them.
+
+## Local history
+
+Pensieve saves each thread's card when it changes (`pensieve/history.py`). It checks every 10 minutes, and it saves a card when:
+
+- the linker records an event (start, fork, split, merge, revive);
+- the state of the thread changes;
+- a ticket, PR, branch, commit or session comes or goes (edited files alone do not count);
+- the embedding of the problem and goal moves 0.05 or more since the last save.
+
+A thread is saved at most once in 30 minutes, except for an event or a state change. A save on a timer alone gives no new information: in the replay, a save at every 12-hour build made 1,365 copies, and the rules above made 29. After 30 days, one save a day is kept for each thread, with every event and state change.
 
 ## Examples
 

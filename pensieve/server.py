@@ -414,7 +414,29 @@ async def enricher():
             await asyncio.sleep(30)
 
 
-@asynccontextmanager
+keeper = None  # history.Keeper: links the cards to threads and saves the ones that changed
+
+
+async def card_keeper():
+    """Every history.CHECK seconds: save the cards that changed to their threads' history; once a day, prune it."""
+    from pensieve import history
+    global keeper
+    await asyncio.sleep(60)  # after the first index pass has settled
+    keeper, pruned = history.Keeper(store), 0.0
+    while True:
+        try:
+            saved = await asyncio.to_thread(keeper.run_once)
+            if saved:
+                print(f"Saved {len(saved)} context cards to their threads' history", flush=True)
+            if time.time() - pruned > 86400:
+                await asyncio.to_thread(history.prune)
+                pruned = time.time()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        await asyncio.sleep(history.CHECK)
+
+
 def _drop_plugin_duplicates():
     from pensieve import integrations
     try:
@@ -426,6 +448,7 @@ def _drop_plugin_duplicates():
         traceback.print_exc()
 
 
+@asynccontextmanager
 async def lifespan(app):
     global store, repos, files, searcher, datamap
     store = Store()
@@ -470,7 +493,7 @@ async def lifespan(app):
     loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
     loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
-    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher())]
+    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(card_keeper())]
     async with mcp_server.mcp.session_manager.run():
         yield
     for t in tasks:
@@ -1410,6 +1433,36 @@ def draft_work_card(req: CardDraftReq):
     card = _local_card(req.id, req.days)
     return {"resources": [{k: r.get(k) for k in ("kind", "title", "reach")} for r in card.get("resources", [])],
             "card": cards.draft_share(card, store, req.include)}
+
+
+@app.get("/api/threads")
+def get_threads():
+    """The threads with saved cards: id, title, number of saves, first and last save; and which thread each current
+    task belongs to."""
+    from pensieve import history
+    return {"threads": history.listing(), "of_task": keeper.of_task if keeper else {}}
+
+
+@app.post("/api/threads/save")
+async def save_threads():
+    """Save the cards that changed now, as the keeper does every history.CHECK seconds. Returns what was saved."""
+    if keeper is None:
+        raise HTTPException(503, "the card keeper starts a minute after Pensieve")
+    return {"saved": await asyncio.to_thread(keeper.run_once)}
+
+
+@app.get("/api/threads/{thread}")
+def get_thread_history(thread: str, format: str = "json", n: int = -1):
+    """A thread's saved cards, oldest first ({at, reasons, snapshot, card}); with format=html, save n as its page
+    (the last by default)."""
+    from fastapi.responses import HTMLResponse
+    from pensieve import cards, history
+    saves = history.history(thread)
+    if not saves:
+        raise HTTPException(404, f"no saved cards for {thread}")
+    if format == "html":
+        return HTMLResponse(cards.render_html(saves[n]["card"]))
+    return saves
 
 
 class CardRenderReq(BaseModel):

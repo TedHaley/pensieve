@@ -640,8 +640,20 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   overlap and goal distance, and record start, continue, split, merge, fork, end and revive.
 - **Measure:** replay the last 30 days, as of each day. Label a sample of links as same work or different work.
   Compare members only, embeddings only and both, by wrong joins and wrong splits, and set the thresholds.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-17: built `pensieve/threads.py` (the linker) and `bench/threads_replay.py`. On one Mac: 61 builds
+    12 hours apart, 1,365 snapshots, 584 pairs to decide, labelled by Sonnet (551 with confidence 0.7 or more: 30
+    same goal). Members only: F1 0.74 at overlap 0.4; goals only: 0.71 at similarity 0.8; both: 0.74. The full
+    linker made 48 threads with 29 continues, 7 splits, 2 merges and 1 suggestion. Most wrong joins come from
+    `work.py` joining two goals on one branch before the linker sees them: fix the joins there next.
+  - A PR that a session's title names is a strong member (two splits fixed).
+  - `pensieve/history.py` saves a thread's card when it changes (see `docs/threads.md`, Local history):
+    `GET /api/threads`, `GET /api/threads/<thread>` (`format=html&n=…` for one save), `POST /api/threads/save`.
+    On a copy of this Mac's index: 44 threads saved on the first pass (964 KB), none on a second pass, and a state
+    change saved one card.
+  - Not built: a thread id on the Context tab and in the MCP tools, hand-set states keyed by thread, and a way to
+    open an old save as the start of new work.
 
 ## E. Connections
 
