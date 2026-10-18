@@ -123,6 +123,7 @@ async def watcher():
     work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
     from pensieve import people
     people.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "people"}))
+    people.blame_fn = repos.people  # each author's share of a repo's lines, for the org chart's ownership signal
     from pensieve import team_projects
     team_projects.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "projects"}))
     threading.Thread(target=work.tasks, args=(store, 30), daemon=True).start()  # built now, so the first view of the tab does not wait for git and gh
@@ -1579,6 +1580,15 @@ def get_people(limit: int = 200, refresh: bool = False):
     from pensieve import people
     people.rebuild(store, _repo_rows, force=refresh)
     return people.summary(limit)
+
+
+@app.get("/api/people/org")
+def get_people_org():
+    """The People tab's Org view, all inferred: teams, each person's function, seniority and team with confidence and
+    evidence, and manager -> report edges where there is evidence for them."""
+    from pensieve import people
+    people.rebuild(store, _repo_rows)
+    return people.org_chart()
 
 
 @app.get("/api/people/find")

@@ -26,7 +26,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from pensieve import config, connections, repos as repos_mod, settings, work
+from pensieve import config, connections, identity, org, repos as repos_mod, settings, work
 
 DIR = config.DATA_DIR / "people"
 RAW = DIR / "raw.json"            # identities and interactions, by identity key (the slow part)
@@ -81,7 +81,7 @@ def is_bot(name: str = "", email: str = "", login: str = "") -> bool:
 def _keys(name="", email="", login="", slack="") -> list[str]:
     email = (email or "").strip().lower()
     out = []
-    if email and "@" in email:
+    if email and "@" in email and not identity.placeholder(email):
         out.append("email:" + email)
         m = NOREPLY.match(email)
         if m:
@@ -128,17 +128,26 @@ class _Raw:
     def __init__(self):
         self.ids = []                      # {keys, name, email, login, slack, avatar, title, src}
         self.acts = {}                     # (kind, a, b) -> {n, last, refs}
-        self.work = defaultdict(lambda: {"repos": {}, "exts": Counter(), "subjects": [], "prs": [], "reviews": [],
-                                         "channels": Counter(), "slack_last": 0, "messages": 0})
+        self.work = defaultdict(_new_work)
         self.me = set()
+        self.me_names = set()
+        self.me_sources = defaultdict(list)   # key -> how Pensieve knows that it is the user's
+        self.extra = {}                       # GitHub teams, code owners and repo owners, for the org chart
         self.stats = Counter()
 
-    def ident(self, src, name="", email="", login="", slack="", avatar="", title=""):
+    def ident(self, src, name="", email="", login="", slack="", avatar="", title="", aliases=()):
         ks = _keys(name, email, login, slack)
         if ks:
+            al = sorted({a.strip() for a in aliases if a and a.strip() and a.strip() != (name or "").strip()})
             self.ids.append(dict(keys=ks, name=name or "", email=(email or "").lower(), login=login or "",
-                                 slack=slack or "", avatar=avatar or "", title=title or "", src=src))
+                                 slack=slack or "", avatar=avatar or "", title=title or "", src=src,
+                                 **({"aliases": al} if al else {})))
         return ks[0] if ks else None
+
+    def mine(self, key, how):
+        self.me.add(key)
+        if how not in self.me_sources[key]:
+            self.me_sources[key].append(how)
 
     def act(self, kind, a, b, ts=0, ref=None, n=1):
         if not a or not b or a == b:
@@ -152,28 +161,61 @@ class _Raw:
 
     def dump(self) -> dict:
         return dict(built=time.time(), ids=self.ids, me=sorted(self.me), stats=dict(self.stats),
+                    me_names=sorted(self.me_names), me_sources=dict(self.me_sources), **self.extra,
                     acts=[dict(kind=k, a=a, b=b, n=v["n"], last=v["last"],
                                refs=sorted(v["refs"], key=lambda r: -(r.get("ts") or 0))[:6])
                           for (k, a, b), v in self.acts.items()],
                     work={k: {**w, "exts": dict(w["exts"]), "channels": dict(w["channels"]),
+                              "tasks": sorted(w["tasks"])[:40], "approved": dict(w["approved"]),
+                              "approved_by": dict(w["approved_by"]),
                               "subjects": sorted(w["subjects"], key=lambda s: -s[0])[:12],
                               "prs": sorted(w["prs"], key=lambda p: -p["ts"])[:10],
                               "reviews": sorted(w["reviews"], key=lambda p: -p["ts"])[:10]}
                           for k, w in self.work.items()})
 
 
-def _me_git(roots) -> tuple[set[str], set[str]]:
-    """The user's git emails and names: the global config and each repo's own."""
-    emails, names = set(), set()
-    for args in [["config", "--global"]] + [["-C", r, "config"] for r in roots]:
+def _new_work():
+    return {"repos": {}, "exts": Counter(), "subjects": [], "prs": [], "reviews": [], "channels": Counter(),
+            "slack_last": 0, "messages": 0, "tasks": set(), "n_prs": 0, "n_reviews": 0, "approved": Counter(),
+            "approved_by": Counter(), "owns": [], "blame": {}}
+
+
+def _me_git(roots) -> tuple[dict, dict]:
+    """The user's git emails and names, each with where it was found: the global config and each repo's own."""
+    emails, names = defaultdict(list), defaultdict(list)
+    for where, args in [("global", ["config", "--global"])] + [(Path(r).name, ["-C", r, "config"]) for r in roots]:
         for k, into in (("user.email", emails), ("user.name", names)):
             try:
                 v = subprocess.run(["git", *args, k], capture_output=True, text=True, timeout=5).stdout.strip()
             except (OSError, subprocess.TimeoutExpired):
                 v = ""
-            if v:
-                into.add(v)
+            if v and where not in into[v]:
+                into[v].append(where)
     return emails, names
+
+
+def _gh_accounts() -> list[dict]:
+    """Every GitHub account that `gh` is logged in to (gh auth status, read only): [{login, host, active}]."""
+    hit = _read(CACHE / "gh-accounts.json", {})
+    if hit.get("at", 0) > time.time() - 86400:
+        return hit.get("accounts", [])
+    out = []
+    if shutil.which("gh"):
+        try:
+            r = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=20)
+            text = r.stdout + "\n" + r.stderr
+        except (OSError, subprocess.TimeoutExpired):
+            text = ""
+        cur = None
+        for ln in text.splitlines():
+            m = re.search(r"Logged in to (\S+) (?:account|as) ([\w-]+)", ln)
+            if m:
+                cur = dict(host=m.group(1), login=m.group(2), active=False)
+                out.append(cur)
+            elif cur and re.search(r"Active account:\s*true", ln):
+                cur["active"] = True
+    _write(CACHE / "gh-accounts.json", {"at": time.time(), "accounts": out})
+    return out
 
 
 def _gh_login() -> str:
@@ -216,27 +258,36 @@ def _git_repo(root: str, name: str) -> dict | None:
         return None
     cf = CACHE / f"git-{_hash(root)}.json"
     hit = _read(cf, {})
-    if hit.get("head") == head and hit.get("v") == 1:
+    if hit.get("head") == head and hit.get("v") == 2:
         return hit
     out = repos_mod.git(root, "log", f"--since={GIT_DAYS}.days", "--no-merges", "-n", "5000", "--name-only",
-                        "--format=%x1e%at%x1f%an%x1f%ae%x1f%s")
+                        "--format=%x1e%at%x1f%an%x1f%ae%x1f%(trailers:key=Co-authored-by,valueonly=true,"
+                        "separator=%x1d)%x1f%s")
     authors, files = {}, defaultdict(Counter)
     file_last = defaultdict(dict)
+    coauthors = {}
     for rec in out.split("\x1e")[1:]:
         head_line, _, names = rec.partition("\n")
-        bits = head_line.split("\x1f", 3)
-        if len(bits) < 4:
+        bits = head_line.split("\x1f", 4)
+        if len(bits) < 5:
             continue
-        ts, an, ae, subj = int(bits[0]), bits[1], bits[2].lower(), bits[3]
+        ts, an, ae, trailers, subj = int(bits[0]), bits[1], bits[2].lower(), bits[3], bits[4]
         if is_bot(an, ae):
             continue
         a = authors.setdefault(ae, {"names": Counter(), "commits": 0, "last": 0, "areas": Counter(), "exts": Counter(),
-                                    "subjects": []})
+                                    "subjects": [], "months": set()})
         a["names"][an] += 1
         a["commits"] += 1
         a["last"] = max(a["last"], ts)
+        a["months"].add(time.strftime("%Y%m", time.gmtime(ts)))
         if len(a["subjects"]) < 8:
             a["subjects"].append([ts, subj])
+        for t in trailers.split("\x1d"):
+            m = re.match(r"\s*(.*?)\s*<([^<>\s]+@[^<>\s]+)>", t)
+            if m and not is_bot(m.group(1), m.group(2)) and m.group(2).lower() != ae:
+                c = coauthors.setdefault(m.group(2).lower(), {"name": m.group(1), "with": Counter(), "last": 0})
+                c["with"][ae] += 1
+                c["last"] = max(c["last"], ts)
         touched = set()
         for f in (n for n in names.split("\n") if n):
             files[f][ae] += 1
@@ -258,13 +309,31 @@ def _git_repo(root: str, name: str) -> dict | None:
                 p[0] += min(c[x], c[y])
                 p[1] = max(p[1], min(file_last[f][x], file_last[f][y]))
                 p[2][repos_mod.area_of(f)] += 1
-    res = dict(v=1, head=head, name=name, root=root,
+    first = _first_commits(root, head, hit)
+    res = dict(v=2, head=head, name=name, root=root, first=first,
                authors={e: {"name": a["names"].most_common(1)[0][0], "commits": a["commits"], "last": a["last"],
+                            "first": first.get(e, 0), "months": sorted(a["months"]),
+                            "names": [n for n, _ in a["names"].most_common(3)],
                             "areas": dict(a["areas"].most_common(8)), "exts": dict(a["exts"]), "subjects": a["subjects"]}
                         for e, a in authors.items()},
+               coauthors={e: {"name": c["name"], "with": dict(c["with"]), "last": c["last"]} for e, c in coauthors.items()},
                pairs=[[x, y, p[0], p[1], [a for a, _ in p[2].most_common(3)]] for (x, y), p in pairs.items()])
     _write(cf, res)
     return res
+
+
+def _first_commits(root: str, head: str, hit: dict) -> dict:
+    """email -> the time of their first commit in the repo's whole history (tenure). After the first run, only the
+    commits since the last HEAD are read."""
+    first = dict(hit.get("first") or {})
+    rng = [f"{hit['head']}..{head}"] if first and hit.get("head") else []
+    out = repos_mod.git(root, "log", "--no-merges", "--format=%ae%x1f%at", *rng)
+    for ln in out.splitlines():
+        e, _, ts = ln.partition("\x1f")
+        if ts.isdigit():
+            e = e.lower()
+            first[e] = min(first.get(e) or int(ts), int(ts))
+    return first
 
 
 def _collect_git(raw: _Raw, repo_rows):
@@ -277,16 +346,23 @@ def _collect_git(raw: _Raw, repo_rows):
             continue
         raw.stats["repos"] += 1
         for email, a in g["authors"].items():
-            k = raw.ident("git", name=a["name"], email=email)
+            k = raw.ident("git", name=a["name"], email=email, aliases=a.get("names", []))
             if not k:
                 continue
             w = raw.work[k]
-            w["repos"][name] = {"commits": a["commits"], "last": a["last"], "areas": a["areas"]}
+            w["repos"][name] = {"commits": a["commits"], "last": a["last"], "areas": a["areas"],
+                                "first": a.get("first") or 0, "months": a.get("months", [])}
             w["exts"].update(a["exts"])
             w["subjects"] += [[ts, name, s] for ts, s in a["subjects"]]
         for x, y, n, last, areas in g["pairs"]:
             raw.act("code", "email:" + x, "email:" + y, last, n=n,
                     ref={"t": f"{name}: {', '.join(areas)}", "ts": last, "repo": name, "areas": areas})
+        # a Co-authored-by trailer ties a name to an email (an identity), and the co-author to the commit's author
+        for email, c in g.get("coauthors", {}).items():
+            k = raw.ident("git", name=c["name"], email=email)
+            for other, n in c["with"].items():
+                raw.act("code", "email:" + other, k, c["last"], n=n,
+                        ref={"t": f"{name}: co-authored commits", "ts": c["last"], "repo": name, "areas": []})
 
 
 def _gh_slug(remote: str) -> str:
@@ -300,7 +376,7 @@ def _gh_repo(slug: str) -> list[dict]:
     authors. Cached for GH_TTL."""
     cf = CACHE / f"gh-{_hash(slug)}.json"
     hit = _read(cf, {})
-    if hit.get("at", 0) > time.time() - GH_TTL:
+    if hit.get("at", 0) > time.time() - GH_TTL and hit.get("v") == 2:
         return hit.get("prs", [])
     def gh(limit, fields):
         r = subprocess.run(["gh", "pr", "list", "--repo", slug, "--state", "all", "--limit", str(limit), "--json",
@@ -319,12 +395,14 @@ def _gh_repo(slug: str) -> list[dict]:
                 state=(p.get("state") or "").lower(), ts=work._ts(p.get("updatedAt") or ""),
                 author=dict(login=au.get("login", ""), name=au.get("name", ""), bot=bool(au.get("is_bot"))),
                 reviewers=sorted({(rv.get("author") or {}).get("login", "") for rv in p.get("reviews") or []} - {""}),
+                approvers=sorted({(rv.get("author") or {}).get("login", "") for rv in p.get("reviews") or []
+                                  if rv.get("state") == "APPROVED"} - {""}),
                 commit_authors=list({(c.get("login") or c.get("email") or ""): dict(
                     login=c.get("login") or "", email=c.get("email") or "", name=c.get("name") or "")
                     for cm in authors.get(p.get("number"), []) for c in cm.get("authors") or []}.values())))
     except (OSError, subprocess.TimeoutExpired, ValueError):
         prs = hit.get("prs", [])  # kept, and not asked again before GH_TTL
-    _write(cf, {"at": time.time(), "prs": prs})
+    _write(cf, {"at": time.time(), "prs": prs, "v": 2})
     return prs
 
 
@@ -354,11 +432,17 @@ def _collect_github(raw: _Raw, repo_rows, my_emails: set[str]):
                               login=c["login"])
             ref = {"t": p["title"], "url": p["url"], "ts": p["ts"], "state": p["state"], "repo": name}
             raw.work[ak]["prs"].append(dict(ref))
+            raw.work[ak]["n_prs"] += 1
+            approvers = set(p.get("approvers") or [])
             for rv in p["reviewers"]:
                 if rv == a["login"] or is_bot(login=rv):
                     continue
                 rk = raw.ident("github", login=rv, avatar=f"https://github.com/{rv}.png?size=128")
                 raw.work[rk]["reviews"].append({**ref, "author": a["login"]})
+                raw.work[rk]["n_reviews"] += 1
+                if rv in approvers:
+                    raw.work[rk]["approved"][a["login"].lower()] += 1
+                    raw.work[ak]["approved_by"][rv.lower()] += 1
                 raw.act("pr", ak, rk, p["ts"], ref={**ref, "by": a["login"], "reviewer": rv})
 
 
@@ -389,9 +473,11 @@ def parse_slack_users(text: str) -> list[dict]:
         if not _UID.fullmatch(uid):
             continue
         pic = _URL_IN.search(f.get("Profile Pic", ""))
-        out.append(dict(id=uid, name=f.get("Real Name") or f.get("Name") or f.get("Display Name") or "",
-                        title=f.get("Title", ""), email=f.get("Email", "").lower(), avatar=pic.group(1) if pic else "",
-                        bot=f.get("Bot", "").lower() == "yes"))
+        name = f.get("Real Name") or f.get("Name") or f.get("Display Name") or ""
+        disp = f.get("Display Name", "")
+        out.append(dict(id=uid, name=name, title=f.get("Title", ""), email=f.get("Email", "").lower(),
+                        avatar=pic.group(1) if pic else "", bot=f.get("Bot", "").lower() == "yes",
+                        display=disp if disp != name else ""))
     return out
 
 
@@ -405,7 +491,8 @@ def _json_users(x, depth=0):
         if isinstance(uid, str) and _UID.fullmatch(uid) and (x.get("real_name") or prof):
             yield dict(id=uid, name=x.get("real_name") or prof.get("real_name") or x.get("name") or "",
                        title=prof.get("title") or x.get("title") or "", email=(prof.get("email") or "").lower(),
-                       avatar=prof.get("image_192") or prof.get("image_72") or "", bot=bool(x.get("is_bot")))
+                       avatar=prof.get("image_192") or prof.get("image_72") or "", bot=bool(x.get("is_bot")),
+                       display=prof.get("display_name") or "")
         for v in x.values():
             yield from _json_users(v, depth + 1)
     elif isinstance(x, list):
@@ -462,7 +549,7 @@ def _collect_slack(raw: _Raw) -> dict:
 
     def seen_user(u):
         cur = users.setdefault(u["id"], dict(id=u["id"], name="", title="", email="", avatar="", bot=False))
-        for k in ("name", "title", "email", "avatar"):
+        for k in ("name", "title", "email", "avatar", "display"):
             cur[k] = cur.get(k) or u.get(k) or ""
         cur["bot"] = cur.get("bot") or u.get("bot", False)
 
@@ -509,10 +596,13 @@ def _collect_slack(raw: _Raw) -> dict:
                         channels[cid]["people"][uid] += 1
                         channels[cid]["last"] = max(channels[cid]["last"], ts)
                         channels[cid]["name"] = channels[cid]["name"] or cname
-    key_of = {uid: raw.ident("slack", name=u["name"], email=u["email"], slack=uid, avatar=u["avatar"], title=u["title"])
+    key_of = {uid: raw.ident("slack", name=u["name"], email=u["email"], slack=uid, avatar=u["avatar"], title=u["title"],
+                             aliases=[u.get("display", "")])
               for uid, u in users.items() if not u.get("bot")}
     if prof.get("me"):
-        raw.me.add("slack:" + prof["me"])
+        raw.mine("slack:" + prof["me"], "your own Slack profile")
+        if users.get(prof["me"], {}).get("email"):
+            raw.mine("email:" + users[prof["me"]]["email"].lower(), "the email on your Slack profile")
     for t in threads.values():
         ppl = [key_of[u] for u in t["people"] if key_of.get(u)]
         raw.stats["slack_threads"] += 1
@@ -557,6 +647,8 @@ def _collect_tasks(raw: _Raw, store, slack_by_item: dict):
             if is_bot(p, p if "@" in p else ""):
                 continue
             k = raw.ident("task", email=p) if "@" in p else raw.ident("task", name=p)
+            if k and t.get("id"):
+                raw.work[k]["tasks"].add(t["id"])
             when = mine(p)
             raw.act("task", "me", k, when, ref={"t": t.get("title", ""), "id": t.get("id"), "ts": when})
         for it in t.get("items", []):
@@ -585,17 +677,127 @@ def collect(store, repo_rows) -> dict:
     CACHE.mkdir(parents=True, exist_ok=True)
     raw = _Raw()
     emails, names = _me_git([r[0] for r in repo_rows])
-    raw.me |= {"email:" + e.lower() for e in emails} | {"name:" + n for n in map(norm_name, names) if n}
+    for e, where in emails.items():
+        raw.mine("email:" + e.lower(), "git config user.email (" + ", ".join(where[:3]) + ")")
+    for n, where in names.items():
+        raw.me_names.add(n)
+        if norm_name(n):
+            raw.mine("name:" + norm_name(n), "git config user.name (" + ", ".join(where[:3]) + ")")
     login = _gh_login()
     if login:
-        raw.me.add("gh:" + login.lower())
+        raw.mine("gh:" + login.lower(), "the active gh account")
+    for acc in _gh_accounts():
+        if acc["host"] == "github.com":
+            raw.mine("gh:" + acc["login"].lower(), "gh auth status" + (" (active account)" if acc["active"] else ""))
+    raw.extra["repo_owner"] = {name: _gh_slug(remote).split("/")[0] for _root, name, remote in repo_rows
+                               if _gh_slug(remote)}
     _collect_git(raw, repo_rows)
     _collect_github(raw, repo_rows, {e.lower() for e in emails})
     by_item = _collect_slack(raw)
     _collect_tasks(raw, store, by_item)
+    _collect_directory(raw)
+    _collect_owners(raw, repo_rows)
+    _collect_blame(raw, repo_rows)
     d = raw.dump()
     _write(RAW, d)
     return d
+
+
+blame_fn = None   # the server sets it: repo name -> [{author: 'Name <email>', share, lines, dirs}] (git blame)
+
+
+def _collect_blame(raw: _Raw, repo_rows):
+    """Each author's share of the lines of each repo (git blame, from the index): ownership, for the org chart."""
+    if not blame_fn:
+        return
+    for _root, name, _remote in repo_rows:
+        try:
+            rows = blame_fn(name) or []
+        except Exception:
+            continue
+        for r in rows:
+            m = re.search(r"<([^<>\s]+@[^<>\s]+)>", r.get("author", ""))
+            if m and r.get("share", 0) >= 0.01:
+                raw.work["email:" + m.group(1).lower()]["blame"][name] = round(r["share"], 4)
+
+
+def _collect_directory(raw: _Raw):
+    """The people that Find a person found and kept (directory.json): more evidence of which identities are one
+    person (a Slack profile's emails, a GitHub login). Records that join no one are not people of the graph."""
+    for r in _read(DIR / "directory.json", {}).get("people", []):
+        common = dict(name=r.get("name", ""), login=r.get("login", ""), slack=r.get("slack", ""),
+                      avatar=r.get("avatar_url", ""), title=r.get("title", ""))
+        for e in (r.get("emails") or [""])[:4]:
+            raw.ident("directory", email=e, **common)
+
+
+_OWNER_FILES = ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS")
+MAX_TEAMS = 40
+
+
+def _collect_owners(raw: _Raw, repo_rows):
+    """Code owners: the CODEOWNERS file of each repo (people, emails and GitHub teams), and the members of those
+    teams through `gh` (GET only, cached for a day)."""
+    owners, teams = {}, Counter()
+    team_repos = defaultdict(Counter)
+    for root, name, _remote in repo_rows:
+        f = next((Path(root) / p for p in _OWNER_FILES if (Path(root) / p).is_file()), None)
+        if not f:
+            continue
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:
+            continue
+        cnt = Counter()
+        for ln in text.splitlines():
+            ln = ln.split("#", 1)[0].split()
+            for o in ln[1:]:
+                cnt[o.lower()] += 1
+        owners[name] = dict(cnt.most_common(200))
+        for o, n in cnt.items():
+            if o.startswith("@") and "/" in o:
+                teams[o[1:]] += n
+                team_repos[o[1:]][name] += n
+            elif o.startswith("@"):
+                raw.work["gh:" + o[1:]]["owns"].append([name, n])
+            elif "@" in o:
+                raw.work["email:" + o]["owns"].append([name, n])
+    raw.extra["codeowners"] = owners
+    got = {}
+    if teams and shutil.which("gh"):
+        with ThreadPoolExecutor(4) as pool:
+            for slug, t in zip([s for s, _ in teams.most_common(MAX_TEAMS)],
+                               pool.map(_gh_team, [s for s, _ in teams.most_common(MAX_TEAMS)])):
+                if t:
+                    got[slug] = {**t, "paths": teams[slug], "repos": dict(team_repos[slug])}
+    raw.extra["teams"] = got
+    raw.stats["gh_teams"] = len(got)
+
+
+def _gh_team(slug: str) -> dict | None:
+    """A GitHub team ('org/team'): its name, parent team, members and maintainers. Read only; cached for a day."""
+    cf = CACHE / f"gh-team-{_hash(slug)}.json"
+    hit = _read(cf, {})
+    if hit.get("at", 0) > time.time() - 86400:
+        return hit.get("team")
+    org_, _, team = slug.partition("/")
+
+    def get(path):
+        r = subprocess.run(["gh", "api", "--method", "GET", path], capture_output=True, text=True, timeout=30)
+        if r.returncode:
+            raise OSError(r.stderr[:200])
+        return json.loads(r.stdout or "null")
+    try:
+        info = get(f"orgs/{org_}/teams/{team}")
+        members = get(f"orgs/{org_}/teams/{team}/members?per_page=100")
+        maint = get(f"orgs/{org_}/teams/{team}/members?role=maintainer&per_page=100")
+        res = dict(name=info.get("name") or team, parent=(info.get("parent") or {}).get("slug", ""),
+                   members=sorted({m["login"].lower() for m in members or [] if m.get("login")}),
+                   maintainers=sorted({m["login"].lower() for m in maint or [] if m.get("login")}))
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
+        res = hit.get("team")
+    _write(cf, {"at": time.time(), "team": res})
+    return res
 
 
 def overrides() -> dict:
@@ -610,35 +812,72 @@ def _set_overrides(fn):
         _write(OVERRIDES, o)
 
 
-def resolve(raw: dict, ovr: dict) -> dict:
-    """People from the raw identities: union on strong keys (email, GitHub login, Slack id), then on full names, then
-    the user's own merges. A split key joins nothing but the user's own merges."""
-    uf = work._Union()
-    split = set(ovr["split"])
+def _stems(raw: dict) -> list[str]:
+    """Company names that logins and email names carry ('sam-example'): the stems of the work email domains that
+    three or more people use, and the GitHub owners of the repos."""
+    doms = Counter(identity.domain(ob["email"]) for ob in raw["ids"] if identity.is_work_mail(ob.get("email", "")))
+    st = {d.split(".")[0] for d, n in doms.items() if n >= 3} | set((raw.get("repo_owner") or {}).values())
+    return sorted({identity.fold(s) for s in st if len(s) >= 3}, key=len, reverse=True)
+
+
+def _stable_ids(groups: dict, prev: dict | None, now: float) -> dict:
+    """root -> (person id, aliases, since). A person keeps the id that they had in the last build: when two people
+    join, the older id stays and the other becomes an alias; when one splits, the part with most of the old keys
+    keeps it. A new person's id is the hash of their best key."""
+    prev_people = (prev or {}).get("people", {})
+    prev_built = (prev or {}).get("built", now)
+    prev_of = {}
+    for pid, p in prev_people.items():
+        for k in p["keys"]:
+            prev_of[k] = pid
+    overlap = defaultdict(Counter)
+    for root, keys in groups.items():
+        for k in keys:
+            if k in prev_of:
+                overlap[prev_of[k]][root] += 1
+    owned = defaultdict(list)
+    for pid, roots in overlap.items():
+        owned[roots.most_common(1)[0][0]].append(pid)
+    out, used = {}, set()
+    for root, keys in groups.items():
+        olds = sorted(owned.get(root, []), key=lambda q: (prev_people[q].get("since") or prev_built, q))
+        if olds:
+            pid = olds[0]
+            aliases = sorted(set(olds[1:]) | {a for q in olds for a in prev_people[q].get("aliases", [])} - {pid})
+            since = prev_people[pid].get("since") or prev_built
+        else:
+            ranked = sorted(keys, key=_key_rank)
+            pid = next(("p" + _hash(k) for k in ranked if "p" + _hash(k) not in prev_people), "p" + _hash(ranked[0]))
+            aliases, since = [], now
+        while pid in used:
+            pid = "p" + _hash(pid)
+        used.add(pid)
+        out[root] = (pid, aliases, since)
+    return out
+
+
+def _best_name(obs, first: str) -> str:
+    names = Counter()
+    for src, n in {(ob["src"], (ob["name"] or "").strip()) for ob in obs}:  # one vote per source, not per repo
+        if n:
+            # a one-word name is often a login or a git shorthand; people know each other by the Slack name
+            names[n] += {"slack": 3, "github": 2, "directory": 2}.get(src, 1) * (3 if len(n.split()) > 1 else 1)
+    return names.most_common(1)[0][0] if names else first.split(":", 1)[-1].split("@")[0]
+
+
+def resolve(raw: dict, ovr: dict, prev: dict | None = None) -> dict:
+    """People from the raw identities (see identity.py: facts, then scored evidence, then the user's own merges and
+    keys). `prev` is the last graph, so that ids stay the same from one build to the next."""
+    now = time.time()
     me_keys = set(raw.get("me", [])) | set(ovr["me"])
-    strong_of = []
-    for ob in raw["ids"]:
-        strong = [k for k in ob["keys"] if not k.startswith("name:") and k not in split]
-        strong_of.append(strong)
-        for k in ob["keys"]:
-            uf.find(k)
-        for k in strong[1:]:
-            uf.join(strong[0], k)
-    logins = {k for k in uf.p if k.startswith("gh:")}
-    for ob, strong in zip(raw["ids"], strong_of):
-        for nk in ob["keys"]:
-            if nk.startswith("name:") and nk not in split and strong:
-                uf.join(strong[0], nk)
-        # a git author whose name is one word that is also a GitHub login seen in the pull requests ("sam-lee")
-        lk = "gh:" + ob["name"].strip().lower()
-        if strong and ob["src"] != "github" and len(ob["name"].split()) == 1 and len(lk) >= 7 and lk in logins \
-                and lk not in split:
-            uf.join(strong[0], lk)
-    for a, b in ovr["merge"]:
-        uf.join(a, b)
-    mine = [k for k in sorted(me_keys) if k in uf.p and k not in split]
-    for k in mine[1:]:
-        uf.join(mine[0], k)
+    ids = []
+    for ob in raw["ids"]:  # a raw file from an older build can hold placeholder emails
+        ks = [k for k in ob["keys"] if not (k.startswith("email:") and identity.placeholder(k[6:]))]
+        if ks:
+            ids.append({**ob, "keys": ks} if len(ks) < len(ob["keys"]) else ob)
+    raw = {**raw, "ids": ids}
+    R = identity.resolve_keys(raw, ovr, _stems(raw))
+    uf, mine = R["uf"], R["mine"]
     groups = defaultdict(set)
     for k in list(uf.p):
         groups[uf.find(k)].add(k)
@@ -648,28 +887,38 @@ def resolve(raw: dict, ovr: dict) -> dict:
         me_root = sorted(me_keys, key=_key_rank)[0] if me_keys else "me:you"
         groups[me_root] = set(me_keys) or {me_root}
     obs_of = defaultdict(list)
-    for ob in raw["ids"]:
-        obs_of[uf.find(ob["keys"][0])].append(ob)
+    for ob, a in zip(raw["ids"], R["anchors"]):
+        obs_of[uf.find(a)].append(ob)
+    for root in [r for r in groups if r != me_root]:
+        obs = obs_of.get(root, [])
+        if obs and all(ob["src"] == "directory" for ob in obs):
+            del groups[root]  # found by a search only: no work with anyone yet
+    ids = _stable_ids(groups, prev, now)
+    joins_of = defaultdict(list)
+    for j in R["joins"]:
+        joins_of[uf.find(j["a"])].append(j)
 
     people, pid_of = {}, {}
     for root, keys in groups.items():
         obs = obs_of.get(root, [])
         first = sorted(keys, key=_key_rank)[0]
-        pid = "p" + _hash(first)
-        names = Counter()
-        for ob in obs:
-            if ob["name"]:
-                names[ob["name"]] += {"slack": 3, "github": 2}.get(ob["src"], 1)
-        name = names.most_common(1)[0][0] if names else first.split(":", 1)[-1].split("@")[0]
+        pid, aliases, since = ids[root]
         avatar = next((ob["avatar"] for ob in obs if ob["src"] == "slack" and ob["avatar"]), "") or \
             next((ob["avatar"] for ob in obs if ob["avatar"]), "")
-        people[pid] = dict(id=pid, name=name, me=root == me_root, keys=sorted(keys, key=_key_rank),
+        people[pid] = dict(id=pid, name=_best_name(obs, first), me=root == me_root, keys=sorted(keys, key=_key_rank),
                            title=next((ob["title"] for ob in obs if ob["title"]), ""), avatar_url=avatar,
-                           sources=sorted({ob["src"] for ob in obs}))
+                           sources=sorted({ob["src"] for ob in obs} - {"directory"}) or sorted({ob["src"] for ob in obs}),
+                           aliases=aliases, since=since, joins=joins_of.get(root, []))
         for k in keys:
             pid_of[k] = pid
     me_id = next(p["id"] for p in people.values() if p["me"])
     pid_of["me"] = me_id
+    maybe = defaultdict(list)
+    for m in R["maybe"]:
+        pa, pb = pid_of.get(m["a"]), pid_of.get(m["b"])
+        if pa and pb and pa != pb:
+            maybe[pa].append({**m, "id": pb})
+            maybe[pb].append({**m, "id": pa})
 
     now = time.time()
     edges = {}
@@ -706,12 +955,27 @@ def resolve(raw: dict, ovr: dict) -> dict:
         p["rank"] = i + 1
     people[me_id]["rank"] = 0
 
-    profiles = {pid: _profile(p, raw["work"], edges, me_id, people) for pid, p in people.items()}
+    work_of = {pid: _merge_work(p["keys"], raw["work"]) for pid, p in people.items()}
+    via = _my_channels(raw, people[me_id], pid_of)
+    profiles = {pid: _profile(p, work_of, edges, me_id, people) for pid, p in people.items()}
     for pid, p in people.items():
         p["last"] = profiles[pid]["last"]
         p["function"] = profiles[pid]["function"]
-    return dict(me=me_id, built=raw.get("built", now), resolved=now, stats=raw.get("stats", {}),
-                people=people, profiles=profiles,
+    chart = org.infer(people, profiles, work_of, edges, raw)
+    for pid, pr in profiles.items():
+        pr["joined_because"] = [_join_view(j) for j in people[pid]["joins"]]
+        pr["maybe"] = [dict(id=m["id"], name=people[m["id"]]["name"], reason=m["reason"], score=m["score"],
+                            evidence=m["evidence"]) for m in sorted(maybe.get(pid, []), key=lambda m: -m["score"])[:3]]
+        pr.update(org.card(chart, pid))
+        if pid == me_id:
+            pr["profiles"] = _my_profiles(people[me_id], raw, via, people)
+        elif pr.get("relation") is not None:
+            pr["relation"]["via"] = _via_for(pid, via, people[me_id], raw)
+    joins = [j for p in people.values() for j in p["joins"]]
+    stats = {**raw.get("stats", {}), "identities": len(raw["ids"]), "people": len(people),
+             "joins": dict(Counter(j["kind"] for j in joins)), "rejected": len(R["rejected"]), "maybe": len(R["maybe"])}
+    return dict(me=me_id, built=raw.get("built", now), resolved=now, stats=stats,
+                people=people, profiles=profiles, org=chart, rejected=R["rejected"][:200],
                 edges=[{"a": e["a"], "b": e["b"], "w": e["w"], "kinds": dict(e["kinds"]), "last": e["last"]}
                        for e in sorted(edges.values(), key=lambda e: -e["w"])[:5000]],
                 me_edges={(e["b"] if e["a"] == me_id else e["a"]): {k: v[:8] for k, v in e["refs"].items()}
@@ -720,16 +984,20 @@ def resolve(raw: dict, ovr: dict) -> dict:
 
 def _merge_work(keys, work_by_key) -> dict:
     out = {"repos": {}, "exts": Counter(), "subjects": [], "prs": [], "reviews": [], "channels": Counter(),
-           "slack_last": 0, "messages": 0}
+           "slack_last": 0, "messages": 0, "n_prs": 0, "n_reviews": 0, "approved": Counter(), "approved_by": Counter(),
+           "owns": Counter(), "blame": {}, "first": 0, "tasks": set()}
     for k in keys:
         w = work_by_key.get(k)
         if not w:
             continue
         for r, v in w["repos"].items():
-            cur = out["repos"].setdefault(r, {"commits": 0, "last": 0, "areas": Counter()})
+            cur = out["repos"].setdefault(r, {"commits": 0, "last": 0, "areas": Counter(), "first": 0})
             cur["commits"] += v["commits"]
             cur["last"] = max(cur["last"], v["last"])
             cur["areas"].update(v["areas"])
+            if v.get("first"):
+                cur["first"] = min(cur["first"] or v["first"], v["first"])
+                out["first"] = min(out["first"] or v["first"], v["first"])
         out["exts"].update(w["exts"])
         out["subjects"] += w["subjects"]
         out["prs"] += w["prs"]
@@ -737,6 +1005,15 @@ def _merge_work(keys, work_by_key) -> dict:
         out["channels"].update(w["channels"])
         out["slack_last"] = max(out["slack_last"], w["slack_last"])
         out["messages"] += w["messages"]
+        out["n_prs"] += w.get("n_prs", 0)
+        out["n_reviews"] += w.get("n_reviews", 0)
+        out["approved"].update(w.get("approved") or {})
+        out["approved_by"].update(w.get("approved_by") or {})
+        for repo, n in w.get("owns") or []:
+            out["owns"][repo] += n
+        for repo, s in (w.get("blame") or {}).items():
+            out["blame"][repo] = round(out["blame"].get(repo, 0) + s, 4)
+        out["tasks"] |= set(w.get("tasks") or [])
     return out
 
 
@@ -757,8 +1034,8 @@ def _function(title: str, exts: Counter) -> tuple[str, bool]:
     return "", True
 
 
-def _profile(p, work_by_key, edges, me_id, people) -> dict:
-    w = _merge_work(p["keys"], work_by_key)
+def _profile(p, work_of, edges, me_id, people) -> dict:
+    w = work_of[p["id"]]
     fn, inferred = _function(p["title"], w["exts"])
     repos = sorted(({"repo": r, "commits": v["commits"], "last": v["last"],
                      "areas": [a for a, _ in v["areas"].most_common(4)]} for r, v in w["repos"].items()),
@@ -768,7 +1045,7 @@ def _profile(p, work_by_key, edges, me_id, people) -> dict:
     last = max([r["last"] for r in repos] + [x["ts"] for x in w["prs"] + w["reviews"]] + [w["slack_last"], 0])
     rel = None
     if p["id"] != me_id:
-        mine = _merge_work(people[me_id]["keys"], work_by_key)
+        mine = work_of[me_id]
         shared = []
         for r, v in w["repos"].items():
             mv = mine["repos"].get(r)
@@ -787,6 +1064,92 @@ def _profile(p, work_by_key, edges, me_id, people) -> dict:
         prs=sorted(w["prs"], key=lambda x: -x["ts"])[:6], reviews=sorted(w["reviews"], key=lambda x: -x["ts"])[:6],
         channels=[c for c, _ in w["channels"].most_common(6)], messages=w["messages"],
         peers=[o for _, o in peers[:6]], relation=rel)
+
+
+def _key_view(k: str) -> str:
+    kind, _, v = k.partition(":")
+    return {"email": "email ", "gh": "GitHub @", "slack": "Slack ", "name": "name "}.get(kind, kind + " ") + v
+
+
+def _join_view(j: dict) -> dict:
+    return dict(a=j["a"], b=j["b"], a_label=_key_view(j["a"]), b_label=_key_view(j["b"]), kind=j["kind"],
+                reason=j["reason"], score=j["score"], evidence=j["evidence"])
+
+
+def _my_channels(raw: dict, me: dict, pid_of: dict) -> dict:
+    """The user's profile key -> kind of edge -> other person -> count: through which of the user's identities each
+    edge to another person runs. Direct messages run through the user's Slack, tasks through the Context tab."""
+    mine = set(me["keys"])
+    slack = next((k for k in me["keys"] if k.startswith("slack:")), "slack:")
+    via = defaultdict(lambda: defaultdict(Counter))
+    for a in raw["acts"]:
+        for mk, ok in ((a["a"], a["b"]), (a["b"], a["a"])):
+            if mk != "me" and mk not in mine:
+                continue
+            po = pid_of.get(ok)
+            if not po or po == me["id"]:
+                continue
+            pk = mk if mk != "me" else (slack if a["kind"] == "dm" else "tasks:")
+            via[pk][a["kind"]][po] += a["n"]
+    return via
+
+
+def _profile_label(k: str, raw: dict) -> tuple[str, str]:
+    """(label, kind) of one of the user's identities: 'work GitHub @sam', 'personal email', 'Slack'."""
+    kind, _, v = k.partition(":")
+    if kind == "gh":
+        w = raw.get("work", {}).get(k) or {}
+        owners = raw.get("repo_owner") or {}
+        repos = {x.get("repo") for x in (w.get("prs") or []) + (w.get("reviews") or [])}
+        orgs_ = {owners.get(r, "").lower() for r in repos if owners.get(r)}
+        if orgs_ - {v.lower()}:
+            return f"work GitHub @{v}", "github"
+        if v.lower() in {o.lower() for o in owners.values()} or not orgs_:
+            return f"personal GitHub @{v}", "github"
+        return f"GitHub @{v}", "github"
+    if kind == "email":
+        return {"work": "work email", "personal": "personal email", "noreply": "GitHub noreply email"}[
+            identity.mail_kind(v)] + " " + v, "email"
+    if kind == "slack":
+        return "Slack", "slack"
+    if kind == "tasks":
+        return "your tasks (Context tab)", "tasks"
+    return _key_view(k), kind
+
+
+def _my_profiles(me: dict, raw: dict, via: dict, people: dict) -> list[dict]:
+    """The user's card: each of the user's identities, how Pensieve knows it is theirs, and through which channels it
+    connects them to which people."""
+    joined = {}
+    for j in me["joins"]:
+        joined.setdefault(j["b"], j["reason"])
+        joined.setdefault(j["a"], j["reason"])
+    out = []
+    for k in [k for k in me["keys"] if not k.startswith("name:")] + ["tasks:"]:
+        label, kind = _profile_label(k, raw)
+        chans = []
+        for ek, ppl in sorted(via.get(k, {}).items(), key=lambda kv: -sum(kv[1].values())):
+            top = sorted(ppl.items(), key=lambda kv: -kv[1])
+            chans.append(dict(kind=ek, label=KIND_LABEL.get(ek, ek), n=sum(ppl.values()), people=len(ppl),
+                              top=[dict(id=o, name=people[o]["name"]) for o, _ in top[:4] if o in people]))
+        w = raw.get("work", {}).get(k) or {}
+        if k == "tasks:" and not chans:
+            continue
+        out.append(dict(key=k, label=label, kind=kind, channels=chans,
+                        how=list(raw.get("me_sources", {}).get(k) or ([joined[k]] if k in joined else [])),
+                        commits=sum(v.get("commits", 0) for v in (w.get("repos") or {}).values()),
+                        prs=w.get("n_prs", 0), reviews=w.get("n_reviews", 0)))
+    return sorted(out, key=lambda x: (-sum(c["n"] for c in x["channels"]), x["label"]))
+
+
+def _via_for(pid: str, via: dict, me: dict, raw: dict) -> list[dict]:
+    """Another person's card: which of the user's identities connect the user to them, and how."""
+    out = []
+    for k, kinds in via.items():
+        ks = [dict(kind=ek, label=KIND_LABEL.get(ek, ek), n=ppl[pid]) for ek, ppl in kinds.items() if ppl.get(pid)]
+        if ks:
+            out.append(dict(key=k, label=_profile_label(k, raw)[0], kinds=sorted(ks, key=lambda x: -x["n"])))
+    return sorted(out, key=lambda x: -sum(y["n"] for y in x["kinds"]))
 
 
 def _avatar_file(url: str) -> Path | None:
@@ -856,7 +1219,7 @@ def rebuild(store, repo_rows_fn, force=False) -> bool:
 
     def run():
         try:
-            g = resolve(collect(store, repo_rows_fn()), overrides())
+            g = resolve(collect(store, repo_rows_fn()), overrides(), graph())
             _publish(g)
             _state["error"] = None
             _fetch_avatars(g)
@@ -876,7 +1239,7 @@ def re_resolve():
     """Apply the overrides again to the saved raw data (fast: no git, gh or Slack)."""
     raw = _read(RAW, None)
     if raw:
-        _publish(resolve(raw, overrides()))
+        _publish(resolve(raw, overrides(), graph()))
 
 
 def summary(limit: int = 200) -> dict:
@@ -917,6 +1280,24 @@ def profile(pid: str) -> dict | None:
     return pr
 
 
+def org_chart() -> dict:
+    """GET /api/people/org: inferred teams, each person's function, seniority and team with confidence and
+    evidence, and inferred manager -> report edges. Each node has what the UI needs to draw it."""
+    g = graph()
+    if not g or not g.get("org"):
+        return dict(teams=[], people={}, edges=[], leaders=[], building=_state["building"], me=g and g.get("me"))
+    ch = g["org"]
+    ppl = {}
+    for pid, op in ch["people"].items():
+        p = g["people"].get(pid)
+        if not p:
+            continue
+        ppl[pid] = {**op, "me": p["me"], "rank": p.get("rank"), "closeness": p.get("closeness", 0), "title": p["title"],
+                    "avatar": bool(p["avatar_url"] and _avatar_file(p["avatar_url"]))}
+    return dict(me=g["me"], built=g["built"], note=ch.get("note", ""), teams=ch["teams"], people=ppl,
+                edges=ch["edges"], leaders=ch.get("leaders", []), building=_state["building"])
+
+
 def _uniq(refs, key):
     seen, out = set(), []
     for r in sorted(refs, key=lambda r: -(r.get("ts") or 0)):
@@ -934,7 +1315,10 @@ def current_id(pid: str) -> str | None:
     g = graph()
     if not g:
         return None
-    return next((p["id"] for p in g["people"].values() if any("p" + _hash(k) == pid for k in p["keys"])), None)
+    if pid in g["people"]:
+        return pid
+    return next((p["id"] for p in g["people"].values() if pid in p.get("aliases", [])), None) or \
+        next((p["id"] for p in g["people"].values() if any("p" + _hash(k) == pid for k in p["keys"])), None)
 
 
 def find(who: str) -> str | None:
