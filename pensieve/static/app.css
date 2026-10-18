@@ -614,8 +614,9 @@ body[data-view=people] #loading{display:none!important}
 .pp-graph .empty{position:absolute;inset:0;display:grid;place-content:center;padding:30px}
 .pp-card{overflow:auto;padding:18px 20px 24px}
 .pp-ring{fill:none;stroke:var(--line-2);stroke-dasharray:2 6}
-.pp-l{stroke:var(--text-3);transition:opacity .15s}
-.pp-pl{stroke:var(--text-3);stroke-opacity:.1;transition:opacity .15s}
+.pp-l{stroke:var(--text-3);transition:opacity .3s}
+.pp-pl{stroke:var(--text-3);stroke-opacity:.1;transition:opacity .3s}
+svg.pp-anim .pp-l,svg.pp-anim .pp-pl{opacity:0;transition:none}  /* lines wait while people move, then fade in */
 .pp-n{cursor:pointer;transition:opacity .15s;outline:none}
 .pp-n .halo{fill:var(--card);stroke:var(--line-2);stroke-width:1.5}
 .pp-n:hover .halo,.pp-n:focus-visible .halo{stroke:var(--text-2);stroke-width:2}
