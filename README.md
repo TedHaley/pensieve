@@ -1,5 +1,12 @@
 # Pensieve
 
+<!-- mcp-name: io.github.TedHaley/pensieve -->
+
+[![Release](https://img.shields.io/github/v/release/TedHaley/pensieve)](https://github.com/TedHaley/pensieve/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform: macOS](https://img.shields.io/badge/platform-macOS%20%28Apple%20Silicon%29-lightgrey.svg)](https://pensieve.tools)
+[![MCP server](https://img.shields.io/badge/MCP-server-blue.svg)](#mcp-server)
+
 One place for all your information, for context engineering: your files, repositories, agent sessions, tickets and messages, so that you and your agents get the right context for each task. Your context is your own: Pensieve reads only what you can access, it only reads, and it keeps everything on your Mac.
 
 - **Find anything:** press **Control+Shift** anywhere on your Mac and search your documents, folders, code and past agent sessions by meaning or by exact words.
@@ -133,7 +140,22 @@ claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=paymen
 - Every tool respects the scope: search, read, similar, who_knows, list_repos, team, unexplored. An item outside it is refused.
 - The search panel and the Map use `default_scope` (empty = everything).
 
-For agents that only speak stdio, the JSON config is `{"mcpServers": {"pensieve": {"command": "pensieve", "args": ["mcp"]}}}`. `pensieve mcp` starts the backend if it isn't running.
+### MCP server
+
+Install Pensieve first (see [Install](#install)). The install puts the `pensieve` command in `~/.local/bin`. Then add this entry to the MCP configuration of your client (Claude Desktop, Cursor, Windsurf and others). Replace `/Users/you` with your home folder. Desktop apps do not always have `~/.local/bin` on their `PATH`, so give the full path.
+
+```json
+{
+  "mcpServers": {
+    "pensieve": {
+      "command": "/Users/you/.local/bin/pensieve",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The server uses stdio. `pensieve mcp` starts the backend if it is not running. To use HTTP, connect to `http://127.0.0.1:8765/mcp` while the backend runs. `pensieve integrate recommended` writes this entry for you, with the full path, in each agent that it finds.
 
 Tools: `search`, `read`, `similar`, `overview`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `unexplored`, `open`, `current_scope`, `index_path`, `report_feedback`, `stale`, `tasks`, `task`, `set_task_state`. Tool descriptions are sent to the agent on every turn, so these seventeen are all an agent sees by default. `tasks` lists your tasks by state, within the agent's scope. `task` gives one task's card: its folder and branch, PRs, tickets, what is left, the command that resumes its last session, and where that session stopped. When an agent finishes a task, it marks it etched with `set_task_state`, and you see the change on the Context tab. `stale` lists what looks abandoned, so that your agent can offer to clean it up. It finds three kinds. Git worktrees with no commit and no agent session in 14 days: "remove" (clean, and its commits are merged or pushed, with the command) or "review" (it has work that exists nowhere else). Local branches that are merged into the default branch, idle for 14 days and not checked out: the command is `git branch -d`, which refuses unmerged work. Squash-merged branches get "review" and no command: their whole change is one commit in the default branch, but `git branch -d` refuses them, because their own commits are not there. Indexed repos with no agent session and no git activity in 3 months: the command is `pensieve repo remove`, which removes the repo from Pensieve's index only. The repo stays on disk. Pensieve only reports: the agent asks you before it removes anything, and the index drops a removed worktree on its next sweep. With the session-start hook, a session in a repo with stale worktrees or merged branches gets a one-line hint to offer this at a natural pause. `overview` shows where things are in a repo: its size, languages, folders two levels deep, the README's start, its dependencies and its largest files, then its topics (files grouped by meaning) with their files and authors. It reads the index, not the files. `index_path` indexes a folder when you ask the agent to: a git repo, a folder of repos, a folder of agent sessions, or documents. Pensieve finds out which kind it is. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`. Until setup is done, every connection also gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source`, `setup_start`. While the generation model is your agent, every connection also gets `pending_work` and `submit_work`.
 
@@ -343,6 +365,20 @@ On the Context tab, the eye button shows a card's page, and the Compact view lis
 Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
 
 On Apple Silicon, the embedding model runs on MLX. On other machines, it runs on sentence-transformers and PyTorch (CUDA or CPU), which makes the install about 650 MB larger. The backend and the Map work on Linux too; the search panel app is macOS only.
+
+## Privacy
+
+Pensieve runs on your Mac. It keeps the index, the settings and the feedback reports in `~/.pensieve`. It sends no usage data and has no account.
+
+Pensieve connects to other hosts only for these jobs:
+
+- **Models:** on first run, it downloads the models from Hugging Face.
+- **Updates:** the app and the Map ask GitHub for the latest release.
+- **Pull requests:** for a context card, the `gh` command gets the PRs of your branches from GitHub, with your own `gh` login.
+- **Connections:** if you turn on a connection, Pensieve reads that MCP server with read-only tools.
+- **Generation model:** if you choose Claude Code or Codex, the text to summarize goes to that agent and its model provider. The built-in model and LM Studio stay on your Mac.
+
+The backend, its MCP endpoint and the hooks use only `127.0.0.1`. An agent that you connect gets search results, and it sends them to its own model provider. Pensieve does not control that agent.
 
 ## Feedback
 
