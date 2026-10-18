@@ -2017,7 +2017,7 @@ function connectorsHtml(cat) {
   if (!rows.length) return '';
   const sg = srcState.cxSignin;
   return `<details class="src-opts cx" ${srcState.cxShown ?? !rows.some(c => c.state === 'on') ? 'open' : ''} data-cx-details><summary>Cloud connectors · ${rows.filter(c => c.state === 'on').length} of ${rows.length} collecting</summary>
-    <div class="cx-intro">Read-only, from your own account. Each one is off until you switch it on in the list above.</div>
+    <div class="cx-intro">Read-only, from your own account. A connection is on once Pensieve holds data from it, unless you switch it off in the list above.</div>
     ${rows.map(c => `<div class="cx-row">
       <div class="src-tx"><div class="src-l">${esc(c.label)}</div><div class="cx-d"><span class="cx-st cx-${esc(c.state)}">${esc(CX_STATE[c.state] || c.state)}</span> ${esc(c.detail)}</div></div>
       <div class="src-n">${c.items ? srcCount(c.items, 'items') : ''}</div>
@@ -3471,7 +3471,8 @@ const ppHue = s => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>
 const ppShort = n => { const w = n.split(/\s+/).filter(Boolean); return w.length > 1 ? `${w[0]} ${w[w.length - 1][0]}.` : n; };
 function ppAv(p, size) {
   const st = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.38)}px`;
-  return p.avatar ? `<img class="pp-av" src="/api/people/${enc(p.id)}/avatar" alt="" style="${st}">`
+  return p.pic ? `<img class="pp-av" src="/api/people/pic/${enc(p.pic)}" alt="" style="${st}">`
+    : p.avatar ? `<img class="pp-av" src="/api/people/${enc(p.id)}/avatar" alt="" style="${st}">`
     : `<span class="pp-av" style="${st};background:${slotColor(ppHue(p.name))}">${esc(initials(p.name))}</span>`;
 }
 async function loadPeople(refresh = false) {
@@ -3481,6 +3482,7 @@ async function loadPeople(refresh = false) {
   if (S.view !== 'people') return;
   renderPeople();
   const d = S.people.data;
+  if (S.people.card?.directory) return;  // a person that a search found stays open
   if (d && !S.people.sel && d.me) openPeopleCard(d.me, {quiet: true});
   else if (S.people.sel) openPeopleCard(S.people.sel, {quiet: true});
 }
@@ -3544,6 +3546,7 @@ function renderPeople() {
   const el = $('#people'); if (!el) return;
   const P = S.people, d = P.data;
   const st = d?.stats || {};
+  const typing = document.activeElement?.id === 'ppq';  // a new graph can arrive while the user types a name
   const from = [st.repos && plural(st.repos, 'repo'), st.prs && plural(st.prs, 'pull request'), st.tasks && plural(st.tasks, 'task'),
                 st.slack_threads && plural(st.slack_threads, 'Slack thread')].filter(Boolean).join(', ');
   const noPics = (d?.nodes || []).filter(n => n.slack && !n.avatar).length;
@@ -3559,11 +3562,12 @@ function renderPeople() {
         ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}<span class="pp-shown">${shown}</span> of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''}</div>
           <div class="pp-more">${P.n > PP_STEP ? `<button class="wk-btn" data-pp-n="-1">Fewer</button>` : ''}${d.total - 1 > P.n ? `<button class="wk-btn" data-pp-n="1">Show more</button>` : ''}</div>` : ''}
       </div>
-      <aside class="pp-card" id="ppcard">${P.card ? ppCardHtml(P.card) : '<div class="empty">Click a person to see their card.</div>'}</aside>
+      <aside class="pp-card" id="ppcard">${P.card ? (P.card.directory ? ppDirCardHtml : ppCardHtml)(P.card) : '<div class="empty">Click a person to see their card.</div>'}</aside>
     </div>`;
   ppDrawGraph();
   bindPeople(el);
   bindPeopleCard();
+  if (typing) { const q = $('#ppq', el); q.focus(); q.setSelectionRange(q.value.length, q.value.length); ppHitsHtml(); }
 }
 function ppDrawGraph() {
   const box = $('#ppgraph'), d = S.people.data;
@@ -3612,22 +3616,113 @@ function bindPeople(el) {
     catch (err) { toast('Could not look up Slack profiles: ' + err.message); }
   });
   const q = $('#ppq', el), hits = $('#pphits', el);
-  const show = () => {
-    P.q = q.value; const s = q.value.trim().toLowerCase();
-    const found = s ? (P.data?.nodes || []).filter(n => n.name.toLowerCase().includes(s)).slice(0, 8) : [];
-    hits.hidden = !found.length;
-    hits.innerHTML = found.map(n => `<button class="pp-hit" data-pp-hit="${esc(n.id)}">${ppAv(n, 22)}<span>${esc(n.name)}</span><span class="muted">${n.me ? 'you' : '#' + n.rank}</span></button>`).join('');
-    $$('[data-pp-hit]', hits).forEach(b => b.onmousedown = ev => { ev.preventDefault(); ppFind(b.dataset.ppHit); });
-  };
-  q.oninput = show;
-  q.onfocus = show;
+  q.oninput = () => { P.q = q.value; ppSearch(q.value); };
+  q.onfocus = () => { if (q.value.trim() && q.value.trim() !== S.people.find.q) ppSearch(q.value); else ppHitsHtml(); };
   q.onblur = () => setTimeout(() => { hits.hidden = true; }, 120);
-  q.onkeydown = e => { if (e.key === 'Enter') { const b = $('[data-pp-hit]', hits); if (b) ppFind(b.dataset.ppHit); } };
+  q.onkeydown = e => {
+    const rows = $$('[data-pp-row]', hits), F = S.people.find;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!rows.length) return; e.preventDefault();
+      F.on = (F.on + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length; ppHitsHtml();
+    } else if (e.key === 'Enter') { e.preventDefault(); rows[F.on]?.dispatchEvent(new MouseEvent('mousedown', {cancelable: true})); }
+    else if (e.key === 'Escape') { hits.hidden = true; }
+  };
+}
+// Find a person: the graph and the people that earlier searches found come first (local), then what GitHub and the
+// switched-on Slack connection find. A Slack connection through Claude Code costs a model run, so it is asked only
+// when the user picks "Search Slack" (deep). The server answers in lines of JSON, one for each source.
+S.people.find = {q: '', local: [], remote: [], asking: [], skipped: [], errors: [], pending: false, deep: false, on: 0, ctl: null};
+const PP_SRC = {github: 'GitHub', slack: 'Slack', linear: 'Linear', notion: 'Notion', hubspot: 'HubSpot', git: 'git', task: 'tasks'};
+const ppRemote = debounce((s, deep) => ppAsk(s, deep), 350);
+function ppSearch(text, deep = false) {
+  const F = S.people.find, s = text.trim();
+  if (s !== F.q) { F.on = 0; F.remote = []; F.deep = false; F.skipped = []; F.errors = []; }
+  F.q = s;
+  // the graph's people at once, before the server answers
+  const low = s.toLowerCase();
+  F.local = s ? (S.people.data?.nodes || []).filter(n => n.name.toLowerCase().includes(low)).slice(0, 8).map(n => ({...n, kind: 'graph'})) : [];
+  F.ctl?.abort(); F.pending = !!s;
+  ppHitsHtml();
+  if (s) deep ? ppAsk(s, true) : ppRemote(s, false);
+}
+async function ppAsk(s, deep) {
+  const F = S.people.find;
+  if (s !== F.q) return;
+  F.ctl?.abort(); const ctl = F.ctl = new AbortController();
+  F.pending = true; F.deep = F.deep || deep; if (deep) F.skipped = [];
+  ppHitsHtml();
+  try {
+    const r = await fetch(`/api/people/search?q=${enc(s)}&deep=${deep}`, {signal: ctl.signal});
+    if (!r.ok) throw new Error(r.status);
+    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const {done, value} = await rd.read(); if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!line.trim() || ctl.signal.aborted) continue;
+        const m = JSON.parse(line);
+        if (m.type === 'local') F.local = m.hits;
+        else if (m.type === 'sources') { F.asking = m.asking.map(x => x.label); if (!deep) F.skipped = m.skipped; }
+        else if (m.type === 'source') {
+          F.asking = F.asking.filter(l => l !== m.label);
+          if (m.error) F.errors.push(m.label);
+          for (const h of m.hits) if (!F.remote.some(x => x.id === h.id)) F.remote.push(h);
+        } else if (m.type === 'done') F.pending = false;
+        ppHitsHtml();
+      }
+    }
+  } catch (e) { if (e.name === 'AbortError') return; F.errors.push('search'); }
+  if (F.ctl === ctl) { F.pending = false; F.asking = []; ppHitsHtml(); }
+}
+function ppHitsHtml() {
+  const F = S.people.find, hits = $('#pphits'); if (!hits) return;
+  if (!F.q || document.activeElement?.id !== 'ppq') { hits.hidden = true; return; }
+  const ids = new Set(F.local.map(h => h.id)), all = [...F.local, ...F.remote.filter(h => !ids.has(h.id))];
+  const sub = h => h.kind === 'graph' ? (h.me ? 'you' : h.rank ? '#' + h.rank : '') : '';
+  const src = h => h.kind === 'graph' ? '' : `<span class="pp-src">${esc(h.public ? 'GitHub public' : (h.sources || [h.source]).map(s => PP_SRC[s] || s).join(' · ') || 'found')}</span>`;
+  const rows = all.slice(0, 12).map(h => ({html: `${ppAv(h, 22)}<span>${esc(h.name)}${h.title ? `<small>${esc(h.title)}</small>` : ''}</span>${src(h)}<span class="muted">${sub(h)}</span>`, open: () => ppOpenHit(h)}));
+  const asking = F.asking.length ? F.asking.join(' and ') : 'GitHub and Slack';
+  const note = F.pending ? `<div class="pp-hit note"><span class="spinner"></span>Searching ${esc(asking)}…</div>`
+    : !all.length ? `<div class="pp-hit note">No one found${F.errors.length ? ` · could not ask ${esc(F.errors.join(', '))}` : ''}</div>` : '';
+  if (F.skipped.length && !F.deep) {
+    const what = [...new Set(F.skipped.map(x => x.label))].join(' and ');
+    rows.push({html: `<span class="pp-av pp-deep" style="width:22px;height:22px">↵</span><span>Search ${esc(what)}<small title="Runs Claude Code with the connection's read-only tools">Uses Claude Code · about 20 s</small></span>`,
+               open: () => ppSearch(F.q, true), deep: true});
+  }
+  if (F.on >= rows.length) F.on = 0;
+  hits.hidden = false;
+  const row = (r, i) => `<button class="pp-hit ${r.deep ? 'deep' : ''} ${i === F.on ? 'on' : ''}" data-pp-row="${i}">${r.html}</button>`;
+  hits.innerHTML = rows.map((r, i) => r.deep ? '' : row(r, i)).join('') + note + rows.map((r, i) => r.deep ? row(r, i) : '').join('');
+  $$('[data-pp-row]', hits).forEach(b => b.onmousedown = ev => { ev.preventDefault(); rows[+b.dataset.ppRow].open(); });
+}
+function ppOpenHit(h) {
+  const P = S.people;
+  if (h.kind === 'graph') return ppFind(h.id);
+  if (P.merging) return toast(`${h.name} has no shared work with you yet, so there is no one to merge them with.`);
+  P.find.ctl?.abort();
+  P.q = ''; P.find.q = '';
+  const q = $('#ppq'); if (q) { q.value = ''; q.blur(); $('#pphits').hidden = true; }
+  P.sel = null; P.card = {...h, directory: true};
+  $$('#ppgraph .pp-n').forEach(g => g.classList.remove('sel'));
+  const box = $('#ppcard'); if (!box) return renderPeople();
+  box.innerHTML = ppDirCardHtml(P.card); box.scrollTop = 0;
+}
+// A person whom a search found, with no shared work with the user: who they are, and where Pensieve found them.
+function ppDirCardHtml(p) {
+  const ids = [...p.emails.map(v => ['Email', v]), ...(p.login ? [['GitHub', p.login]] : []), ...(p.slack ? [['Slack', p.slack]] : [])];
+  const where = (p.public ? ['GitHub (public profile)'] : p.sources.map(s => PP_SRC[s] || s)).join(' and ');
+  return `<div class="meta"><span class="badge">Person</span>${esc(where)}</div>
+    <div class="pp-id">${ppAv(p, 56)}<div style="min-width:0"><h2>${esc(p.name)}</h2>${p.title ? `<div class="pp-fn">${esc(p.title)}</div>` : ''}</div></div>
+    <p class="pp-lead">Pensieve has not seen you work with them yet: no shared files, pull requests, tasks or Slack threads. ${p.public ? 'This is a public GitHub profile.' : `Found in ${esc(where)}${p.found_at ? ' ' + rel(p.found_at * 1000) : ''}; kept on this Mac for the next search.`}</p>
+    <div class="h4">Identities</div><div>${ids.map(([k, v]) => `<div class="pp-idrow"><span class="k">${esc(k)}</span><span class="v" title="${esc(v)}">${esc(v)}</span></div>`).join('')}</div>
+    ${p.login ? `<div class="actions"><a class="btn" href="https://github.com/${esc(enc(p.login))}" target="_blank" rel="noopener">Open on GitHub</a></div>` : ''}`;
 }
 function ppFind(id) {
   const P = S.people, n = P.data?.nodes.find(x => x.id === id);
   if (n && !n.me && n.rank > P.n) { P.n = Math.ceil(n.rank / PP_STEP) * PP_STEP; store.set('peopleN', P.n); }
-  P.q = '';
+  P.q = ''; P.find.q = ''; P.find.ctl?.abort();
   const q = $('#ppq'); if (q) { q.value = ''; q.blur(); $('#pphits').hidden = true; }
   P.merging ? ppPick(id) : openPeopleCard(id);
 }
@@ -3679,7 +3774,7 @@ function ppCardHtml(p) {
     <div class="actions">${p.repos.length ? '<button class="btn" data-pp-map>Show their work on the map</button>' : ''}<button class="btn" data-pp-merge title="Join this person with another one: the same person under another name or email">Merge with…</button>${p.me ? '' : '<button class="btn" data-pp-me title="Mark this person as you">This is me</button>'}</div>`;
 }
 function bindPeopleCard() {
-  const box = $('#ppcard'), P = S.people, p = P.card; if (!box || !p) return;
+  const box = $('#ppcard'), P = S.people, p = P.card; if (!box || !p || p.directory) return;
   const post = (u, body) => api(u, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   $$('[data-pp-open]', box).forEach(b => b.onclick = () => ppFind(b.dataset.ppOpen));
   $$('[data-pp-split]', box).forEach(b => b.onclick = async () => {
@@ -4363,7 +4458,7 @@ function drawProjTable(ss) {
 const pl = {items: [], sel: 0, q: '', seq: 0};
 // Search lives at the top of the left panel: a query swaps the filters for results; clearing it brings them back.
 async function openPalette(prefill = null, {focus = true} = {}) {
-  if (S.view === 'settings') await setView(dataType());
+  if (S.view !== 'data') await setView(dataType());  // search lives in the Map's panel
   toggleSide(true);
   const i = $('#palin');
   if (prefill != null) i.value = prefill;
@@ -4541,9 +4636,11 @@ $$('#gearmenu [data-go]').forEach(b => b.onclick = () => {
   S.view === 'settings' ? renderSettings() : setView('settings');
 });
 function toggleSide(open) {
-  if (open == null && S.view === 'settings') return;  // Settings has no filter panel
+  if (open == null && S.view !== 'data') return;  // only the Map has the filter panel
   const on = open ?? !document.body.classList.contains('side-open');
   document.body.classList.toggle('side-open', on); store.set('sideOpen', on);
+  const b = $('#sidetoggle'); b.setAttribute('aria-expanded', on); b.title = on ? 'Hide the panel' : 'Show the panel';
+  b.setAttribute('aria-label', on ? 'Hide the filter panel' : 'Show the filter panel');
   setTimeout(() => { if (S.view === 'map') renderTimeline(); }, 260);
 }
 $('#sidetoggle').onclick = () => toggleSide();

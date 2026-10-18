@@ -520,8 +520,6 @@ body.native .brand{display:none}
 .iconbtn.round{border-radius:999px;width:36px;height:36px}
 .iconbtn.round.glass:hover{background:var(--glass-strong)}
 .iconbtn:active{transform:scale(.96)}
-body.side-open #sidetoggle{color:var(--accent)}
-body[data-view=settings] #sidetoggle{color:var(--text-3);opacity:.45;pointer-events:none}
 .seg.theme-seg{height:36px;align-items:center;padding:0 3px;gap:1px;border-radius:999px;background:var(--glass);box-shadow:inset 0 0 0 1px var(--glass-edge),var(--shadow-sm)}
 .seg.theme-seg button{width:30px;height:30px;padding:0;display:grid;place-items:center}
 
@@ -560,6 +558,15 @@ body[data-view=settings] #sidetoggle{color:var(--text-3);opacity:.45;pointer-eve
 body.side-open #sidepanel{transform:none;opacity:1;pointer-events:auto}
 body[data-view=map] #sidepanel{bottom:calc(var(--gap) + 80px)}
 body[data-view=settings] #sidepanel{display:none}
+/* the panel and its collapse button are on the Map only; the button sits under the logo and turns as the panel slides */
+#sidetoggle{position:fixed;top:calc(var(--top-h) - 6px);left:calc(var(--gap) + 4px);z-index:26;width:26px;height:26px;padding:0;border:0;
+  border-radius:999px;display:grid;place-items:center;color:var(--text-2);cursor:pointer;transition:color .18s var(--ease),background .18s var(--ease)}
+#sidetoggle:hover{color:var(--text);background:var(--glass-strong)}
+#sidetoggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#sidetoggle svg{transition:transform .24s var(--ease)}
+body:not(.side-open) #sidetoggle svg{transform:rotate(180deg)}
+body[data-view=data] #sidepanel{top:calc(var(--top-h) + 26px)}
+body:not([data-view=data]) #sidetoggle,body:not([data-view=data]) #sidepanel{display:none}
 #side{grid-area:auto;border:0;background:none;overflow:auto;padding:16px 12px 16px;flex:1;min-height:0}
 #legend{position:static;max-width:none;border:0;border-top:1px solid var(--line);border-radius:0;background:none;padding:10px 16px 12px;margin:0;flex:none;max-height:30%;overflow:auto}
 .sec{margin-bottom:18px}
@@ -629,7 +636,15 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .pp-hits{position:absolute;right:0;top:36px;width:260px;padding:6px;border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm),inset 0 0 0 .5px var(--line);z-index:3}
 .pp-hit{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:6px 8px;border-radius:9px;color:var(--text);font-size:13px;text-align:left}
 .pp-hit span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pp-hit:hover{background:var(--surface-2)}
+.pp-hit:hover,.pp-hit.on{background:var(--surface-2)}
+.pp-hits{width:300px;max-height:min(460px,70vh);overflow:auto}
+.pp-hit small{display:block;color:var(--text-3);font-size:11.5px;overflow:hidden;text-overflow:ellipsis}
+.pp-hit .pp-src{flex:none;font-size:10.5px;font-weight:600;border-radius:999px;padding:1px 7px;background:var(--surface-3);color:var(--text-2)}
+.pp-hit.note{color:var(--text-3);font-size:12.5px;cursor:default}
+.pp-hit.note:hover{background:none}
+.pp-hit.note .spinner{width:12px;height:12px;border-width:2px;flex:none;margin:0 5px}
+.pp-hit.deep{border-top:1px solid var(--line);border-radius:0 0 9px 9px;margin-top:4px}
+.pp-av.pp-deep{background:var(--accent-soft);color:var(--accent);font-size:12px}
 .pp-av{border-radius:50%;object-fit:cover;display:inline-grid;place-items:center;color:#fff;font-weight:600;flex:none;background:var(--surface-3)}
 .pp-id{display:flex;gap:14px;align-items:center;margin-top:10px}
 .pp-id h2{margin:0;font-size:19px;letter-spacing:-.01em;overflow-wrap:anywhere}
@@ -829,7 +844,6 @@ pre.code{font:12px/1.55 var(--mono)}
 .sheet{position:fixed;z-index:15;border-radius:26px;overflow:auto;animation:sheet .24s var(--ease)}
 @keyframes sheet{from{opacity:0;transform:translateY(8px) scale(.995)}}
 #insights{top:var(--top-h);left:var(--gap);right:var(--gap);bottom:var(--gap);padding:28px 32px 48px;transition:left .24s var(--ease)}
-body.side-open #insights{left:calc(var(--side) + 2 * var(--gap))}
 .card,.kpi{background:var(--fill);border:0;border-radius:18px;box-shadow:inset 0 0 0 .5px var(--glass-edge)}
 .card{padding:16px 18px}
 .kpi{padding:14px 16px}

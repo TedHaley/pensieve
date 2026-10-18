@@ -1591,6 +1591,59 @@ def find_person(who: str):
     return {"id": pid}
 
 
+@app.get("/api/people/search")
+async def search_people(q: str, remote: bool = True, deep: bool = False):
+    """Find a person, as lines of JSON. The first line has the local matches: the graph, then the people that earlier
+    searches found. Then one line for each remote source as it answers: GitHub through gh, and the switched-on
+    people connectors with their read-only user search tools. A Claude Code server costs a model run, so it is asked
+    only with `deep`. The last line is {"type": "done"}."""
+    from pensieve import directory
+    q = q.strip()[:100]
+
+    async def gen():
+        yield json.dumps({"type": "local", "hits": await asyncio.to_thread(directory.local, q)}) + "\n"
+        if not remote or len(q) < 2:
+            yield json.dumps({"type": "done"}) + "\n"
+            return
+        jobs = {}
+        if await asyncio.to_thread(directory.gh_on):
+            jobs["github"] = ({"label": "GitHub"}, lambda: directory.search_github(q))
+        skipped = []
+        for r in await asyncio.to_thread(directory.user_servers):
+            if r["origin"] == "engine" and not deep:
+                skipped.append({"id": r["id"], "label": r["label"]})
+            else:
+                jobs[r["id"]] = (r, lambda r=r: directory.search_server(r, q))
+        yield json.dumps({"type": "sources", "asking": [{"id": k, "label": v[0]["label"]} for k, v in jobs.items()],
+                          "skipped": skipped}) + "\n"
+
+        async def one(sid, r, fn):
+            t0 = time.time()
+            try:
+                out = {"hits": await asyncio.to_thread(lambda: directory.hits(fn()))}
+            except Exception as e:
+                out = {"hits": [], "error": str(e)[:200]}
+            return {"type": "source", "id": sid, "label": r["label"], "seconds": round(time.time() - t0, 1),
+                    "cost_usd": (r.get("_cost") or {}).get("cost_usd"), **out}
+        for f in asyncio.as_completed([one(k, *v) for k, v in jobs.items()]):
+            yield json.dumps(await f) + "\n"
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/people/pic/{h}")
+def get_people_pic(h: str):
+    """A picture from the picture folder, by the hash of its address (people found by a search)."""
+    from pensieve import people
+    if len(h) != 16 or set(h) - set("0123456789abcdef") or not people.AVATARS.is_dir():
+        raise HTTPException(404)
+    f = next((f for f in people.AVATARS.glob(h + ".*") if f.suffix != ".none"), None)
+    if not f:
+        raise HTTPException(404)
+    return FileResponse(f, headers={"Cache-Control": "max-age=3600"})
+
+
 @app.get("/api/people/{pid}")
 def get_person(pid: str):
     """One person's card: identities, function, what they work on, and the user's relation to them."""

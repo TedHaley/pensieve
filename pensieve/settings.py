@@ -110,7 +110,7 @@ DESCRIPTIONS = {
     "llm_model": "Chat model used for summaries and insights.",
     "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
     "llm_connections": "Saved model servers, each with a name, URL, model and optional API key (manage in Settings → Models).",
-    "connections_on": "Connections that Pensieve collects from (easier to change in Sources). A connection is off until it is here.",
+    "connections_on": "Connections switched on by hand (easier to change in Sources). A connection that Pensieve holds data from is on too, unless it is in disabled.",
     "mcp_servers": "MCP servers that Pensieve connects to itself, with a URL and headers, or a command and environment. "
                    "Use them when the insights engine has no MCP servers, for example the built-in engine.",
     "connections_every_hours": "How often Pensieve collects from each connection that is on (0 = only when you ask).",
@@ -324,14 +324,39 @@ def on_change(fn):
     _listeners.append(fn)
 
 
+_HAS_DATA: dict[str, tuple[float, bool]] = {}
+
+
+def _has_data(sid: str) -> bool:
+    """True when Pensieve already pulled data from this connection: items it collected, or results that an agent got
+    from the server in a session. The agent-sessions source itself only reads what agents pulled, so it counts too."""
+    import time
+    now = time.monotonic()
+    hit = _HAS_DATA.get(sid)
+    if hit and now - hit[0] < 30:
+        return hit[1]
+    d = config.DATA_DIR / "connections"
+    has = sid == "agent_sessions" or (d / sid).is_dir() and any(f.suffix == ".md" for f in (d / sid).iterdir())
+    if not has:
+        try:
+            has = sid in json.loads((d / "state.json").read_text()).get("session_servers", [])
+        except (OSError, ValueError):
+            pass
+    _HAS_DATA[sid] = (now, has)
+    return has
+
+
 def enabled(source_id: str) -> bool:
     """A source is on unless it, or any category above it, is in `disabled`. 'files/~/Docs' -> checks 'files' too.
-    A connection is the other way round: it is off until it is in `connections_on`."""
+    A connection is on once it is in `connections_on`, or once Pensieve holds data from it. Switching it off puts it
+    in `disabled`, which wins over both."""
     off = set(get("disabled"))
-    cat = source_id.split("/", 1)[0]
-    if cat == "connections" and "/" in source_id and source_id not in get("connections_on"):
+    if source_id in off or source_id.split("/", 1)[0] in off:
         return False
-    return source_id not in off and cat not in off
+    cat, _, sid = source_id.partition("/")
+    if cat == "connections" and sid:
+        return source_id in get("connections_on") or _has_data(sid)
+    return True
 
 
 def on_map(source_id: str) -> bool:
@@ -355,9 +380,10 @@ def file_type(t: str) -> dict:
 
 
 def set_enabled(source_id: str, on: bool) -> dict:
-    if source_id.startswith("connections/"):
+    if source_id.startswith("connections/"):  # off is explicit, so data from it does not switch it back on
         cur = [d for d in get("connections_on") if d != source_id]
-        return update({"connections_on": cur + [source_id] if on else cur})
+        off = [d for d in get("disabled") if d != source_id]
+        return update({"connections_on": cur + [source_id] if on else cur, "disabled": off if on else off + [source_id]})
     off = [d for d in get("disabled") if d != source_id]
     if not on:
         off.append(source_id)

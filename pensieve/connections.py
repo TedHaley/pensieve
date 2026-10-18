@@ -12,7 +12,8 @@ them.
 
 Collected items are written as Markdown to ~/.pensieve/connections/<server>/, and the file indexer indexes them. The
 raw JSON of each item is in .raw/ and its field changes over time are in .history/ (hidden folders: not indexed).
-Pensieve calls only tools that `is_read` accepts. A source is off until the user switches it on."""
+Pensieve calls only tools that `is_read` accepts. A source is on once the user switches it on, or once Pensieve holds
+data from it (for example from agent sessions), unless the user switched it off."""
 import asyncio
 import hashlib
 import json
@@ -893,12 +894,15 @@ def markdown(label: str, tool: str, key_name: str, key: str, d: dict, hist_p: Pa
 
 def from_session(session_id: str, results: list[tuple]) -> int:
     """Store the MCP tool results that an agent got in one session: (full tool name, args, result content)."""
-    n = 0
+    n, used = 0, set()
     for full, args, content in results:
         _, srv, tool = (full.split("__", 2) + ["", ""])[:3]
         if not tool or srv == "pensieve" or not read_tool(srv, tool):
             continue
         n += store(SESSIONS, "Agent sessions", f"{srv}.{tool}", args, _result_text(content), session=session_id)
+        used.add(srv)
+    if used:  # the user's agents pull data from these servers, so they count as on (see settings.enabled)
+        _update(lambda st: st.__setitem__("session_servers", sorted(set(st.get("session_servers", [])) | used)))
     return n
 
 
