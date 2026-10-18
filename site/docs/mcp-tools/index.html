@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pensieve MCP tools reference: search, read, similar, who_knows and more</title>
+<meta name="description" content="Reference for every tool of the Pensieve MCP server: search, read, similar, overview, who_knows, knowledge_gaps, tasks, task, share_card and the setup tools, with arguments and return values.">
+<link rel="canonical" href="https://pensieve.tools/docs/mcp-tools/">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Pensieve MCP tools reference: search, read, similar, who_knows and more">
+<meta property="og:description" content="Reference for every tool of the Pensieve MCP server: search, read, similar, overview, who_knows, knowledge_gaps, tasks, task, share_card and the setup tools, with arguments and return values.">
+<meta property="og:url" content="https://pensieve.tools/docs/mcp-tools/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/docs/docs.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"MCP tools reference","description":"Reference for every tool of the Pensieve MCP server: search, read, similar, overview, who_knows, knowledge_gaps, tasks, task, share_card and the setup tools, with arguments and return values.","url":"https://pensieve.tools/docs/mcp-tools/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="/" aria-label="Pensieve home"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve <span>Docs</span></a>
+  <nav aria-label="Site">
+    <a class="chip gh" href="https://github.com/TedHaley/pensieve"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+    <a class="chip solid" href="/docs/install/">Install</a>
+  </nav>
+</header>
+<div class="layout">
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/" aria-current="page">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<main>
+<p class="crumb">Docs</p>
+<h1>MCP tools reference</h1>
+<p class="lede">This page lists each tool of the Pensieve MCP server, its arguments and what it returns.</p>
+<p>An MCP client sends the description of each tool to the model on every turn. Thus Pensieve shows a small set by
+default. Other sets appear only when they are necessary. Every tool obeys the <a href="/docs/agents/#scope">scope</a>
+of the connection.</p>
+<div class="tbl"><table><thead><tr><th>Set</th><th>When the agent sees it</th><th class=n>Tools</th></tr></thead><tbody><tr><td>Default</td><td>Always</td><td class=n>19</td></tr><tr><td>Setup</td><td>Until setup is done</td><td class=n>4</td></tr><tr><td>Work queue</td><td>While the generation model is your agent</td><td class=n>2</td></tr><tr><td>Settings</td><td>With <code>pensieve mcp --all-tools</code> or <code>?tools=all</code></td><td class=n>15</td></tr></tbody></table></div>
+
+<h2 id="default">Default tools</h2>
+<div class="tbl"><table><thead><tr><th>Tool</th><th>Arguments</th><th>Returns</th></tr></thead><tbody><tr><td><code>search</code></td><td><code>query</code>, <code>limit</code> = 8, <code>kind</code></td><td>One line per hit, best first: <code>path:line</code>, the enclosing definition, the line that matched, and an id for <code>read</code> and <code>similar</code>. The top hits also show a few numbered lines. Query syntax: <code>"exact"</code>, <code>-word</code>, <code>ext:py</code>, <code>in:&lt;path&gt;</code>, <code>by:&lt;person&gt;</code>, <code>kind:code|doc|session|folder|repo|person</code>.</td></tr><tr><td><code>read</code></td><td><code>id</code> (one id, or up to 8 ids separated by spaces), <code>max_chars</code> = 12000</td><td>The full text of a result. For code, also the repo, branch, lines, owners from git blame, recent commits and the agent sessions that touched it.</td></tr><tr><td><code>similar</code></td><td><code>id</code>, <code>limit</code> = 8</td><td>Items that are similar in meaning to a result, in the same line format as <code>search</code>. Use it before you write new code.</td></tr><tr><td><code>overview</code></td><td><code>repo</code> (default: the repo of the scope)</td><td>Where things are in a repo: size, languages, top folders two levels deep, the start of the README, dependencies, the largest files, and topics (files grouped by meaning) with their files and authors.</td></tr><tr><td><code>who_knows</code></td><td><code>topic</code>, <code>repo</code></td><td><code>people</code>: who wrote the code most related to the topic (git blame). <code>code</code>: the matching code, with id, repo, path, line and score.</td></tr><tr><td><code>team</code></td><td><code>repo</code>, <code>days</code> = 90</td><td>For each person: commits, main areas and recent commit subjects in that period.</td></tr><tr><td><code>unexplored</code></td><td><code>repo</code></td><td>Areas next to your own work that your agent sessions did not touch, and who owns them.</td></tr><tr><td><code>knowledge_gaps</code></td><td><code>repo</code>, <code>inactive_days</code> = 180</td><td>Areas mostly written by people with no commit in <code>inactive_days</code>: who wrote each one, the active person who knows it best (<code>ask</code>) and the bus factor.</td></tr><tr><td><code>list_repos</code></td><td>none</td><td>The indexed repos in the scope, with their size and the number of agent sessions in each.</td></tr><tr><td><code>current_scope</code></td><td>none</td><td>The part of the index that this connection searches.</td></tr><tr><td><code>open</code></td><td><code>id</code>, <code>action</code> = <code>open</code> | <code>reveal</code> | <code>visualize</code></td><td>Opens an item on your computer: code in your editor at the line, the item in Finder, or the item on the Map.</td></tr><tr><td><code>index_path</code></td><td><code>path</code></td><td>Indexes a folder when you ask the agent to: a git repo, a folder of repos, a folder of agent sessions, or documents. Pensieve finds out which kind it is.</td></tr><tr><td><code>stale</code></td><td><code>days</code> = 14</td><td>What looks abandoned: worktrees with no commit and no session, merged local branches, and repos with no activity for 3 months. Each item has a verdict and, where it is safe, a command. The agent asks you before it runs a command.</td></tr><tr><td><code>tasks</code></td><td><code>state</code> = <code>conscious,subconscious</code>, <code>limit</code> = 10, <code>query</code></td><td>Your context cards of the last 30 days, one line each, newest first. <code>state</code> takes a list of states, or <code>all</code>. <code>query</code> takes words, a ticket key, a branch or a PR number.</td></tr><tr><td><code>task</code></td><td><code>id</code> (a task id or a thread id), <code>full</code> = false</td><td>One task as a card: its state and why, folder, branch, uncommitted files, PRs, tickets, what changed since the last session, what is left, where that session stopped and the command that resumes it.</td></tr><tr><td><code>set_task_state</code></td><td><code>id</code>, <code>state</code>, <code>reason</code></td><td>Sets a task's state: <code>conscious</code>, <code>subconscious</code>, <code>latent</code>, <code>etched</code>, <code>forgotten</code>, or <code>auto</code>. You see the change on the Context tab.</td></tr><tr><td><code>share_card</code></td><td><code>id</code>, <code>ask</code></td><td>Makes a card that is fit to send and saves it as one HTML page in <code>~/Downloads</code>. Returns the path of the file and the card. The agent attaches the file. You approve what it sends.</td></tr><tr><td><code>thread_history</code></td><td><code>thread</code>, <code>n</code></td><td>The saved cards of a thread, oldest first. With <code>n</code>, the whole card of that save (<code>n</code> = -1 is the last).</td></tr><tr><td><code>report_feedback</code></td><td><code>kind</code> = <code>bug</code> | <code>idea</code>, <code>summary</code>, <code>details</code></td><td>Saves a report on your computer. You read it in Settings → Feedback before you send it.</td></tr></tbody></table></div>
+
+<h3 id="search-output">What a search returns</h3>
+<p>The result is short on purpose. The agent reads it again on every later turn. A result looks like this:</p>
+<pre><code>src/billing/retry.py:42  def schedule_retry(invoice)  ▸ if decline.hard: return None  [code:1832]
+    41│ def schedule_retry(invoice):
+    42│     if decline.hard: return None
+docs/payments.md  Card retries stop after a hard decline …  [file:77]
+session &quot;fix card retries&quot; (2026-10-12)  … we skip the queue for hard declines …  [session:4f1c…]</code></pre>
+<p>Pensieve adds a note to some hits:</p>
+<ul>
+  <li><strong>(edited since indexed):</strong> the file changed after Pensieve indexed it, and Pensieve did not index it again before the search.</li>
+  <li><strong>(near-copy of …: read both to tell them apart):</strong> another hit has almost the same code.</li>
+  <li><strong>(main checkout; differs in your worktree):</strong> the agent works in a linked worktree, and its copy of the file is different.</li>
+</ul>
+<p>To see what an agent gets, run the same search from a terminal in the repo:</p>
+<pre><code>pensieve search &quot;retry failed webhook delivery&quot; --kind code</code></pre>
+
+<h2 id="setup">Setup tools</h2>
+<p>Until you finish setup, Pensieve indexes nothing. Every connection then also gets these tools, so the agent that
+installed Pensieve can do setup with you in its chat.</p>
+<div class="tbl"><table><thead><tr><th>Tool</th><th>Arguments</th><th>Returns</th></tr></thead><tbody><tr><td><code>setup_guide</code></td><td>none</td><td>What Pensieve is, the user profiles, the source categories and the folders that each scan reads, the generation models and the energy note. It reads no folder. The agent then asks you each question in order.</td></tr><tr><td><code>setup_scan</code></td><td><code>profiles</code> or <code>categories</code></td><td>What can be indexed in those categories, with the size of each item and the recommended items. macOS can ask you for folder access.</td></tr><tr><td><code>setup_add_source</code></td><td><code>kind</code> = <code>files</code> | <code>repos</code> | <code>agents</code>, <code>path</code></td><td>The id of a source that the scan did not find.</td></tr><tr><td><code>setup_start</code></td><td><code>sources</code> or <code>recommended</code>, <code>ai</code>, <code>content</code></td><td>Starts indexing. Returns the time left, the energy note and how to search.</td></tr></tbody></table></div>
+
+<h2 id="work">Work queue tools</h2>
+<p>If you choose your agent as the generation model, Pensieve keeps its jobs in a queue. Nothing runs in the
+background. Ask the agent to “do Pensieve's pending work”.</p>
+<div class="tbl"><table><thead><tr><th>Tool</th><th>Arguments</th><th>Returns</th></tr></thead><tbody><tr><td><code>pending_work</code></td><td><code>limit</code> = 5, <code>kind</code></td><td>Jobs that wait for your agent: task notes, session summaries, topic names and insights. Each job holds its instructions and its data.</td></tr><tr><td><code>submit_work</code></td><td><code>id</code>, <code>answer</code></td><td>Saves the answer to one job. Pensieve uses it in its next pass.</td></tr></tbody></table></div>
+
+<h2 id="settings">Settings tools</h2>
+<p>These tools change Pensieve itself. An agent gets them only with <code>pensieve mcp --all-tools</code>, or with
+<code>?tools=all</code> over HTTP.</p>
+<div class="tbl"><table><thead><tr><th>Tool</th><th>Arguments</th><th>Returns</th></tr></thead><tbody><tr><td><code>show_search</code></td><td><code>query</code></td><td>Opens the search panel with the query.</td></tr><tr><td><code>show_visualizer</code></td><td><code>view</code></td><td>Opens the Map window.</td></tr><tr><td><code>status</code></td><td>none</td><td>The size of the index and whether indexing runs now.</td></tr><tr><td><code>list_scopes</code></td><td>none</td><td>The named scopes and the current scope.</td></tr><tr><td><code>save_scope</code></td><td><code>name</code>, <code>sources</code>, <code>description</code></td><td>Makes or replaces a named scope.</td></tr><tr><td><code>delete_scope</code></td><td><code>name</code></td><td>Removes a named scope.</td></tr><tr><td><code>get_settings</code></td><td>none</td><td>The settings, with a description of each.</td></tr><tr><td><code>update_settings</code></td><td><code>changes</code></td><td>Changes settings, for example <code>{"editor": "cursor"}</code>.</td></tr><tr><td><code>list_sources</code></td><td>none</td><td>The sources by category, with their on and off state and item counts.</td></tr><tr><td><code>set_source</code></td><td><code>id</code>, <code>enabled</code>, <code>map</code></td><td>Switches a category or one item on or off, or on or off the Map.</td></tr><tr><td><code>file_types</code></td><td>none</td><td>For each file type: whether Pensieve reads its content, whether it shows on the Map, and how many files it has.</td></tr><tr><td><code>add_folder</code></td><td><code>path</code></td><td>Indexes another folder.</td></tr><tr><td><code>remove_folder</code></td><td><code>path</code></td><td>Stops indexing a folder.</td></tr><tr><td><code>reindex</code></td><td>none</td><td>Scans folders and repos now.</td></tr><tr><td><code>usage_stats</code></td><td><code>days</code> = 7</td><td>Pensieve's own MCP calls: for each tool, the number of calls, errors and the p50 and p95 time.</td></tr></tbody></table></div>
+
+<h2 id="errors">Errors</h2>
+<p>A bad argument, an unknown id or an item outside the scope comes back to the agent as a readable error. Pensieve
+logs each call on your computer, in <code>usage.db</code>. Settings → Usage shows the log.</p>
+<nav class="pager" aria-label="Pages"><a class="prev" href="/docs/agents/vs-code/"><small>Previous</small>VS Code</a><a class="next" href="/docs/context-cards/"><small>Next</small>Context cards</a></nav>
+<p class="edit">Something wrong or missing? <a href="https://github.com/TedHaley/pensieve/issues/new/choose">Tell us on GitHub</a>.</p>
+</main>
+</div>
+<footer>
+  <div class="in">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <nav><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/TedHaley/pensieve">GitHub</a><a href="https://github.com/TedHaley/pensieve/releases">Releases</a><a href="https://github.com/TedHaley/pensieve/issues/new/choose">Feedback</a></nav>
+  </div>
+</footer>
+<script>
+// on a phone the docs menu starts closed, so the page starts with its own text
+if (matchMedia('(max-width: 860px)').matches) document.getElementById('docnav').removeAttribute('open');
+</script>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</body>
+</html>

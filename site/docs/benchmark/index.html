@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pensieve benchmark: MCP code search vs grep for Claude Code agents</title>
+<meta name="description" content="How Pensieve was measured against grep with Claude Sonnet in Claude Code: 72 held-out tasks in four repos, tasks solved, tool calls, cost and time. The method, the results and the limits.">
+<link rel="canonical" href="https://pensieve.tools/docs/benchmark/">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Pensieve benchmark: MCP code search vs grep for Claude Code agents">
+<meta property="og:description" content="How Pensieve was measured against grep with Claude Sonnet in Claude Code: 72 held-out tasks in four repos, tasks solved, tool calls, cost and time. The method, the results and the limits.">
+<meta property="og:url" content="https://pensieve.tools/docs/benchmark/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/docs/docs.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Benchmark","description":"How Pensieve was measured against grep with Claude Sonnet in Claude Code: 72 held-out tasks in four repos, tasks solved, tool calls, cost and time. The method, the results and the limits.","url":"https://pensieve.tools/docs/benchmark/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="/" aria-label="Pensieve home"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve <span>Docs</span></a>
+  <nav aria-label="Site">
+    <a class="chip gh" href="https://github.com/TedHaley/pensieve"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+    <a class="chip solid" href="/docs/install/">Install</a>
+  </nav>
+</header>
+<div class="layout">
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/" aria-current="page">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<main>
+<p class="crumb">Docs</p>
+<h1>Benchmark</h1>
+<p class="lede">This page tells you how we measured Pensieve against grep, what the results are, and what we did not measure.</p>
+<div class="stats">
+  <div><b>91%</b><span>tasks solved with Pensieve, against 85% with grep (first batch)</span></div>
+  <div><b>−43%</b><span>tool calls per lookup: 1.97 against 3.44</span></div>
+  <div><b>−18%</b><span>cost per lookup: $0.041 against $0.050</span></div>
+  <div><b>−21%</b><span>time per lookup: 8.6 s against 10.9 s</span></div>
+</div>
+<p>These four numbers are from one batch of 288 runs, with Pensieve 0.5.6. Two later batches with clean settings
+found the same accuracy with and without Pensieve, and 23 to 25% lower cost with Pensieve. Both results are below.</p>
+
+<h2 id="method">Method</h2>
+<p>The script is <a href="https://github.com/TedHaley/pensieve/tree/main/bench/agent_search.py"><code>bench/agent_search.py</code></a>. It does these steps:</p>
+<ol>
+  <li>It makes tasks from indexed code. Each task describes one piece of code. The answer is the file that holds it.</li>
+  <li>It writes each task in one of these styles: a plain description, a name that the code defines, an error string from the code, or a mix of a name and words.</li>
+  <li>It splits the tasks into a dev set, which we used to tune Pensieve, and a test set, which we did not use to tune.</li>
+  <li>It runs Claude Sonnet headless through Claude Code (<code>claude -p</code>) on each test task, once in each setup.</li>
+  <li>It records whether the answer names the right file, the tool calls, the tokens, the time, and the cost that Claude Code reports.</li>
+</ol>
+<div class="tbl"><table><thead><tr><th>Setup</th><th>Tools that the agent has</th></tr></thead><tbody><tr><td>grep</td><td>Read, Grep and Glob</td></tr><tr><td>guided</td><td>Read, Grep and Glob, plus Pensieve's <code>search</code>, <code>read</code> and <code>similar</code>, plus the “search before you grep” instructions block. This is the recommended install.</td></tr><tr><td>only</td><td>Pensieve's tools and Read, with no Grep or Glob. Only in the later batches.</td></tr></tbody></table></div>
+<div class="tbl"><table><thead><tr><th>Item</th><th>Value</th></tr></thead><tbody><tr><td>Model</td><td>Claude Sonnet, in Claude Code</td></tr><tr><td>Tasks</td><td>72 held-out (test) tasks</td></tr><tr><td>Repos</td><td>4 repos, from 504 to 34,847 files</td></tr><tr><td>Runs</td><td>Each task twice in each setup: 144 runs per setup</td></tr><tr><td>Order</td><td>All setups of a batch run interleaved, in one batch</td></tr></tbody></table></div>
+<p>Cost depends on the state of Claude's prompt cache. The same tokens can cost 4 times more with a cold cache. Thus
+we compare cost only between setups in one batch. Calls, tokens and time can be compared between batches.</p>
+
+<h2 id="results">Results: first batch (Pensieve 0.5.6)</h2>
+<div class="tbl"><table><thead><tr><th></th><th class=n>grep</th><th class=n>guided (Pensieve)</th><th class=n>Change</th></tr></thead><tbody><tr><td>Tasks solved</td><td class=n>123 / 144 (85%)</td><td class=n><strong>131 / 144 (91%)</strong></td><td class=n>+6 points</td></tr><tr><td>Tool calls per lookup</td><td class=n>3.44</td><td class=n><strong>1.97</strong></td><td class=n>−43%</td></tr><tr><td>Cost per lookup</td><td class=n>$0.050</td><td class=n><strong>$0.041</strong></td><td class=n>−18%</td></tr><tr><td>Tokens per lookup</td><td class=n>67k</td><td class=n><strong>57k</strong></td><td class=n>−16%</td></tr><tr><td>Time per lookup (mean)</td><td class=n>10.9 s</td><td class=n><strong>8.6 s</strong></td><td class=n>−21%</td></tr></tbody></table></div>
+<p>In 82 of the 144 guided runs, the agent answered with one tool call or none. Pensieve solved as many tasks or
+more, and cost less, in every repo:</p>
+<div class="tbl"><table><thead><tr><th>Repo</th><th class=n>Solved, grep</th><th class=n>Solved, guided</th><th class=n>Cost change</th><th class=n>Calls, grep</th><th class=n>Calls, guided</th></tr></thead><tbody><tr><td>504 files</td><td class=n>24 / 26</td><td class=n>24 / 26</td><td class=n>−15%</td><td class=n>2.85</td><td class=n>1.65</td></tr><tr><td>Medium repo 1</td><td class=n>34 / 40</td><td class=n>36 / 40</td><td class=n>−6%</td><td class=n>2.65</td><td class=n>1.77</td></tr><tr><td>Medium repo 2</td><td class=n>20 / 26</td><td class=n>24 / 26</td><td class=n>−14%</td><td class=n>2.54</td><td class=n>1.46</td></tr><tr><td>34,847 files</td><td class=n>45 / 52</td><td class=n>47 / 52</td><td class=n>−28%</td><td class=n>4.81</td><td class=n>2.54</td></tr></tbody></table></div>
+<p>The two medium repos have 1,783 and 2,383 files.</p>
+
+<h2 id="clean-runs">Results: later batches with clean settings</h2>
+<p>The first batch loaded the Claude Code settings of the computer that ran it. Later, the script loads only the
+settings of the repo (<code>--setting-sources project,local</code>). These are the last of those batches, run on
+2026-10-13 with the same 72 tasks:</p>
+<div class="tbl"><table><thead><tr><th>Setup</th><th class=n>Solved</th><th class=n>Tool calls</th><th class=n>Cost per lookup</th><th class=n>Time (mean)</th></tr></thead><tbody><tr><td>grep</td><td class=n>129 / 144</td><td class=n>3.42</td><td class=n>$0.051</td><td class=n>9.5 s</td></tr><tr><td>guided</td><td class=n>129 / 144</td><td class=n>1.81</td><td class=n>$0.039</td><td class=n>6.8 s</td></tr><tr><td>only</td><td class=n>130 / 144</td><td class=n>1.70</td><td class=n>$0.038</td><td class=n>6.5 s</td></tr></tbody></table></div>
+<ul>
+  <li><strong>Accuracy is level with grep.</strong> The 6-point gain of the first batch did not come back with clean settings. This task set suits grep: most descriptions use words that are in the code.</li>
+  <li><strong>Cost and time are lower.</strong> Guided was 23 to 25% cheaper and 25 to 29% faster than grep in the two clean batches.</li>
+  <li><strong>6 tasks fail in every setup.</strong> Their description fits a near-copy of the answer as well as the answer.</li>
+</ul>
+
+<h2 id="search-only">Search alone, with no agent</h2>
+<p>A second set measures one search, with no agent. It has 2,377 queries in the same four repos. Each query has one
+right file. “@1” is the share of queries where the right file is first. The grep row is one case-insensitive grep,
+with files ranked by the number of matches.</p>
+<div class="tbl"><table><thead><tr><th>Query kind</th><th class=n>Queries</th><th class=n>Pensieve 0.6.4 @1</th><th class=n>grep @1</th></tr></thead><tbody><tr><td>Question in plain words</td><td class=n>334</td><td class=n>47.9%</td><td class=n>0%</td></tr><tr><td>Name plus words</td><td class=n>333</td><td class=n>70.9%</td><td class=n>0%</td></tr><tr><td>Name</td><td class=n>219</td><td class=n>94.1%</td><td class=n>51.3%</td></tr><tr><td>Exact string</td><td class=n>714</td><td class=n>84.6%</td><td class=n>85.2%</td></tr><tr><td>String that 2 or more files contain</td><td class=n>404</td><td class=n>37.1%</td><td class=n>39.7%</td></tr><tr><td>Message as it shows in a log</td><td class=n>373</td><td class=n>56.3%</td><td class=n>0%</td></tr><tr><td><strong>All</strong></td><td class=n>2,377</td><td class=n><strong>65.9%</strong></td><td class=n>37.1%</td></tr></tbody></table></div>
+<p>In the top 8 results, which is what the <code>search</code> tool shows, Pensieve has the right file for 91.6% of
+queries. Grep has it for 53.1%. On the held-out queries only, @1 is 66.7% against 35.2%. A search took 73 ms at the
+median, on an Apple M4 Max. Grep is level with Pensieve on exact strings.
+<a href="https://github.com/TedHaley/pensieve/blob/main/bench/STRATEGIES.md">STRATEGIES.md</a> lists every ranking method that we tried, with its numbers.</p>
+
+<h2 id="overview-tool">Repo overviews</h2>
+<p>We asked “Give me a high-level overview of this repository” in five repos, three times each. A second Claude run
+checked each claim against the code. Only confirmed errors count.</p>
+<div class="tbl"><table><thead><tr><th>Setup</th><th class=n>Wrong claims (15 answers)</th><th class=n>Tool calls</th><th class=n>Cost</th><th class=n>Time (median)</th></tr></thead><tbody><tr><td>grep, repo with no CLAUDE.md</td><td class=n>10</td><td class=n>4.1</td><td class=n>$0.056</td><td class=n>13.0 s</td></tr><tr><td><code>overview</code> tool, repo with no CLAUDE.md</td><td class=n><strong>4</strong></td><td class=n>1.4</td><td class=n>$0.034</td><td class=n>12.0 s</td></tr><tr><td>grep, repo with its CLAUDE.md</td><td class=n>3</td><td class=n>1.5</td><td class=n>$0.035</td><td class=n>10.0 s</td></tr><tr><td><code>overview</code> tool, repo with its CLAUDE.md</td><td class=n>2</td><td class=n>1.2</td><td class=n>$0.044</td><td class=n>11.9 s</td></tr></tbody></table></div>
+<p>If a repo has good notes for the agent, grep needs no help. The <code>overview</code> tool helps most when a repo
+has no notes.</p>
+
+<h2 id="shared-cards">Shared context cards</h2>
+<p>This test asks whether a shared card helps a teammate's agent. The agent worked in a fresh clone, with no access
+to the owner's computer. It answered questions about 4 real tasks, 3 times each. A judge counted the facts from a
+list that the answer got right, and the wrong claims.</p>
+<div class="tbl"><table><thead><tr><th>Setup</th><th class=n>Facts right</th><th class=n>Wrong claims</th></tr></thead><tbody><tr><td>No card</td><td class=n>6 / 60 (11%)</td><td class=n>10</td></tr><tr><td>With the shared card</td><td class=n>52 / 60 (85%)</td><td class=n>0</td></tr></tbody></table></div>
+<p>The script is <a href="https://github.com/TedHaley/pensieve/tree/main/bench/workflows.py"><code>bench/workflows.py</code></a>. This test is small: 4 tasks
+and 12 runs in each setup.</p>
+
+<h2 id="limits">What we did not measure</h2>
+<ul>
+  <li><strong>Other models and agents.</strong> Every agent run used Claude Sonnet in Claude Code. We did not measure Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop or VS Code.</li>
+  <li><strong>Other repos.</strong> The tasks come from four repos on one developer's computer. We do not publish their names.</li>
+  <li><strong>Full coding tasks.</strong> Each task asks the agent to find one file. We did not measure whether Pensieve helps an agent fix a bug or ship a feature.</li>
+  <li><strong>Generated tasks.</strong> A model wrote the tasks from the code. Real questions from real sessions are noisier. We have only about 18 of them, too few to report.</li>
+  <li><strong>Independent runs.</strong> Nobody outside the project has run the benchmark yet.</li>
+  <li><strong>Linux and Intel.</strong> All runs were on Apple Silicon.</li>
+  <li><strong>The prompt hook.</strong> The optional <code>claude-prompt-search</code> hook cut tool calls by 33 to 46% in three batches. Its accuracy was level with guided, and its cost was the same. The results above do not use it.</li>
+</ul>
+
+<h2 id="data">Data and scripts</h2>
+<p>The scripts are in <a href="https://github.com/TedHaley/pensieve/tree/main/bench"><code>bench/</code></a>. The run files hold paths and code from the four
+repos, so they are not public. To get your own numbers, run the benchmark on your repos:</p>
+<pre><code>uv run python bench/agent_search.py gen --repo ~/code/my-app -n 40 --tasks tasks-v2.jsonl
+uv run python bench/exact_tasks.py      <span class="c"># adds name, error-string and mixed tasks</span>
+uv run python bench/agent_search.py run --repo ~/code/my-app --tasks tasks-v2.jsonl --arms grep,guided</code></pre>
+<div class="note warn"><p>Use a copy of an index (<code>PENSIEVE_DATA</code>), not <code>~/.pensieve</code>. Run a server on the copy for the agent runs.</p></div>
+<nav class="pager" aria-label="Pages"><a class="prev" href="/docs/connections/"><small>Previous</small>Connections</a><a class="next" href="/docs/privacy/"><small>Next</small>Privacy and data</a></nav>
+<p class="edit">Something wrong or missing? <a href="https://github.com/TedHaley/pensieve/issues/new/choose">Tell us on GitHub</a>.</p>
+</main>
+</div>
+<footer>
+  <div class="in">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <nav><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/TedHaley/pensieve">GitHub</a><a href="https://github.com/TedHaley/pensieve/releases">Releases</a><a href="https://github.com/TedHaley/pensieve/issues/new/choose">Feedback</a></nav>
+  </div>
+</footer>
+<script>
+// on a phone the docs menu starts closed, so the page starts with its own text
+if (matchMedia('(max-width: 860px)').matches) document.getElementById('docnav').removeAttribute('open');
+</script>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</body>
+</html>
