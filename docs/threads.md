@@ -100,7 +100,9 @@ A thread is the smallest unit that you hand off or report in a standup. These it
 
 ## History
 
-The snapshots of a thread form its history, as commits form the history of a branch. The history shows how the goal, the state and the next step changed over time. You can open any snapshot again: a thread that ended can start again from its last snapshot, with its links, its decisions and the commands that get the work.
+The snapshots of a thread form its history, as commits form the history of a branch. The history shows how the goal, the state and the next step changed over time.
+
+To start a thread again, start a new agent session from one of its cards: the card now, or a saved one. Pensieve writes the card to a file and opens the agent in the work's folder, with a prompt to read the card, to get what changed since (the card's refresh commands), and to report before it changes anything. When the folder is gone, the card's start commands get the work back.
 
 ## How Pensieve links snapshots
 

@@ -652,8 +652,12 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     `GET /api/threads`, `GET /api/threads/<thread>` (`format=html&n=…` for one save), `POST /api/threads/save`.
     On a copy of this Mac's index: 44 threads saved on the first pass (964 KB), none on a second pass, and a state
     change saved one card.
-  - Not built: a thread id on the Context tab and in the MCP tools, hand-set states keyed by thread, and a way to
-    open an old save as the start of new work.
+  - Revive is a new agent session that reads a card first: "New session from card" on the Context tab, or
+    `POST /api/work/revive` with a task or a thread's saved card. The card goes into a file for the agent, and the
+    agent (the one of the card's last session) starts in the work's folder. Tested headless on a saved card: the
+    agent read it, reported the problem, the fix and the open question, and tried the refresh, in 4 calls.
+  - A hand-set state stays keyed by task: it describes the current snapshot, and it resets when the work changes.
+  - Not built: a thread id on the Context tab and in the MCP tools.
 
 ## E. Connections
 

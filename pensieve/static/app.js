@@ -3345,6 +3345,7 @@ const homeTilde = p => p.replace(/^\/Users\/[^/]+/, '~');
 const WK_IC = {
   play: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/></svg>',
   share: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 14.5V3.5M8 7.5l4-4 4 4M7.5 10.5H6.5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9ZM18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8Z" fill="currentColor"/></svg>',
   eye: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
   rows: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
   cards: '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="3.5" y="4" width="17" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3.5" y="13" width="17" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
@@ -3360,7 +3361,8 @@ const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
 function wkActions(t) {
   const resume = t.resume ? `<button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
-  return `<div class="wk-bar">${resume}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
+  const fresh = `<button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new agent session that reads this card first">${WK_IC.spark}New session from card</button>`;
+  return `<div class="wk-bar">${resume}${fresh}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
 }
 // A card on one line: where, its PRs and what is next. A click opens it in full, in place.
 function wkRow(t, n) {
@@ -3373,7 +3375,7 @@ function wkRow(t, n) {
     <div class="c-main"><div class="c-l1"><h4>${esc(t.title)}</h4>${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
       <div class="c-l2">${where ? `<span class="c-where">${esc(where)}</span>` : ''}${next ? `<span class="c-next">${esc(next)}</span>` : ''}</div></div>
     <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>
-    <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}${wkCardBtns(t)}</div>
+    <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}<button class="wk-btn icon" data-wk-revive="${esc(t.id)}" title="Start a new agent session that reads this card first">${WK_IC.spark}</button>${wkCardBtns(t)}</div>
   </article>`;
 }
 function wkCardBtns(t) {
@@ -3603,6 +3605,11 @@ function renderWork() {
     catch (e) { toast('Could not resume it: ' + e.message); }
   });
   $$('[data-wk-share]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openShare(b.dataset.wkShare); });
+  $$('[data-wk-revive]', el).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkRevive, days: S.work.days})}); toast('Starting a new session from this card in Terminal'); }
+    catch (err) { toast('Could not start it: ' + err.message); }
+  });
   $$('[data-wk-preview]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
     const t = d.tasks.find(x => x.id === b.dataset.wkPreview);

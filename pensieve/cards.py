@@ -338,6 +338,28 @@ def _link_row(r: dict, e) -> str:
             + (f"<p>{e(r['summary'])}</p>" if r.get("summary") else "") + f'</span><span class="reach">{e(REACH_LABEL[r["reach"]])}</span></li>')
 
 
+REVIVE_PROMPT = ("Pick up this work. Its context card is {path}: read it first. Then get what changed since the card "
+                 "was saved (its handoff.refresh commands), and tell me where the work stands and what you will do "
+                 "next, before you change anything.")
+
+
+def revive_command(card: dict, folder) -> str:
+    """The shell command that starts a new agent session with a card as its first context: the card goes into a file
+    for the agent, and the agent starts in the work's folder (this Mac's checkout, or the home folder when it is
+    gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
+    import shlex
+    from pathlib import Path
+    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:50] or "card"
+    path = Path(folder).expanduser() / f"{slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_agent(card))
+    where = next((r["ref"]["path"] for r in card.get("resources", []) if r["kind"] == "folder"
+                  and Path(r.get("ref", {}).get("path", "")).is_dir()), str(Path.home()))
+    agents = [r.get("ref", {}).get("session", "").split(":", 1)[0] for r in card.get("resources", []) if r["kind"] == "session"]
+    agent = next((a for a in agents if a in ("claude", "codex")), "claude")
+    return f"cd {shlex.quote(where)} && {agent} {shlex.quote(REVIVE_PROMPT.format(path=path))}"
+
+
 def save(card: dict, folder) -> str:
     """Write the card's HTML page into folder, named after its title; returns the path."""
     from pathlib import Path

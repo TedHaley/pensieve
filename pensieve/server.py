@@ -1556,10 +1556,39 @@ def resume_session(req: ResumeReq):
     cmd = work.resume_command(store, req.session)
     if not cmd:
         raise HTTPException(404, "can't resume that session: its folder is gone, or its agent has no resume command")
-    script = cmd.replace("\\", "\\\\").replace('"', '\\"')
+    _terminal(cmd)
+    return {"ok": True, "command": cmd}
+
+
+def _terminal(cmd: str):
+    """Run a shell command in a new Terminal window."""
     import subprocess
+    script = cmd.replace("\\", "\\\\").replace('"', '\\"')
     subprocess.run(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
                     "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True)
+
+
+class ReviveReq(BaseModel):
+    id: str = ""  # a task on the Context tab: its card now
+    days: int = 30
+    thread: str = ""  # or a thread's saved card (history), save n (default the last)
+    n: int = -1
+
+
+@app.post("/api/work/revive")
+def revive_card(req: ReviveReq):
+    """Start a new agent session in Terminal with a card as its first context: a task's card now, or a card that
+    the history saved, such as one from work that ended."""
+    from pensieve import cards, history
+    if req.thread:
+        saves = history.history(req.thread)
+        if not saves:
+            raise HTTPException(404, f"no saved cards for {req.thread}")
+        card = saves[req.n]["card"]
+    else:
+        card = _local_card(req.id, req.days)
+    cmd = cards.revive_command(card, config.DATA_DIR / "threads" / "revive")
+    _terminal(cmd)
     return {"ok": True, "command": cmd}
 
 
