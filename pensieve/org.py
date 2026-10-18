@@ -8,11 +8,16 @@
   approvals to other people), ownership (the top committer of areas, the git blame share, CODEOWNERS entries and
   GitHub team maintainers). Without a title the level is never above 'lead', and the confidence stays low.
 - Reporting lines only with evidence: a manager's title that names a team ('Engineering Manager, Payments'), or one
-  person who gives most of the approvals to a group of people. Otherwise the chart shows teams, not a tree."""
+  person who gives most of the approvals to a group of people. Otherwise the chart shows teams, not a tree.
+
+The evidence builds up over time (orgstore.py): pull requests, titles, first commits and team co-membership from all
+builds so far, not only from the last one. More evidence gives more confidence."""
 import math
 import re
 import time
 from collections import Counter, defaultdict
+
+from pensieve import orgstore
 
 LEVELS = ["IC", "senior IC", "lead", "manager", "director+"]
 _TITLE = [
@@ -38,6 +43,49 @@ def _title_level(title: str) -> tuple[str, str]:
     return "IC", ""
 
 
+def is_manager_title(title: str) -> bool:
+    return _title_level(title)[0] in ("manager", "director+")
+
+
+def _from_store(people: dict, pid_of_login: dict, ev: dict, now: float) -> dict:
+    """The accumulated evidence (orgstore.py), by person: approvals (decayed), reviews, pull request counts, the
+    first commit and the titles seen."""
+    approvals = defaultdict(Counter)   # author -> approver -> approvals, weighted by age
+    reviews = defaultdict(Counter)     # reviewer -> author -> pull requests reviewed
+    approved = defaultdict(set)        # approver -> the authors they approved
+    n_prs, n_rev = Counter(), Counter()
+    for p in ev["prs"].values():
+        a = pid_of_login.get(p["author"])
+        if not a:
+            continue
+        n_prs[a] += 1
+        w = orgstore.decay(p["ts"], now)
+        for r in p["reviewers"]:
+            q = pid_of_login.get(r)
+            if q and q != a:
+                n_rev[q] += 1
+                reviews[q][a] += 1
+        for r in p["approvers"]:
+            q = pid_of_login.get(r)
+            if q and q != a:
+                approvals[a][q] += w
+                approved[q].add(a)
+    pid_of_key = {k: pid for pid, p in people.items() for k in p["keys"]}
+    first = {}
+    for k, ts in ev["first"].items():
+        q = pid_of_key.get(k)
+        if q and ts:
+            first[q] = min(first.get(q) or ts, ts)
+    titles = {}   # person -> (title, sightings) of the title seen last
+    for k, seen in ev["titles"].items():
+        q = pid_of_key.get(k)
+        for t, s in seen.items():
+            if q and (q not in titles or (s["last"], s["n"]) > (titles[q][1]["last"], titles[q][1]["n"])):
+                titles[q] = (t, s)
+    return dict(approvals=approvals, reviews=reviews, approved=approved, n_prs=n_prs, n_reviews=n_rev, first=first,
+                titles=titles, has_prs=bool(ev["prs"]))
+
+
 def _cos(a: Counter, b: Counter) -> float:
     if not a or not b:
         return 0.0
@@ -45,8 +93,9 @@ def _cos(a: Counter, b: Counter) -> float:
     return dot / (math.sqrt(sum(v * v for v in a.values())) * math.sqrt(sum(v * v for v in b.values())) or 1)
 
 
-def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict) -> dict:
+def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict, store: dict | None = None) -> dict:
     now = time.time()
+    store = store or orgstore.empty()  # the evidence of all builds (orgstore.py)
     teams_gh = raw.get("teams") or {}
     pid_of_login = {}
     for pid, p in people.items():
@@ -63,18 +112,24 @@ def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict) -
             if lg in pid_of_login:
                 maint_of[pid_of_login[lg]].add(slug)
 
-    approvals = defaultdict(Counter)  # author -> approver -> approvals
-    for pid, w in work_of.items():
-        for author_login, n in w["approved"].items():
-            a = pid_of_login.get(author_login)
-            if a and a != pid:
-                approvals[a][pid] += n
+    acc = _from_store(people, pid_of_login, store, now)
+    if acc["has_prs"]:   # all the pull requests that any build saw, each once
+        approvals = acc["approvals"]
+    else:                # an older raw file without the pull request log: this build's counts
+        approvals = defaultdict(Counter)  # author -> approver -> approvals
+        for pid, w in work_of.items():
+            for author_login, n in w["approved"].items():
+                a = pid_of_login.get(author_login)
+                if a and a != pid:
+                    approvals[a][pid] += n
     top_approver = {}
     groups = defaultdict(list)
     for author, c in approvals.items():
         tot = sum(c.values())
+        if not tot:
+            continue
         a, n = c.most_common(1)[0]
-        if tot >= 4 and n / tot >= 0.5:
+        if tot >= 3.5 and n / tot >= 0.5:
             top_approver[author] = (a, n, tot)
             groups[a].append(author)
 
@@ -90,12 +145,22 @@ def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict) -
         if n >= 10 and n / tot >= 0.4 and len(c) >= 2:
             owns_area[top] += 1
 
-    out_people = {}
+    out_people, title_of = {}, {}
     for pid, p in people.items():
         w = work_of[pid]
+        seen = acc["titles"].get(pid)
+        if p["title"]:
+            title, sightings = p["title"], seen[1] if seen and seen[0] == p["title"] else None
+        else:   # no title in this build: the last one that an earlier build saw
+            title, sightings = seen if seen else ("", None)
+        title_of[pid] = title
+        s = dict(first=min([x for x in (w["first"], acc["first"].get(pid)) if x] or [0]),
+                 n_prs=max(w["n_prs"], acc["n_prs"][pid]), n_reviews=max(w["n_reviews"], acc["n_reviews"][pid]),
+                 approved=max(len(w["approved"]), len(acc["approved"].get(pid, ()))), title=title,
+                 sightings=sightings, current=bool(p["title"]))
         out_people[pid] = dict(id=pid, name=p["name"], function=profiles[pid]["function"],
                                function_inferred=profiles[pid]["function_inferred"],
-                               **_seniority(p, w, now, owns_area[pid], maint_of[pid], len(groups.get(pid, []))))
+                               **_seniority(s, w, now, owns_area[pid], maint_of[pid], len(groups.get(pid, []))))
 
     active = sorted((pid for pid, w in work_of.items() if w["repos"] or w["channels"] or gh_of.get(pid)),
                     key=lambda q: people[q].get("rank", 1e9))[:MAX_PEOPLE]
@@ -117,6 +182,8 @@ def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict) -
     for i, members in enumerate(sorted(clusters, key=lambda m: -len(m))):
         teams.append(_name_team(f"t{i + 1}", members, vec, teams_gh, people, df))
     team_of = {m: t for t in teams for m in t["members"]}
+    ev_teams = store["teams"]
+    anchor = lambda q: people[q]["keys"][0] if people[q]["keys"] else ""
     for pid, op in out_people.items():
         t = team_of.get(pid)
         if not t:
@@ -129,24 +196,34 @@ def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict) -
         mine = gh_of.get(pid, set()) & {t.get("github_team")}
         if mine:
             ev.insert(0, f"member of the GitHub team {teams_gh[next(iter(mine))]['name']}")
-        op.update(team=t["id"], team_confidence=round(min(0.85, 0.3 + avg + (0.15 if mine else 0)), 2),
+        # the same people in the same group in earlier builds: a steadier team
+        me_a = anchor(pid)
+        co = [ev_teams.get("\t".join(sorted((me_a, anchor(o)))), 0) for o in t["members"] if o != pid]
+        stay = sum(co) / len(co) if co else 0
+        bonus = min(0.1, 0.03 * stay) if stay >= 1 else 0
+        if bonus:
+            ev.append(f"in a group with these people in about {stay:.0f} earlier builds")
+        op.update(team=t["id"], team_confidence=round(min(0.9, 0.3 + avg + (0.15 if mine else 0) + bonus), 2),
                   team_evidence=ev + [f"work most like {len(t['members']) - 1} others in this group "
                                       f"(similarity {avg:.2f})"])
 
-    reports = _reporting(people, out_people, teams, team_of, groups, top_approver, approvals)
+    reports = _reporting(people, out_people, teams, team_of, groups, top_approver, approvals, title_of, acc)
     for t in teams:
         t["managers"] = sorted({e["manager"] for e in reports if e["report"] in t["members"]
                                 and sum(1 for x in reports if x["manager"] == e["manager"] and x["report"] in t["members"]) >= 2},
                                key=lambda q: people[q].get("rank", 1e9))
     leaders = sorted((pid for pid, op in out_people.items() if op["level"] == "director+"),
                      key=lambda q: people[q].get("rank", 1e9))
-    return dict(built=now, teams=teams, people=out_people, edges=reports, leaders=leaders,
+    review_map = {r: dict(c) for r, c in acc["reviews"].items()}  # reviewer -> author -> pull requests
+    return dict(built=now, teams=teams, people=out_people, edges=reports, leaders=leaders, reviews=review_map,
                 note="Inferred from repos, pull requests, CODEOWNERS, GitHub teams and Slack. Not an HR record.")
 
 
-def _seniority(p, w, now, owned_areas, maintains, approver_for) -> dict:
+def _seniority(s, w, now, owned_areas, maintains, approver_for) -> dict:
+    """`s`: this build's work and the accumulated evidence together (first commit, pull requests, reviews, the
+    number of people approved, the title and its sightings)."""
     ev, score = [], 0.0
-    first = w["first"]
+    first = s["first"]
     if first:
         yrs = (now - first) / YEAR
         ev.append(f"first commit {yrs:.1f} years ago")
@@ -155,14 +232,15 @@ def _seniority(p, w, now, owned_areas, maintains, approver_for) -> dict:
     if len(w["repos"]) >= 3 or areas >= 10:
         score += 0.4
         ev.append(f"works across {len(w['repos'])} repos and {areas} areas")
-    if w["n_reviews"] >= 20 and w["n_reviews"] >= 1.5 * max(1, w["n_prs"]):
+    n_rev, n_prs = s["n_reviews"], s["n_prs"]
+    if n_rev >= 20 and n_rev >= 1.5 * max(1, n_prs):
         score += 0.6
-        ev.append(f"reviews more than writes: {w['n_reviews']} reviews, {w['n_prs']} pull requests")
-    elif w["n_reviews"]:
-        ev.append(f"{w['n_reviews']} reviews given, {w['n_prs']} pull requests written")
-    if len(w["approved"]) >= 5:
+        ev.append(f"reviews more than writes: {n_rev} reviews, {n_prs} pull requests")
+    elif n_rev:
+        ev.append(f"{n_rev} reviews given, {n_prs} pull requests written")
+    if s["approved"] >= 5:
         score += 0.6
-        ev.append(f"approves the pull requests of {len(w['approved'])} people")
+        ev.append(f"approves the pull requests of {s['approved']} people")
     if owned_areas:
         score += 0.6 if owned_areas >= 3 else 0.3
         ev.append(f"top committer of {owned_areas} area{'s' if owned_areas > 1 else ''}")
@@ -180,14 +258,26 @@ def _seniority(p, w, now, owned_areas, maintains, approver_for) -> dict:
         score += 0.8
         ev.append(f"gives most of the approvals to {approver_for} people")
     signals = sum(1 for _ in ev)
-    if p["title"]:
-        level, word = _title_level(p["title"])
-        ev.insert(0, f"Slack title '{p['title']}'" + (f" ('{word}')" if word else ": no seniority word"))
-        return dict(level=level, level_confidence=0.8 if word else 0.55, level_evidence=ev, level_from="title")
-    if not (w["repos"] or w["n_prs"] or w["n_reviews"]):
+    title, seen = s["title"], s["sightings"]
+    if title:
+        level, word = _title_level(title)
+        conf = 0.8 if word else 0.55
+        note = ""
+        if seen:
+            if seen["n"] >= 3:   # the same title in several builds
+                conf += 0.05
+            note = f", seen in {seen['n']} build{'s' if seen['n'] != 1 else ''} since " + \
+                time.strftime("%Y-%m-%d", time.localtime(seen["first"]))
+            if not s["current"] and now - seen["last"] > 180 * 86400:  # not seen for half a year: maybe changed
+                conf -= 0.15
+        ev.insert(0, f"Slack title '{title}'" + (f" ('{word}')" if word else ": no seniority word") + note +
+                  ("" if s["current"] else " (from an earlier build)"))
+        return dict(level=level, level_confidence=round(min(0.85, conf), 2), level_evidence=ev, level_from="title")
+    if not (w["repos"] or n_prs or n_rev or first):
         return dict(level=None, level_confidence=0, level_evidence=["not enough work seen to tell"], level_from="")
     level = "IC" if score < 1.0 else "senior IC" if score < 2.2 else "lead"
-    return dict(level=level, level_confidence=round(min(0.55, 0.25 + 0.04 * signals), 2), level_evidence=ev,
+    more = min(0.08, 0.02 * math.log2(1 + (n_prs + n_rev) / 10))  # more pull requests seen: a surer guess
+    return dict(level=level, level_confidence=round(min(0.6, 0.25 + 0.04 * signals + more), 2), level_evidence=ev,
                 level_from="signals")
 
 
@@ -264,7 +354,7 @@ def _name_team(tid, members, vec, teams_gh, people, df) -> dict:
                 managers=[])
 
 
-def _reporting(people, out_people, teams, team_of, groups, top_approver, approvals) -> list[dict]:
+def _reporting(people, out_people, teams, team_of, groups, top_approver, approvals, title_of, acc) -> list[dict]:
     """Manager -> report edges, only with evidence: a manager's title, or one person who approves most of the pull
     requests of three or more people."""
     found = {}
@@ -280,9 +370,11 @@ def _reporting(people, out_people, teams, team_of, groups, top_approver, approva
             found[(m, r)] = dict(manager=m, report=r, confidence=round(conf, 2), evidence=list(ev))
 
     for pid, op in out_people.items():
-        title = people[pid]["title"]
+        title = title_of.get(pid) or ""
         if op["level"] not in ("manager", "director+") or op["level_from"] != "title":
             continue
+        seen = acc["titles"].get(pid)
+        steady = 0.05 if seen and seen[0] == title and seen[1]["n"] >= 3 else 0  # the same title in several builds
         m = re.search(r"(?:,|\s-\s|\bof\b|\bfor\b)\s*(.+)$", title)
         phrase = {w for w in re.findall(r"[a-z]{3,}", (m.group(1) if m else "").lower())
                   if w not in {"the", "team", "and", "engineering"}}
@@ -291,17 +383,19 @@ def _reporting(people, out_people, teams, team_of, groups, top_approver, approva
             target = next((t for t in teams if phrase & set(re.findall(r"[a-z]{3,}", t["name"].lower()))), None)
         if target:
             for r in target["members"]:
-                add(pid, r, 0.65, [f"title '{title}' names the team {target['name']}"])
+                add(pid, r, 0.65 + steady, [f"title '{title}' names the team {target['name']}"])
         elif team_of.get(pid):
             for r in team_of[pid]["members"]:
-                add(pid, r, 0.45, [f"title '{title}'; in the same inferred team"])
+                add(pid, r, 0.45 + steady, [f"title '{title}'; in the same inferred team"])
     for a, authors in groups.items():
         if len(authors) < 3:
             continue
+        given = sum(top_approver[r][1] for r in authors)
         for r in authors:
             _, n, tot = top_approver[r]
-            add(a, r, min(0.55, 0.3 + 0.05 * len(authors)),
-                [f"approved {n} of {tot} approvals of {people[r]['name']}'s pull requests",
+            # more approvals seen over the builds: more confidence, up to 0.7
+            add(a, r, min(0.7, 0.3 + 0.05 * len(authors) + 0.03 * math.log2(1 + given / 5)),
+                [f"approved {n:.0f} of {tot:.0f} approvals of {people[r]['name']}'s pull requests (weighted by age)",
                  f"top approver for {len(authors)} people"])
     return sorted(found.values(), key=lambda e: -e["confidence"])
 

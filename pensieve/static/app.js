@@ -3467,7 +3467,9 @@ $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'da
 // larger. Nodes show the person's picture (Slack, then GitHub) or initials. A click opens their card: who they are,
 // what they work on, and the user's relation to them. The server builds the graph in the background (/api/people).
 S.people = {data: null, err: null, n: +store.get('peopleN', 24), sel: null, card: null, q: '', merging: null, stale: true,
-            view: store.get('peopleView', 'graph') === 'org' ? 'org' : 'graph', org: null};
+            view: store.get('peopleView', 'graph') === 'org' ? 'org' : 'graph', org: null,
+            rel: null,  // the selected person's relations (/api/people/<id>/relations), for the panel under the graph
+            cardMin: !!store.get('peopleCardMin', false), relMin: !!store.get('peopleRelMin', false)};
 const PP_STEP = 24;
 const ppHue = s => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 8;
 const ppShort = n => { const w = n.split(/\s+/).filter(Boolean); return w.length > 1 ? `${w[0]} ${w[w.length - 1][0]}.` : n; };
@@ -3485,10 +3487,8 @@ async function loadPeople(refresh = false) {
   if (S.people.view === 'org') await loadOrg();
   else S.people.org = null;  // the next Org view loads it again, from the new build
   renderPeople();
-  const d = S.people.data;
   if (S.people.card?.directory) return;  // a person that a search found stays open
-  if (d && !S.people.sel && d.me) openPeopleCard(d.me, {quiet: true});
-  else if (S.people.sel) openPeopleCard(S.people.sel, {quiet: true});
+  if (S.people.sel) openPeopleCard(S.people.sel, {quiet: true});  // no one picked yet: the graph keeps the full width
 }
 // Positions: the user in the centre; each person on a ring whose radius grows as closeness falls. Their angles then
 // relax so that people who work together sit side by side and no two circles overlap.
@@ -3566,30 +3566,39 @@ function renderPeople() {
       <div class="wk-ctl"><div class="pp-find"><input id="ppq" type="search" placeholder="Find a person" aria-label="Find a person" autocomplete="off" spellcheck="false" value="${esc(P.q)}"><div class="pp-hits" id="pphits" hidden></div></div>
         ${noPics ? `<button class="wk-btn" data-pp-pics title="Look up Slack pictures and titles with your Slack connection's read-only tools">Get Slack pictures</button>` : ''}
         <button class="wk-btn icon" data-pp-refresh title="Build again now" aria-label="Build again now"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
-    <div class="pp-body">
+    <div class="pp-body" id="ppbody" data-card="${ppCardMode()}">
+      <div class="pp-main">
       ${org ? `<div class="pp-graph pp-org" id="pporg">${ppOrgHtml()}</div>` : ''}
       <div class="pp-graph" id="ppgraph" ${org ? 'hidden' : ''}>${!d ? (P.err ? `<div class="empty">Could not load people: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
         : d.nodes.length <= 1 ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Finding the people you work with…' : d.error ? 'Could not build the graph: ' + esc(d.error) : 'No people yet. Pensieve finds them in your indexed repos, pull requests and Slack connection.'}</div>` : ''}
         ${P.merging ? `<div class="pp-banner">Pick the person to merge with <b>${esc(d?.nodes.find(n => n.id === P.merging)?.name || '')}</b>. <button class="linkbtn" data-pp-merge-cancel>Cancel</button></div>` : ''}
         ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}<span class="pp-shown">${shown}</span> of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''} · scroll or pinch to zoom</div>` : ''}
       </div>
-      <aside class="pp-card" id="ppcard">${P.card ? (P.card.directory ? ppDirCardHtml : ppCardHtml)(P.card) : '<div class="empty">Click a person to see their card.</div>'}</aside>
+      <section class="pp-rel ${ppRelOn() ? 'on' : ''} ${P.relMin ? 'min' : ''}" id="pprel" aria-label="Connections of the selected person">${ppRelHtml()}</section>
+      </div>
+      <aside class="pp-card" id="ppcard" aria-label="Person card">
+        <div class="pp-cardbar"><button class="pp-cbtn" data-pp-collapse title="Collapse the card to the edge" aria-label="Collapse the card"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="pp-cbtn" data-pp-close title="Close (Esc)" aria-label="Close the card"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
+        <div class="pp-cardin" id="ppcardin">${P.card ? (P.card.directory ? ppDirCardHtml : ppCardHtml)(P.card) : ''}</div>
+        <button class="pp-strip" id="ppstrip" data-pp-expand title="Show the card" aria-label="Show the card">${ppStripHtml()}</button>
+      </aside>
     </div>`;
   ppDrawGraph();
   bindPeople(el);
   bindPeopleCard();
+  bindPeopleRel();
+  ppBindCardBar();
   if (typing) { const q = $('#ppq', el); q.focus(); q.setSelectionRange(q.value.length, q.value.length); ppHitsHtml(); }
 }
-function ppDrawGraph() {
+function ppDrawGraph({glide = false} = {}) {
   const box = $('#ppgraph'), d = S.people.data;
   if (!box || !d || d.nodes.length <= 1 || S.people.view === 'org') return;
   box.querySelector('svg')?.remove();
-  const W = Math.max(320, box.clientWidth), H = Math.max(320, box.clientHeight);
+  const W = Math.max(320, box.clientWidth), H = Math.max(200, box.clientHeight);
   box.insertAdjacentHTML('afterbegin', ppSvg(d, W, H));
   // the footer and Show more count the people drawn, which a narrow graph halves
   const sh = box.querySelector('.pp-shown');
   if (sh) sh.textContent = S.people.drawn;
-  ppAnimate(box.querySelector('svg'));
+  ppAnimate(box.querySelector('svg'), glide);
   if (!box.dataset.wheel) {  // the wheel or a pinch zooms: down or pinch in shows more people, up or pinch out fewer
     box.dataset.wheel = '1';
     let acc = 0, busy = 0;
@@ -3626,6 +3635,13 @@ async function loadOrg() {
 }
 const ppPeople = n => n === 1 ? '1 person' : `${n.toLocaleString()} people`;
 const PP_LEVEL = {'IC': 0, 'senior IC': 1, 'lead': 2, 'manager': 3, 'director+': 4};
+const PP_LEVEL_NAME = {'IC': 'IC', 'senior IC': 'Senior IC', 'lead': 'Lead', 'manager': 'Manager', 'director+': 'Director+'};
+// How much org evidence the builds have gathered (people/org_evidence.json), in one line.
+function ppEvidenceLine(ev) {
+  if (!ev || !ev.builds) return '';
+  const bits = [plural(ev.prs || 0, 'pull request'), plural(ev.titles || 0, 'title'), ev.first_commits ? plural(ev.first_commits, 'first commit') : ''].filter(Boolean);
+  return `Based on ${bits.join(', ')}${ev.since ? `, since ${new Date(ev.since * 1000).toLocaleDateString(undefined, {year: 'numeric', month: 'short', day: 'numeric'})}` : ''} (${plural(ev.builds, 'build')}).`;
+}
 function ppOrgHtml() {
   const o = S.people.org, P = S.people;
   if (!o) return '<div class="empty">Loading the org chart…</div>';
@@ -3651,7 +3667,7 @@ function ppOrgHtml() {
   }).join('');
   const loose = Object.keys(ppl).filter(id => !placed.has(id) && !leaders.includes(id) && ppl[id].level).sort((a, b) => rank(a) - rank(b)).slice(0, 40);
   return `${P.merging ? `<div class="pp-banner">Pick the person to merge with <b>${esc(P.data?.nodes.find(n => n.id === P.merging)?.name || '')}</b>. <button class="linkbtn" data-pp-merge-cancel>Cancel</button></div>` : ''}
-    <div class="pp-orgnote">Inferred from repos, pull requests, CODEOWNERS, GitHub teams and Slack: not an HR record. ${o.edges.length ? `${plural(o.edges.length, 'reporting line')} inferred, each with its evidence.` : 'No reporting lines have enough evidence, so teams show as groups.'}</div>
+    <div class="pp-orgnote">Inferred from repos, pull requests, CODEOWNERS, GitHub teams and Slack: not an HR record. ${o.edges.length ? `${plural(o.edges.length, 'reporting line')} inferred, each with its evidence.` : 'No reporting lines have enough evidence, so teams show as groups.'} ${esc(ppEvidenceLine(o.evidence))}${o.evidence?.builds ? ' The chart fills in as Pensieve collects more.' : ''}</div>
     ${leaders.length ? `<section class="pp-team lead"><header><b>Leadership</b><span class="muted">from Slack titles</span></header><div class="pp-members">${leaders.map(id => node(id, 'mgr')).join('')}</div></section>` : ''}
     <div class="pp-teams">${teams}</div>
     ${loose.length ? `<section class="pp-team loose"><header><b>No clear team</b><span class="muted">too little shared work to place them</span></header><div class="pp-members">${loose.map(id => node(id)).join('')}</div></section>` : ''}`;
@@ -3667,19 +3683,21 @@ function ppStep(dir) {
 }
 // When the people on the graph change, they move like a camera: the ones that stay glide from where they were, new
 // ones come in from where the old zoom had them (off the edge when zooming out), and the ones that go leave the same
-// way. A redraw with the same people does not move.
-function ppAnimate(svg) {
+// way. A redraw with the same people does not move, unless `glide` is set: then the graph changed size (the card or
+// the relationship panel opened or closed), and each person glides from their old place relative to the centre.
+function ppAnimate(svg, glide = false) {
   const P = S.people, L = P._L;
   if (!svg || !L) return;
-  const before = P.lastPos, zOld = P.lastZ || L.z, gone = P.lastNodes;
+  const before = P.lastPos, zOld = P.lastZ || L.z, gone = P.lastNodes, c0 = P.lastC || {x: L.cx, y: L.cy};
   P.lastPos = new Map([...L.pos].map(([id, p]) => [id, {x: p.x, y: p.y, r: p.r}]));
-  P.lastZ = L.z;
+  P.lastZ = L.z; P.lastC = {x: L.cx, y: L.cy};
   P.lastNodes = new Map($$('.pp-n', svg).map(g => [g.dataset.pid, g.outerHTML]));
   if (!before || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  if (before.size === L.pos.size && [...L.pos.keys()].every(k => before.has(k))) return;
-  const k = L.z / zOld, cx = L.cx, cy = L.cy, moves = [];
+  const same = before.size === L.pos.size && [...L.pos.keys()].every(k => before.has(k));
+  if (same && (!glide || [...L.pos].every(([id, p]) => before.get(id).x === p.x && before.get(id).y === p.y))) return;
+  const k = L.z / zOld, cx = L.cx, cy = L.cy, moves = [], dx = cx - c0.x, dy = cy - c0.y;
   $$('.pp-n', svg).forEach(g => {
-    const to = L.pos.get(g.dataset.pid), was = before.get(g.dataset.pid);
+    const to = L.pos.get(g.dataset.pid), b = before.get(g.dataset.pid), was = b && {x: b.x + dx, y: b.y + dy, r: b.r};
     const from = was || {x: cx + (to.x - cx) * k, y: cy + (to.y - cy) * k, r: to.r * Math.pow(k, 0.6)};
     moves.push({g, from, to: {x: to.x, y: to.y, s: 1}, s0: from.r / to.r, enter: !was});
   });
@@ -3823,10 +3841,10 @@ function ppOpenHit(h) {
   P.find.ctl?.abort();
   P.q = ''; P.find.q = '';
   const q = $('#ppq'); if (q) { q.value = ''; q.blur(); $('#pphits').hidden = true; }
-  P.sel = null; P.card = {...h, directory: true};
+  P.sel = null; P.rel = null; P.card = {...h, directory: true};
   $$('#ppgraph .pp-n').forEach(g => g.classList.remove('sel'));
-  const box = $('#ppcard'); if (!box) return renderPeople();
-  box.innerHTML = ppDirCardHtml(P.card); box.scrollTop = 0;
+  if (!$('#ppcardin')) return renderPeople();
+  ppFillCard(); ppFillRel(); ppApplyLayout();
 }
 // A person whom a search found, with no shared work with the user: who they are, and where Pensieve found them.
 function ppDirCardHtml(p) {
@@ -3848,25 +3866,147 @@ function ppFind(id) {
 async function openPeopleCard(id, {quiet = false} = {}) {
   const P = S.people;
   P.sel = id;
-  let card;
-  try { card = await api('/api/people/' + enc(id)); } catch {
+  let card, rels;
+  try {
+    [card, rels] = await Promise.all([api('/api/people/' + enc(id)), api(`/api/people/${enc(id)}/relations`).catch(() => null)]);
+  } catch {
     P.sel = null;
     if (!quiet) toast('That person is no longer in the graph. Loading the graph again…');
     return loadPeople();
   }
+  if (P.sel !== id) return;  // the user picked someone else, or closed the card, while this loaded
   if (card.id !== id) {  // the graph was built again and their id changed (a better identity joined them)
-    P.sel = id = card.id; P.card = card;
+    P.sel = id = card.id; P.card = card; P.rel = rels;
     return loadPeople();
   }
-  P.card = card;
+  P.card = card; P.rel = rels;
   if (S.view !== 'people') return;
   const vis = $(`#ppgraph .pp-n[data-pid="${CSS.escape(id)}"]`);
   if (!vis && !card.me && S.people.view !== 'org' && S.people.data?.nodes.some(n => n.id === id)) return renderPeople();  // grown to show them
   $$('#ppgraph .pp-n').forEach(g => g.classList.toggle('sel', g.dataset.pid === id));
   $$('#pporg .pp-onode').forEach(g => g.classList.toggle('sel', g.dataset.ppOnode === id));
-  const box = $('#ppcard');
-  if (!box) return renderPeople();
-  box.innerHTML = ppCardHtml(card); box.scrollTop = 0; bindPeopleCard();
+  if (!$('#ppcardin')) return renderPeople();
+  ppFillCard();
+  ppFillRel();
+  ppApplyLayout();
+}
+// The card's place: none (no one picked: the graph has the full width), open, or a strip at the right edge.
+const ppCardMode = () => !S.people.card ? 'none' : S.people.cardMin ? 'strip' : 'open';
+const ppRelOn = () => !!(S.people.sel && S.people.rel && !S.people.card?.directory);
+function ppStripHtml() {
+  const p = S.people.card; if (!p) return '';
+  return `${ppAv(p, 32)}<span class="nm">${esc(p.name)}</span>`;
+}
+function ppFillCard() {
+  const P = S.people, box = $('#ppcardin'); if (!box) return;
+  box.innerHTML = P.card ? (P.card.directory ? ppDirCardHtml : ppCardHtml)(P.card) : '';
+  box.scrollTop = 0;
+  $('#ppstrip').innerHTML = ppStripHtml();
+  bindPeopleCard();
+}
+function ppFillRel() {
+  const box = $('#pprel'); if (!box) return;
+  box.innerHTML = ppRelHtml();
+  bindPeopleRel();
+}
+// Sets the card's and the panel's state on the page. Their size changes are CSS transitions; when they end, the
+// graph lays out again for its new size and its people glide there.
+function ppApplyLayout() {
+  const P = S.people, body = $('#ppbody'), rel = $('#pprel'); if (!body || !rel) return;
+  const mode = ppCardMode(), on = ppRelOn();
+  const changed = body.dataset.card !== mode || rel.classList.contains('on') !== on || rel.classList.contains('min') !== P.relMin;
+  body.dataset.card = mode;
+  rel.classList.toggle('on', on); rel.classList.toggle('min', P.relMin);
+  if (!changed) return requestAnimationFrame(ppRelLines);
+  clearTimeout(P.layoutT);
+  const done = () => { ppDrawGraph({glide: true}); if (ppRelOn()) ppFillRel(); };  // the panel's width sets how many peers fit
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return done();
+  P.layoutT = setTimeout(done, 380);  // the transitions take 340 ms
+}
+function ppClose() {
+  const P = S.people;
+  P.sel = null; P.card = null; P.rel = null;
+  $$('#ppgraph .pp-n.sel, #pporg .pp-onode.sel').forEach(g => g.classList.remove('sel'));
+  ppApplyLayout();
+  clearTimeout(P.clearT);
+  P.clearT = setTimeout(() => { if (!P.card) { const c = $('#ppcardin'); if (c) c.innerHTML = ''; } if (!P.rel) { const r = $('#pprel'); if (r) r.innerHTML = ''; } }, 400);
+}
+function ppBindCardBar() {
+  const P = S.people, card = $('#ppcard'); if (!card) return;
+  const setMin = v => { P.cardMin = v; store.set('peopleCardMin', v); ppApplyLayout(); };
+  $('[data-pp-close]', card).onclick = ppClose;
+  $('[data-pp-collapse]', card).onclick = () => setMin(true);
+  $('[data-pp-expand]', card).onclick = () => setMin(false);
+}
+// The relationship panel under the graph: the selected person's nearest org as a small chart. Inferred managers sit
+// above, peers (the same inferred team) beside, inferred reports below, and the strongest collaborators outside the
+// team in a group at the side. Each link says what the relation is and how sure Pensieve is; a hover shows why.
+function ppRelHtml() {
+  const P = S.people, r = P.rel;
+  if (!ppRelOn()) return '';
+  const c = r.center, first = c.me ? 'you' : c.name.split(/\s+/)[0];
+  const pct = x => `${Math.round((x || 0) * 100)}%`;
+  const all = [...r.managers, ...r.peers, ...r.reports, ...r.collaborators];
+  const node = n => {
+    const sub = n.relation === 'peer' ? `peer · same team · ${pct(n.confidence)}` : n.relation === 'collaborator' ? `${n.label} · ${pct(n.confidence)}` : n.label;
+    return `<button class="pr-node ${esc(n.relation)} ${n.me ? 'me' : ''}" data-pp-rel="${esc(n.id)}" data-pr-i="${all.indexOf(n)}" aria-label="${esc(n.name)}: ${esc(sub)}">${ppAv(n, 34)}<span class="nm">${esc(n.me ? 'You' : ppShort(n.name))}</span><span class="lb">${esc(sub)}</span></button>`;
+  };
+  // as many peers as fit on one line beside the person; the rest are in the Org view's team
+  const box = $('#pprel'), w = (box?.clientWidth || 900) - Math.min(220, Math.max(160, (box?.clientWidth || 900) * 0.28)) - 40;
+  const room = () => 2 * Math.floor((w - 170) / 2 / 92);
+  const fit = Math.max(2, room()), peers = r.peers.slice(0, fit), more = r.peers.length - peers.length + Math.max(0, (r.team?.size || 0) - 1 - r.peers.length - r.managers.length - r.reports.length);
+  const half = Math.ceil(peers.length / 2);
+  const centre = `<div class="pr-node centre ${c.me ? 'me' : ''}" id="prcentre">${ppAv(c, 44)}<span class="nm">${esc(c.me ? 'You' : c.name)}</span><span class="lb">${esc([c.function, c.level && (PP_LEVEL_NAME[c.level] || c.level) + ' (inferred)'].filter(Boolean).join(' · '))}</span></div>`;
+  const none = t => `<div class="pr-none">${esc(t)}</div>`;
+  const ev = ppEvidenceLine(r.evidence);
+  return `<header class="pp-relhead"><button class="pp-cbtn" data-pp-relmin aria-expanded="${!P.relMin}" title="${P.relMin ? 'Show' : 'Hide'} the connections"><svg viewBox="0 0 24 24" width="14" height="14"><path d="${P.relMin ? 'm6 15 6-6 6 6' : 'm6 9 6 6 6-6'}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <b>Around ${esc(c.me ? 'you' : c.name)}</b>${r.team ? `<button class="pr-more" data-pr-team="${esc(r.team.id)}" title="Show the team in the Org view">${esc(r.team.name)} · ${ppPeople(r.team.size)}${more > 0 ? ` (${more} more)` : ''}</button>` : ''}<span class="muted">all inferred, not an HR record${ev ? ' · ' + esc(ev) : ''}</span></header>
+    <div class="pp-relbody">
+      <div class="pr-chart" id="prchart"><svg class="pr-lines" id="prlines" aria-hidden="true"></svg>
+        <div class="pr-row up">${r.managers.length ? r.managers.map(node).join('') : none('No manager inferred yet')}</div>
+        <div class="pr-row mid"><div class="pr-peers l">${peers.slice(0, half).map(node).join('')}</div>${centre}<div class="pr-peers r">${peers.slice(half).map(node).join('')}</div></div>
+        <div class="pr-row down">${r.reports.length ? r.reports.map(node).join('') : none(`No reports inferred for ${first}`)}</div>
+      </div>
+      <div class="pr-side"><div class="h5">Works closely with ${esc(first)}</div>${r.collaborators.length ? r.collaborators.map(node).join('') : none('No strong ties outside the team')}</div>
+    </div>`;
+}
+function bindPeopleRel() {
+  const P = S.people, box = $('#pprel'), r = P.rel; if (!box || !r) return;
+  const all = [...r.managers, ...r.peers, ...r.reports, ...r.collaborators];
+  $('[data-pp-relmin]', box)?.addEventListener('click', () => {
+    P.relMin = !P.relMin; store.set('peopleRelMin', P.relMin); ppFillRel(); ppApplyLayout();
+  });
+  $('[data-pr-team]', box)?.addEventListener('click', e => ppShowTeam(e.currentTarget.dataset.prTeam));
+  $$('[data-pp-rel]', box).forEach(b => {
+    const n = all[+b.dataset.prI];
+    const html = () => `<b>${esc(n.name)}</b>${n.function ? `<br>${esc(n.function)}` : ''}<br>${esc(n.label)} · ${Math.round(n.confidence * 100)}% ${n.relation === 'collaborator' ? 'strength' : 'confidence'}${n.also ? `<br>${esc(n.also)}` : ''}${n.evidence?.length ? `<br><span class="muted">${n.evidence.slice(0, 6).map(esc).join('<br>')}</span>` : ''}`;
+    b.onmouseenter = e => { tip(html(), e.clientX, e.clientY); $(`#prlines [data-to="${CSS.escape(n.id)}"]`)?.classList.add('on'); };
+    b.onmousemove = e => tip(tipEl.innerHTML, e.clientX, e.clientY);
+    b.onmouseleave = () => { tip(null); $$('#prlines .on').forEach(l => l.classList.remove('on')); };
+    b.onfocus = () => { const q = b.getBoundingClientRect(); tip(html(), q.right, q.bottom); };
+    b.onblur = () => tip(null);
+    b.onclick = () => { tip(null); ppFind(n.id); };
+  });
+  requestAnimationFrame(ppRelLines);
+}
+// The chart's links, drawn over it once its nodes have their places: elbows up to managers and down to reports, and
+// straight lines to the peers.
+function ppRelLines() {
+  const svg = $('#prlines'), chart = $('#prchart'), c = $('#prcentre');
+  if (!svg || !chart || !c || !S.people.rel || S.people.relMin) return;
+  const R = chart.getBoundingClientRect(), at = el => { const q = el.querySelector('.pp-av').getBoundingClientRect(); return {x: q.left + q.width / 2 - R.left + chart.scrollLeft, t: q.top - R.top + chart.scrollTop, b: q.bottom - R.top + chart.scrollTop, y: q.top + q.height / 2 - R.top + chart.scrollTop, l: q.left - R.left + chart.scrollLeft, r: q.right - R.left + chart.scrollLeft}; };
+  const o = at(c), out = [];
+  svg.setAttribute('width', chart.scrollWidth); svg.setAttribute('height', chart.scrollHeight);
+  $$('.pr-chart .pr-node[data-pp-rel]').forEach(n => {
+    const p = at(n), id = esc(n.dataset.ppRel), cls = n.classList.contains('manager') ? 'manager' : n.classList.contains('report') ? 'report' : 'peer';
+    let d;
+    if (cls === 'manager') { const my = (p.b + o.t) / 2; d = `M${o.x} ${o.t - 2}V${my}H${p.x}V${p.b + 2}`; }
+    else if (cls === 'report') { const nb = c.getBoundingClientRect().bottom - R.top + chart.scrollTop, my = (nb + p.t) / 2; d = `M${o.x} ${nb}V${my}H${p.x}V${p.t - 2}`; }
+    else if (Math.abs(p.y - o.y) < 4) d = p.x < o.x ? `M${o.l - 2} ${o.y}H${p.r + 2}` : `M${o.r + 2} ${o.y}H${p.l - 2}`;
+    else { const left = p.x < o.x, sx = left ? o.l - 8 : o.r + 8; d = `M${left ? o.l - 2 : o.r + 2} ${o.y}H${sx}V${p.y}H${left ? p.r + 2 : p.l - 2}`; }  // a peer on a second line
+    out.push(`<path class="${cls}" data-to="${id}" d="${d}"/>`);
+  });
+  svg.innerHTML = out.join('');
 }
 const PP_KIND = {email: 'Email', gh: 'GitHub', slack: 'Slack', name: 'Name'};
 function ppCardHtml(p) {
@@ -3876,7 +4016,9 @@ function ppCardHtml(p) {
   const lead = p.me ? 'This is you. Pensieve joins these identities into one person.'
     : kinds.length ? `<b>#${r.rank}</b> nearest to you. You share ${kinds.map(k => `${esc(k.label)} <span class="muted">(${k.n.toLocaleString()})</span>`).join(', ')}.`
     : r?.closeness ? `<b>#${r.rank}</b> near you, through the people you work with.` : 'Pensieve has not seen you work with them yet.';
-  const fn = p.function ? `<div class="pp-fn">${esc(p.function)}${p.function_inferred ? ' <i title="Inferred from the kinds of files in their commits">· inferred</i>' : ''}</div>` : '';
+  // the header: their domain and their seniority, e.g. "Backend engineering · Senior IC (inferred)"
+  const lv = p.seniority?.level;
+  const fn = p.function || lv ? `<div class="pp-fn">${p.function ? `<span title="${p.function_inferred ? 'Domain, inferred from the kinds of files in their commits' : 'Their Slack title'}">${esc(p.function)}</span>` : ''}${p.function && lv ? ' · ' : ''}${lv ? `<span class="pp-sen" title="Seniority, inferred: ${Math.round((p.seniority.confidence || 0) * 100)}% confidence, from ${p.seniority.source === 'title' ? 'a Slack title' : 'work signals'}">${esc(PP_LEVEL_NAME[lv] || lv)} <i>(inferred)</i></span>` : ''}${p.function_inferred && p.function && !lv ? ' <i>(inferred)</i>' : ''}</div>` : '';
   const rels = r ? [
     r.shared_areas?.length ? `<div class="h4">Areas you both work in</div><div class="chips">${r.shared_areas.map(a => `<span class="chip">${esc(a)}</span>`).join('')}</div>` : '',
     r.tasks?.length ? `<div class="h4">Your tasks they are part of</div><div class="list">${r.tasks.map(t => `<button class="item" data-pp-task="${esc(t.id || '')}"><div class="t"><span class="grow">${esc(t.t || 'Task')}</span>${when(t.ts)}</div></button>`).join('')}</div>` : '',
@@ -3921,7 +4063,7 @@ function ppCardHtml(p) {
     <div class="actions">${p.repos.length ? '<button class="btn" data-pp-map>Show their work on the map</button>' : ''}<button class="btn" data-pp-merge title="Join this person with another one: the same person under another name or email">Merge with…</button>${p.me ? '' : '<button class="btn" data-pp-me title="Mark this person as you">This is me</button>'}</div>`;
 }
 function bindPeopleCard() {
-  const box = $('#ppcard'), P = S.people, p = P.card; if (!box || !p || p.directory) return;
+  const box = $('#ppcardin'), P = S.people, p = P.card; if (!box || !p || p.directory) return;
   const post = (u, body) => api(u, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   $$('[data-pp-open]', box).forEach(b => b.onclick = () => ppFind(b.dataset.ppOpen));
   $$('[data-pp-split]', box).forEach(b => b.onclick = async () => {
@@ -3934,13 +4076,7 @@ function bindPeopleCard() {
     catch (e) { return toast('Could not merge: ' + e.message); }
     loadPeople();
   });
-  $('[data-pp-orgteam]', box)?.addEventListener('click', async e => {
-    const tid = e.currentTarget.dataset.ppOrgteam;
-    if (P.view !== 'org') { P.view = 'org'; store.set('peopleView', 'org'); if (!P.org) await loadOrg(); renderPeople(); }
-    const sec = $(`#pporg [data-pp-team="${CSS.escape(tid)}"]`);
-    sec?.scrollIntoView({block: 'nearest', behavior: 'smooth'});
-    sec?.classList.add('flash'); setTimeout(() => sec?.classList.remove('flash'), 1600);
-  });
+  $('[data-pp-orgteam]', box)?.addEventListener('click', e => ppShowTeam(e.currentTarget.dataset.ppOrgteam));
   $('[data-pp-me]', box)?.addEventListener('click', async () => { try { await post('/api/people/me', {id: p.id}); toast(`Marked ${p.name} as you.`); } catch (e) { return toast(e.message); } loadPeople(); });
   $('[data-pp-map]', box)?.addEventListener('click', () => {
     const email = p.identities.find(i => i.kind === 'email')?.value;
@@ -3955,6 +4091,13 @@ function bindPeopleCard() {
     S.work.q = ''; S.work.hits = null; S.work.flash = {id, state: t.state, until: Date.now() + 6000}; renderWork();
   });
 }
+async function ppShowTeam(tid) {
+  const P = S.people;
+  if (P.view !== 'org') { P.view = 'org'; store.set('peopleView', 'org'); if (!P.org) await loadOrg(); renderPeople(); }
+  const sec = $(`#pporg [data-pp-team="${CSS.escape(tid)}"]`);
+  sec?.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  sec?.classList.add('flash'); setTimeout(() => sec?.classList.remove('flash'), 1600);
+}
 // The People tab's card for a name or an author string ('Name <email>').
 async function openPeopleFor(who) {
   let r;
@@ -3963,7 +4106,7 @@ async function openPeopleFor(who) {
   await setView('people');
   openPeopleCard(r.id);
 }
-window.addEventListener('resize', debounce(() => { if (S.view === 'people') ppDrawGraph(); }, 200));
+window.addEventListener('resize', debounce(() => { if (S.view === 'people') { ppDrawGraph(); if (ppRelOn()) ppFillRel(); } }, 200));
 
 /* ============================== data tab ============================== */
 // Each task: its data points from every source, newest first, and an AI note on how it stands and is moving.
@@ -4824,6 +4967,7 @@ document.addEventListener('keydown', e => {
     if (S.view === 'settings' && !typing) return setView(S.prevView || 'code');
     if (typing) return document.activeElement.blur();
     if ($('#drawer').classList.contains('open')) return closeDrawer();
+    if (S.view === 'people' && S.people.card) return ppClose();
     if (S.highlight || S.code.highlight || S.files.highlight) { S.highlight = null; S.code.highlight = null; S.files.highlight = null; S.code.focus = null; refreshStates(); renderToolbar(); renderSidebar(); return; }
     return;
   }

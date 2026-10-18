@@ -1665,6 +1665,18 @@ def get_person(pid: str):
     return p
 
 
+@app.get("/api/people/{pid}/relations")
+def get_person_relations(pid: str):
+    """The person's nearest org, for the panel under the graph: inferred managers above, peers (the same inferred
+    team) beside, inferred reports below, and the strongest collaborators outside the team. Each link has a label,
+    a confidence (0..1) and its evidence. `evidence` says how much org evidence the builds have gathered."""
+    from pensieve import people
+    r = people.relations(pid)
+    if r is None:
+        raise HTTPException(404, f"unknown person {pid!r}")
+    return r
+
+
 @app.get("/api/people/{pid}/avatar")
 def get_person_avatar(pid: str):
     """The person's picture, from the copy in the data folder (never fetched on each view)."""
