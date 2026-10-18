@@ -15,7 +15,7 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
-AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "person", "unexplored", "knowledge_gaps", "list_repos",
+AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "person", "projects", "unexplored", "knowledge_gaps", "list_repos",
                "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state",
                "share_card", "thread_history"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
@@ -555,6 +555,28 @@ def person(who: str) -> dict:
             closeness=r.get("closeness"), rank=r.get("rank"), kinds={k["label"]: k["n"] for k in r.get("kinds", [])},
             shared_areas=r.get("shared_areas", []), tasks=[t.get("t") for t in r.get("tasks", [])],
             reviews=[x.get("url") for x in r.get("prs", [])], slack_threads=len(r.get("threads", []))))
+
+
+@tool()
+def projects(query: str = "", limit: int = 8) -> dict:
+    """The projects around the user, nearest first: clusters of recent code, documents and sessions, each with its
+    people, the user's role, recent pull requests and tickets. A project is near when the people closest to the user
+    work on it. query: words that a project's name, areas, people, pull requests or tickets must have."""
+    from pensieve import team_projects
+    team_projects.rebuild(_c()["store"], _c()["datamap"])
+    res = team_projects.summary(_c()["datamap"], query)
+    out = []
+    for e in res["projects"][:max(1, min(limit, 30))]:
+        full = team_projects.project(_c()["datamap"], e["id"]) or {}
+        out.append(dict(
+            name=e["name"], description=e["description"] or None, near=e["near"], relevance=e["relevance"],
+            your_role=e["role"], repos=e["repos"], areas=e["areas"], tickets_prefix=e["prefixes"] or None,
+            people=[m["name"] + (" (you)" if m["me"] else "") for m in e["members"]],
+            prs=[{k: x.get(k) for k in ("title", "url", "state")} for x in full.get("prs", [])[:4]] or None,
+            tickets=[{k: x.get(k) for k in ("key", "title", "status")} for x in full.get("tickets", [])[:4]] or None,
+            last_active=time.strftime("%Y-%m-%d", time.localtime(e["last"])) if e["last"] else None))
+    return {"projects": out, "building": res["building"] or None,
+            "note": None if out else "No projects yet: they are built in the background from the indexed work."}
 
 
 @tool()
