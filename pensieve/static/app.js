@@ -115,7 +115,8 @@ class Scene3D {
           float d=clamp(distance(position,uCenter)/uRad,0.,1.);
           vF=uFade>=1.?1.:smoothstep(0.,1.,uFade*1.9-d*.9);
           float k=aState<.25?.55:aState<.75?.8:aState>1.5?1.75:1.;
-          gl_PointSize=max(2.,aSize*k*uPR*uScale/-mv.z)*mix(.3,1.,vF);gl_Position=projectionMatrix*mv;}`,
+          gl_PointSize=max(2.,aSize*k*uPR*uScale/-mv.z)*mix(.3,1.,vF);gl_Position=projectionMatrix*mv;
+          if(aState<-.5){gl_PointSize=0.;gl_Position=vec4(2.,2.,2.,1.);}}`,  // filtered out: clipped, never rasterized
       fragmentShader: `uniform vec3 uRing;varying vec3 vC;varying float vS;varying float vF;
         void main(){float r=length(gl_PointCoord-.5);if(r>.5||vS<-.5)discard;
           float a=vS<.25?.07:vS<.75?.2:vS>1.5?1.:.9;
@@ -331,7 +332,7 @@ function buildMap() {
   hoverIdx = -1;
   refreshStates(); renderLabels(); renderLegend();
   $('#loading').classList.toggle('gone', n > 0);
-  if (n && (firstFit || cams[camKey()] == null)) { gl.fit(null, true); firstFit = false; gl.intro(); }
+  if (n && (firstFit || cams[camKey()] == null)) { gl.fit(visibleIdx(), true); firstFit = false; gl.intro(); }
   gl.setRings(-1, selIdx);
 }
 const camKey = () => S.view === 'data' ? 'data' : S.view === 'code' ? 'code:' + S.code.repo : S.view === 'files' ? 'files' : 'map:' + S.level;
@@ -353,13 +354,11 @@ function recolor() {
 function refreshStates() {
   const a = gl.attr('aState'); if (!a) return;
   if (S.view === 'data') {
-    const {highlight: hl, search: sr, colorBy, cardOf} = S.data, ctx = colorBy === 'context' && cardOf;
-    // -1: filtered out (another folder, type or author), not drawn at all. Colored by context, the points of no
-    // card recede so the cards stand out.
+    const {highlight: hl, search: sr} = S.data;
+    // -1: filtered out (another folder, type or author), not drawn at all
     mapPts.forEach((p, i) => {
       let v = dataPass(p) ? 1 : -1;
       if (v > 0 && (hl || sr)) v = (!hl || hl.has(p.id)) && (!sr || sr.has(p.id)) ? 2 : 0.5;
-      else if (v > 0 && ctx) v = cardOf.has(p.id) ? 2 : 0.2;  // 0.2: small and faint, so tens of thousands draw cheaply
       a.array[i] = v;
     });
     a.needsUpdate = true;
@@ -415,17 +414,6 @@ function renderLabels() {
       const idx = []; mapPts.forEach((p, i) => { if (D.sel.members.has(p.id) && dataPass(p)) idx.push(i); });
       if (idx.length) items.push({n: idx.length, text: D.sel.name, sel: true, pos: dataAnchor(idx), color: D.colorBy === 'topic' ? slotColor(D.sel.slot) : 'transparent',
         title: `${plural(idx.length, 'item')} · click to step back out`, onClick: () => deselectLabel()});
-    }
-    if (D.colorBy === 'context') {  // one label per context card, where its sessions and files sit
-      const cards = new Map();
-      mapPts.forEach((p, i) => { const t = D.cardOf?.get(p.id); if (t && dataInView(p)) { if (!cards.has(t)) cards.set(t, []); cards.get(t).push(i); } });
-      [...cards].sort((a, b) => b[0].updated - a[0].updated).slice(0, MAP_CARD_LABELS).forEach(([t, idx]) => {
-        const on = D.sel?.kind === 'card' && D.sel.key === t.id;
-        items.push({n: idx.length + (on ? 1e6 : 0), text: t.title, sel: on, pos: dataAnchor(idx), color: cardColor(t),
-          title: `${(D.cards.states.find(m => m.state === t.state) || {}).label || t.state} · ${plural(idx.length, 'item')}\n${on ? 'click to step back out' : 'click for its context card'}`,
-          onClick: () => on ? deselectLabel() : selectLabel('card', t.id)});
-      });
-      return gl.setLabels(items);
     }
     mapPts.forEach((p, i) => { const c = dataTopicOf(p); if (dataInView(p) && c != null && (!basis || basis.has(i))) { if (!by.has(c)) by.set(c, []); by.get(c).push(i); } });
     if (D.colorBy === 'risk') {  // only the topics at risk get a label, with how much of their code lost its authors
@@ -512,10 +500,7 @@ function renderLegend() {
   if (S.view === 'data') {
     const D = S.data, cb = D.colorBy, sw = (c, l) => `<span><i class="sw" style="background:${c}"></i>${esc(l)}</span>`, ctx = D.ctx || D.points;
     const rest = (slots, key) => ctx.some(p => !slots.has(key(p)));
-    if (cb === 'context') {
-      const n = new Map(); ctx.forEach(p => { const t = D.cardOf?.get(p.id); if (t) n.set(t.state, (n.get(t.state) || new Set()).add(t.id)); });
-      html = `<b class="lg-h">Context cards of the last ${MAP_CARD_DAYS} days</b>` + (D.cards?.states || []).filter(m => n.has(m.state)).map(m => sw(m.color, `${m.label} · ${n.get(m.state).size}`)).join('') + sw(pal().other, 'No context card');
-    } else if (cb === 'type') html = Object.entries(TYPE_SLOT).filter(([t]) => ctx.some(p => p.type === t)).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
+    if (cb === 'type') html = Object.entries(TYPE_SLOT).filter(([t]) => ctx.some(p => p.type === t)).map(([t, v]) => sw(slotColor(v), TYPE_NAME[t])).join('');
     else if (cb === 'folder') html = [...D.folderSlot].map(([k, v]) => sw(slotColor(v), placeName(k))).join('') + (rest(D.folderSlot, p => p.place) ? sw(pal().other, 'Other') : '');
     else if (cb === 'author') html = [...D.authorSlot].map(([k, v]) => sw(slotColor(v), k)).join('') + (rest(D.authorSlot, p => p.who) ? sw(pal().other, (D.authorRank?.length || 0) > PEOPLE_PAGE ? 'Everyone else, bots and agents' : 'Others, bots and agents') : '') + peoplePager(D.authorRank?.length || 0, D.authorPage || 0);
     else if (cb === 'recency') { const [a, b] = D.tRange; html = legendRamp(`Oldest · ${esc(monY(a / 1000) || '?')}`, `Newest · ${esc(monY(b / 1000) || '?')}`, 'Last changed (code: last commit)'); }
@@ -612,12 +597,11 @@ function renderToolbar() {
     const D = S.data;
     const fr = focusedRepo();
     if (D.colorBy === 'risk' && !fr) D.colorBy = 'type';
-    tb.innerHTML = `<div class="seg" id="dcolor"><span class="seg-label">Color</span>${[['context', 'Context'], ['type', 'Type'], ['folder', 'Folder'], ['author', 'Author'], ['recency', 'Recency'], ['topic', 'Topic'], ...(fr ? [['risk', 'Knowledge risk']] : [])].map(([k, l]) => `<button data-v="${k}" class="${D.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+    tb.innerHTML = `<div class="seg" id="dcolor"><span class="seg-label">Color</span>${[['type', 'Type'], ['folder', 'Folder'], ['author', 'Author'], ['recency', 'Recency'], ['topic', 'Topic'], ...(fr ? [['risk', 'Knowledge risk']] : [])].map(([k, l]) => `<button data-v="${k}" class="${D.colorBy === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       ${D.highlight ? `<button class="btn on" data-act="cleardhl">✕ Clear highlight</button>` : ''}`;
     $$('#dcolor button', tb).forEach(b => b.onclick = async () => {
       D.colorBy = b.dataset.v; if (D.colorBy !== 'risk') store.set('dataColor', D.colorBy);
       if (D.colorBy === 'risk') await loadGaps(focusedRepo()?.name);
-      if (D.colorBy === 'context' && !D.cardOf) await loadCards();
       renderToolbar(); refreshStates(); recolor(); renderSidebar();
     });
   } else if (S.view === 'files') {
@@ -1265,9 +1249,9 @@ async function whoKnows(q) {
 const TYPE_SLOT = {doc: 0, code: 1, session: 2};
 const TYPE_NAME = {doc: 'Documents', code: 'Code', session: 'Agent sessions'};
 const TYPE_ONE = {doc: 'Document', code: 'Code', session: 'Agent session'};
-S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type'),
+S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type') === 'context' ? 'type' : store.get('dataColor', 'type'),  // the Context lens is gone
           treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map(),
-          srcOff: new Set(store.get('dataSrcOff', [])), srcOpen: new Set(store.get('dataSrcOpen', [])), cards: null, cardOf: null,
+          srcOff: new Set(store.get('dataSrcOff', [])), srcOpen: new Set(store.get('dataSrcOpen', [])),
           topics: new Map(), topicsAI: false, sel: null, selStack: [], search: null, ctx: null, view: null, rev: '', authors: new Set(), drawerPerson: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
 const relHome = (p = '') => { p = p || ''; const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
 const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
@@ -1350,7 +1334,7 @@ function onScreen() {
 }
 function viewTopicsTick() {
   const D = S.data;
-  if (S.view !== 'data' || !D.loaded || document.hidden || VT.busy || D.colorBy === 'context') return;  // context: no topics
+  if (S.view !== 'data' || !D.loaded || document.hidden || VT.busy) return;
   const cur = onScreen(), now = performance.now();
   if (jaccard(cur, VT.prev) < 0.95) { VT.prev = cur; VT.still = now; return; }  // still moving: wait for it to settle
   if (cur.size < 10) return;  // too few to cluster: keep the topics you zoomed in from
@@ -1432,7 +1416,6 @@ async function loadData() {
   const ts = D.points.map(p => p.t).filter(x => !isNaN(x)).sort((a, b) => a - b);
   D.tRange = [ts[Math.floor(ts.length * .05)] || 0, ts[ts.length - 1] || 1];
   D.tree = null; D.loaded = true; D.stale = false;
-  if (D.colorBy === 'context') await loadCards();
 }
 // A point's source group (as in Settings → Sources) and its item in that group
 function srcOf(p) {
@@ -1446,25 +1429,9 @@ function srcOf(p) {
 const SRC_GROUPS = [['agents', 'Agent sessions', 'A', '#30b0c7'], ['repos', 'Repositories', 'R', '#34c759'],
                     ['files', 'Files & folders', 'F', '#0a84ff'], ['apps', 'Apps', 'Ap', '#8e8e93'], ['connections', 'Connections', 'C', '#bf5af2']];
 const srcItemName = (g, k) => g === 'agents' ? (AGENT_NAME[k] || k) : g === 'connections' ? k.replace(/^claude_ai_/, '').replace(/_/g, ' ') : g === 'files' ? '~/' + k : k;
-// Context cards on the map: each point takes the card it belongs to (its sessions, the files they edited, its tickets).
-// Only the recent cards, and only the most recent ones get a label: with every card and label the map was slow to zoom.
-const MAP_CARD_DAYS = 7, MAP_CARD_LABELS = 25;
-async function loadCards() {
-  const D = S.data;
-  try { D.cards = await api(`/api/work?days=${MAP_CARD_DAYS}`); } catch { D.cards = null; return; }
-  const byPath = new Map(D.points.map(p => [p.path, p])), of = new Map();
-  for (const t of D.cards.tasks) {
-    const ids = [...t.sessions.map(s => 'session:' + s.id), ...t.files.map(f => byPath.get(f)?.id),
-                 ...t.tickets.map(k => k.path && byPath.get(k.path)?.id), ...t.items.map(i => i.path && byPath.get(i.path)?.id)];
-    ids.forEach(id => { if (id && !of.has(id)) of.set(id, t); });
-  }
-  D.cardOf = of;
-}
-const cardColor = t => (S.data.cards?.states || []).find(m => m.state === t.state)?.color || pal().other;
 function dataColor(p) {
   const D = S.data;
   switch (D.colorBy) {
-    case 'context': { const t = D.cardOf?.get(p.id); return t ? cardColor(t) : pal().other; }
     case 'type': return slotColor(TYPE_SLOT[p.type]);
     case 'folder': return slotColor(D.folderSlot.has(p.place) ? D.folderSlot.get(p.place) : -1);
     case 'author': return slotColor(p.who && D.authorSlot.has(p.who) ? D.authorSlot.get(p.who) : -1);
@@ -1551,14 +1518,6 @@ function selectLabel(kind, key) {
     const stack = D.selStack;
     toggleDataFolder(key, true);  // filters and fits (and clears the selection, restored here)
     D.selStack = [...stack, entry]; D.sel = entry;
-  } else if (kind === 'card') {
-    const t = D.cards?.tasks.find(x => x.id === key); if (!t) return;
-    const members = new Set(D.points.filter(p => D.cardOf.get(p.id) === t).map(p => p.id));
-    Object.assign(entry, {card: t, name: t.title, members});
-    D.selStack.push(entry); D.sel = entry;
-    D.highlight = members;
-    refreshStates(); renderToolbar(); setTimeout(() => gl.fit(visibleIdx()), 30);
-    openCardPanel(t);
   } else {
     const t = dataTopics().get(key) || {name: `Topic ${key + 1}`, keywords: '', description: '', reps: []};
     const members = new Set(D.points.filter(p => dataTopicOf(p) === key && dataInView(p)).map(p => p.id));
@@ -1577,7 +1536,7 @@ function deselectLabel() {
   const sameFolders = s.folders.size === D.folders.size && [...s.folders].every(f => D.folders.has(f));
   if (!sameFolders) { const stack = D.selStack, sel = D.sel; D.folders = new Set(s.folders); dataChanged(false); D.selStack = stack; D.sel = sel; D.highlight = s.highlight; refreshStates(); renderLabels(); }
   else { refreshStates(); renderToolbar(); renderLabels(); }
-  if (D.drawerTopic) { if (D.sel?.kind === 'topic') openTopic(D.sel); else if (D.sel?.kind === 'card') openCardPanel(D.sel.card); else closeDrawer(); }
+  if (D.drawerTopic) { if (D.sel?.kind === 'topic') openTopic(D.sel); else closeDrawer(); }
   const dir = s.cam.p.clone().sub(s.cam.t), dist = dir.length();
   gl.flyTo(s.cam.t.clone(), dist, dir.normalize());
 }
@@ -1615,29 +1574,6 @@ function openTopic(entry) {
 const NOTE_ROWS = [['problem', 'Problem', 'What is wrong or missing'], ['goal', 'Goal', 'What done looks like, and why it matters'],
   ['state', 'State', 'Where it stands, and what was decided'], ['next', 'Next', 'What needs to be done, and whether someone is still working on it'],
   ['question', 'Waiting on you', 'The question that the last session asked you']];
-function openCardPanel(t) {
-  const D = S.data, m = (D.cards?.states || []).find(x => x.state === t.state) || {label: t.state, color: pal().other};
-  const n = D.cards?.notes?.[t.id], p = (t.places || [])[0];
-  const prs = t.prs.slice(0, 4).map(r => `<a class="item" href="${esc(r.url)}" target="_blank" rel="noopener"><div class="t"><span class="grow">#${esc(prNum(r.url) || '')} ${esc(r.title || '')}</span><span class="muted">${esc(r.state || '')}</span></div></a>`).join('');
-  const note = n ? NOTE_ROWS.map(([k, l]) => [l, n[k]]).filter(([, v]) => v)
-    .map(([l, v]) => `<div class="h4">${l}</div><p style="margin:2px 0 0">${esc(v)}</p>`).join('') : '';
-  openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${m.color}"></i>${esc(m.label)}</span>${t.active ? 'Session running · ' : ''}${fmtWhen(t.updated)}</div><h2>${esc(t.title)}</h2>`,
-    `${p ? `<p class="muted" style="margin:0">${esc(homeTilde(p.path))}${p.branch ? ` · ${esc(p.branch)}` : ''}${p.changed ? ` · ${plural(p.changed, 'uncommitted file')}` : ''}</p>` : ''}
-     ${note}
-     ${prs ? `<div class="h4">Pull requests</div><div class="list">${prs}</div>` : ''}
-     <div class="actions">${t.resume ? `<button class="btn on" data-card-resume="${esc(t.resume.session)}">Resume last session</button>` : ''}<button class="btn" data-card-open>Open in Context</button><button class="btn" data-zoomout>Zoom back out</button></div>`);
-  D.drawerTopic = {card: t};
-  const body = $('#drawer-body');
-  $('[data-card-resume]', body)?.addEventListener('click', async e => {
-    try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: e.currentTarget.dataset.cardResume})}); toast('Resuming it in Terminal'); }
-    catch (err) { toast('Could not resume it: ' + err.message); }
-  });
-  $('[data-card-open]', body).onclick = () => {
-    S.work.flash = {id: t.id, state: t.state, until: Date.now() + 2000, shown: false};  // renderWork finds and lights it
-    setView('work');
-  };
-  $('[data-zoomout]', body).onclick = () => deselectLabel();
-}
 // the repo (name, folder key) that the current folder filter is in, if exactly one
 function focusedRepo() {
   const D = S.data; if (D.folders.size !== 1) return null;
@@ -3307,6 +3243,7 @@ async function setView(v, repo) {
   $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings'; $('#work').hidden = v !== 'work';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
   renderSidebar();  // now, not after the loads below: the panel would show the previous view's until then
+  if (!page && !S.mapShown) { S.mapShown = true; if (innerWidth >= 860) toggleSide(true); }  // the map opens with its panel
   if (v === 'code') {
     if (!S.code.repos.length) await loadRepos();
     if (repo && repo !== S.code.repo || !S.code.points.length) await loadRepo(repo || S.code.repo);
@@ -3317,10 +3254,8 @@ async function setView(v, repo) {
   if (v === 'files') $('#loadingtext').textContent = S.files.points.length ? '' : 'Indexing your files — the map appears once the first batch is laid out…';
   gl.paused = v === 'work';
   if (v === 'work') gl.release();
-  if (!page) {
-    const empty = !gl.n;
-    renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]); if (!cams[camKey()]) gl.fit(null, true);
-    if (empty) gl.intro();
+  if (!page) {  // without a saved camera, buildMap fits the map and plays the intro once
+    renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]);
   }
   renderSidebar(); renderTimeline();
   if (v === 'insights') { await insightsFollowData(); renderInsights(); loadAI().then(refreshAIViews); }
@@ -3333,11 +3268,28 @@ $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'da
 // Each task: its data points from every source, newest first, and an AI note on how it stands and is moving.
 S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, asked: new Set(), menu: false,
           states: new Set((() => { const v = store.get('taskStates', ['conscious', 'subconscious']); return Array.isArray(v) ? v : [v]; })()),
-          view: store.get('workView', 'expanded'), full: new Set(),  // compact view: one row a card; full: the rows opened
+          view: store.get('workView', 'compact'), full: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a card; full: the rows opened
           details: new Set()};  // the cards whose problem, goal, state and sections are open
 const wkPageSize = () => S.work.view === 'compact' ? 40 : 10;
 const wkModel = s => (S.work.data?.states || []).find(m => m.state === s) || {label: s, color: '#8e8e93', meaning: ''};
-const wkShown = () => (S.work.data?.tasks || []).filter(t => !S.work.states.size || S.work.states.has(t.state));
+// A search shows its matches best first, in every state; otherwise the cards of the states picked
+const wkShown = () => {
+  const ts = S.work.data?.tasks || [];
+  if (S.work.hits) { const by = new Map(ts.map(t => [t.id, t])); return S.work.hits.map(id => by.get(id)).filter(Boolean); }
+  return ts.filter(t => !S.work.states.size || S.work.states.has(t.state));
+};
+let wkSeq = 0;
+const wkSearch = debounce(async () => {
+  const q = S.work.q.trim(), seq = ++wkSeq;
+  let hits = null;
+  if (q) {
+    try { hits = (await api(`/api/work/search?days=${S.work.days}&q=${encodeURIComponent(q)}`)).results.map(r => r.id); }
+    catch { hits = []; }
+  }
+  if (seq !== wkSeq) return;  // a newer query is on its way
+  S.work.hits = hits; S.work.page = 0;
+  if (S.view === 'work') renderWork();
+}, 220);
 const closeWkMenu = () => { if (S.work.menu) { S.work.menu = false; renderWork(); } };
 document.addEventListener('click', closeWkMenu);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeWkMenu(); });
@@ -3375,13 +3327,15 @@ function wkRow(t, n) {
     .map(r => `<a class="wk-st pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener">#${esc(prNum(r.url) || '')} ${esc(r.state || '')}</a>`).join('');
   const next = wkNext(n);
   return `<article class="wk-task wk-row-c" data-id="${esc(t.id)}" data-wk-row="${esc(t.id)}" style="--acc:${wkModel(t.state).color}" title="Show this card in full">
-    <div class="c-main"><div class="c-l1"><h4 title="${esc(t.title)}">${esc(n?.title || t.title)}</h4>${wkThread(S.work.data?.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
+    <div class="c-main"><div class="c-l1"><h4 title="${esc(t.title)}">${esc(wkTitle(t, n))}</h4>${wkThread(S.work.data?.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
       <div class="c-l2">${where ? `<span class="c-where">${esc(where)}</span>` : ''}${next ? `<span class="c-next">${esc(next)}</span>` : ''}</div></div>
     <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>
     <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}<button class="wk-btn icon" data-wk-revive="${esc(t.id)}" title="Start a new agent session that reads this card first">${WK_IC.spark}</button>${wkCardBtns(t)}</div>
   </article>`;
 }
 const wkNext = n => !n ? '' : n.question ? `Decide: ${n.question}` : (n.next || '');
+// A card is named by its goal; the note's short title and then the task's own title stand in until there is one
+const wkTitle = (t, n) => (n?.goal || '').trim() || n?.title || t.title;
 const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
 function wkGlance(t, n, writing) {
   const p = (t.places || [])[0] || {};
@@ -3539,8 +3493,9 @@ async function loadWork(first = false) {
   if (first) S.work.asked.clear();
   askNotes();
   if (S.view === 'work') renderWork();
+  if (S.work.q.trim()) wkSearch();  // the cards changed: so can what matches
 }
-const wkPageTasks = () => wkShown().slice(S.work.page * wkPageSize(), (S.work.page + 1) * wkPageSize());
+const wkPageTasks =() => wkShown().slice(S.work.page * wkPageSize(), (S.work.page + 1) * wkPageSize());
 // The notes of the page in view that are missing or out of date: written by the server in the background, once per page
 function askNotes() {
   const d = S.work.data, key = `${S.work.days}:${[...S.work.states].sort()}:${S.work.page}`;
@@ -3600,30 +3555,36 @@ function renderWork() {
   const note = t => {
     const n = d.notes[t.id];
     const done = n && /^(nothing|none|n\/a)\.?$/i.test((n.next || '').trim());
-    if (n) return `<div class="wk-note">${NOTE_ROWS.filter(([k]) => n[k] && (['problem', 'goal', 'state'].includes(k) || (k === 'next' && n.question))).map(([k, l, tip]) => `<div class="nrow ${k === 'problem' ? 'recap' : k === 'next' ? (done ? 'done' : 'left') : ''}" title="${tip}"><span class="nlbl">${l}</span><p>${k === 'next' && done ? 'Nothing left' : esc(n[k])}</p></div>`).join('')}
+    if (n) return `<div class="wk-note">${NOTE_ROWS.filter(([k]) => n[k] && (['problem', 'state'].includes(k) || (k === 'next' && n.question))).map(([k, l, tip]) => `<div class="nrow ${k === 'problem' ? 'recap' : k === 'next' ? (done ? 'done' : 'left') : ''}" title="${tip}"><span class="nlbl">${l}</span><p>${k === 'next' && done ? 'Nothing left' : esc(n[k])}</p></div>`).join('')}
       ${writing(t) ? '<div class="foot">Updating…</div>' : ''}</div>`;
     if (!insightsOn()) return '<div class="wk-note empty-note">Choose a generation model in Settings → Models to get a note on each task.</div>';
     return `<div class="wk-note empty-note">${writing(t) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
   };
-  const many = picked.length !== 1;
+  const many = !S.work.hits && picked.length !== 1;  // search results are in score order: no state groups
   const was = new Map($$('.wk-task[data-id]', el).map(a => [a.dataset.id, a.getBoundingClientRect().top]));
+  const box = document.activeElement?.id === 'wksearch' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+  const search = `<div class="wk-search"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="wksearch" type="search" value="${esc(S.work.q)}" placeholder="Search cards" aria-label="Search cards" autocomplete="off" spellcheck="false"
+        title="Plain words search by meaning · &quot;exact words&quot; must appear · -word leaves cards out">
+      <span class="syn">${S.work.hits ? `${S.work.hits.length} match${S.work.hits.length === 1 ? '' : 'es'}` : '"exact" · -exclude'}</span></div>`;
   el.innerHTML = `<div class="wk-head"><h2>Context</h2>
       <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>
         `<button data-wk-view="${v}" class="${S.work.view === v ? 'on' : ''}" role="radio" aria-checked="${S.work.view === v}" title="${l} view">${ic}${l}</button>`).join('')}</div>${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
+    ${search}
     ${tasks.length ? tasks.map((t, i) => {
       const prev = i ? tasks[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== t.state) ? `<h3 class="wk-group" style="--acc:${wkModel(t.state).color}" title="${esc(def(wkModel(t.state)))}">${esc(wkModel(t.state).label)}<span>${count(t.state)}</span></h3>` : '';
       if (S.work.view === 'compact' && !S.work.full.has(t.id)) return head + wkRow(t, d.notes[t.id]);
       return `${head}<article class="wk-task${S.work.view === 'compact' ? ' opened' : ''}" data-id="${esc(t.id)}" ${S.work.view === 'compact' ? `data-wk-row="${esc(t.id)}"` : ''} style="--acc:${wkModel(t.state).color}">
           <div class="wk-main">
-            <header><h4 title="${esc(t.title)}">${esc(d.notes[t.id]?.title || t.title)}</h4>${wkThread(d.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
+            <header><h4 title="${esc(t.title)}">${esc(wkTitle(t, d.notes[t.id]))}</h4>${wkThread(d.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
             ${wkGlance(t, d.notes[t.id], writing(t))}
             ${S.work.details.has(t.id) ? `<div class="wk-detail">${note(t)}${wkSections(t)}</div>` : ''}
           </div>
           ${wkActions(t)}
           ${wkAdjacent(t)}
         </article>`;
-    }).join('') + pager : `<div class="empty">${d.tasks.length ? 'No tasks in the states you chose for this period.' : 'No tasks in this period. Tasks come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
+    }).join('') + pager : `<div class="empty">${S.work.hits ? `No cards of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.tasks.length ? 'No tasks in the states you chose for this period.' : 'No tasks in this period. Tasks come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
     if (!fl.shown) { fl.shown = true; fl.t0 = performance.now(); flashed.scrollIntoView({block: 'center'}); }
@@ -3638,6 +3599,10 @@ function renderWork() {
     if (Math.abs(dy) > 2) a.animate([{transform: `translateY(${dy}px)`}, {transform: 'none'}], {duration: 450, easing: 'cubic-bezier(.2,.8,.2,1)'});
   });
   $$('[data-wk-page]', el).forEach(b => b.onclick = () => { S.work.page += +b.dataset.wkPage; renderWork(); el.scrollTop = 0; askNotes(); });
+  const sb = $('#wksearch', el);
+  if (box) { sb.focus(); sb.setSelectionRange(...box); }  // the page was drawn again while you typed
+  sb.oninput = () => { S.work.q = sb.value; wkSearch(); };
+  sb.onkeydown = e => { if (e.key === 'Escape' && sb.value) { e.stopPropagation(); sb.value = S.work.q = ''; wkSearch(); } };
   const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('taskStates', [...S.work.states]); renderWork(); askNotes(); };
   $$('[data-wk-menu]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.menu = !S.work.menu; renderWork(); });
   $$('[data-wk-st]', el).forEach(c => c.onchange = () => pick(d.states.map(m => m.state).filter(s => s === c.dataset.wkSt ? c.checked : S.work.states.has(s))));
@@ -4235,10 +4200,7 @@ async function handleEvent(m) {
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); reloadRepoSoon(); }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'upstream') loadUpstream();
-    else if (m.type === 'work') {
-      if (S.view === 'work') loadWork();
-      else if (S.view === 'data' && S.data.colorBy === 'context') loadCards().then(recolor);
-    }
+    else if (m.type === 'work') { if (S.view === 'work') loadWork(); }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }

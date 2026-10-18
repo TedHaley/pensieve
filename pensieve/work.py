@@ -7,6 +7,7 @@ A task joins agent sessions, git branches, commits and connection items (tickets
 
 `adjacent` finds what coworkers did near a task: their recent commits on remote branches in the same folders, and
 tickets and threads about the same subject."""
+import hashlib
 import json
 import re
 import subprocess
@@ -15,6 +16,8 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import numpy as np
 
 from pensieve import connections, repos as repos_mod, task_states
 
@@ -819,10 +822,10 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
     raw = notes().get(t["id"], {})
     if raw.get("also"):
         done = _done_items().get(t["id"], {}).get("done", {})
-        out.append("Also talked about in these sessions, with no PR, ticket or commit of its own then: " + "; ".join(
+        out.append("Also talked about in these sessions, with no PR, ticket or commit apart from this card's then: " + "; ".join(
             a + (f" [outdated: {done[a]}]" if a in done else "") for a in raw["also"]))
-    if raw.get("split"):
-        out.append("Other goals of these sessions, each its own card: " + ", ".join(s["id"] for s in raw["split"]))
+    if split := [s for s in raw.get("split") or [] if not _part_of_main(s, raw)]:
+        out.append("Other goals of these sessions, each its own card: " + ", ".join(s["id"] for s in split))
     if t.get("last_words"):
         out += ["", "Last words of the last session:", _clean_words(t["last_words"])[-450:]]
     roots = [p["path"] + "/" for p in t.get("places", [])]
@@ -1103,6 +1106,65 @@ def core(note: dict) -> dict:
                                                               if x and x.strip(" .").lower() != "none"),
                     next=note.get("left"), question=note.get("question"))
     return {k: note[k].strip() for k in CORE if isinstance(note.get(k), str) and note[k].strip(" .").lower() not in ("", "none")}
+
+
+def card_text(t: dict, note: dict | None) -> str:
+    """The words of one card that a search reads: its titles, its note, where the work is, its PRs, tickets and
+    sessions."""
+    note = note or {}
+    places = [" ".join(x for x in (p.get("repo"), p.get("branch")) if x) for p in t.get("places", [])]
+    return "\n".join(x for x in [t["title"], note.get("title", ""), *core(note).values(), *places,
+                                 *(f"#{p['url'].rstrip('/').rsplit('/', 1)[-1]} {p.get('title') or ''}" for p in t["prs"]),
+                                 *(f"{k['key']} {k.get('title') or ''}" for k in t.get("tickets", [])),
+                                 *(s.get("title") or "" for s in t["sessions"][:8])] if x.strip())
+
+
+_card_vecs: dict[str, np.ndarray] = {}  # card text hash -> embedding
+# Meaning scores of cards are close together (0.6 to 0.8 on real cards), so a share of the best keeps almost all.
+# A card stays when it is this close to the best one; the best few always stay.
+CARD_SEARCH_MARGIN, CARD_SEARCH_MIN = 0.06, 3
+CARD_SEARCH_WORDS = 0.08  # added to the meaning score when a card has all the query's words, a share for some
+
+
+def _card_vectors(tasks: list[dict], have: dict) -> dict[str, np.ndarray]:
+    """Each task's card vector, by task id. A card's vector is made again only when its text changes."""
+    from pensieve import indexer
+    keys = {t["id"]: hashlib.sha1(card_text(t, have.get(t["id"])).encode()).hexdigest() for t in tasks}
+    todo = {keys[t["id"]]: card_text(t, have.get(t["id"])) for t in tasks if keys[t["id"]] not in _card_vecs}
+    if todo:
+        for k, v in zip(todo, indexer.embed(list(todo.values()))):
+            _card_vecs[k] = v
+    return {i: _card_vecs[k] for i, k in keys.items()}
+
+
+def warm_card_search(tasks: list[dict], have: dict) -> None:
+    """Make the card vectors in the background, so the first card search does not wait for them."""
+    threading.Thread(target=_card_vectors, args=(tasks, have), daemon=True).start()
+
+
+def search_cards(tasks: list[dict], have: dict, q: str) -> list[dict]:
+    """The cards that match a query, best first: {id, score}. The query is read as in search.parse: "exact phrases"
+    and -excluded words filter the cards, the other words rank them by meaning. With no other words, the cards
+    keep their order."""
+    from pensieve import indexer, search
+    pq = search.parse(q)
+    if not (pq["semantic"] or pq["exact"] or pq["exclude"]):
+        return []
+    texts = {t["id"]: card_text(t, have.get(t["id"])) for t in tasks}
+    low = {k: v.lower() for k, v in texts.items()}
+    keep = [t for t in tasks if all(p.lower() in low[t["id"]] for p in pq["exact"])
+            and not any(x.lower() in low[t["id"]] for x in pq["exclude"])]
+    if not pq["semantic"] or not keep:
+        return [dict(id=t["id"], score=1.0) for t in keep]
+    vecs = _card_vectors(keep, have)
+    qv = indexer.embed([pq["semantic"]], query=True)[0]
+    # a card that has the query's words goes up: a near-empty card ("hello") is close in meaning to almost anything
+    words = [w for w in re.findall(r"\w+", pq["semantic"].lower()) if len(w) >= 3]
+    lex = {t["id"]: sum(w in low[t["id"]] for w in words) / len(words) if words else 0 for t in keep}
+    scored = sorted(((float(vecs[t["id"]] @ qv) + CARD_SEARCH_WORDS * lex[t["id"]], t["id"]) for t in keep), reverse=True)
+    best = scored[0][0]
+    return [dict(id=i, score=round(s, 4)) for n, (s, i) in enumerate(scored)
+            if n < CARD_SEARCH_MIN or s >= best - CARD_SEARCH_MARGIN]
 NOTE_MIN_AGE = 600  # seconds before a note is written again for new data
 
 
@@ -1229,11 +1291,12 @@ def _commit(t: dict, sha: str) -> dict | None:
 def _split_goals(task: dict, note: dict) -> dict:
     """The note with its other goals sorted by the rule of docs/threads.md: a goal with data outside the sessions (a
     PR, ticket or commit of the task) is its own card, `split` (id and evidence); one that only the sessions talk
-    about is a line on the main card, `also`."""
+    about, or whose data the main goal also names, is a line on the main card, `also`."""
     note = dict(note, split=[], also=[])
+    note["main"] = _evidence(task, note.get("evidence"))
     for i, g in enumerate(note.get("goals", [])):
         ev = _evidence(task, g.get("evidence"))
-        if not any(ev.values()):
+        if not any(ev.values()) or _part_of_main(ev, note):
             note["also"].append(g["title"])
             continue
         first = (ev["keys"] or [f"pr{u.rstrip('/').rsplit('/', 1)[-1]}" for u in ev["prs"]] or [ev["commits"][0]["sha"][:8]])[0]
@@ -1241,8 +1304,24 @@ def _split_goals(task: dict, note: dict) -> dict:
         while gid in {s["id"] for s in note["split"]}:
             n, gid = n + 1, f"{task['id']}~{first}-{n + 1}"
         note["split"].append(dict(id=gid, n=i, **ev))
-    note["main"] = _evidence(task, note.get("evidence"))
     return note
+
+
+def _refs(ev: dict) -> set:
+    return set(ev.get("prs", [])) | set(ev.get("keys", [])) | {c["sha"] for c in ev.get("commits", [])}
+
+
+def _part_of_main(ev: dict, note: dict) -> bool:
+    """True when a goal is part of the main work, not a second card with the same PR: the main goal's evidence has
+    every PR, ticket and commit of the goal, and the main goal's next step names one of them. The note model often
+    lists the PR of another goal as main evidence too, so the evidence alone does not show this."""
+    own = _refs(ev)
+    if not own or not own <= _refs(note.get("main") or {}):
+        return False
+    nxt = (note.get("next") or "").lower()
+    names = [u.rstrip("/").rsplit("/", 1)[-1] for u in ev.get("prs", [])] + [k.lower() for k in ev.get("keys", [])]
+    names += [c["sha"][:7].lower() for c in ev.get("commits", [])]
+    return any(re.search(rf"(?<![\w-]){re.escape(x)}(?![\w-])", nxt) for x in names)
 
 
 def _goal_tasks(out: list[dict], have: dict) -> list[dict]:
@@ -1256,11 +1335,12 @@ def _goal_tasks(out: list[dict], have: dict) -> list[dict]:
             continue
         main = n.get("main") or {}
         t["commits"] = t["commits"] + [c for c in main.get("commits", []) if c["sha"] not in {x["sha"] for x in t["commits"]}]
-        if not n.get("split"):
+        split = [g for g in n.get("split") or [] if not _part_of_main(g, n)]  # notes written before that rule
+        if not split:
             continue
         mine = set(main.get("prs", [])) | {c["sha"] for c in main.get("commits", [])}
-        theirs = {x for g in n["split"] for x in g["prs"] + [c["sha"] for c in g["commits"]]} - mine
-        for g in n["split"]:
+        theirs = {x for g in split for x in g["prs"] + [c["sha"] for c in g["commits"]]} - mine
+        for g in split:
             gn = have.get(g["id"]) or {}
             extra.append(dict(t, id=g["id"], goal_of=t["id"], title=gn.get("title") or g["id"], kind="work",
                               keys=g["keys"], tickets=[k for k in t["tickets"] if k["key"] in g["keys"]], ticket_refs=[],

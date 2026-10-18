@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        Brand.registerFonts()
         NSApp.mainMenu = Self.mainMenu()  // key equivalents (copy, paste, ⌘W …) need a main menu even when hidden
         buildStatusItem()
 
@@ -40,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .sink { [weak self] r in self?.badge?.isHidden = r == nil }.store(in: &watchers)
         backend.$syncing.receive(on: RunLoop.main)
             .sink { [weak self] jobs in self?.showSyncing(jobs) }.store(in: &watchers)
+        backend.$busy.receive(on: RunLoop.main)
+            .sink { [weak self] busy in self?.showBusy(busy) }.store(in: &watchers)
         if ProcessInfo.processInfo.environment["PENSIEVE_SHOW_PANEL"] != nil { panel.show() }
     }
 
@@ -168,20 +171,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private var syncJobs: [Backend.SyncJob] = []
+    private var backendBusy = false
     private var syncTimer: Timer?
     private var breathTime = 0.0
     private var breathBlend = 0.0
+    private var working: Bool { !syncJobs.isEmpty || backendBusy }
 
-    /// While anything is indexing, the mark breathes; the menu lists what is being indexed. The motion fades in
-    /// over 0.6 s when indexing starts and out over 0.4 s after it stops.
     private func showSyncing(_ jobs: [Backend.SyncJob]) {
         syncJobs = jobs
-        guard !jobs.isEmpty, syncTimer == nil else { return }
+        breathe()
+    }
+
+    private func showBusy(_ busy: Bool) {
+        backendBusy = busy
+        breathe()
+    }
+
+    /// While Pensieve works (indexing, layout, summaries, insights), the mark breathes; the menu lists what is
+    /// being indexed. The motion fades in over 0.6 s when the work starts and out over 0.4 s after it stops.
+    private func breathe() {
+        guard working, syncTimer == nil else { return }
         let dt = 1.0 / 20
         syncTimer = Timer.scheduledTimer(withTimeInterval: dt, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let indexing = !self.syncJobs.isEmpty
+                let indexing = self.working
                 self.breathBlend = indexing ? min(1, self.breathBlend + dt / 0.6) : max(0, self.breathBlend - dt / 0.4)
                 self.breathTime += dt
                 if !indexing && self.breathBlend == 0 {
