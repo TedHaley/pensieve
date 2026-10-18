@@ -360,7 +360,7 @@ def _tasks(store, days, until: float | None = None):
             last_summary=(ss[0]["summary"] or "")[:800] if ss else "",
             earlier=[(s["title"], (s["summary"] or "")[:400]) for s in ss[1:3]],  # what the note's decisions come from
             events=_events(ss, its, cs),
-            id=_task_id(keys, brs, ss), title=title, kind="ticket" if keys else "branch" if brs else "work",
+            id=_task_id(keys, brs, ss, prs_seen), title=title, kind="ticket" if keys else "branch" if brs else "work",
             keys=keys, status=main["status"] if main else "", updated=updated,
             # tickets the sessions talk about without being their work; a key named once is often an example or a typo
             ticket_refs=[dict(key=k, url=f"{sites[k.split('-')[0]]}/{k}" if k.split("-")[0] in sites else "")
@@ -1047,13 +1047,16 @@ def _server_label(sid: str) -> str:
     return "agent sessions" if sid == connections.SESSIONS else sid.removeprefix("claude_ai_").split("_")[-1]
 
 
-def _task_id(keys, branches, sessions) -> str:
-    """Stable while the task grows: its first ticket key, else its first branch, else its oldest session."""
+def _task_id(keys, branches, sessions, prs=()) -> str:
+    """Stable while the task grows: its first ticket key, else its first branch, else its oldest session, else its
+    first pull request (a pull request on its own, from a connection)."""
     if keys:
         return f"t:{keys[0]}"
     if branches:
         return f"b:{branches[0]}"
-    return f"s:{min(sessions, key=lambda s: s['started'] or s['updated'])['id']}"
+    if sessions:
+        return f"s:{min(sessions, key=lambda s: s['started'] or s['updated'])['id']}"
+    return "p:" + hashlib.sha1(min(p["url"] or p["path"] for p in prs).encode()).hexdigest()[:12]
 
 
 NOTE_PROMPT = """You write the status line of one task on a developer's work dashboard.
