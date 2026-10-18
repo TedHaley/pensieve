@@ -1,6 +1,6 @@
 # Pensieve
 
-> Pensieve is a free, open source Mac app: one place for all your information, for context engineering. It searches your files, git repos, AI agent sessions, tickets and messages by meaning or by exact words. Coding agents (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop, VS Code) connect to it over MCP and get the most relevant files in one search instead of many grep calls. Everything runs on the Mac. MIT license.
+> Pensieve: never lose the thread. Pensieve is a local MCP server and Mac app for developers and their AI coding agents. It is free and open source. It searches your files, git repos, AI agent sessions, tickets and messages by meaning or by exact words. Coding agents (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop, VS Code) connect to it over MCP and get the most relevant files in one search instead of many grep calls. Everything runs on the Mac. MIT license.
 
 Pensieve needs an Apple Silicon Mac with macOS 14 or later. The backend and the Map also work on Linux. The search panel app is macOS only.
 
