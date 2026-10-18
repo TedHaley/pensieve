@@ -3352,7 +3352,8 @@ async function loadPeople(refresh = false) {
 // relax so that people who work together sit side by side and no two circles overlap.
 function ppLayout(d, W, H) {
   const narrow = W < 600, me = d.nodes.find(n => n.me);
-  const others = d.nodes.filter(n => !n.me).slice(0, narrow ? Math.min(S.people.n, 12) : S.people.n);
+  // a narrow graph shows half as many people for each step of Show more
+  const others = d.nodes.filter(n => !n.me).slice(0, narrow ? Math.ceil(S.people.n / 2) : S.people.n);
   const cx = W / 2, cy = H / 2, R = Math.max(80, Math.min(W, H) / 2 - 40), R0 = Math.min(118, R * 0.38);
   const pos = new Map(), vis = new Set(others.map(n => n.id));
   if (me) pos.set(me.id, {x: cx, y: cy, r: 32, n: me});
@@ -3384,6 +3385,7 @@ function ppLayout(d, W, H) {
 }
 function ppSvg(d, W, H) {
   const L = ppLayout(d, W, H), sel = S.people.sel;
+  S.people.drawn = L.others.length;
   const rings = [0, 0.5, 1].map(f => { const r = L.R0 + f * (L.R - L.R0);
     return `<ellipse class="pp-ring" cx="${L.cx}" cy="${L.cy}" rx="${(r * L.sx).toFixed(1)}" ry="${r.toFixed(1)}"/>`; }).join('');
   const mp = L.me && L.pos.get(L.me.id);
@@ -3410,7 +3412,7 @@ function renderPeople() {
                 st.slack_threads && plural(st.slack_threads, 'Slack thread')].filter(Boolean).join(', ');
   const noPics = (d?.nodes || []).filter(n => n.slack && !n.avatar).length;
   const shown = Math.min(P.n, Math.max(0, (d?.nodes.length || 1) - 1));
-  el.innerHTML = `<div class="wk-head pp-head"><div><h2>People</h2><p>The people you work with, from your repos, pull requests, tasks and Slack. The nearest are closest to you and largest. Click a person for their card.</p></div>
+  el.innerHTML = `<div class="wk-head pp-head"><h2>People</h2>
       <div class="wk-ctl"><div class="pp-find"><input id="ppq" type="search" placeholder="Find a person" aria-label="Find a person" autocomplete="off" spellcheck="false" value="${esc(P.q)}"><div class="pp-hits" id="pphits" hidden></div></div>
         ${noPics ? `<button class="wk-btn" data-pp-pics title="Look up Slack pictures and titles with your Slack connection's read-only tools">Get Slack pictures</button>` : ''}
         <button class="wk-btn icon" data-pp-refresh title="Build again now" aria-label="Build again now"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
@@ -3418,7 +3420,7 @@ function renderPeople() {
       <div class="pp-graph" id="ppgraph">${!d ? (P.err ? `<div class="empty">Could not load people: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
         : d.nodes.length <= 1 ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Finding the people you work with…' : d.error ? 'Could not build the graph: ' + esc(d.error) : 'No people yet. Pensieve finds them in your indexed repos, pull requests and Slack connection.'}</div>` : ''}
         ${P.merging ? `<div class="pp-banner">Pick the person to merge with <b>${esc(d?.nodes.find(n => n.id === P.merging)?.name || '')}</b>. <button class="linkbtn" data-pp-merge-cancel>Cancel</button></div>` : ''}
-        ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}${shown} of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''}</div>
+        ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}<span class="pp-shown">${shown}</span> of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''}</div>
           <div class="pp-more">${P.n > PP_STEP ? `<button class="wk-btn" data-pp-n="-1">Fewer</button>` : ''}${d.total - 1 > P.n ? `<button class="wk-btn" data-pp-n="1">Show more</button>` : ''}</div>` : ''}
       </div>
       <aside class="pp-card" id="ppcard">${P.card ? ppCardHtml(P.card) : '<div class="empty">Click a person to see their card.</div>'}</aside>
@@ -3433,6 +3435,10 @@ function ppDrawGraph() {
   box.querySelector('svg')?.remove();
   const W = Math.max(320, box.clientWidth), H = Math.max(320, box.clientHeight);
   box.insertAdjacentHTML('afterbegin', ppSvg(d, W, H));
+  // the footer and Show more count the people drawn, which a narrow graph halves
+  const drawn = S.people.drawn, sh = box.querySelector('.pp-shown'), more = box.querySelector('[data-pp-n="1"]');
+  if (sh) sh.textContent = drawn;
+  if (more) more.hidden = drawn >= d.total - 1;
   const svg = box.querySelector('svg'), byId = new Map(d.nodes.map(n => [n.id, n]));
   const hl = id => {
     svg.classList.toggle('hl', !!id);

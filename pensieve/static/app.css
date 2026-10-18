@@ -599,7 +599,7 @@ body[data-view=people] .toolbar,body[data-view=people] #timeline,body[data-view=
 body[data-view=people] #sidepanel,body[data-view=people] #sidetoggle,body[data-view=people] .mapbtn,body[data-view=people] #gl,
 body[data-view=people] #loading{display:none!important}
 #people{top:var(--top-h);left:var(--gap);right:var(--gap);bottom:var(--gap);padding:26px 30px 22px;display:flex;flex-direction:column;overflow:hidden}
-.pp-head{flex:none}
+.pp-head{flex:none;align-items:center}  /* the title and the find field on one line */
 .pp-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,400px);gap:16px;margin-top:16px}
 .pp-graph,.pp-card{border-radius:20px;background:var(--card);box-shadow:inset 0 0 0 .5px var(--line);min-height:0}
 .pp-graph{position:relative;overflow:hidden}
