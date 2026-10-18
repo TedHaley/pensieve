@@ -98,6 +98,55 @@ def fetch_default(root, timeout=30) -> bool:
         return False
 
 
+PROTECTED_EVERY = 86400  # each protected branch is fetched at least once a day
+_protected_at: dict[str, float] = {}
+
+
+def protected_branches(root) -> list[str]:
+    """The branches that origin's protection rules name exactly (main, develop, release-2026…), read from GitHub
+    through gh: classic branch protection patterns (a read-only GraphQL query) and rulesets (GET). A wildcard rule
+    (`*`, `release/*`) is left out: it often covers every personal branch. Empty without gh or a GitHub origin."""
+    import shutil
+    m = re.search(r"github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", git(root, "remote", "get-url", "origin").strip())
+    if not m or not shutil.which("gh"):
+        return []
+    owner, name = m.groups()
+
+    def gh(*args):
+        try:
+            r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+            return r.stdout if r.returncode == 0 else ""
+        except (subprocess.TimeoutExpired, OSError):
+            return ""
+    names = gh("graphql", "-f", "query=query($o:String!,$n:String!){repository(owner:$o,name:$n){"
+               "branchProtectionRules(first:100){nodes{pattern}}}}", "-f", f"o={owner}", "-f", f"n={name}",
+               "-q", ".data.repository.branchProtectionRules.nodes[].pattern").split()
+    for rid in gh(f"repos/{owner}/{name}/rulesets", "-q", '.[] | select(.target == "branch") | .id').split():
+        names += [x.removeprefix("refs/heads/") for x in
+                  gh(f"repos/{owner}/{name}/rulesets/{rid}", "-q", ".conditions.ref_name.include[]?").split()]
+    return sorted({n for n in names if n and not set(n) & set("*?[]~")})  # ~DEFAULT_BRANCH, ~ALL: the default fetch covers them
+
+
+def fetch_protected(root, timeout=120) -> int:
+    """Once a day: fetch every protected branch of origin into refs/remotes/origin/<branch>, so that the index, the
+    cards and who-knows see the team's shared branches. The working tree and local branches are not touched. Returns
+    how many branches were fetched."""
+    import time
+    if time.time() - _protected_at.get(root, 0) < PROTECTED_EVERY:
+        return 0
+    _protected_at[root] = time.time()  # also after a failure: try again tomorrow, not every half hour
+    branches = [b for b in protected_branches(root) if b != default_branch(root)]
+    if not branches:
+        return 0
+    try:
+        r = subprocess.run(["git", "-C", root, "fetch", "--quiet", "--no-tags", "origin",
+                            *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in branches]],
+                           env=_QUIET_GIT, capture_output=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return 0
+    return len(branches) if r.returncode == 0 else 0
+
+
 def pull_default(root) -> tuple[bool, str]:
     """Bring the local default branch up to origin's, fast-forward only. On that branch: git pull --ff-only. On
     another branch: git fetch origin <b>:<b>, which moves the branch without touching the checkout. Never merges."""
@@ -627,7 +676,8 @@ class Repos:
         return out
 
     def check_upstream(self, fetch=True) -> dict:
-        """Fetch origin's default branch of every indexed repo, then record how far each local one is behind."""
+        """Fetch origin's default branch of every indexed repo (and once a day its protected branches), then record
+        how far each local one is behind."""
         with self.lock:
             roots = [r[0] for r in self.db.execute("SELECT root FROM repos")]
         out = {}
@@ -636,6 +686,7 @@ class Repos:
                 continue
             if fetch:
                 fetch_default(root)
+                fetch_protected(root)
             if u := upstream(root):
                 out[root] = u
         self.upstream = out
