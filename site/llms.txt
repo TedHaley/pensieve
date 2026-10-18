@@ -31,7 +31,7 @@ Each agent works in a scope. By default, the scope is the repo that the agent st
 
 ## Benchmark
 
-Claude Sonnet in Claude Code, 72 held-out tasks in four repos (504 to 34,847 files), each run twice. With Pensieve 0.5.6, the agent solved 91% of tasks (85% without), used 43% fewer tool calls, and cost 18% less per lookup. In two later batches with clean Claude Code settings, accuracy was level with grep, and cost was 23 to 25% lower. Method and limits: https://pensieve.tools/docs/benchmark/
+Claude Sonnet in Claude Code, 72 held-out tasks in four repos (504 to 34,847 files), each run twice. In the latest batch (2026-10-13, clean Claude Code settings), the agent with Pensieve solved as many tasks as with grep (129 of 144), with 47% fewer tool calls, 23% lower cost and 29% less time per lookup. An earlier batch with Pensieve 0.5.6 solved 91% against 85%. The later clean batches did not repeat that gain. Method and limits: https://pensieve.tools/docs/benchmark/
 
 ## Docs
 

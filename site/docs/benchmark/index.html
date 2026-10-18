@@ -42,13 +42,14 @@
 <h1>Benchmark</h1>
 <p class="lede">This page tells you how we measured Pensieve against grep, what the results are, and what we did not measure.</p>
 <div class="stats">
-  <div><b>91%</b><span>tasks solved with Pensieve, against 85% with grep (first batch)</span></div>
-  <div><b>−43%</b><span>tool calls per lookup: 1.97 against 3.44</span></div>
-  <div><b>−18%</b><span>cost per lookup: $0.041 against $0.050</span></div>
-  <div><b>−21%</b><span>time per lookup: 8.6 s against 10.9 s</span></div>
+  <div><b>−47%</b><span>tool calls per lookup: 1.81 against 3.42</span></div>
+  <div><b>−23%</b><span>cost per lookup: $0.039 against $0.051</span></div>
+  <div><b>−29%</b><span>time per lookup: 6.8 s against 9.5 s</span></div>
+  <div><b>90%</b><span>tasks solved, the same as with grep (129 / 144)</span></div>
 </div>
-<p>These four numbers are from one batch of 288 runs, with Pensieve 0.5.6. Two later batches with clean settings
-found the same accuracy with and without Pensieve, and 23 to 25% lower cost with Pensieve. Both results are below.</p>
+<p>These four numbers are from the latest batch (2026-10-13), with clean Claude Code settings. Pensieve solves as many
+tasks as grep, with about half the tool calls. An earlier batch, with Pensieve 0.5.6, solved 91% against 85% with
+grep. The two later clean batches did not repeat this gain. Both results are below.</p>
 
 <h2 id="method">Method</h2>
 <p>The script is <a href="https://github.com/TedHaley/pensieve/tree/main/bench/agent_search.py"><code>bench/agent_search.py</code></a>. It does these steps:</p>
