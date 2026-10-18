@@ -385,18 +385,20 @@ def _result_text(content) -> str:
     return text
 
 
-def _collect_engine(r: dict, calls: int) -> list[tuple]:
-    reads = [f"mcp__{r['id']}__{t['name']}" for t in r["tools"] if t["read"]]
+def _collect_engine(r: dict, calls: int, prompt: str | None = None, only=None) -> list[tuple]:
+    """Run Claude Code headless with only the read tools of one server (and of those, only the ones `only` keeps)."""
+    ok = [t for t in r["tools"] if t["read"] and (only is None or only(t["name"]))]
+    reads = [f"mcp__{r['id']}__{t['name']}" for t in ok]
     if not reads:
         raise RuntimeError("no read-only tools")
-    deny = [f"mcp__{r['id']}__{t['name']}" for t in r["tools"] if not t["read"]]
+    deny = [f"mcp__{r['id']}__{t['name']}" for t in r["tools"] if t not in ok]
     deny += [f"mcp__{k}" for k in _load().get("engine", {}) if k != r["id"]]  # and every other server, whole
     exe = llm._exe("claude")
     if not exe:
         raise llm.Offline("Can't find claude")
     argv = [exe, "-p", "--model", _engine_model(), "--output-format", "stream-json", "--verbose", "--tools", "",
             "--max-turns", str(calls + 2), "--allowedTools", ",".join(reads), "--disallowedTools", ",".join(deny)]
-    prompt = PROMPT.format(name=r["name"], since=_since(r["id"]), calls=calls)
+    prompt = prompt or PROMPT.format(name=r["name"], since=_since(r["id"]), calls=calls)
     with tempfile.TemporaryDirectory(prefix=llm.OWN_PREFIX) as tmp:
         p = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=900, cwd=tmp, env=_WAIT_FOR_MCP)
     uses, out = {}, []
@@ -411,7 +413,7 @@ def _collect_engine(r: dict, calls: int) -> list[tuple]:
                 uses[b["id"]] = (b["name"].split("__", 2)[-1], b.get("input") or {})
             elif b.get("type") == "tool_result" and not b.get("is_error") and b.get("tool_use_id") in uses:
                 tool, args = uses[b["tool_use_id"]]
-                if any(t["name"] == tool and t["read"] for t in r["tools"]):
+                if any(t["name"] == tool for t in ok):
                     out.append((tool, args, _result_text(b.get("content"))))
         if d.get("type") == "result":
             if d.get("is_error") and not out:
@@ -520,6 +522,62 @@ def collect(sid: str, calls: int = 8) -> dict:
         run = dict(collected=_load().get("runs", {}).get(sid, {}).get("collected"), error=_err(e), failed=t0)
     _update(lambda st: st.setdefault("runs", {}).__setitem__(sid, run))
     return run
+
+
+_USER_WORDS = {"user", "users", "profile", "profiles", "member", "people", "person", "whoami"}
+_NOT_USER_WORDS = {"channel", "channels", "message", "messages", "conversation", "conversations", "thread", "group"}
+
+
+def user_tool(name: str) -> bool:
+    """A read tool that looks up people (slack_read_user_profile, slack_search_users, users_info), not messages."""
+    w = set(words(name))
+    return is_read(name) and bool(_USER_WORDS & w) and not _NOT_USER_WORDS & w
+
+
+LOOKUP = """Look up user profiles with the {name} tools only. Pensieve keeps the tool results.
+First look up the profile of the current user: call the profile tool with no user id.
+Then look up the profile of each of these user ids: {ids}.
+Make at most {calls} tool calls. Do not summarize, and do not change anything. When you are done, reply DONE."""
+
+
+def lookup_users(sid: str, ids: list[str], calls: int = 30) -> list[tuple]:
+    """The profiles (name, title, picture) of some users of a chat server, with its read-only user tools only:
+    [(tool, args, result text)]. The first call has no user id: it gives the user's own profile."""
+    r = next((x for x in servers() if x["id"] == sid), None)
+    if not r:
+        raise ValueError(f"unknown connection {sid!r}")
+    ids = [i for i in ids if re.fullmatch(r"[A-Z0-9]{6,}", i)][:calls - 1]
+    if r["origin"] == "engine":
+        return _collect_engine(r, calls, LOOKUP.format(name=r["name"], ids=", ".join(ids) or "(none)", calls=calls),
+                               only=user_tool)
+    cfg = agent_configs()[sid]["cfg"] if r["origin"] == "agent" else \
+        next(c for c in settings.get("mcp_servers") if slug(c["name"]) == sid)
+    return asyncio.run(asyncio.wait_for(_lookup_own(cfg, ids), 300))
+
+
+async def _lookup_own(cfg: dict, ids: list[str]) -> list[tuple]:
+    out = []
+    async with _open(cfg) as s:
+        tools = [t for t in (await s.list_tools()).tools if is_read(t.name, t.annotations) and user_tool(t.name)]
+        pick = None
+        for t in tools:  # a tool that reads one user by id: user_id, user or id
+            schema = _attr(t, "input_schema") or {}
+            param = next((p for p in ("user_id", "userId", "user", "id") if p in schema.get("properties", {})), None)
+            if param and {"get", "read", "fetch", "lookup", "view", "show"} & set(words(t.name)):
+                pick = (t.name, param, param not in (schema.get("required") or []))
+                break
+        if not pick:
+            return out
+        tool, param, optional = pick
+        for args in ([{}] if optional else []) + [{param: i} for i in ids]:
+            try:
+                res = await s.call_tool(tool, args)
+            except Exception:
+                continue
+            if not _attr(res, "is_error"):
+                text = "\n".join(getattr(b, "text", "") for b in res.content)
+                out.append((tool, args, text or json.dumps(_attr(res, "structured_content") or {})))
+    return out
 
 
 def due() -> list[str]:

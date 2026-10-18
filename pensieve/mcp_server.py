@@ -15,7 +15,7 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
-AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
+AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "person", "unexplored", "knowledge_gaps", "list_repos",
                "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state",
                "share_card", "thread_history"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
@@ -527,6 +527,27 @@ def team(repo: str, days: int = 90) -> dict:
     return {"repo": repo, "days": days, "people": [
         dict(name=p["name"], email=p["email"], me=p["me"], commits=p["commits"], areas=p["areas"],
              recent=[s["subject"] for s in p["subjects"][:5]]) for p in t["people"][:15]]}
+
+
+@tool()
+def person(who: str) -> dict:
+    """One person's card from the user's side: role, repos and areas, recent pull requests, and how the user works
+    with them (closeness 0..1, shared areas, tasks, reviews). `who`: a name, an email or a GitHub login."""
+    from pensieve import people
+    pid = people.find(who)
+    if not pid:
+        raise ValueError(f"no person for {who!r} (the People tab builds its graph in the background)")
+    p = people.profile(pid)
+    r = p.get("relation") or {}
+    return dict(
+        name=p["name"], you=p["me"], function=p["function"], function_inferred=p["function_inferred"],
+        identities=[i["key"] for i in p["identities"]], repos=p["repos"][:5],
+        recent_prs=[{k: x.get(k) for k in ("t", "url", "state", "repo")} for x in p["prs"][:5]],
+        recent_commits=[s["subject"] for s in p["subjects"][:5]], works_with=[x["name"] for x in p["peers"]],
+        relation=None if p["me"] else dict(
+            closeness=r.get("closeness"), rank=r.get("rank"), kinds={k["label"]: k["n"] for k in r.get("kinds", [])},
+            shared_areas=r.get("shared_areas", []), tasks=[t.get("t") for t in r.get("tasks", [])],
+            reviews=[x.get("url") for x in r.get("prs", [])], slack_threads=len(r.get("threads", []))))
 
 
 @tool()

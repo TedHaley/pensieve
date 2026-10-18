@@ -121,6 +121,8 @@ async def watcher():
     asyncio.create_task(model_switcher())
     asyncio.create_task(connections_worker())
     work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
+    from pensieve import people
+    people.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "people"}))
     threading.Thread(target=work.tasks, args=(store, 30), daemon=True).start()  # built now, so the first view of the tab does not wait for git and gh
     last_full = 0
     while True:
@@ -1445,6 +1447,110 @@ def draft_work_card(req: CardDraftReq):
     card = _local_card(req.id, req.days)
     return {"resources": [{k: r.get(k) for k in ("kind", "title", "reach")} for r in card.get("resources", [])],
             "card": cards.draft_share(card, store, req.include)}
+
+
+def _repo_rows():
+    with repos.lock:
+        return repos.db.execute("SELECT root, name, remote FROM repos").fetchall()
+
+
+@app.get("/api/people")
+def get_people(limit: int = 200, refresh: bool = False):
+    """The People tab: the nearest `limit` people with their closeness to the user (0..1, the user is 1), and the
+    weighted edges between them. Served from the last build; a build older than half an hour starts a new one."""
+    from pensieve import people
+    people.rebuild(store, _repo_rows, force=refresh)
+    return people.summary(limit)
+
+
+@app.get("/api/people/find")
+def find_person(who: str):
+    """The person id for a name, an email or 'Name <email>' (as the Map shows authors)."""
+    from pensieve import people
+    pid = people.find(who)
+    if not pid:
+        raise HTTPException(404, f"no person for {who!r}")
+    return {"id": pid}
+
+
+@app.get("/api/people/{pid}")
+def get_person(pid: str):
+    """One person's card: identities, function, what they work on, and the user's relation to them."""
+    from pensieve import people
+    p = people.profile(pid)
+    if p is None:
+        raise HTTPException(404, f"unknown person {pid!r}")
+    return p
+
+
+@app.get("/api/people/{pid}/avatar")
+def get_person_avatar(pid: str):
+    """The person's picture, from the copy in the data folder (never fetched on each view)."""
+    from pensieve import people
+    f = people.avatar(pid)
+    if not f:
+        raise HTTPException(404)
+    return FileResponse(f, headers={"Cache-Control": "max-age=3600"})
+
+
+class PeopleMergeReq(BaseModel):
+    ids: list[str]
+
+
+class PeopleSplitReq(BaseModel):
+    key: str
+
+
+class PeopleMeReq(BaseModel):
+    id: str
+
+
+@app.post("/api/people/merge")
+def merge_people(req: PeopleMergeReq):
+    """These people are one person (kept on this Mac, in people/overrides.json)."""
+    from pensieve import people
+    try:
+        return {"id": people.merge(req.ids)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/people/split")
+def split_person(req: PeopleSplitReq):
+    """This identity (email:…, gh:…, slack:…, name:…) is not the person it was joined to."""
+    from pensieve import people
+    people.split(req.key)
+    return {"ok": True}
+
+
+@app.post("/api/people/me")
+def set_me_person(req: PeopleMeReq):
+    """This person is the user."""
+    from pensieve import people
+    try:
+        people.set_me(req.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/people/overrides")
+def reset_people_overrides():
+    """Forget every merge, split and 'this is me' that the user made."""
+    from pensieve import people
+    people.reset_overrides()
+    return {"ok": True}
+
+
+@app.post("/api/people/profiles")
+async def fetch_people_profiles():
+    """Look up the Slack pictures and titles of the nearest people, with the Slack connection's read-only user
+    tools, then build the graph again."""
+    from pensieve import people
+    res = await asyncio.to_thread(people.fetch_profiles)
+    if not res.get("error"):
+        people.rebuild(store, _repo_rows, force=True)
+    return res
 
 
 @app.get("/api/threads")

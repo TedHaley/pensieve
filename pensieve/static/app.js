@@ -319,7 +319,7 @@ function itemColor(it) {
 }
 
 function buildMap() {
-  if (S.view === 'work') return;
+  if (S.view === 'work' || S.view === 'people') return;
   mapPts =S.view === 'data' ? S.data.points : S.view === 'code' ? S.code.points : S.view === 'files' ? S.files.points : S.level === 'chunk' ? (S.chunks || []) : S.sessions;
   const n = mapPts.length, pos = new Float32Array(n * 3), col = new Float32Array(n * 3), size = new Float32Array(n), st = new Float32Array(n);
   const c = new THREE.Color();
@@ -1666,13 +1666,14 @@ function openPersonPanel(who, {keep = false} = {}) {
      ${peers.length ? `<div class="h4">Works alongside</div><div class="chips">${peers.map(([w, n]) => `<button class="chip" data-ppeer="${esc(w)}" title="Open ${esc(w)}"><i class="sw" style="background:${slotColor(D.authorSlot.get(w) ?? -1)}"></i>${esc(w)}<span class="n">${n}</span></button>`).join('')}</div>` : ''}
      <div id="pteam"></div>
      ${recent.length ? `<div class="h4">Recently changed</div><div class="list">${recent.map(itemRow).join('')}</div>` : ''}
-     <div class="actions"><button class="btn" data-pfilter>${D.authors.has(who) && D.authors.size === 1 ? 'Show everyone' : 'Show only their work'}</button></div>`);
+     <div class="actions"><button class="btn" data-pfilter>${D.authors.has(who) && D.authors.size === 1 ? 'Show everyone' : 'Show only their work'}</button><button class="btn" data-pprofile title="Their card in the People tab: what they work on and how you work together">Open their card</button></div>`);
   D.drawerPerson = who;
   if (!keep) renderSidebar(); else $$('.prow-w').forEach(r => r.classList.toggle('open', r.querySelector('[data-pwho]')?.dataset.pwho === who));
   const body = $('#drawer-body');
   $$('[data-open]', body).forEach(b => b.onclick = () => openItem(b.dataset.open));
   $$('[data-pplace]', body).forEach(b => b.onclick = () => selectLabel('folder', b.dataset.pplace));
   $$('[data-ppeer]', body).forEach(b => b.onclick = () => openPersonPanel(b.dataset.ppeer));
+  $('[data-pprofile]', body)?.addEventListener('click', () => openPeopleFor(who));
   $('[data-pfilter]', body)?.addEventListener('click', () => { if (D.authors.has(who) && D.authors.size === 1) D.authors.clear(); else D.authors = new Set([who]); clearSel(); D.highlight = null; dataChanged(); });
   // commits in the code repos they work in (team data is per repo; the busiest two)
   const repos = [...new Set(places.map(x => repoOfKey(x.k)?.name).filter(Boolean))].slice(0, 2);
@@ -2860,7 +2861,7 @@ async function saveSettings() {
 }
 
 /* ============================== deep links (#open=, #view=, #settings) ============================== */
-const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings', tasks: 'work'};
+const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings', tasks: 'work', people: 'people'};
 async function openItem(id) {
   const i = id.indexOf(':'), kind = id.slice(0, i), ref = id.slice(i + 1);
   if (kind === 'file') return openFile(ref);
@@ -2892,6 +2893,7 @@ async function route() {
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
   if (['context', 'currents', 'tasks', 'work'].includes(h)) return setView('work');
+  if (h === 'people') return setView('people');
   if (h === 'map' || h === 'mind') return setView(dataType());
   if (h === 'setup') return openSetup();
   if (['sources', 'scopes', 'agents', 'ai', 'general', 'usage', 'feedback', ...Object.keys(OLD_TABS)].includes(h)) {
@@ -2926,7 +2928,7 @@ function syncInsightsTab() {
   const b = $('#tabs [data-view=insights]'); if (!b) return;
   const d = aiState.data, on = insightsOn(), prep = aiPreparing(d);
   b.classList.toggle('off', !on);
-  b.title = on ? 'Insights (2)' : prep ? (d.detail || 'Preparing insights…') : 'Insights are off — click to turn them on (2)';
+  b.title = on ? 'Insights (4)' : prep ? (d.detail || 'Preparing insights…') : 'Insights are off — click to turn them on (4)';
   const pct = prep && d.progress != null ? Math.round(d.progress * 100) : null;
   b.innerHTML = `Insights${prep ? `<i class="tab-ring" style="--p:${pct ?? 25}" ${pct == null ? 'data-spin' : ''}></i>` : !on ? '<span class="tab-off">Off</span>' : ''}`;
 }
@@ -3215,14 +3217,15 @@ function dataFollowInsights() {
 async function setView(v, repo) {
   if (LEGACY_TYPE[v] && v !== 'data') { setTypes(LEGACY_TYPE[v]); v = 'data'; }
   if (S.view === v && !repo) return;
-  if (!['insights', 'settings', 'work'].includes(S.view)) cams[camKey()] = gl.saveCam();
+  if (!['insights', 'settings', 'work', 'people'].includes(S.view)) cams[camKey()] = gl.saveCam();
   const prev = S.view;
   S.view = v; store.set('view', v);
   syncTabs(v);
-  const page = v === 'insights' || v === 'settings' || v === 'work';
+  const page = v === 'insights' || v === 'settings' || v === 'work' || v === 'people';
   if (prev !== 'settings' && prev !== v) S.prevView = prev;
   document.body.dataset.view = v;  // the map stays as the backdrop; CSS shows the right floating panels
   $('#insights').hidden = v !== 'insights'; $('#settings').hidden = v !== 'settings'; $('#work').hidden = v !== 'work';
+  $('#people').hidden = v !== 'people';
   if (prev !== v) { $('#drawer').classList.remove('open'); S.selected = null; selIdx = -1; }
   renderSidebar();  // now, not after the loads below: the panel would show the previous view's until then
   if (!page) renderToolbar();  // the same for the toolbar, while the map loads
@@ -3235,8 +3238,8 @@ async function setView(v, repo) {
   if (v === 'data' && (!S.data.loaded || S.data.stale)) { $('#loading').classList.remove('gone'); $('#loadingtext').textContent = 'Loading your map…'; await loadData(); }
   if (v === 'files' && (!S.files.loaded || S.files.stale)) await loadFiles();
   if (v === 'files') $('#loadingtext').textContent = S.files.points.length ? '' : 'Indexing your files — the map appears once the first batch is laid out…';
-  gl.paused = v === 'work';
-  if (v === 'work') gl.release();
+  gl.paused = v === 'work' || v === 'people';
+  if (gl.paused) gl.release();
   if (!page) {  // without a saved camera, buildMap fits the map and plays the intro once
     renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]);
   }
@@ -3244,8 +3247,252 @@ async function setView(v, repo) {
   if (v === 'insights') { await insightsFollowData(); renderInsights(); loadAI().then(refreshAIViews); }
   if (v === 'settings') renderSettings();
   if (v === 'work') { renderWork(); loadWork(true); }
+  if (v === 'people') { renderPeople(); loadPeople(); }
 }
 $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'data' ? dataType() : b.dataset.view));
+
+// The people the user works with, as a network around the user: nearer people sit closer to the centre and are drawn
+// larger. Nodes show the person's picture (Slack, then GitHub) or initials. A click opens their card: who they are,
+// what they work on, and the user's relation to them. The server builds the graph in the background (/api/people).
+S.people = {data: null, err: null, n: +store.get('peopleN', 24), sel: null, card: null, q: '', merging: null, stale: true};
+const PP_STEP = 24;
+const ppHue = s => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 8;
+const ppShort = n => { const w = n.split(/\s+/).filter(Boolean); return w.length > 1 ? `${w[0]} ${w[w.length - 1][0]}.` : n; };
+function ppAv(p, size) {
+  const st = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.38)}px`;
+  return p.avatar ? `<img class="pp-av" src="/api/people/${enc(p.id)}/avatar" alt="" style="${st}">`
+    : `<span class="pp-av" style="${st};background:${slotColor(ppHue(p.name))}">${esc(initials(p.name))}</span>`;
+}
+async function loadPeople(refresh = false) {
+  try {
+    S.people.data = await api(`/api/people?limit=200${refresh ? '&refresh=true' : ''}`); S.people.err = null; S.people.stale = false;
+  } catch (e) { S.people.err = e.message; }
+  if (S.view !== 'people') return;
+  renderPeople();
+  const d = S.people.data;
+  if (d && !S.people.sel && d.me) openPeopleCard(d.me, {quiet: true});
+  else if (S.people.sel) openPeopleCard(S.people.sel, {quiet: true});
+}
+// Positions: the user in the centre; each person on a ring whose radius grows as closeness falls. Their angles then
+// relax so that people who work together sit side by side and no two circles overlap.
+function ppLayout(d, W, H) {
+  const narrow = W < 600, me = d.nodes.find(n => n.me);
+  const others = d.nodes.filter(n => !n.me).slice(0, narrow ? Math.min(S.people.n, 12) : S.people.n);
+  const cx = W / 2, cy = H / 2, R = Math.max(80, Math.min(W, H) / 2 - 40), R0 = Math.min(118, R * 0.38);
+  const pos = new Map(), vis = new Set(others.map(n => n.id));
+  if (me) pos.set(me.id, {x: cx, y: cy, r: 32, n: me});
+  const small = (others.length > 60 ? 0.7 : 1) * (narrow ? 0.8 : 1);
+  others.forEach((n, i) => {
+    const c = Math.max(0, Math.min(1, n.closeness || 0)), dist = R0 + Math.pow(1 - c, 0.85) * (R - R0), a = i * 2.39996 + 0.4;
+    pos.set(n.id, {x: cx + dist * Math.cos(a), y: cy + dist * Math.sin(a), r: (12 + 16 * Math.sqrt(c)) * small, dist, n});
+  });
+  const links = d.edges.filter(e => vis.has(e.a) && vis.has(e.b));
+  const wmax = Math.max(1e-6, ...links.map(e => e.w)), P = others.map(n => pos.get(n.id));
+  for (let it = 0, N = 260; it < N; it++) {
+    const k = 1 - it / N;
+    for (const e of links) {
+      const a = pos.get(e.a), b = pos.get(e.b), f = 0.005 * (e.w / wmax) * k;
+      const dx = b.x - a.x, dy = b.y - a.y; a.x += dx * f; a.y += dy * f; b.x -= dx * f; b.y -= dy * f;
+    }
+    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
+      const a = P[i], b = P[j], dx = b.x - a.x, dy = b.y - a.y, dd = Math.hypot(dx, dy) || 0.01, min = a.r + b.r + 30;  // room for the names
+      if (dd < min) { const s = (min - dd) / dd / 2; a.x -= dx * s; a.y -= dy * s; b.x += dx * s; b.y += dy * s; }
+    }
+    for (const p of P) {
+      const dx = p.x - cx, dy = p.y - cy, dd = Math.hypot(dx, dy) || 0.01, t = dd + (p.dist - dd) * 0.45;
+      p.x = cx + dx / dd * t; p.y = cy + dy / dd * t;
+    }
+  }
+  const sx = Math.max(1, Math.min(1.45, (W / 2 - 60) / R));  // a wide panel: the rings become ellipses
+  P.forEach(p => { p.x = cx + (p.x - cx) * sx; });
+  return {pos, links, me, others, cx, cy, R, R0, sx};
+}
+function ppSvg(d, W, H) {
+  const L = ppLayout(d, W, H), sel = S.people.sel;
+  const rings = [0, 0.5, 1].map(f => { const r = L.R0 + f * (L.R - L.R0);
+    return `<ellipse class="pp-ring" cx="${L.cx}" cy="${L.cy}" rx="${(r * L.sx).toFixed(1)}" ry="${r.toFixed(1)}"/>`; }).join('');
+  const mp = L.me && L.pos.get(L.me.id);
+  const spokes = mp ? L.others.map(n => { const p = L.pos.get(n.id), c = n.closeness || 0;
+    return c > 0 ? `<line class="pp-l" data-a="${esc(L.me.id)}" data-b="${esc(n.id)}" x1="${mp.x}" y1="${mp.y}" x2="${p.x.toFixed(1)}" y2="${p.y.toFixed(1)}" style="stroke-width:${(0.6 + 2.6 * c).toFixed(2)};stroke-opacity:${(0.12 + 0.45 * c).toFixed(2)}"/>` : ''; }).join('') : '';
+  const wmax = Math.max(1e-6, ...L.links.map(e => e.w));
+  const peers = [...L.links].sort((a, b) => b.w - a.w).slice(0, Math.max(30, L.others.length * 2)).map(e => { const a = L.pos.get(e.a), b = L.pos.get(e.b);
+    return `<line class="pp-pl" data-a="${esc(e.a)}" data-b="${esc(e.b)}" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" style="stroke-width:${(0.5 + 1.5 * e.w / wmax).toFixed(2)}"/>`; }).join('');
+  const nodes = [...L.pos.values()].map((p, i) => {
+    const n = p.n, r = p.r, label = n.me ? 'You' : ppShort(n.name);
+    const face = n.avatar
+      ? `<clipPath id="ppc${i}"><circle r="${r}"/></clipPath><image href="/api/people/${enc(n.id)}/avatar" x="${-r}" y="${-r}" width="${2 * r}" height="${2 * r}" clip-path="url(#ppc${i})" preserveAspectRatio="xMidYMid slice"/>`
+      : `<circle r="${r}" style="fill:${slotColor(ppHue(n.name))}"/><text class="ini" style="font-size:${Math.round(r * 0.72)}px">${esc(initials(n.name))}</text>`;
+    return `<g class="pp-n ${n.me ? 'me' : ''} ${sel === n.id ? 'sel' : ''}" data-pid="${esc(n.id)}" transform="translate(${p.x.toFixed(1)},${p.y.toFixed(1)})" tabindex="0" role="button" aria-label="${esc(n.name)}">
+      <circle class="halo" r="${r + 3}"/>${face}${n.me || r >= 15 || L.others.length <= 30 ? `<text class="nm" y="${r + 15}">${esc(label)}</text>` : ''}</g>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="People you work with">${rings}<g>${peers}</g><g>${spokes}</g>${nodes}</svg>`;
+}
+function renderPeople() {
+  const el = $('#people'); if (!el) return;
+  const P = S.people, d = P.data;
+  const st = d?.stats || {};
+  const from = [st.repos && plural(st.repos, 'repo'), st.prs && plural(st.prs, 'pull request'), st.tasks && plural(st.tasks, 'task'),
+                st.slack_threads && plural(st.slack_threads, 'Slack thread')].filter(Boolean).join(', ');
+  const noPics = (d?.nodes || []).filter(n => n.slack && !n.avatar).length;
+  const shown = Math.min(P.n, Math.max(0, (d?.nodes.length || 1) - 1));
+  el.innerHTML = `<div class="wk-head pp-head"><div><h2>People</h2><p>The people you work with, from your repos, pull requests, tasks and Slack. The nearest are closest to you and largest. Click a person for their card.</p></div>
+      <div class="wk-ctl"><div class="pp-find"><input id="ppq" type="search" placeholder="Find a person" aria-label="Find a person" autocomplete="off" spellcheck="false" value="${esc(P.q)}"><div class="pp-hits" id="pphits" hidden></div></div>
+        ${noPics ? `<button class="wk-btn" data-pp-pics title="Look up Slack pictures and titles with your Slack connection's read-only tools">Get Slack pictures</button>` : ''}
+        <button class="wk-btn icon" data-pp-refresh title="Build again now" aria-label="Build again now"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
+    <div class="pp-body">
+      <div class="pp-graph" id="ppgraph">${!d ? (P.err ? `<div class="empty">Could not load people: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
+        : d.nodes.length <= 1 ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Finding the people you work with…' : d.error ? 'Could not build the graph: ' + esc(d.error) : 'No people yet. Pensieve finds them in your indexed repos, pull requests and Slack connection.'}</div>` : ''}
+        ${P.merging ? `<div class="pp-banner">Pick the person to merge with <b>${esc(d?.nodes.find(n => n.id === P.merging)?.name || '')}</b>. <button class="linkbtn" data-pp-merge-cancel>Cancel</button></div>` : ''}
+        ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}${shown} of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''}</div>
+          <div class="pp-more">${P.n > PP_STEP ? `<button class="wk-btn" data-pp-n="-1">Fewer</button>` : ''}${d.total - 1 > P.n ? `<button class="wk-btn" data-pp-n="1">Show more</button>` : ''}</div>` : ''}
+      </div>
+      <aside class="pp-card" id="ppcard">${P.card ? ppCardHtml(P.card) : '<div class="empty">Click a person to see their card.</div>'}</aside>
+    </div>`;
+  ppDrawGraph();
+  bindPeople(el);
+  bindPeopleCard();
+}
+function ppDrawGraph() {
+  const box = $('#ppgraph'), d = S.people.data;
+  if (!box || !d || d.nodes.length <= 1) return;
+  box.querySelector('svg')?.remove();
+  const W = Math.max(320, box.clientWidth), H = Math.max(320, box.clientHeight);
+  box.insertAdjacentHTML('afterbegin', ppSvg(d, W, H));
+  const svg = box.querySelector('svg'), byId = new Map(d.nodes.map(n => [n.id, n]));
+  const hl = id => {
+    svg.classList.toggle('hl', !!id);
+    const near = new Set([id]);
+    $$('.pp-l,.pp-pl', svg).forEach(l => { const on = id && (l.dataset.a === id || l.dataset.b === id); l.classList.toggle('on', !!on); if (on) { near.add(l.dataset.a); near.add(l.dataset.b); } });
+    $$('.pp-n', svg).forEach(g => g.classList.toggle('on', !!id && near.has(g.dataset.pid)));
+  };
+  $$('.pp-n', svg).forEach(g => {
+    const n = byId.get(g.dataset.pid);
+    g.onmouseenter = e => { hl(n.id); tip(`<b>${esc(n.name)}</b>${n.function ? `<br>${esc(n.function)}` : ''}${n.me ? '' : `<br>${Math.round((n.closeness || 0) * 100)}% close · #${n.rank}`}`, e.clientX, e.clientY); };
+    g.onmousemove = e => tip(tipEl.innerHTML, e.clientX, e.clientY);
+    g.onmouseleave = () => { hl(null); tip(null); };
+    g.onclick = () => ppPick(n.id);
+    g.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ppPick(n.id); } };
+  });
+}
+async function ppPick(id) {
+  const P = S.people;
+  if (P.merging && P.merging !== id) {
+    const a = P.merging; P.merging = null;
+    try { const r = await api('/api/people/merge', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids: [a, id]})}); toast('Merged. To undo, split an identity on their card.'); P.sel = r.id; }
+    catch (e) { toast('Could not merge: ' + e.message); }
+    return loadPeople();
+  }
+  openPeopleCard(id);
+}
+function bindPeople(el) {
+  const P = S.people;
+  $('[data-pp-refresh]', el)?.addEventListener('click', () => { toast('Building the people graph again…'); loadPeople(true); });
+  $$('[data-pp-n]', el).forEach(b => b.onclick = () => { P.n = Math.max(PP_STEP, P.n + PP_STEP * +b.dataset.ppN); store.set('peopleN', P.n); renderPeople(); });
+  $('[data-pp-merge-cancel]', el)?.addEventListener('click', () => { P.merging = null; renderPeople(); });
+  $('[data-pp-pics]', el)?.addEventListener('click', async e => {
+    e.currentTarget.disabled = true; toast('Looking up Slack profiles with read-only tools. This can take a minute…');
+    try { const r = await api('/api/people/profiles', {method: 'POST'}); toast(r.error || `Found ${plural(r.found || 0, 'Slack profile')}. Pictures appear when the graph is built again.`); }
+    catch (err) { toast('Could not look up Slack profiles: ' + err.message); }
+  });
+  const q = $('#ppq', el), hits = $('#pphits', el);
+  const show = () => {
+    P.q = q.value; const s = q.value.trim().toLowerCase();
+    const found = s ? (P.data?.nodes || []).filter(n => n.name.toLowerCase().includes(s)).slice(0, 8) : [];
+    hits.hidden = !found.length;
+    hits.innerHTML = found.map(n => `<button class="pp-hit" data-pp-hit="${esc(n.id)}">${ppAv(n, 22)}<span>${esc(n.name)}</span><span class="muted">${n.me ? 'you' : '#' + n.rank}</span></button>`).join('');
+    $$('[data-pp-hit]', hits).forEach(b => b.onmousedown = ev => { ev.preventDefault(); ppFind(b.dataset.ppHit); });
+  };
+  q.oninput = show;
+  q.onfocus = show;
+  q.onblur = () => setTimeout(() => { hits.hidden = true; }, 120);
+  q.onkeydown = e => { if (e.key === 'Enter') { const b = $('[data-pp-hit]', hits); if (b) ppFind(b.dataset.ppHit); } };
+}
+function ppFind(id) {
+  const P = S.people, n = P.data?.nodes.find(x => x.id === id);
+  if (n && !n.me && n.rank > P.n) { P.n = Math.ceil(n.rank / PP_STEP) * PP_STEP; store.set('peopleN', P.n); }
+  P.q = '';
+  const q = $('#ppq'); if (q) { q.value = ''; q.blur(); $('#pphits').hidden = true; }
+  P.merging ? ppPick(id) : openPeopleCard(id);
+}
+async function openPeopleCard(id, {quiet = false} = {}) {
+  const P = S.people;
+  P.sel = id;
+  let card;
+  try { card = await api('/api/people/' + enc(id)); } catch { if (!quiet) toast('That person is no longer in the graph.'); P.sel = null; return; }
+  P.card = card;
+  if (S.view !== 'people') return;
+  const vis = $(`#ppgraph .pp-n[data-pid="${CSS.escape(id)}"]`);
+  if (!vis && !card.me && S.people.data?.nodes.some(n => n.id === id)) return renderPeople();  // grown to show them
+  $$('#ppgraph .pp-n').forEach(g => g.classList.toggle('sel', g.dataset.pid === id));
+  const box = $('#ppcard');
+  if (!box) return renderPeople();
+  box.innerHTML = ppCardHtml(card); box.scrollTop = 0; bindPeopleCard();
+}
+const PP_KIND = {email: 'Email', gh: 'GitHub', slack: 'Slack', name: 'Name'};
+function ppCardHtml(p) {
+  const r = p.relation, link = (u, t, extra = '') => u ? `<a class="item" href="${esc(u)}" target="_blank" rel="noopener"><div class="t"><span class="grow">${esc(t)}</span>${extra}</div></a>` : `<div class="item"><div class="t"><span class="grow">${esc(t)}</span>${extra}</div></div>`;
+  const when = ts => ts ? `<span class="muted">${rel(ts * 1000)}</span>` : '';
+  const kinds = r?.kinds || [];
+  const lead = p.me ? 'This is you. Pensieve joins these identities into one person.'
+    : kinds.length ? `<b>#${r.rank}</b> nearest to you. You share ${kinds.map(k => `${esc(k.label)} <span class="muted">(${k.n.toLocaleString()})</span>`).join(', ')}.`
+    : r?.closeness ? `<b>#${r.rank}</b> near you, through the people you work with.` : 'Pensieve has not seen you work with them yet.';
+  const fn = p.function ? `<div class="pp-fn">${esc(p.function)}${p.function_inferred ? ' <i title="Inferred from the kinds of files in their commits">· inferred</i>' : ''}</div>` : '';
+  const rels = r ? [
+    r.shared_areas?.length ? `<div class="h4">Areas you both work in</div><div class="chips">${r.shared_areas.map(a => `<span class="chip">${esc(a)}</span>`).join('')}</div>` : '',
+    r.tasks?.length ? `<div class="h4">Your tasks they are part of</div><div class="list">${r.tasks.map(t => `<button class="item" data-pp-task="${esc(t.id || '')}"><div class="t"><span class="grow">${esc(t.t || 'Task')}</span>${when(t.ts)}</div></button>`).join('')}</div>` : '',
+    r.prs?.length ? `<div class="h4">Pull request reviews between you</div><div class="list">${r.prs.map(x => link(x.url, x.t, `${when(x.ts)}`)).join('')}</div>` : '',
+    r.threads?.length ? `<div class="h4">Slack threads you share</div><div class="list">${r.threads.map(x => link(x.url, x.t, when(x.ts))).join('')}</div>` : '',
+    r.code?.length && !r.shared_areas?.length ? `<div class="h4">Files you both edited</div><div class="list">${r.code.map(x => link('', x.t, when(x.ts))).join('')}</div>` : '',
+  ].join('') : '';
+  const kpis = `<div class="kpis pp-kpis">${p.me ? '' : `<div class="kpi"><div class="l">Closeness</div><div class="v">${Math.round((r?.closeness || 0) * 100)}%</div></div>
+      <div class="kpi"><div class="l">Last together</div><div class="v sm">${r?.last ? rel(r.last * 1000) : '–'}</div></div>`}
+      <div class="kpi"><div class="l">Last active</div><div class="v sm">${p.last ? rel(p.last * 1000) : '–'}</div></div></div>`;
+  const ids = p.identities.length > 1;
+  return `<div class="meta"><span class="badge">Person</span>${p.sources.map(s => esc({git: 'git', github: 'GitHub', slack: 'Slack', task: 'tasks'}[s] || s)).join(' · ')}</div>
+    <div class="pp-id">${ppAv(p, 56)}<div style="min-width:0"><h2>${esc(p.name)}</h2>${fn}</div></div>
+    <p class="pp-lead">${lead}</p>${kpis}
+    ${rels}
+    ${p.repos.length ? `<div class="h4">Works on</div><div class="list">${p.repos.map(x => `<div class="item"><div class="t"><span class="grow">${esc(x.repo)}</span><span class="muted">${plural(x.commits, 'commit')} · ${rel(x.last * 1000)}</span></div>${x.areas.length ? `<div class="s">${x.areas.map(esc).join(' · ')}</div>` : ''}</div>`).join('')}</div>` : ''}
+    ${p.prs.length ? `<div class="h4">Their pull requests</div><div class="list">${p.prs.map(x => link(x.url, x.t, `<span class="pp-st ${esc(x.state)}">${esc(x.state)}</span>${when(x.ts)}`)).join('')}</div>` : ''}
+    ${p.reviews.length ? `<div class="h4">Pull requests they reviewed</div><div class="list">${p.reviews.map(x => link(x.url, x.t, when(x.ts))).join('')}</div>` : ''}
+    ${p.subjects.length ? `<div class="h4">Recent commits</div><div class="list">${p.subjects.slice(0, 5).map(x => `<div class="item"><div class="t"><span class="grow">${esc(x.subject)}</span>${when(x.ts)}</div><div class="s">${esc(x.repo)}</div></div>`).join('')}</div>` : ''}
+    ${p.channels.length ? `<div class="h4">Slack channels</div><div class="chips">${p.channels.map(c => `<span class="chip">${esc(c)}</span>`).join('')}</div>` : ''}
+    ${p.peers.length ? `<div class="h4">Works alongside</div><div class="chips">${p.peers.map(o => `<button class="chip" data-pp-open="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>` : ''}
+    <div class="h4">Identities</div><div>${p.identities.map(i => `<div class="pp-idrow"><span class="k">${esc(PP_KIND[i.kind] || i.kind)}</span><span class="v" title="${esc(i.value)}">${esc(i.value)}</span>${ids ? `<button class="linkbtn" data-pp-split="${esc(i.key)}" title="This ${esc((PP_KIND[i.kind] || i.kind).toLowerCase())} is someone else: make it a person of its own">Not them</button>` : ''}</div>`).join('')}</div>
+    <div class="actions">${p.repos.length ? '<button class="btn" data-pp-map>Show their work on the map</button>' : ''}<button class="btn" data-pp-merge title="Join this person with another one: the same person under another name or email">Merge with…</button>${p.me ? '' : '<button class="btn" data-pp-me title="Mark this person as you">This is me</button>'}</div>`;
+}
+function bindPeopleCard() {
+  const box = $('#ppcard'), P = S.people, p = P.card; if (!box || !p) return;
+  const post = (u, body) => api(u, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  $$('[data-pp-open]', box).forEach(b => b.onclick = () => ppFind(b.dataset.ppOpen));
+  $$('[data-pp-split]', box).forEach(b => b.onclick = async () => {
+    try { await post('/api/people/split', {key: b.dataset.ppSplit}); toast('Split into a person of its own.'); } catch (e) { return toast('Could not split: ' + e.message); }
+    P.sel = null; P.card = null; loadPeople();
+  });
+  $('[data-pp-merge]', box)?.addEventListener('click', () => { P.merging = p.id; renderPeople(); $('#ppq')?.focus(); });
+  $('[data-pp-me]', box)?.addEventListener('click', async () => { try { await post('/api/people/me', {id: p.id}); toast(`Marked ${p.name} as you.`); } catch (e) { return toast(e.message); } loadPeople(); });
+  $('[data-pp-map]', box)?.addEventListener('click', () => {
+    const email = p.identities.find(i => i.kind === 'email')?.value;
+    openItem('person:' + (email ? `${p.name} <${email}>` : p.name));
+  });
+  $$('[data-pp-task]', box).forEach(b => b.onclick = async () => {
+    const id = b.dataset.ppTask; if (!id) return;
+    await setView('work');
+    if (!S.work.data) await loadWork();
+    const t = S.work.data?.tasks.find(x => x.id === id);
+    if (!t) return toast('That task is not in the Context tab now.');
+    S.work.q = ''; S.work.hits = null; S.work.flash = {id, state: t.state, until: Date.now() + 6000}; renderWork();
+  });
+}
+// The People tab's card for a name or an author string ('Name <email>').
+async function openPeopleFor(who) {
+  let r;
+  try { r = await api('/api/people/find?who=' + enc(who)); } catch { return toast(`No card for ${who} yet. The People tab builds them in the background.`); }
+  S.people.sel = r.id;
+  await setView('people');
+  openPeopleCard(r.id);
+}
+window.addEventListener('resize', debounce(() => { if (S.view === 'people') ppDrawGraph(); }, 200));
 
 /* ============================== data tab ============================== */
 // Each task: its data points from every source, newest first, and an AI note on how it stands and is moving.
@@ -4012,7 +4259,7 @@ function palRender() {
   } else {
     S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));
   }
-  const cmds = [['Go to Context', '1', () => setView('work')], ['Show code', '2', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '3', () => setView('insights')], ['Open Settings', '4', () => setView('settings')],
+  const cmds = [['Go to Context', '1', () => setView('work')], ['Go to People', '2', () => setView('people')], ['Show code', '3', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '4', () => setView('insights')], ['Open Settings', '5', () => setView('settings')],
     ['Toggle light / dark', 'T', toggleTheme], ['Clear all filters', '', clearFilters], ['Fit map to view', 'F', () => gl.fit(visibleIdx())], ['Keyboard shortcuts', '?', () => ($('#helpmodal').hidden = false)]];
   cmds.filter(([t]) => !q || t.toLowerCase().includes(q.replace(/^>/, '').trim())).slice(0, raw ? 3 : 7).forEach(([t, k, run]) => add('Commands', {ic: '›', title: t, rt: k, run}));
   pl.items = items; pl.sel = Math.min(pl.sel, items.length - 1);
@@ -4110,7 +4357,7 @@ document.addEventListener('keydown', e => {
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === '/') { e.preventDefault(); openPalette(); }
-  else if (k === '1') setView('work'); else if (k === '2') setView(dataType()); else if (k === '3') setView('insights'); else if (k === '4') setView('settings');
+  else if (k === '1') setView('work'); else if (k === '2') setView('people'); else if (k === '3') setView(dataType()); else if (k === '4') setView('insights'); else if (k === '5') setView('settings');
   else if (k === 'f') gl.fit(visibleIdx());
   else if (k === 't') toggleTheme();
   else if (k === '?') $('#helpmodal').hidden = false;
@@ -4184,6 +4431,7 @@ async function handleEvent(m) {
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'upstream') loadUpstream();
     else if (m.type === 'work') { if (S.view === 'work') loadWork(); }
+    else if (m.type === 'people') { if (S.view === 'people') loadPeople(); else S.people.stale = true; }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
     else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
@@ -4215,7 +4463,7 @@ async function init() {
   if (!S.sessions.length) $('#loadingtext').textContent = 'Indexing your sessions — points appear as they are embedded…';
   document.body.dataset.view = S.view;
   syncTabs(S.view);
-  if (S.view !== 'work') { renderToolbar(); buildMap(); refresh(); }
+  if (S.view !== 'work' && S.view !== 'people') { renderToolbar(); buildMap(); refresh(); }
   if (!gl.controls.autoRotate || store.get('hinted', false)) $('#hint').classList.add('gone');
   setTimeout(() => $('#hint').classList.add('gone'), 9000);
   connect();
