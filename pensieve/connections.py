@@ -791,7 +791,8 @@ def _fname(key_name: str, key: str) -> str:
     return s if s and s == raw[:100] else f"{s[:80]}-{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
 
 
-def store(sid: str, label: str, tool: str, args: dict, text: str, session: str | None = None) -> int:
+def store(sid: str, label: str, tool: str, args: dict, text: str, session: str | None = None,
+          seen_at: str = "") -> int:
     """Write the items of one tool result to ~/.pensieve/connections/<sid>/. An item seen before is merged with its
     earlier copy, and each changed field goes into its history. An item from a direct message, a group message or a
     private channel (private_tool, private_item) is marked `_private`: it is context on this Mac, and never part of a
@@ -832,6 +833,8 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
         merged = {**old, **item}
         if session:
             merged["_seen_in"] = sorted(set(old.get("_seen_in", [])) | {session})
+            if seen_at:  # when an agent saw it: the item's time when it has none of its own
+                merged["_seen_at"] = max(old.get("_seen_at", ""), seen_at)
         if merged == old:
             continue
         changes = {k: [_render(old[k]), _render(v)] for k, v in item.items() if k in old and not _NOISE.search(k)
@@ -892,14 +895,16 @@ def markdown(label: str, tool: str, key_name: str, key: str, d: dict, hist_p: Pa
     return text[:60000] + "\n"
 
 
-def from_session(session_id: str, results: list[tuple]) -> int:
-    """Store the MCP tool results that an agent got in one session: (full tool name, args, result content)."""
+def from_session(session_id: str, results: list[tuple], seen_at: str = "") -> int:
+    """Store the MCP tool results that an agent got in one session: (full tool name, args, result content).
+    `seen_at`: the session's time, kept on items that have no time of their own."""
     n, used = 0, set()
     for full, args, content in results:
         _, srv, tool = (full.split("__", 2) + ["", ""])[:3]
         if not tool or srv == "pensieve" or not read_tool(srv, tool):
             continue
-        n += store(SESSIONS, "Agent sessions", f"{srv}.{tool}", args, _result_text(content), session=session_id)
+        n += store(SESSIONS, "Agent sessions", f"{srv}.{tool}", args, _result_text(content), session=session_id,
+                   seen_at=seen_at)
         used.add(srv)
     if used:  # the user's agents pull data from these servers, so they count as on (see settings.enabled)
         _update(lambda st: st.__setitem__("session_servers", sorted(set(st.get("session_servers", [])) | used)))
@@ -919,8 +924,8 @@ def backfill_sessions() -> int:
         except Exception:
             continue
         if s.mcp and not in_temp(s.project):
-            n += from_session(s.id, s.mcp)
-    _update(lambda st: st.__setitem__("sessions_backfilled", time.time()))
+            n += from_session(s.id, s.mcp, s.updated or s.started)
+    _update(lambda st: st.__setitem__("sessions_backfilled2", time.time()))  # 2: items keep the session's time
     return n
 
 

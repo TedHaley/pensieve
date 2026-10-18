@@ -1595,8 +1595,8 @@ def find_person(who: str):
 async def search_people(q: str, remote: bool = True, deep: bool = False):
     """Find a person, as lines of JSON. The first line has the local matches: the graph, then the people that earlier
     searches found. Then one line for each remote source as it answers: GitHub through gh, and the switched-on
-    people connectors with their read-only user search tools. A Claude Code server costs a model run, so it is asked
-    only with `deep`. The last line is {"type": "done"}."""
+    people connectors with their read-only user search tools. A Claude Code server costs a model run, so only a
+    messaging tool (Slack) is asked without `deep`. The last line is {"type": "done"}."""
     from pensieve import directory
     q = q.strip()[:100]
 
@@ -1610,7 +1610,8 @@ async def search_people(q: str, remote: bool = True, deep: bool = False):
             jobs["github"] = ({"label": "GitHub"}, lambda: directory.search_github(q))
         skipped = []
         for r in await asyncio.to_thread(directory.user_servers):
-            if r["origin"] == "engine" and not deep:
+            # a Claude Code server costs a model run: only a messaging tool is asked on its own, for a query of 3+ letters
+            if r["origin"] == "engine" and not deep and (r["connector"] not in directory.CHAT or len(q) < 3):
                 skipped.append({"id": r["id"], "label": r["label"]})
             else:
                 jobs[r["id"]] = (r, lambda r=r: directory.search_server(r, q))
@@ -1912,7 +1913,7 @@ async def connections_worker():
             continue
         try:
             st = connections._load()
-            if settings.enabled(f"connections/{connections.SESSIONS}") and not st.get("sessions_backfilled"):
+            if settings.enabled(f"connections/{connections.SESSIONS}") and not st.get("sessions_backfilled2"):
                 if await asyncio.to_thread(connections.backfill_sessions):
                     wake_files.set()
                     broadcast({"type": "repos"})

@@ -467,7 +467,7 @@ class Store:
             return False
         self.save_session_files(s.id, s.touched)
         if s.mcp and settings.enabled(f"connections/{connections.SESSIONS}"):
-            connections.from_session(s.id, s.mcp)
+            connections.from_session(s.id, s.mcp, s.updated or s.started)
         chunks = chunk_session(s.turns)
         hashes = [hashlib.sha1(c.encode()).hexdigest() for c in chunks]
         with self.lock:

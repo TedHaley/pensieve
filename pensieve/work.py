@@ -113,7 +113,7 @@ def _items() -> list[dict]:
                             status=connections._render(raw.get("status") or raw.get("state")) if raw.get("status") or raw.get("state") else "",
                             assignee=", ".join(assignees) if assignees else
                             connections._render(raw.get("assignee")) if raw.get("assignee") else "",
-                            updated=_ts(raw.get("_updated") or raw.get("updated") or raw.get("updated_at")
+                            updated=_ts(raw.get("_updated") or raw.get("updated") or raw.get("updated_at") or raw.get("_seen_at")
                                         or md.stat().st_mtime), text=text,
                             private=private))
     return out

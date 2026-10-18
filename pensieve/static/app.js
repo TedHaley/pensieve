@@ -3565,8 +3565,7 @@ function renderPeople() {
       <div class="pp-graph" id="ppgraph">${!d ? (P.err ? `<div class="empty">Could not load people: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
         : d.nodes.length <= 1 ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Finding the people you work with…' : d.error ? 'Could not build the graph: ' + esc(d.error) : 'No people yet. Pensieve finds them in your indexed repos, pull requests and Slack connection.'}</div>` : ''}
         ${P.merging ? `<div class="pp-banner">Pick the person to merge with <b>${esc(d?.nodes.find(n => n.id === P.merging)?.name || '')}</b>. <button class="linkbtn" data-pp-merge-cancel>Cancel</button></div>` : ''}
-        ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}<span class="pp-shown">${shown}</span> of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''}</div>
-          <div class="pp-more">${P.n > PP_STEP ? `<button class="wk-btn" data-pp-n="-1">Fewer</button>` : ''}${d.total - 1 > P.n ? `<button class="wk-btn" data-pp-n="1">Show more</button>` : ''}</div>` : ''}
+        ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}<span class="pp-shown">${shown}</span> of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''} · scroll or pinch to zoom</div>` : ''}
       </div>
       <aside class="pp-card" id="ppcard">${P.card ? (P.card.directory ? ppDirCardHtml : ppCardHtml)(P.card) : '<div class="empty">Click a person to see their card.</div>'}</aside>
     </div>`;
@@ -3582,9 +3581,8 @@ function ppDrawGraph() {
   const W = Math.max(320, box.clientWidth), H = Math.max(320, box.clientHeight);
   box.insertAdjacentHTML('afterbegin', ppSvg(d, W, H));
   // the footer and Show more count the people drawn, which a narrow graph halves
-  const drawn = S.people.drawn, sh = box.querySelector('.pp-shown'), more = box.querySelector('[data-pp-n="1"]');
-  if (sh) sh.textContent = drawn;
-  if (more) more.hidden = drawn >= d.total - 1;
+  const sh = box.querySelector('.pp-shown');
+  if (sh) sh.textContent = S.people.drawn;
   ppAnimate(box.querySelector('svg'));
   if (!box.dataset.wheel) {  // the wheel or a pinch zooms: down or pinch in shows more people, up or pinch out fewer
     box.dataset.wheel = '1';
@@ -3614,7 +3612,7 @@ function ppDrawGraph() {
     g.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ppPick(n.id); } };
   });
 }
-// One step of Show more (dir 1) or Fewer (dir -1). False when there is nothing to add or take away.
+// One step of zoom: out shows more people (dir 1), in shows fewer (dir -1). False when there is nothing to add or take away.
 function ppStep(dir) {
   const P = S.people, d = P.data;
   if (!d) return false;
@@ -3677,7 +3675,6 @@ async function ppPick(id) {
 function bindPeople(el) {
   const P = S.people;
   $('[data-pp-refresh]', el)?.addEventListener('click', () => { toast('Building the people graph again…'); loadPeople(true); });
-  $$('[data-pp-n]', el).forEach(b => b.onclick = () => ppStep(+b.dataset.ppN));
   $('[data-pp-merge-cancel]', el)?.addEventListener('click', () => { P.merging = null; renderPeople(); });
   $('[data-pp-pics]', el)?.addEventListener('click', async e => {
     e.currentTarget.disabled = true; toast('Looking up Slack profiles with read-only tools. This can take a minute…');
@@ -3701,8 +3698,8 @@ function bindPeople(el) {
 // switched-on Slack connection find. A Slack connection through Claude Code costs a model run, so it is asked only
 // when the user picks "Search Slack" (deep). The server answers in lines of JSON, one for each source.
 S.people.find = {q: '', local: [], remote: [], asking: [], skipped: [], errors: [], pending: false, deep: false, on: 0, ctl: null};
-const PP_SRC = {github: 'GitHub', slack: 'Slack', linear: 'Linear', notion: 'Notion', hubspot: 'HubSpot', git: 'git', task: 'tasks'};
-const ppRemote = debounce((s, deep) => ppAsk(s, deep), 350);
+const PP_SRC = {github: 'GitHub', slack: 'Slack', teams: 'Teams', linear: 'Linear', notion: 'Notion', hubspot: 'HubSpot', git: 'git', task: 'tasks'};
+const ppRemote = debounce((s, deep) => ppAsk(s, deep), 700);  // a pause in typing: Slack through Claude Code costs a model run
 function ppSearch(text, deep = false) {
   const F = S.people.find, s = text.trim();
   if (s !== F.q) { F.on = 0; F.remote = []; F.deep = false; F.skipped = []; F.errors = []; }
@@ -3748,11 +3745,13 @@ async function ppAsk(s, deep) {
 function ppHitsHtml() {
   const F = S.people.find, hits = $('#pphits'); if (!hits) return;
   if (!F.q || document.activeElement?.id !== 'ppq') { hits.hidden = true; return; }
-  const ids = new Set(F.local.map(h => h.id)), all = [...F.local, ...F.remote.filter(h => !ids.has(h.id))];
+  // remote hits: the messaging tools first (who people are at work), then git and GitHub, then the rest
+  const srank = h => { const ss = h.sources || [h.source]; return ss.some(x => x === 'slack' || x === 'teams') ? 0 : ss.some(x => x === 'github' || x === 'git') ? 1 : 2; };
+  const ids = new Set(F.local.map(h => h.id)), all = [...F.local, ...F.remote.filter(h => !ids.has(h.id)).sort((a, b) => srank(a) - srank(b))];
   const sub = h => h.kind === 'graph' ? (h.me ? 'you' : h.rank ? '#' + h.rank : '') : '';
   const src = h => h.kind === 'graph' ? '' : `<span class="pp-src">${esc(h.public ? 'GitHub public' : (h.sources || [h.source]).map(s => PP_SRC[s] || s).join(' · ') || 'found')}</span>`;
   const rows = all.slice(0, 12).map(h => ({html: `${ppAv(h, 22)}<span>${esc(h.name)}${h.title ? `<small>${esc(h.title)}</small>` : ''}</span>${src(h)}<span class="muted">${sub(h)}</span>`, open: () => ppOpenHit(h)}));
-  const asking = F.asking.length ? F.asking.join(' and ') : 'GitHub and Slack';
+  const asking = F.asking.length ? F.asking.join(' and ') : 'Slack and GitHub';
   const note = F.pending ? `<div class="pp-hit note"><span class="spinner"></span>Searching ${esc(asking)}…</div>`
     : !all.length ? `<div class="pp-hit note">No one found${F.errors.length ? ` · could not ask ${esc(F.errors.join(', '))}` : ''}</div>` : '';
   if (F.skipped.length && !F.deep) {
@@ -3799,7 +3798,15 @@ async function openPeopleCard(id, {quiet = false} = {}) {
   const P = S.people;
   P.sel = id;
   let card;
-  try { card = await api('/api/people/' + enc(id)); } catch { if (!quiet) toast('That person is no longer in the graph.'); P.sel = null; return; }
+  try { card = await api('/api/people/' + enc(id)); } catch {
+    P.sel = null;
+    if (!quiet) toast('That person is no longer in the graph. Loading the graph again…');
+    return loadPeople();
+  }
+  if (card.id !== id) {  // the graph was built again and their id changed (a better identity joined them)
+    P.sel = id = card.id; P.card = card;
+    return loadPeople();
+  }
   P.card = card;
   if (S.view !== 'people') return;
   const vis = $(`#ppgraph .pp-n[data-pid="${CSS.escape(id)}"]`);

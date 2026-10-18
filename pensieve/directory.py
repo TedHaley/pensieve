@@ -32,6 +32,7 @@ PUBLIC_MIN = 3             # public GitHub users are asked only when the members
 LIMIT = 8
 # Connectors whose user tools find coworkers. Other servers can have a 'user' tool for other things (analytics users).
 PEOPLE_CONNECTORS = {"slack", "linear", "notion", "hubspot", "github"}
+CHAT = {"slack", "teams"}  # messaging tools: the first place to look for a person, even through Claude Code
 
 _lock = threading.RLock()
 _filling = set()

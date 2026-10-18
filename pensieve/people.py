@@ -547,15 +547,22 @@ def _collect_tasks(raw: _Raw, store, slack_by_item: dict):
     except Exception:
         ts = []
     for t in ts:
-        ref = {"t": t.get("title", ""), "id": t.get("id"), "ts": t.get("updated", 0)}
+        def mine(p):
+            """When this person took part in the task: their newest commit in it, else the newest ticket they are
+            assigned, else 0 (no time). Not the task's own update time: that is anyone's, and collecting new items
+            moves it to now."""
+            return max([c["ts"] for c in t.get("commits", []) if c.get("author") == p] +
+                       [x.get("updated") or 0 for x in t.get("tickets", []) if x.get("assignee") == p] + [0])
         for p in t.get("people", []):
             if is_bot(p, p if "@" in p else ""):
                 continue
             k = raw.ident("task", email=p) if "@" in p else raw.ident("task", name=p)
-            raw.act("task", "me", k, t.get("updated", 0), ref=ref)
+            when = mine(p)
+            raw.act("task", "me", k, when, ref={"t": t.get("title", ""), "id": t.get("id"), "ts": when})
         for it in t.get("items", []):
             for k in slack_by_item.get(it.get("path"), ()):
-                raw.act("task", "me", k, t.get("updated", 0), ref=ref)
+                when = it.get("updated") or 0  # the message's own time
+                raw.act("task", "me", k, when, ref={"t": t.get("title", ""), "id": t.get("id"), "ts": when})
     recent = [t for t in ts if t.get("files")][:8]
 
     def cw(t):
@@ -892,6 +899,8 @@ def summary(limit: int = 200) -> dict:
 def profile(pid: str) -> dict | None:
     """GET /api/people/<id>: who they are, what they work on, and the user's relation to them."""
     g = graph()
+    if g and pid not in g["profiles"]:
+        pid = current_id(pid) or pid
     if not g or pid not in g["profiles"]:
         return None
     pr = dict(g["profiles"][pid])
@@ -916,6 +925,16 @@ def _uniq(refs, key):
             seen.add(k)
             out.append(r)
     return out
+
+
+def current_id(pid: str) -> str | None:
+    """The id that a person has now, for an id from an older build. An id is the hash of the person's first key, so
+    it changes when a better key joins them (a Slack profile with their email): the old id is the hash of one of
+    their keys now."""
+    g = graph()
+    if not g:
+        return None
+    return next((p["id"] for p in g["people"].values() if any("p" + _hash(k) == pid for k in p["keys"])), None)
 
 
 def find(who: str) -> str | None:
