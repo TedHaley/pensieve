@@ -1392,12 +1392,21 @@ def get_work(days: int = 30):
     have = work.notes()
     stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
     of = {t["id"]: history.thread_of(t["id"]) for t in ts}
+    work.warm_card_search(ts, have)
     # each note's core (problem, goal, state, next, question); notes in an older format show until written again
     return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
                                            "stale": t["id"] in stale}
                                  for t in ts if work.core(have.get(t["id"], {}))},
                 threads={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
                 states=task_states.models(), writing=status.get("work_notes") or [])
+
+
+@app.get("/api/work/search")
+def search_work(q: str, days: int = 30):
+    """The context cards of the last `days` days that match `q`, best first: {results: [{id, score}]}. Meaning words
+    rank the cards, "exact phrases" and -words filter them."""
+    ts = work.tasks(store, days)
+    return dict(results=work.search_cards(ts, work.notes(), q))
 
 
 @app.get("/api/work/card")

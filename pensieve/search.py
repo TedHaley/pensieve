@@ -359,6 +359,8 @@ class Searcher:
         extra = []
         if not pq["semantic"] and kf == "repo":  # kind:repo alone: every repo, biggest first
             extra += self._folders("", scope, repos_only=True, limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
+        elif not pq["semantic"] and not pq["exact"] and by and kf in (None, "folder"):  # by:<name> alone: where they wrote
+            extra += self._folders("", scope, limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))
         if pq["semantic"] and kf in (None, "folder", "repo"):
             extra += self._folders(pq["semantic"], scope, repos_only=kf == "repo", strong_only=kf is None, code_qv=code_qv,
                                    limit=limit, by=by, ext=f.get("ext"), within=f.get("in"))

@@ -37,9 +37,10 @@ func draw(_ px: Int) -> Data {
     NSGraphicsContext.restoreGraphicsState()
     NSGradient(colors: [bgTop, bgBottom])!.draw(in: body, angle: -90)
 
-    // The mark, y-down like the SVG.
-    let side: CGFloat = 652
-    let m = NSRect(x: 512 - side / 2, y: 512 - side / 2, width: side, height: side)
+    // The mark, y-down like the SVG. Its box is centered, but the small stem circles make it look left of center,
+    // so it sits a little to the right.
+    let side: CGFloat = 600, nudge: CGFloat = 20
+    let m = NSRect(x: 512 - side / 2 + nudge, y: 512 - side / 2, width: side, height: side)
     ctx.saveGState()
     ctx.translateBy(x: 0, y: 1024)
     ctx.scaleBy(x: 1, y: -1)

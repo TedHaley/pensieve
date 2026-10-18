@@ -16,6 +16,8 @@ final class Backend: ObservableObject {
     @Published private(set) var settings: [String: Any] = [:]
     /// What is being indexed now (GET /api/syncing): empty when idle.
     @Published private(set) var syncing: [SyncJob] = []
+    /// The backend does background work (GET /api/status, see statusBusy).
+    @Published private(set) var busy = false
     var onSettingsChange: (() -> Void)?
 
     /// One running indexing job: `total` and `seconds_left` are known for repos and a search-model switch, not for
@@ -162,9 +164,24 @@ final class Backend: ObservableObject {
                     jobs = res["syncing"] ?? []
                 }
                 if jobs != self.syncing { self.syncing = jobs }
-                try? await Task.sleep(for: .seconds(jobs.isEmpty ? 3 : 1))
+                let busy = self.state == .up ? await self.statusBusy() : false
+                if busy != self.busy { self.busy = busy }
+                try? await Task.sleep(for: .seconds(jobs.isEmpty && !busy ? 3 : 1))
             }
         }
+    }
+
+    /// Busy: layout, insights, indexing, session summaries or topic names are in progress. An error or an offline
+    /// language model stops this work, so it is not busy.
+    private func statusBusy() async -> Bool {
+        guard let (d, r) = try? await URLSession.shared.data(from: url("api/status")),
+              (r as? HTTPURLResponse)?.statusCode == 200,
+              let st = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return false }
+        let on = { (k: String) in st[k] as? Bool ?? false }
+        let n = { (k: String) in st[k] as? Int ?? 0 }
+        if (st["message"] as? String ?? "").hasPrefix("error") || on("llm_offline") { return false }
+        return on("layout") || on("insights_running") || on("indexing")
+            || n("summarized_sessions") < n("sessions") || n("topics_named") < n("topics")
     }
 
     private func isUp() async -> Bool {

@@ -70,7 +70,7 @@ struct SearchView: View {
                 }
             } label: {
                 Text(current.isEmpty ? "Everything" : current)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(Brand.font(13, .medium))
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.visible)
@@ -94,13 +94,13 @@ struct SearchView: View {
                 .foregroundStyle(.secondary)
             TextField("Search", text: $model.query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 24, weight: .regular))
+                .font(Brand.font(24))
                 .overlay(alignment: .leading) {
                     if let c = model.completion {
                         // the typed text, invisible, positions the rest of the Top Hit's name right after the caret
                         (Text(model.query).foregroundColor(.clear) + Text(c.rest).foregroundColor(.secondary)
                             + Text(" — \(c.kind)").foregroundColor(Color.secondary.opacity(0.6)))
-                            .font(.system(size: 24, weight: .regular))
+                            .font(Brand.font(24))
                             .lineLimit(1)
                             .allowsHitTesting(false)
                     }
@@ -111,7 +111,7 @@ struct SearchView: View {
             scopeMenu
             if let r = updater.available, !updater.busy {
                 Text("⌘U to update")
-                    .font(.system(size: 13))
+                    .font(Brand.font(13))
                     .foregroundStyle(.tertiary)
                     .fixedSize()
                     .help("Install Pensieve \(r.version)")
@@ -205,7 +205,7 @@ struct HintLine: View {
                             Button("Skip this version") { updater.skip() }
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Brand.accent)
                         .fixedSize()
                         .padding(.leading, below ? 0 : 6)
                     }
@@ -215,7 +215,7 @@ struct HintLine: View {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(SearchModel.options, id: \.0) { key, what in
                             HStack(spacing: 0) {
-                                Text(key).font(.system(size: SearchModel.hintFontSize, design: .monospaced))
+                                Text(key).font(Brand.mono(SearchModel.hintFontSize))
                                     .foregroundStyle(.primary.opacity(0.8))
                                     .frame(width: 215, alignment: .leading)
                                 Text(what)
@@ -238,7 +238,7 @@ struct HintLine: View {
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: SearchModel.hintFontSize))
+        .font(Brand.font(SearchModel.hintFontSize))
         .foregroundStyle(.secondary)
         .lineLimit(model.showsGuidance ? nil : 6)
         .padding(.top, 2)
@@ -270,19 +270,19 @@ struct ActionMenu: View {
                         .font(.system(size: 12, weight: .semibold))
                         .frame(width: 16)
                     Text(a.title(for: hit))
-                        .font(.system(size: 13, weight: on ? .semibold : .regular))
+                        .font(Brand.font(13, on ? .semibold : .regular))
                         .lineLimit(1)
                         .fixedSize()
                     Spacer(minLength: 8)
                     Text(a.shortcut)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(on ? Color.white.opacity(0.8) : Color.secondary)
+                        .font(Brand.font(11.5))
+                        .foregroundStyle(on ? Brand.onAccent.opacity(0.8) : Color.secondary)
                         .fixedSize()
                 }
-                .foregroundStyle(on ? Color.white : Color.primary)
+                .foregroundStyle(on ? Brand.onAccent : Color.primary)
                 .padding(.horizontal, 10)
                 .frame(height: SearchModel.actionRowHeight)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Color.accentColor : .clear))
+                .background(Capsule().fill(on ? Brand.accent : .clear))
                 .contentShape(Rectangle())
                 .onHover { if $0 { model.actionIndex = i } }
                 .onTapGesture { model.runAction(i) }
@@ -300,7 +300,7 @@ struct ResultsList: View {
     var body: some View {
         if model.results.isEmpty {
             Text("No results")
-                .font(.system(size: 13))
+                .font(Brand.font(13))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 53)
@@ -314,7 +314,7 @@ struct ResultsList: View {
                             switch row {
                             case .header(let kind, _):
                                 Text(Kind.title(kind))
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(Brand.font(11, .semibold))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .padding(.leading, 12)
@@ -360,38 +360,38 @@ struct ResultRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(hit.title)
-                        .font(.system(size: 13.5, weight: .semibold))
+                        .font(Brand.font(13.5, .semibold))
                         .lineLimit(1)
                         .truncationMode(truncation)
                     if hit.isExact {
                         Text("exact")
-                            .font(.system(size: 9.5, weight: .bold))
+                            .font(Brand.font(9.5, .bold))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
-                            .background(Capsule().fill(selected ? Color.white.opacity(0.25) : Color.accentColor.opacity(0.16)))
-                            .foregroundStyle(selected ? Color.white : Color.accentColor)
+                            .background(Capsule().fill(selected ? Brand.onAccent.opacity(0.25) : Brand.accent.opacity(0.1)))
+                            .foregroundStyle(selected ? Brand.onAccent : Brand.accent)
                             .fixedSize()
                     }
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(selected ? Color.white : Color.primary)
+                .foregroundStyle(selected ? Brand.onAccent : Color.primary)
                 if let sub = hit.subtitle, !sub.isEmpty {
                     Text(sub)
-                        .font(.system(size: 11))
-                        .foregroundStyle(selected ? Color.white.opacity(0.78) : Color.secondary)
+                        .font(Brand.font(11))
+                        .foregroundStyle(selected ? Brand.onAccent.opacity(0.78) : Color.secondary)
                         .lineLimit(1)
                         .truncationMode(truncation)
                 }
                 if let snip = hit.snippet, !snip.isEmpty {
                     Text(Self.snippet(snip, hit.highlights ?? [], selected: selected))
-                        .font(.system(size: 11.5))
+                        .font(Brand.font(11.5))
                         .lineLimit(1)
                 }
             }
             if selected {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(actionsOpen ? 0.95 : 0.6))
+                    .foregroundStyle(Brand.onAccent.opacity(actionsOpen ? 0.95 : 0.6))
                     .help("Actions: ⌃ or →")
             }
         }
@@ -400,7 +400,7 @@ struct ResultRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             if selected {
-                let shape = RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor)
+                let shape = RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Brand.accent)
                 if let highlight { shape.matchedGeometryEffect(id: "selection", in: highlight) } else { shape }
             }
         }
@@ -414,7 +414,7 @@ struct ResultRow: View {
             $0 == "\n" || $0 == "\r" || $0 == "\t" ? " " : $0
         }))
         var a = AttributedString(flat)
-        a.foregroundColor = selected ? Color.white.opacity(0.85) : Color.secondary
+        a.foregroundColor = selected ? Brand.onAccent.opacity(0.85) : Color.secondary
         let scalars = a.unicodeScalars
         let n = scalars.count
         for r in ranges where r.count == 2 {
@@ -422,8 +422,8 @@ struct ResultRow: View {
             guard hi > lo else { continue }
             let start = scalars.index(scalars.startIndex, offsetBy: lo)
             let end = scalars.index(scalars.startIndex, offsetBy: hi)
-            a[start..<end].foregroundColor = selected ? Color.white : Color.primary
-            a[start..<end].font = .system(size: 11.5, weight: .bold)
+            a[start..<end].foregroundColor = selected ? Brand.onAccent : Color.primary
+            a[start..<end].font = Brand.font(11.5, .bold)
         }
         // Start the line near the first highlight so it is visible in a one-line snippet.
         if let first = ranges.first(where: { $0.count == 2 })?.first, first > 70, first < n {
@@ -461,11 +461,11 @@ struct HitIcon: View {
             } else {
                 Image(systemName: symbol)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(selected ? Color.white : tint)
+                    .foregroundStyle(selected ? Brand.onAccent : tint)
                     .frame(width: 30, height: 30)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(selected ? Color.white.opacity(0.22) : tint.opacity(0.15))
+                            .fill(selected ? Brand.onAccent.opacity(0.22) : tint.opacity(0.15))
                     )
             }
         }
@@ -542,7 +542,7 @@ extension View {
             .shadow(color: .black.opacity(0.25), radius: 12, y: 5)
             .mask(Rectangle().padding(-40).overlay(Circle().blendMode(.destinationOut)).compositingGroup())
         if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: Circle())
+            self.glassEffect(.regular.tint(Brand.glassTint), in: Circle())
                 .overlay(Circle().strokeBorder(Color.primary.opacity(0.28), lineWidth: 1))
                 .background(shadow)
         } else {
@@ -552,13 +552,14 @@ extension View {
         }
     }
 
-    /// Spotlight's look: Liquid Glass on macOS 26, a popover-style blur before that.
+    /// Spotlight's look: Liquid Glass on macOS 26, a popover-style blur before that, tinted to the site's paper or ink.
     @ViewBuilder func panelGlass() -> some View {
         let shape = RoundedRectangle(cornerRadius: SearchModel.cornerRadius, style: .continuous)
         if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: shape)
+            self.glassEffect(.regular.tint(Brand.glassTint), in: shape)
         } else {
-            self.background(VisualEffect().clipShape(shape))
+            self.background(shape.fill(Brand.glassTint))
+                .background(VisualEffect().clipShape(shape))
                 .overlay(shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
         }
     }
