@@ -1611,11 +1611,15 @@ function openTopic(entry) {
   $$('[data-twho]', body).forEach(b => b.onclick = () => openPersonPanel(b.dataset.twho));
   $('[data-zoomout]', body).onclick = () => deselectLabel();
 }
+// a card's note, in the order of the core: [field, label, what it says]
+const NOTE_ROWS = [['problem', 'Problem', 'What is wrong or missing'], ['goal', 'Goal', 'What done looks like, and why it matters'],
+  ['state', 'State', 'Where it stands, and what was decided'], ['next', 'Next', 'What needs to be done, and whether someone is still working on it'],
+  ['question', 'Waiting on you', 'The question that the last session asked you']];
 function openCardPanel(t) {
   const D = S.data, m = (D.cards?.states || []).find(x => x.state === t.state) || {label: t.state, color: pal().other};
   const n = D.cards?.notes?.[t.id], p = (t.places || [])[0];
   const prs = t.prs.slice(0, 4).map(r => `<a class="item" href="${esc(r.url)}" target="_blank" rel="noopener"><div class="t"><span class="grow">#${esc(prNum(r.url) || '')} ${esc(r.title || '')}</span><span class="muted">${esc(r.state || '')}</span></div></a>`).join('');
-  const note = n ? [['Recap', n.recap], ['Current state', n.current], ['What’s left', n.left]].filter(([, v]) => v)
+  const note = n ? NOTE_ROWS.map(([k, l]) => [l, n[k]]).filter(([, v]) => v)
     .map(([l, v]) => `<div class="h4">${l}</div><p style="margin:2px 0 0">${esc(v)}</p>`).join('') : '';
   openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${m.color}"></i>${esc(m.label)}</span>${t.active ? 'Session running · ' : ''}${fmtWhen(t.updated)}</div><h2>${esc(t.title)}</h2>`,
     `${p ? `<p class="muted" style="margin:0">${esc(homeTilde(p.path))}${p.branch ? ` · ${esc(p.branch)}` : ''}${p.changed ? ` · ${plural(p.changed, 'uncommitted file')}` : ''}</p>` : ''}
@@ -2329,7 +2333,7 @@ function renderSetup() {
   const secs = picked.reduce((a, i) => a + (i.seconds || 0), 0), mins = Math.max(1, Math.round(secs / 60));
   let body;
   if (step === 'about') {
-    body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg>
+    body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg>
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
       <p class="sub">Setup takes a minute: tell Pensieve how you work, choose what it indexes, and pick an engine for insights.</p>${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
@@ -3044,7 +3048,7 @@ function aiOffPage() {
   const prep = aiPreparing(d), opts = d.options.filter(o => o.id !== 'none');
   const builtin = opts.find(o => o.id === 'builtin'), others = opts.filter(o => o.id !== 'builtin');
   return `<div class="ai-off">
-    <div class="ai-off-h"><span class="brand"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.2" fill="currentColor"/><circle cx="13" cy="15" r="1.9" fill="currentColor"/></svg></span>
+    <div class="ai-off-h"><span class="brand"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg></span>
       <div><h1>${prep ? 'Getting insights ready' : 'Insights are off'}</h1><p>${esc(NO_AI_WORKS)} Insights add:</p>
       <ul>${INSIGHTS_ADD.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div></div>
     ${prep ? `<div class="card ai-rec">${aiProgressHtml(d)}</div>` : ''}
@@ -3328,8 +3332,10 @@ $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'da
 /* ============================== data tab ============================== */
 // Each task: its data points from every source, newest first, and an AI note on how it stands and is moving.
 S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, asked: new Set(), menu: false,
-          states: new Set((() => { const v = store.get('taskStates', ['conscious', 'subconscious']); return Array.isArray(v) ? v : [v]; })())};
-const WK_PAGE = 10;
+          states: new Set((() => { const v = store.get('taskStates', ['conscious', 'subconscious']); return Array.isArray(v) ? v : [v]; })()),
+          view: store.get('workView', 'expanded'), full: new Set(),  // compact view: one row a card; full: the rows opened
+          details: new Set()};  // the cards whose problem, goal, state and sections are open
+const wkPageSize = () => S.work.view === 'compact' ? 40 : 10;
 const wkModel = s => (S.work.data?.states || []).find(m => m.state === s) || {label: s, color: '#8e8e93', meaning: ''};
 const wkShown = () => (S.work.data?.tasks || []).filter(t => !S.work.states.size || S.work.states.has(t.state));
 const closeWkMenu = () => { if (S.work.menu) { S.work.menu = false; renderWork(); } };
@@ -3339,6 +3345,11 @@ const WK_SRC = {session: 'Session', commit: 'Commit', ticket: 'Ticket', pr: 'PR'
 const homeTilde = p => p.replace(/^\/Users\/[^/]+/, '~');
 const WK_IC = {
   play: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/></svg>',
+  share: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 14.5V3.5M8 7.5l4-4 4 4M7.5 10.5H6.5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9ZM18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8Z" fill="currentColor"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
+  rows: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  cards: '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="3.5" y="4" width="17" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3.5" y="13" width="17" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
   term: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="3.5" y="5" width="17" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   folder: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>',
   copy: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 8.5V6.2a1.7 1.7 0 0 0-1.7-1.7H6.2a1.7 1.7 0 0 0-1.7 1.7v7.6a1.7 1.7 0 0 0 1.7 1.7h2.3" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
@@ -3349,9 +3360,139 @@ const WK_IC = {
 const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
 // The bar at the foot of a card: resume the last session, and see coworkers and related work
 function wkActions(t) {
-  const resume = t.resume ? `<button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button>` : '';
+  const resume = t.resume ? `<button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button><button class="wk-btn icon" data-wk-resume-copy="${esc(t.resume.command)}" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
-  return `<div class="wk-bar">${resume}<span class="wk-loc"></span>${adj}</div>`;
+  const fresh = `<button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new agent session that reads this card first">${WK_IC.spark}New session from card</button><button class="wk-btn icon" data-wk-revive-copy="${esc(t.id)}" title="Copy a prompt with this card in it, to start the work in any agent">${WK_IC.copy}</button>`;
+  const open = S.work.details.has(t.id);
+  const details = `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
+  return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
+}
+// A card on one line: where, its PRs and what is next. A click opens it in full, in place.
+function wkRow(t, n) {
+  const p = (t.places || [])[0] || {};
+  const where = [p.repo || (p.path || '').split('/').pop(), p.branch].filter(Boolean).join(' · ');
+  const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).slice(0, 2)
+    .map(r => `<a class="wk-st pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener">#${esc(prNum(r.url) || '')} ${esc(r.state || '')}</a>`).join('');
+  const next = wkNext(n);
+  return `<article class="wk-task wk-row-c" data-id="${esc(t.id)}" data-wk-row="${esc(t.id)}" style="--acc:${wkModel(t.state).color}" title="Show this card in full">
+    <div class="c-main"><div class="c-l1"><h4 title="${esc(t.title)}">${esc(n?.title || t.title)}</h4>${wkThread(S.work.data?.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
+      <div class="c-l2">${where ? `<span class="c-where">${esc(where)}</span>` : ''}${next ? `<span class="c-next">${esc(next)}</span>` : ''}</div></div>
+    <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>
+    <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}<button class="wk-btn icon" data-wk-revive="${esc(t.id)}" title="Start a new agent session that reads this card first">${WK_IC.spark}</button>${wkCardBtns(t)}</div>
+  </article>`;
+}
+const wkNext = n => !n ? '' : n.question ? `Decide: ${n.question}` : (n.next || '');
+const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
+function wkGlance(t, n, writing) {
+  const p = (t.places || [])[0] || {};
+  const where = [p.repo || (p.path || '').split('/').pop(), p.branch].filter(Boolean).join(' · ');
+  const flags = [p.worktree && 'worktree', p.changed && plural(p.changed, 'uncommitted file'), p.ahead && `${p.ahead} not pushed`,
+    p.behind && `${p.behind} behind`].filter(Boolean);
+  const next = wkNext(n);
+  const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).slice(0, 4)
+    .map(r => `<a class="wk-chip pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener" title="${esc(r.title || r.url)}">${WK_IC.pr}#${esc(prNum(r.url) || '')} ${esc(r.state || 'state unknown')}${r.checks === 'failing' ? ' · checks failing' : ''}</a>`).join('');
+  const tix = wkTickets(t).slice(0, 4).map(k => `<a class="wk-chip tk${k.ref ? ' ref' : ''}" ${k.url ? `href="${esc(k.url)}" target="_blank" rel="noopener"` : ''}
+    title="${esc(k.ref ? 'Named in its sessions, not linked to this work yet' : k.title || k.key)}">${esc(k.key)}${k.status ? ' · ' + esc(k.status) : ''}</a>`).join('');
+  const sess = t.sessions.length ? `<span class="wk-chip">${plural(t.sessions.length, 'session')}</span>` : '';
+  return `<div class="wk-glance">
+    ${where ? `<div class="wk-where1">${WK_IC.branch}<span>${esc(where)}</span>${flags.map(f => wkSt(f, 'warn')).join('')}</div>` : ''}
+    <p class="wk-next">${next ? `<b>Next</b> ${esc(next)}` : writing ? '<span class="shimmer-text">Writing a note…</span>' : ''}</p>
+    ${prs || tix || sess ? `<div class="wk-chips">${prs}${tix}${sess}</div>` : ''}</div>`;
+}
+const wkThread = th => th ? `<button class="wk-thread" data-wk-thread="${esc(th.id)}" title="Thread ${esc(th.id)}: one goal over time. Pensieve saves its card when it changes; click for its ${plural(th.saves, 'saved card')}">${WK_IC.branch}${esc(th.id.slice(3, 9))}<span>${th.saves}</span></button>` : '';
+async function openThread(tid, title) {
+  const m = document.createElement('div');
+  m.className = 'modal'; m.id = 'threadmodal';
+  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>${esc(title)}</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+    <div class="sh-body"><div class="shimmer" style="height:120px"></div></div></div>`;
+  document.body.append(m);
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
+  let saves;
+  try { saves = await api(`/api/threads/${enc(tid)}`); }
+  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">No saved cards yet: ${esc(e.message)}</div>`; return; }
+  $('.sh-body', m).innerHTML = `<p class="cap">Thread <code>${esc(tid)}</code>. Pensieve saves this card when its PRs, commits, sessions, state or what’s next change.</p>`
+    + saves.map((s, i) => ({s, i})).reverse().map(({s, i}) => `<div class="sh-r th-save">
+      <label><b>${esc(new Date(s.at * 1000).toLocaleString())}</b><span class="muted">${esc(s.reasons.join(', '))} · ${esc(wkModel(s.card.state?.value || '').label || s.card.state?.value || '')}</span></label>
+      <p class="cap">${esc((s.card.core?.next || s.card.core?.state || '').slice(0, 220))}</p>
+      <div class="th-btns"><button class="btn" data-th-preview="${i}">Preview</button><button class="btn" data-th-revive="${i}">New session from this card</button><button class="btn" data-th-copy="${i}" title="Copy a prompt with this card in it, to start the work in any agent">Copy prompt</button></div></div>`).join('')
+    + `<p class="cap">${plural(saves.length, 'saved card')}.</p>`;
+  $$('[data-th-preview]', m).forEach(b => b.onclick = () => openPreview(() => fetch(`/api/threads/${enc(tid)}?format=html&n=${b.dataset.thPreview}`),
+    `${title} · ${new Date(saves[+b.dataset.thPreview].at * 1000).toLocaleDateString()}`));
+  $$('[data-th-revive]', m).forEach(b => b.onclick = async () => {
+    try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, n: +b.dataset.thRevive})}); toast('Starting a new session from this card in Terminal'); }
+    catch (err) { toast('Could not start it: ' + err.message); }
+  });
+  $$('[data-th-copy]', m).forEach(b => b.onclick = async () => {
+    try {
+      const r = await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, n: +b.dataset.thCopy, run: false})});
+      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the card copied: paste it into any agent');
+    } catch (err) { toast('Could not copy it: ' + err.message); }
+  });
+}
+function wkCardBtns(t) {
+  return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this card as a page">${WK_IC.eye}</button>`
+    + `<button class="wk-btn icon" data-wk-share="${esc(t.id)}" title="Share: preview what goes, then save a page to Downloads that people open and agents read">${WK_IC.share}</button>`;
+}
+// The page in an iframe's srcdoc: the Mac app's web view can't open a second window
+async function openPreview(load, title) {
+  const m = document.createElement('div');
+  m.className = 'modal'; m.id = 'previewmodal';
+  m.innerHTML = `<div class="palette preview-dlg"><div class="sh-head"><h3>${esc(title)}</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+    <div class="pv-body"><div class="shimmer" style="height:240px;margin:18px"></div></div></div>`;
+  document.body.append(m);
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
+  try {
+    const r = await load();
+    if (!r.ok) throw new Error(`${r.status}`);
+    const f = document.createElement('iframe');
+    f.title = title; f.srcdoc = await r.text();
+    $('.pv-body', m).replaceChildren(f);
+  } catch (e) { $('.pv-body', m).innerHTML = `<div class="empty">Could not show the card: ${esc(e.message)}</div>`; }
+}
+// The Share dialog: Pensieve drafts the shared card (summaries of what the reader can't open, read whole now); the
+// person writes what they need, edits the core, unticks what doesn't belong, and saves the page to Downloads.
+const REACH_TXT = {local: 'summary only', git: 'link (git)', mcp: 'link (via MCP)', restricted: 'link, may need access', public: 'link'};
+async function openShare(id) {
+  const m = document.createElement('div');
+  m.className = 'modal'; m.id = 'sharemodal';
+  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>Share this card</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+    <div class="sh-body"><p class="cap">Reading the sessions, changes and files of this work, and writing a summary of each one that your reader can’t open…</p><div class="shimmer" style="height:160px"></div></div></div>`;
+  document.body.append(m);
+  const close = () => m.remove();
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) close(); };
+  let d;
+  try { d = await api('/api/work/card/draft', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, days: S.work.days})}); }
+  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">Could not draft the card: ${esc(e.message)}</div>`; return; }
+  const c = d.card, core = c.core || {}, rs = c.resources || [];
+  const left = d.resources.filter(r => r.reach === 'local' && r.kind !== 'folder').length - rs.filter(r => r.reach === 'local').length;
+  const priv = d.resources.filter(r => r.reach === 'private').length;
+  $('.sh-body', m).innerHTML = `
+    <label class="sh-f"><span>What do you need from them?</span><textarea data-sh="ask" rows="2" placeholder="Can you review #12 before Friday? / It’s yours while I’m away."></textarea></label>
+    ${NOTE_ROWS.map(([k, l, tip]) => `<label class="sh-f"><span title="${tip}">${l}</span><textarea data-sh-core="${k}" rows="${k === 'state' ? 3 : 2}">${esc(core[k] || '')}</textarea></label>`).join('')}
+    <h4>What goes with it</h4><p class="cap">Links stay links for anyone who can open them. What only this Mac has goes as a summary, without its path.${left > 0 ? ` ${plural(left, 'local item')} had nothing worth sending and ${left === 1 ? 'is' : 'are'} left out.` : ''}${priv ? ` ${plural(priv, 'private message')} (direct, group or private channel) ${priv === 1 ? 'stays' : 'stay'} on this Mac.` : ''}</p>
+    ${rs.map((r, i) => `<div class="sh-r"><label><input type="checkbox" data-sh-keep="${i}" checked><b>${esc(r.title)}</b><span class="muted">${esc(REACH_TXT[r.reach] || r.reach)}</span></label>
+      ${r.summary || r.reach === 'local' || r.reach === 'restricted' ? `<textarea data-sh-sum="${i}" rows="3">${esc(r.summary || '')}</textarea>` : ''}</div>`).join('')}
+    <div class="sh-foot"><span class="muted">Saved to Downloads as one page: people open it, agents read the data in it.</span><button class="btn" data-close>Cancel</button><button class="btn" data-sh-preview>Preview</button><button class="btn primary" data-sh-save>Save to Downloads</button></div>`;
+  const edited = () => {  // the card as the person edited it in this dialog
+    const card = JSON.parse(JSON.stringify(c));
+    card.core = {...card.core};
+    $$('[data-sh-core]', m).forEach(t => { const v = t.value.trim(); if (v) card.core[t.dataset.shCore] = v; else delete card.core[t.dataset.shCore]; });
+    card.resources = rs.map((r, i) => ({...r, summary: ($(`[data-sh-sum="${i}"]`, m)?.value ?? r.summary ?? '').trim()}))
+      .filter((r, i) => $(`[data-sh-keep="${i}"]`, m).checked);
+    return card;
+  };
+  $('[data-sh-preview]', m).onclick = () => openPreview(() => fetch('/api/work/card/render', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({card: edited(), ask: $('[data-sh="ask"]', m).value})}), 'Preview: the page you would send');
+  $('[data-sh-save]', m).onclick = async e => {
+    e.target.disabled = true;
+    const card = edited();
+    try {
+      const r = await api('/api/work/card/save', {method: 'POST', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({id, days: S.work.days, card, ask: $('[data-sh="ask"]', m).value})});
+      await api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: 'file:' + r.path, action: 'reveal'})}).catch(() => {});
+      toast(`Saved ${r.path.split('/').pop()} to Downloads`); close();
+    } catch (err) { toast('Could not save the card: ' + err.message); e.target.disabled = false; }
+  };
 }
 const wkSt = (text, kind = '') => `<span class="wk-st ${kind}">${esc(text)}</span>`;
 const PR_ORDER = {open: 0, draft: 1, merged: 2, closed: 3};
@@ -3370,9 +3511,9 @@ function wkSections(t) {
   const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).map(r => `<div class="wk-row">
       <a class="nm" href="${esc(r.url)}" target="_blank" rel="noopener">${WK_IC.pr}#${esc(prNum(r.url) || '')}</a><span class="ttl" title="${esc(r.title || r.url)}">${esc(r.title || r.url.replace(/^https:\/\//, ''))}</span>
       ${r.state ? wkSt(r.state, 'pr-' + r.state) : wkSt('state unknown')}${r.checks ? wkSt(`checks ${r.checks}`, r.checks === 'failing' ? 'bad' : r.checks === 'passing' ? 'ok' : 'warn') : ''}${r.review ? wkSt(r.review, r.review === 'approved' ? 'ok' : 'warn') : ''}</div>`).join('');
-  const tickets = t.tickets.map(k => `<div class="wk-row">
-      <a class="nm" href="${esc(k.url || '#')}" target="_blank" rel="noopener">${esc(k.key)}</a><span class="ttl" title="${esc(k.title)}">${esc(k.title || '')}</span>
-      ${k.status ? wkSt(k.status, /done|closed|resolved/i.test(k.status) ? 'ok' : '') : wkSt('status unknown')}${k.assignee ? `<span class="who">${esc(k.assignee)}</span>` : ''}</div>`).join('');
+  const tickets = wkTickets(t).map(k => `<div class="wk-row">
+      <a class="nm" href="${esc(k.url || '#')}" target="_blank" rel="noopener">${esc(k.key)}</a><span class="ttl" title="${esc(k.title || '')}">${esc(k.ref ? 'Named in its sessions' : k.title || '')}</span>
+      ${k.ref ? wkSt('mentioned') : k.status ? wkSt(k.status, /done|closed|resolved/i.test(k.status) ? 'ok' : '') : wkSt('status unknown')}${k.assignee ? `<span class="who">${esc(k.assignee)}</span>` : ''}</div>`).join('');
   const sess = t.events.filter(e => e.source === 'session'), other = t.events.filter(e => e.source !== 'session');
   const openS = S.work.open.has(t.id + ':s'), openA = S.work.open.has(t.id + ':a');
   const arts = new Map(t.sessions.map(s => [s.id, s.artifacts || []]));
@@ -3391,7 +3532,7 @@ function wkSections(t) {
   const activity = other.length ? `<button class="wk-more" data-wk-open="${esc(t.id)}:a">${openA ? 'Hide activity' : `All activity (${other.length})`}</button>
       ${openA ? `<ol class="wk-tl">${other.map(wkEvent).join('')}</ol>` : ''}` : '';
   return sec('Working in', places) + sec(t.prs.length > 1 ? 'Pull requests' : 'Pull request', prs) +
-    sec(t.tickets.length > 1 ? 'Tickets' : 'Ticket', tickets) + sec(sess.length > 1 ? 'Sessions' : 'Session', sessions) + activity;
+    sec(wkTickets(t).length > 1 ? 'Tickets' : 'Ticket', tickets) + sec(sess.length > 1 ? 'Sessions' : 'Session', sessions) + activity;
 }
 async function loadWork(first = false) {
   try { S.work.data = await api(`/api/work?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
@@ -3399,7 +3540,7 @@ async function loadWork(first = false) {
   askNotes();
   if (S.view === 'work') renderWork();
 }
-const wkPageTasks = () => wkShown().slice(S.work.page * WK_PAGE, (S.work.page + 1) * WK_PAGE);
+const wkPageTasks = () => wkShown().slice(S.work.page * wkPageSize(), (S.work.page + 1) * wkPageSize());
 // The notes of the page in view that are missing or out of date: written by the server in the background, once per page
 function askNotes() {
   const d = S.work.data, key = `${S.work.days}:${[...S.work.states].sort()}:${S.work.page}`;
@@ -3435,11 +3576,11 @@ function renderWork() {
   if (fl && !fl.shown) {  // a card opened from the map: its state into the filter, its page in view
     if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('taskStates', [...S.work.states]); }
     const at = wkShown().findIndex(x => x.id === fl.id);
-    if (at >= 0) S.work.page = Math.floor(at / WK_PAGE);
+    if (at >= 0) S.work.page = Math.floor(at / wkPageSize());
   }
-  const shown = wkShown(), pages = Math.max(1, Math.ceil(shown.length / WK_PAGE));
+  const shown = wkShown(), pages = Math.max(1, Math.ceil(shown.length / wkPageSize()));
   S.work.page = Math.min(S.work.page, pages - 1);
-  const tasks = wkPageTasks(), first = S.work.page * WK_PAGE;
+  const tasks = wkPageTasks(), first = S.work.page * wkPageSize();
   const count = s => d.tasks.filter(t => t.state === s).length;
   const def = m => `${m.meaning} ${m.rule}`;
   const picked = d.states.filter(m => S.work.states.has(m.state));
@@ -3458,10 +3599,8 @@ function renderWork() {
   const writing = t => (Array.isArray(d.writing) ? d.writing : []).includes(t.id);
   const note = t => {
     const n = d.notes[t.id];
-    const done = n && /^(nothing|none|n\/a)\.?$/i.test(n.left.trim());
-    if (n) return `<div class="wk-note">${n.recap ? `<div class="nrow recap" title="What the task or problem is"><span class="nlbl">Recap</span><p>${esc(n.recap)}</p></div>` : ''}
-      <div class="nrow" title="What has been done"><span class="nlbl">Current state</span><p>${esc(n.current)}</p></div>
-      <div class="nrow ${done ? 'done' : 'left'}" title="What is left to do, and whether it is still being worked on"><span class="nlbl">What’s left</span><p>${done ? 'Nothing left' : esc(n.left)}</p></div>
+    const done = n && /^(nothing|none|n\/a)\.?$/i.test((n.next || '').trim());
+    if (n) return `<div class="wk-note">${NOTE_ROWS.filter(([k]) => n[k] && (['problem', 'goal', 'state'].includes(k) || (k === 'next' && n.question))).map(([k, l, tip]) => `<div class="nrow ${k === 'problem' ? 'recap' : k === 'next' ? (done ? 'done' : 'left') : ''}" title="${tip}"><span class="nlbl">${l}</span><p>${k === 'next' && done ? 'Nothing left' : esc(n[k])}</p></div>`).join('')}
       ${writing(t) ? '<div class="foot">Updating…</div>' : ''}</div>`;
     if (!insightsOn()) return '<div class="wk-note empty-note">Choose a generation model in Settings → Models to get a note on each task.</div>';
     return `<div class="wk-note empty-note">${writing(t) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
@@ -3469,16 +3608,18 @@ function renderWork() {
   const many = picked.length !== 1;
   const was = new Map($$('.wk-task[data-id]', el).map(a => [a.dataset.id, a.getBoundingClientRect().top]));
   el.innerHTML = `<div class="wk-head"><h2>Context</h2>
-      <div class="wk-ctl">${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
+      <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>
+        `<button data-wk-view="${v}" class="${S.work.view === v ? 'on' : ''}" role="radio" aria-checked="${S.work.view === v}" title="${l} view">${ic}${l}</button>`).join('')}</div>${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
     ${tasks.length ? tasks.map((t, i) => {
       const prev = i ? tasks[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== t.state) ? `<h3 class="wk-group" style="--acc:${wkModel(t.state).color}" title="${esc(def(wkModel(t.state)))}">${esc(wkModel(t.state).label)}<span>${count(t.state)}</span></h3>` : '';
-      return `${head}<article class="wk-task" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
+      if (S.work.view === 'compact' && !S.work.full.has(t.id)) return head + wkRow(t, d.notes[t.id]);
+      return `${head}<article class="wk-task${S.work.view === 'compact' ? ' opened' : ''}" data-id="${esc(t.id)}" ${S.work.view === 'compact' ? `data-wk-row="${esc(t.id)}"` : ''} style="--acc:${wkModel(t.state).color}">
           <div class="wk-main">
-            <header><h4>${esc(t.title)}</h4>${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
-            ${wkSections(t)}
+            <header><h4 title="${esc(t.title)}">${esc(d.notes[t.id]?.title || t.title)}</h4>${wkThread(d.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
+            ${wkGlance(t, d.notes[t.id], writing(t))}
+            ${S.work.details.has(t.id) ? `<div class="wk-detail">${note(t)}${wkSections(t)}</div>` : ''}
           </div>
-          ${note(t)}
           ${wkActions(t)}
           ${wkAdjacent(t)}
         </article>`;
@@ -3514,6 +3655,43 @@ function renderWork() {
   $$('[data-wk-resume]', el).forEach(b => b.onclick = async () => {
     try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
     catch (e) { toast('Could not resume it: ' + e.message); }
+  });
+  $$('[data-wk-share]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openShare(b.dataset.wkShare); });
+  $$('[data-wk-thread]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const t = d.tasks.find(x => d.threads?.[x.id]?.id === b.dataset.wkThread);
+    openThread(b.dataset.wkThread, t ? t.title : 'Thread');
+  });
+  $$('[data-wk-details]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const id = b.dataset.wkDetails; S.work.details[S.work.details.has(id) ? 'delete' : 'add'](id); renderWork();
+  });
+  $$('[data-wk-revive]', el).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkRevive, days: S.work.days})}); toast('Starting a new session from this card in Terminal'); }
+    catch (err) { toast('Could not start it: ' + err.message); }
+  });
+  $$('[data-wk-resume-copy]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation(); navigator.clipboard?.writeText(b.dataset.wkResumeCopy); toast('Resume command copied');
+  });
+  $$('[data-wk-revive-copy]', el).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try {
+      const r = await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkReviveCopy, days: S.work.days, run: false})});
+      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the card copied: paste it into any agent');
+    } catch (err) { toast('Could not copy it: ' + err.message); }
+  });
+  $$('[data-wk-preview]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const t = d.tasks.find(x => x.id === b.dataset.wkPreview);
+    openPreview(() => fetch(`/api/work/card?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Context card');
+  });
+  $$('[data-wk-view]', el).forEach(b => b.onclick = () => {
+    S.work.view = b.dataset.wkView; S.work.page = 0; S.work.full.clear(); store.set('workView', S.work.view); renderWork(); askNotes();
+  });
+  $$('[data-wk-row]', el).forEach(r => r.onclick = e => {
+    if (e.target.closest('button, a, select')) return;
+    const id = r.dataset.wkRow; S.work.full[S.work.full.has(id) ? 'delete' : 'add'](id); renderWork();
   });
   $$('[data-wk-open]', el).forEach(b => b.onclick = () => { const id = b.dataset.wkOpen; S.work.open[S.work.open.has(id) ? 'delete' : 'add'](id); renderWork(); });
   $$('[data-wk-file]', el).forEach(b => b.onclick = () => openFile(b.dataset.wkFile));

@@ -64,7 +64,7 @@ class StateChange:
 
 
 def _nothing_left(note: dict) -> bool:
-    left = (note.get("left") or "").strip().rstrip(".").lower()
+    left = (note.get("next") or note.get("left") or "").strip().rstrip(".").lower()  # "left" in notes before version 8
     return left in ("nothing", "none", "n/a", "nothing left")
 
 

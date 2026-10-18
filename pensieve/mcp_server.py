@@ -3,6 +3,7 @@
 import contextvars
 import functools
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,8 @@ from pensieve import actions, onboarding, scopes, settings, sources, usage
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
-               "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state"}
+               "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state",
+               "share_card", "thread_history"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -257,10 +259,11 @@ def read(id: str, max_chars: int = 12000) -> dict:
     return {"items": out, **({"skipped": ids[8:]} if len(ids) > 8 else {})}
 
 
-def prompt_context(prompt: str, cwd: str) -> str:
-    """For Claude Code's UserPromptSubmit hook: Pensieve's best code matches for a prompt sent in an indexed repo, as
-    the search tool shows them, or "" (a slash command, a few words, or a folder Pensieve doesn't index)."""
-    import re
+def prompt_context(prompt: str, cwd: str, card_format: str = "text") -> str:
+    """For Claude Code's UserPromptSubmit hook, for a prompt sent in an indexed repo: the context card of the work it
+    is about, the list of tasks for a standup or open loops, the past sessions for a question about a decision, or
+    else the best code matches as the search tool shows them. "" for a slash command, a few words, or a folder
+    Pensieve doesn't index."""
     text = (prompt or "").strip()
     if not cwd or text.startswith("/") or len(text.split()) < 3:
         return ""
@@ -269,19 +272,103 @@ def prompt_context(prompt: str, cwd: str) -> str:
         return ""
     q = re.sub(r"\s+", " ", text.replace('"', " "))[:400]  # a prompt's quotes aren't search syntax
     t, tokens = time.perf_counter(), (scopes.current.set(sc), agent_cwd.set(cwd))
+    res = []
     try:
-        res = [x for x in _c()["searcher"].find(q, 5, kinds=["code"], scope=sc)["results"] if x.get("kind") == "code"]
-        found = _lines(res)[:2500]
+        kind, found = _work_for_prompt(text, card_format)  # a prompt about the user's work: a card or the task list
+        if found:
+            pass
+        elif WHO_WORDS.search(text):  # who knows or should review some code: its authors
+            kind, found = "people", _people(text)
+        elif WHY_WORDS.search(text):  # a question about an earlier decision: the sessions that made it
+            res = [x for x in _c()["searcher"].find(q, 3, kinds=["session"], scope=sc)["results"]
+                   if x.get("kind") == "session"]
+            kind, found = "sessions", _lines(res)[:2500]
+        else:
+            res = [x for x in _c()["searcher"].find(q, 5, kinds=["code"], scope=sc)["results"] if x.get("kind") == "code"]
+            kind, found = "code", _lines(res)[:2500]
     finally:
         scopes.current.reset(tokens[0])
         agent_cwd.reset(tokens[1])
-    usage.record(ts=time.time(), source="hook", tool="prompt_search", client="claude-code", cwd=cwd, scope=sc.name,
-                 args={"query": q[:200]}, ms=round((time.perf_counter() - t) * 1000, 2), ok=True, n_results=len(res),
-                 results=[[x.get("id"), x.get("path")] for x in res], out_chars=len(found))
+    usage.record(ts=time.time(), source="hook", tool=f"prompt_{kind}", client="claude-code", cwd=cwd, scope=sc.name,
+                 args={"query": q[:200]}, ms=round((time.perf_counter() - t) * 1000, 2), ok=True,
+                 n_results=len(res) or int(bool(found)), results=[[x.get("id"), x.get("path")] for x in res],
+                 out_chars=len(found))
     if not found:
         return ""
-    return (f"Pensieve searched this prompt in {sc.name} before you started (path:line, enclosing definition ▸ "
-            f"matched line). If a hit answers it, use it; search or read only for what is missing.\n{found}")
+    head = {
+        "card": "Pensieve found the context card of the work this prompt is about. Its problem, goal, state and next "
+                "are as of the last session; the folders and PRs are live. Use it, and look up only what it doesn't "
+                "answer.",
+        "tasks": "Pensieve listed the user's tasks for this prompt.",
+        "people": "Pensieve looked up who knows the code this prompt is about.",
+        "sessions": f"Pensieve searched the past agent sessions in {sc.name} for this prompt. read(id) shows one; "
+                    "a PR description often has the reason too.",
+        "code": f"Pensieve searched this prompt in {sc.name} before you started (path:line, enclosing definition ▸ "
+                "matched line). If a hit answers it, use it; search or read only for what is missing.",
+    }[kind]
+    return f"{head}\n\n{found}"
+
+
+WHO_WORDS = re.compile(r"\b(who('s| is)? (else |besides me )?(knows|owns|wrote|worked on|should review|can review|to ask|"
+                       r"the (go-to|owner|expert))|who should i ask|go-to (person|people)|point of contact|"
+                       r"(a |the )?reviewers? for)\b", re.I)
+
+
+def _people(text: str) -> str:
+    """who_knows for a prompt, as a few lines: each author's share of the related code (git blame), when they were
+    last active, and their files."""
+    sc = _scope()
+    allow = scopes.allowlist(sc, "code", _c()["store"], _c()["repos"], _c()["repos"].index) if sc else None
+    r = _c()["repos"].experts(q=text[:400], allow=allow)
+    _mark_user(r["experts"])
+    lines = [f"- {p['author']}{' (you)' if p.get('you') else ''}: {round(p['share'] * 100)}% of the related lines, last active "
+             f"{time.strftime('%Y-%m-%d', time.localtime(p['last_active']))}; {', '.join(p['files'][:3])}"
+             for p in r["experts"][:6]]
+    return ("Pensieve's who_knows for this prompt (git blame of the most related code, or of every file under a "
+            "path that the prompt names; bots left out):\n" + "\n".join(lines)) if lines else ""
+
+
+def _mark_user(people: list[dict]):
+    """you=True on the authors that are the user (git's user.email or user.name in the agent's folder)."""
+    from pensieve import work
+    cwd = agent_cwd.get() or ""
+    me = {x.lower() for x in work._me(cwd)} if cwd else set()
+    for p in people:
+        m = re.match(r"(.*?)\s*<([^>]+)>", p["author"])
+        name, email = (m.group(1), m.group(2)) if m else (p["author"], "")
+        if me & {name.lower(), email.lower()}:
+            p["you"] = True
+
+
+WHY_WORDS = re.compile(r"\b(why did (we|i)|what did (we|i) decide|did (we|i) (switch|decide|choose|pick|drop)|root cause|"
+                       r"the reason (for|we)|what (was|were) the (cause|measurements))\b", re.I)
+
+
+def _work_for_prompt(text: str, card_format: str = "text") -> tuple[str, str]:
+    """("card", the card of the task a prompt is about: compact text, or the agent JSON with card_format "json"),
+    ("tasks", the task lines for a prompt about all of the user's work: a standup, what is still open), or ("", "");
+    within the current scope."""
+    from pensieve import task_states, work
+    have = work.notes()
+    if work.LIST_WORDS.search(text):
+        standup = work.STANDUP_WORDS.search(text)
+        ts = [t for t in _tasks_in_scope() if (t["files"] or t["branches"] or t["prs"] or t["keys"] or t["commits"])
+              and (standup or t["state"] in ("conscious", "subconscious", "latent"))][:20]
+        head = ("The user's tasks in this repo (task id · state · title · where · PRs · what is left · last activity); "
+                "call task(id) for a card. A task lists only the PRs that its sessions or branch link to: "
+                + ("for every PR in the period, also run `gh pr list --author @me --state all --search "
+                   "\"updated:>=<start date>\"` (a PR opened before the period can merge in it). Tasks without a PR "
+                   "(a repair, an investigation) are work done too."
+                   if standup else "for every open PR, also run `gh pr list --author @me --state open`."))
+        return ("tasks", head + "\n" + "\n".join(work.brief(t, have.get(t["id"], {})) for t in ts)) if ts else ("", "")
+    t = work.card_for_prompt(_tasks_in_scope(), text, have)
+    if not t:
+        return "", ""
+    hist = task_states.history(_c()["store"], t["id"])
+    if card_format == "json":
+        from pensieve import cards
+        return "card", cards.render_agent(cards.build(t, have.get(t["id"], {}), hist))
+    return "card", work.compact(t, have.get(t["id"], {}), hist)
 
 
 @tool()
@@ -317,6 +404,7 @@ def who_knows(topic: str, repo: str | None = None) -> dict:
     sc = _scope()
     allow = scopes.allowlist(sc, "code", _c()["store"], _c()["repos"], _c()["repos"].index) if sc else None
     r = _c()["repos"].experts(q=topic, repo=repo, allow=allow)
+    _mark_user(r["experts"])
     return {"people": r["experts"], "code": [dict(id=f"code:{c['id']}", repo=c["repo"], path=c["path"], line=c["start"],
                                                  score=round(c["score"], 3)) for c in r["chunks"]]}
 
@@ -492,28 +580,77 @@ def _tasks_in_scope():
 
 
 @tool()
-def tasks(state: str = "conscious,subconscious", limit: int = 10) -> str:
+def tasks(state: str = "conscious,subconscious", limit: int = 10, query: str = "") -> str:
     """The user's tasks (the context cards of the Context tab) of the last 30 days, joined across agent sessions, commits, PRs and
     tickets, newest first. state: comma-separated, from conscious (being worked on), subconscious (not done and gone
     quiet: revisit), latent (defined, no material work yet), etched (done), forgotten (unfinished and left), or "all".
-    Within this connection's scope (its repo by default). Call task(id) for one task's folder, branch, PRs and
-    what is left, before you pick it up."""
+    query: words, a ticket key, branch or PR number; tasks that match more of them come first, and tasks that match
+    none are left out. Within this connection's scope (its repo by default). Call task(id) for one task's folder,
+    branch, PRs and what is left, before you pick it up."""
     from pensieve import work
     want = None if state.strip() == "all" else {s.strip() for s in state.split(",") if s.strip()}
     have = work.notes()
-    ts = [t for t in _tasks_in_scope() if not want or t["state"] in want][:max(1, min(limit, 50))]
-    return "\n".join(work.brief(t, have.get(t["id"], {})) for t in ts) or f"No tasks in state {state}."
+    ts = [t for t in _tasks_in_scope() if not want or t["state"] in want]
+    if query.strip():
+        ts = work.matching(ts, query, have)
+    else:  # a session that only asked questions (no edits, branch, PR, ticket or commit) is not work to list
+        ts = [t for t in ts if t["files"] or t["branches"] or t["prs"] or t["keys"] or t["commits"]]
+    ts = ts[:max(1, min(limit, 50))]
+    from pensieve import history
+    return "\n".join(work.brief(t, have.get(t["id"], {})) + (f" · {th}" if (th := history.thread_of(t["id"])) else "")
+                     for t in ts) or f"No tasks in state {state}."
 
 
 @tool()
-def task(id: str) -> str:
+def task(id: str, full: bool = False) -> str:
     """One task as a card: its state and why, where the work is (folder, branch, uncommitted files), PRs, tickets,
-    what is done and left, the command that resumes its last session, where that session stopped, and its timeline."""
-    from pensieve import task_states, work
+    what changed since the last session, what is left, where that session stopped, its main files and the command
+    that resumes it. id: a task id, or a thread id (th_…) for the thread's card now. full=true adds every file its
+    sessions made and its timeline."""
+    from pensieve import history, task_states, work
+    if id.startswith("th_"):
+        id = history.task_of(id) or id
+    t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
+    if not t:
+        raise KeyError(f"{id}: no current card; thread_history shows a thread's saved cards")
+    card = (work.detail if full else work.compact)(t, work.notes().get(id, {}), task_states.history(_c()["store"], id))
+    th = history.thread_of(id)
+    return card + (f"\nThread: {th} · {history.saves(th)} saved cards (thread_history)" if th else "")
+
+
+@tool()
+def thread_history(thread: str, n: int | None = None) -> str:
+    """A thread's saved cards: Pensieve saves a thread's card when it changes (a PR, a commit, a state, what is
+    next), so the history shows how one goal moved over time. Without n: each save, oldest first (number, date, why
+    it was saved, what was next then). With n: that save's whole card, for an agent (n=-1 is the last). Use it to see
+    how work got where it is, or to start ended work again from its last card."""
+    from datetime import datetime
+    from pensieve import cards, history
+    saves = history.history(thread)
+    if not saves:
+        raise KeyError(f"{thread}: no saved cards")
+    if n is not None:
+        return cards.render_agent(saves[n]["card"])
+    return "\n".join(f"{i} · {datetime.fromtimestamp(s['at']).strftime('%Y-%m-%d %H:%M')} · {', '.join(s['reasons'])} · "
+                     f"{s['card'].get('state', {}).get('value', '')} · next: {(s['card'].get('core', {}).get('next') or '')[:140]}"
+                     for i, s in enumerate(saves))
+
+
+@tool()
+def share_card(id: str, ask: str = "") -> dict:
+    """A task's card made fit to send, as the Share button on the Context tab makes it: the problem, goal, state and
+    next, the links its reader can open, and summaries (read from the whole documents now) of what they can't, such
+    as transcripts and uncommitted changes. No local paths, session ids or secrets. ask: what the user needs from
+    the reader, in their words. Saves one HTML page in ~/Downloads, which people open and agents read (the page holds
+    the card's JSON), and returns the file's path and the card. To send it, attach the file with your Slack, email or
+    PR tool, and write your own message: the user approves what you send."""
+    from pensieve import cards, task_states, work
     t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
     if not t:
         raise KeyError(id)
-    return work.detail(t, work.notes().get(id, {}), task_states.history(_c()["store"], id))
+    store = _c()["store"]
+    card = cards.share(cards.draft_share(cards.build(t, work.notes().get(id, {}), task_states.history(store, id)), store), ask)
+    return {"file": cards.save(card, Path.home() / "Downloads"), "card": cards.render_agent(card)}
 
 
 @tool()

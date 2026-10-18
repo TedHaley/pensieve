@@ -1,6 +1,6 @@
 {
   "name": "pensieve",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Pensieve for Claude Code: semantic search over your repos, documents and past agent sessions (MCP server), the search skills, and hooks that keep the index current. Needs the Pensieve app or `pensieve` command on this Mac.",
   "author": {
     "name": "Ted Haley"
@@ -27,6 +27,16 @@
           {
             "type": "command",
             "command": "curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/repo-check 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/prompt-context 2>/dev/null || true"
           }
         ]
       }

@@ -20,7 +20,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | A6 | Real searches are slower than the benchmark | Search | investigating |
 | A7 | Search images, audio and video by content | Search | testing |
 | A8 | Index folders while agent sessions catch up | Indexing | testing |
-| B1 | Make the prompt hook the default | Agents | idea |
+| B1 | Make the prompt hook the default | Agents | testing |
 | B2 | Prompt hooks for Codex and Gemini CLI | Agents | idea |
 | B3 | Benchmark other agents and models | Agents | idea |
 | B4 | Tell the agent how sure a hit is | Agents | idea |
@@ -42,6 +42,8 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D3 | A place for user feedback | Product | testing |
 | D4 | Find people with similar or complementary work | Product | idea |
 | D5 | The Context tab: context cards across sources, in five states | Product | testing |
+| D6 | Context cards as files to share | Product | testing |
+| D7 | Threads: one goal followed over time | Product | idea |
 | E1 | Connections as one list | Connections | idea |
 | E2 | Remote disks | Connections | idea |
 | E3 | Database metadata | Connections | idea |
@@ -240,8 +242,13 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   file.
 - **Try:** add "if two hits fit, read both" to the hook's text, then run the agent benchmark again.
 - **Measure:** found rate, calls, cost and time against guided, in one batch.
-- **Status:** idea
+- **Status:** testing
 - **Notes:**
+  - 2026-10-17: the hook now answers by the kind of prompt: the context card of the work that a prompt names, the
+    task list for a standup or open loops, `who_knows` for "who should review", past sessions for "why did we", and
+    code hits otherwise. On the workflow benchmark (D5) it cut tool calls from 4.0 to 2.7 and cost from $0.033 to
+    $0.026 a run against the MCP tools alone, with the same facts. It is in the plugin and recommended in
+    `pensieve integrate`. Not measured again: the code-search benchmark with the new hook text.
 
 ### B2. Prompt hooks for Codex and Gemini CLI
 
@@ -546,6 +553,114 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - 2026-10-16: on the real index (30 days): 114 tasks in 0.2 s (49 with a ticket, 10 on a feature branch, 55
     without either). Notes: 9 of 9 written once the engine flags were added, against 2 of 10 before. Coworker lookup
     takes 0.1 to 0.6 s for each task.
+  - 2026-10-17: measured with `bench/workflows.py`: 17 developer requests in 3 repos on one Mac (pick up work, open
+    loops, standup, why a change was made, who should review). A judge scores facts that were checked by hand
+    against git, GitHub and the transcripts, and wrong claims. 6 of the 17 requests were never used to tune.
+    Sonnet, 2 runs of each request in each arm:
+
+    | Arm | Facts | Wrong claims a run | Tool calls | $ a run | Seconds |
+    |---|---:|---:|---:|---:|---:|
+    | Claude Code with git, gh and grep | 0.64 | 0.35 | 6.9 | 0.051 | 23 |
+    | + Pensieve MCP | 0.87 | 0.03 | 4.0 | 0.033 | 16 |
+    | + Pensieve MCP and the prompt hook | 0.88 | 0.09 | 2.7 | 0.026 | 12 |
+
+    Without Pensieve, an agent can't answer from session history at all (0.00 on requests whose answer is only in
+    a transcript). The first round showed that cards also cause wrong claims when they are stale. The fixes, in the
+    order of the four context failures:
+    - Poisoning (validate): `reconcile` marks a note sentence that git or GitHub contradicts ("push the commits"
+      when every commit is pushed) as outdated. The card quotes the last session's final question word for word.
+      Notes read the last 2,400 characters of the session and must not guess how something was done. A session in
+      one repo no longer joins a ticket whose project lives in another repo (this benchmark's own session joined
+      one before).
+    - Distraction (compact): `task` returns a compact card by default (median about 440 tokens, against 570–1,150).
+      `task(id, full=true)` keeps the long form. `tasks(query=…)` finds one card without a list of 30.
+    - Confusion (curate): no memory files, artifacts or the main checkout's "behind" count on a card. `tasks`
+      leaves out sessions that only asked questions.
+    - Clash (prune): a PR of a branch that another task owns shows as a branch PR and in "Since the last session",
+      so a card no longer says "not merged" for a merged PR.
+  - Not fixed: gh shows "state unknown" for PRs in a repo that only a second gh account can see. A fix would try
+    each logged-in account; the auto-mode classifier blocks an agent from writing code that reads gh tokens.
+  - A skill for these workflows (`pensieve-work`) added calls and tokens for no gain in facts: dropped.
+
+### D6. Context cards as files to share
+
+- **Why:** a card holds what a teammate needs to pick up a piece of work: where it stands, what is left, the
+  question that waits on the owner, the PRs and the decisions. Today it lives only in the app and in an agent's
+  session.
+- **Built:** `pensieve/cards.py`, `pensieve/resources.py` and `context-card.schema.json` (`context-card/1`). One
+  data model, two renderings:
+  - JSON, the source of truth, from the same task and validation as the text card (`work.reconcile`, the last
+    question word for word);
+  - one HTML page with no outside files, light and dark, that holds the JSON. `cards.from_html` reads it back.
+  Agents in a session keep the compact text card: HTML costs several times the tokens for the same facts.
+  `cards.share` (`--share`) removes local paths, session ids and the resume command, and replaces secrets with
+  `[secret]`. `GET /api/work/card?id=…&format=html|json|agent&share=true` and `pensieve card <id>` make a card.
+- **Questions:**
+  - A shared card holds model text and the last session's words, which can name people and internal systems.
+    Show a preview before a card leaves the Mac, and let the user edit it.
+  - A static file is a snapshot. A live card (it changes when its PR merges) needs a place to sync to: D1.
+  - Handoff: an agent that gets a card from a teammate resumes from it. Test with the workflow benchmark: give the
+    card of another person's task and measure facts and calls.
+- **Status:** testing
+- **Notes:**
+  - 2026-10-17: a card has a `remote` part (git remote, branch and commit, PRs, tickets, links, artifacts) and a
+    `local` part (folder paths, the resume command, session ids). `cards.share` drops `local` and every local path,
+    and makes a branch card's id portable (`b:org/repo@branch`). `handoff` gives the next step, the commands that
+    get the work (`gh pr checkout …`) and the commands that refresh the live state.
+  - Two renderings: HTML for people, `cards.render_agent` (compact JSON) for agents. In the prompt hook, on 10
+    requests about one piece of work, 3 runs each (Sonnet): the text card got 0.91 facts, 0.13 wrong claims and
+    $0.024 a run; the JSON card got 0.94, 0.07 and $0.032. The difference in facts is within noise, and JSON costs a
+    third more. The hook keeps the text card (`?card=json` for the JSON one); shared cards go to agents as JSON.
+  - 2026-10-17: a local card and a shared card have the same core (problem, goal, state, next, and the question
+    that waits; notes version 8) and differ in their resources. Each resource has a reach: local, git, mcp,
+    restricted or public (`pensieve/resources.py`). The Share button opens a preview: Pensieve reads each local and
+    restricted resource whole (transcript, diff, memory file, the session text around an artifact) and the insights
+    engine summarizes it for the goal. The person writes the ask, edits the core and the summaries, and unticks what
+    doesn't belong. Saving makes the card fit to send again.
+  - Measured, shared: a teammate's agent in a fresh clone from GitHub, with the owner's folders closed, on 4 pieces
+    of work, 3 runs each (Sonnet). No card: 0.11 facts, 0.83 wrong claims, $0.070 a run. The redacted local card:
+    0.76, 0.00, $0.049. The new shared card: 0.85, 0.00, $0.044. It gains most where the work has uncommitted
+    changes (0.47 to 0.80): only the summaries carry them. A first version lost the follow-ups that a session ended
+    with, and named a key file on the owner's Desktop; session summaries now end with the follow-ups, and a shared
+    core leaves out sentences about the owner's machine.
+  - Measured, local (13 requests whose facts did not change during the day): with the prompt hook, 0.90 facts and
+    no wrong claims, against 0.87 and 0.12 with the old note fields, at $0.033 against $0.024 a run (longer notes).
+  - Open: a card's id changes when its branch becomes long-lived (more than 4 days of sessions), which a shared
+    thread can't follow.
+
+### D7. Threads: one goal followed over time
+
+- **Why:** a card's id is a snapshot of its members, so it changes when a member comes or goes. A hand-set state,
+  a note and a published copy need an id that stays. Today two goals on one long-lived branch can join into one
+  card, and one goal can change its id.
+- **Spec:** [`docs/threads.md`](docs/threads.md). The goal is the identity of a thread; members (tickets, PRs,
+  branches, commits, sessions) are its evidence, in a set order; embeddings can split or suggest, never join.
+  A session can be a member of several threads. An ended thread can start again, with no time limit.
+- **Try:** a thread id next to the snapshot id. Link each new snapshot to its best match by weighted member
+  overlap and goal distance, and record start, continue, split, merge, fork, end and revive.
+- **Measure:** replay the last 30 days, as of each day. Label a sample of links as same work or different work.
+  Compare members only, embeddings only and both, by wrong joins and wrong splits, and set the thresholds.
+- **Status:** testing
+- **Notes:**
+  - 2026-10-17: built `pensieve/threads.py` (the linker) and `bench/threads_replay.py`. On one Mac: 61 builds
+    12 hours apart, 1,365 snapshots, 584 pairs to decide, labelled by Sonnet (551 with confidence 0.7 or more: 30
+    same goal). Members only: F1 0.74 at overlap 0.4; goals only: 0.71 at similarity 0.8; both: 0.74. The full
+    linker made 48 threads with 29 continues, 7 splits, 2 merges and 1 suggestion. Most wrong joins come from
+    `work.py` joining two goals on one branch before the linker sees them: fix the joins there next.
+  - A PR that a session's title names is a strong member (two splits fixed).
+  - `pensieve/history.py` saves a thread's card when it changes (see `docs/threads.md`, Local history):
+    `GET /api/threads`, `GET /api/threads/<thread>` (`format=html&n=…` for one save), `POST /api/threads/save`.
+    On a copy of this Mac's index: 44 threads saved on the first pass (964 KB), none on a second pass, and a state
+    change saved one card.
+  - Revive is a new agent session that reads a card first: "New session from card" on the Context tab, or
+    `POST /api/work/revive` with a task or a thread's saved card. The card goes into a file for the agent, and the
+    agent (the one of the card's last session) starts in the work's folder. Tested headless on a saved card: the
+    agent read it, reported the problem, the fix and the open question, and tried the refresh, in 4 calls.
+  - A hand-set state stays keyed by task: it describes the current snapshot, and it resets when the work changes.
+  - Thread ids on the Context tab and in the MCP tools: each card has a thread chip (its short id and number of
+    saves) that opens the thread's history, where each save has Preview and "New session from this card". `tasks`
+    lines end with the thread id, `task` takes a thread id too, and `thread_history` lists a thread's saves or
+    returns one as an agent card. `/api/work` returns `threads` ({task: {id, saves}}).
 
 ## E. Connections
 

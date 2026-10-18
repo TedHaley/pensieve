@@ -61,6 +61,54 @@ def is_read(name: str, annotations=None) -> bool:
     return not WRITE.intersection(w) and bool(READ.intersection(w))
 
 
+PRIVATE = {"private", "dm", "dms", "im", "mpim", "direct"}
+
+
+def private_tool(name: str) -> bool:
+    """A tool that can read direct messages or private channels (slack_search_public_and_private, get_dm_history):
+    every item it finds counts as private."""
+    return bool(PRIVATE.intersection(words(name)))
+
+
+CHAT = re.compile(r"slack|teams|chat|discord", re.I)
+# How Slack's own MCP server marks a direct or group message in its text results: "Channel: DM (ID: D…)", a
+# Participants line, an mpdm- channel, or a D… or G… id in a channel or permalink
+_PRIVATE_TEXT = re.compile(r"^\W*Channel:\s*DM\b|^\W*Participants:|\bmpdm-|\(ID: [DG][A-Z0-9]{8,}\)|"
+                           r"/archives/[DG][A-Z0-9]{8,}\b", re.M)
+_PRIVATE_TYPES = {"im", "mpim", "private", "private_channel", "group"}
+
+
+def _strings(x, depth=0):
+    if depth > 6:
+        return
+    if isinstance(x, str):
+        yield x.replace("\\n", "\n")
+    elif isinstance(x, dict):
+        for v in x.values():
+            yield from _strings(v, depth + 1)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _strings(v, depth + 1)
+
+
+def private_item(d: dict, chat: bool) -> bool:
+    """An item from a direct message, a group message or a private channel, by its fields (is_im, is_private,
+    channel_type, a D… or G… channel id). A chat server's item (`chat`) is also checked by its text, where Slack's
+    MCP server says DM."""
+    if any(d.get(k) is True for k in ("is_im", "is_mpim", "is_private", "is_group")):
+        return True
+    if str(d.get("channel_type") or "").lower() in _PRIVATE_TYPES:
+        return True
+    ch = d.get("channel")
+    cid = ch.get("id") if isinstance(ch, dict) else ch if isinstance(ch, str) else d.get("channel_id")
+    if isinstance(cid, str) and re.fullmatch(r"[DG][A-Z0-9]{8,}", cid):
+        return True
+    if isinstance(ch, dict) and (any(ch.get(k) is True for k in ("is_im", "is_mpim", "is_private", "is_group")) or
+                                 str(ch.get("type") or "").lower() in _PRIVATE_TYPES):
+        return True
+    return chat and any(_PRIVATE_TEXT.search(s) for s in _strings(d))
+
+
 def slug(server_name: str) -> str:
     """The server part of Claude Code's tool names: 'claude.ai Atlassian' -> 'claude_ai_Atlassian'."""
     return re.sub(r"[^A-Za-z0-9_-]", "_", server_name)
@@ -571,7 +619,9 @@ def _fname(key_name: str, key: str) -> str:
 
 def store(sid: str, label: str, tool: str, args: dict, text: str, session: str | None = None) -> int:
     """Write the items of one tool result to ~/.pensieve/connections/<sid>/. An item seen before is merged with its
-    earlier copy, and each changed field goes into its history. Returns the number of items written."""
+    earlier copy, and each changed field goes into its history. An item from a direct message, a group message or a
+    private channel (private_tool, private_item) is marked `_private`: it is context on this Mac, and never part of a
+    shared card. Returns the number of items written."""
     try:
         data = json.loads(text)
     except ValueError:
@@ -583,6 +633,10 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
         h = hashlib.sha1(json.dumps([tool, args], sort_keys=True).encode()).hexdigest()[:12]
         items = [{"id": f"{tool}-{h}", "title": f"{tool} {json.dumps(args)[:100]}",
                   "content": data if isinstance(data, (dict, list)) else text[:50000]}]
+    chat, all_private = bool(CHAT.search(f"{sid} {tool}")), private_tool(tool)
+    for i in items:
+        if all_private or private_item(i, chat):
+            i["_private"] = True
     root = DIR / sid
     for sub in ("", ".raw", ".history"):
         (root / sub).mkdir(parents=True, exist_ok=True)

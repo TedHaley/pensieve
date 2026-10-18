@@ -414,6 +414,38 @@ async def enricher():
             await asyncio.sleep(30)
 
 
+async def card_keeper():
+    """Every history.CHECK seconds: mark what later commits did (work.check_done), link the cards to threads
+    (history.current) and save the ones that changed; once a day, prune the history."""
+    from pensieve import history, work
+    await asyncio.sleep(60)  # after the first index pass has settled
+    history.current, pruned = history.Keeper(store), 0.0
+    while True:
+        try:
+            await asyncio.to_thread(lambda: work.check_done(work.tasks(store, 30)))
+            saved = await asyncio.to_thread(history.current.run_once)
+            if saved:
+                print(f"Saved {len(saved)} context cards to their threads' history", flush=True)
+            if time.time() - pruned > 86400:
+                await asyncio.to_thread(history.prune)
+                pruned = time.time()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        await asyncio.sleep(history.CHECK)
+
+
+def _drop_plugin_duplicates():
+    from pensieve import integrations
+    try:
+        gone = integrations.drop_plugin_duplicates(config.PORT)
+        if gone:
+            print(f"Removed hooks that the Pensieve plugin already has: {', '.join(gone)}", flush=True)
+    except Exception:  # a settings file we can't read or write: leave it as it is
+        import traceback
+        traceback.print_exc()
+
+
 @asynccontextmanager
 async def lifespan(app):
     global store, repos, files, searcher, datamap
@@ -457,8 +489,9 @@ async def lifespan(app):
     if settings.get("ai") == "builtin":
         llm.start_download()
     loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
+    loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
-    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher())]
+    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(card_keeper())]
     async with mcp_server.mcp.session_manager.run():
         yield
     for t in tasks:
@@ -1097,7 +1130,8 @@ async def hook_prompt_context(request: Request):
     """Claude Code's UserPromptSubmit hook posts its JSON here; the answer adds Pensieve's matches for the prompt."""
     try:
         body = await request.json()
-        text = await asyncio.to_thread(mcp_server.prompt_context, body.get("prompt") or "", body.get("cwd") or "")
+        text = await asyncio.to_thread(mcp_server.prompt_context, body.get("prompt") or "", body.get("cwd") or "",
+                                       request.query_params.get("card", "text"))
     except Exception:  # Claude Code adds whatever the hook prints to the prompt: never an error page
         import traceback
         traceback.print_exc()
@@ -1351,16 +1385,119 @@ def remove_mcp_server(path: str):
 
 @app.get("/api/work")
 def get_work(days: int = 30):
-    """The Context tab: context cards (tasks) with their state, their data points from every source, and each task's AI note."""
+    """The Context tab: context cards (tasks) with their state, their data points from every source, each task's AI
+    note, and its thread (id and number of saved cards) once the card keeper has linked it."""
+    from pensieve import history
     ts = work.tasks(store, days)
     have = work.notes()
     stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
-    def note(n):  # notes written before the fields were renamed show until they are written again
-        return dict(recap=n.get("recap") or n.get("conjure", ""), current=n.get("current") or n.get("now", ""),
-                    left=n.get("left", ""))
-    return dict(tasks=ts, notes={t["id"]: {**note(have[t["id"]]), "stale": t["id"] in stale}
-                                 for t in ts if t["id"] in have and ("current" in have[t["id"]] or "now" in have[t["id"]])},
+    of = {t["id"]: history.thread_of(t["id"]) for t in ts}
+    # each note's core (problem, goal, state, next, question); notes in an older format show until written again
+    return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
+                                           "stale": t["id"] in stale}
+                                 for t in ts if work.core(have.get(t["id"], {}))},
+                threads={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
                 states=task_states.models(), writing=status.get("work_notes") or [])
+
+
+@app.get("/api/work/card")
+def get_work_card(id: str, format: str = "html", share: bool = False, days: int = 30):
+    """One task as a context card (context-card/1). `format`: html (the page for people, which holds the JSON),
+    agent (compact JSON with a line on how to read it) or json. `share`: the card to send: no local part or path,
+    and a summary of each local or restricted resource, read whole now (this takes a few model calls)."""
+    from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+    from pensieve import cards
+    card = _local_card(id, days)
+    card = cards.draft_share(card, store) if share else card
+    if format == "html":
+        return HTMLResponse(cards.render_html(card))
+    return PlainTextResponse(cards.render_agent(card)) if format == "agent" else JSONResponse(card)
+
+
+def _local_card(task_id: str, days: int) -> dict:
+    from pensieve import cards
+    t = next((x for x in work.tasks(store, days) if x["id"] == task_id), None)
+    if not t:
+        raise HTTPException(404, f"no task {task_id}")
+    return cards.build(t, work.notes().get(task_id, {}), task_states.history(store, task_id))
+
+
+class CardDraftReq(BaseModel):
+    id: str
+    days: int = 30  # the Context tab's period, where the id comes from
+    include: list[int] | None = None  # the local card's resources to keep, by position; default all
+
+
+@app.post("/api/work/card/draft")
+def draft_work_card(req: CardDraftReq):
+    """The Share button's preview: the local card's resources (what the person can untick) and the shared card
+    drafted from them, with a summary of each local or restricted one. Nothing is saved."""
+    from pensieve import cards
+    card = _local_card(req.id, req.days)
+    return {"resources": [{k: r.get(k) for k in ("kind", "title", "reach")} for r in card.get("resources", [])],
+            "card": cards.draft_share(card, store, req.include)}
+
+
+@app.get("/api/threads")
+def get_threads():
+    """The threads with saved cards: id, title, number of saves, first and last save; and which thread each current
+    task belongs to."""
+    from pensieve import history
+    return {"threads": history.listing(), "of_task": history.current.of_task if history.current else {}}
+
+
+@app.post("/api/threads/save")
+async def save_threads():
+    """Save the cards that changed now, as the keeper does every history.CHECK seconds. Returns what was saved."""
+    from pensieve import history
+    if history.current is None:
+        raise HTTPException(503, "the card keeper starts a minute after Pensieve")
+    return {"saved": await asyncio.to_thread(history.current.run_once)}
+
+
+@app.get("/api/threads/{thread}")
+def get_thread_history(thread: str, format: str = "json", n: int = -1):
+    """A thread's saved cards, oldest first ({at, reasons, snapshot, card}); with format=html, save n as its page
+    (the last by default)."""
+    from fastapi.responses import HTMLResponse
+    from pensieve import cards, history
+    saves = history.history(thread)
+    if not saves:
+        raise HTTPException(404, f"no saved cards for {thread}")
+    if format == "html":
+        return HTMLResponse(cards.render_html(saves[n]["card"]))
+    return saves
+
+
+class CardRenderReq(BaseModel):
+    card: dict
+    ask: str = ""
+
+
+@app.post("/api/work/card/render")
+def render_work_card(req: CardRenderReq):
+    """The Share dialog's preview: the edited card's page exactly as saving would write it (made fit to send)."""
+    from fastapi.responses import HTMLResponse
+    from pensieve import cards
+    return HTMLResponse(cards.render_html(cards.share(req.card, req.ask)))
+
+
+class CardSaveReq(BaseModel):
+    id: str
+    days: int = 30
+    card: dict | None = None  # the shared card as the person edited it; default: a draft of the whole card
+    ask: str = ""
+
+
+@app.post("/api/work/card/save")
+def save_work_card(req: CardSaveReq):
+    """The Share button's save: the shared card as an HTML page in ~/Downloads (the app's web view can't download).
+    An edited card is made fit to send again, and refused if it still holds anything local. Returns the file's path."""
+    from pensieve import cards
+    card = cards.share(req.card if req.card else cards.draft_share(_local_card(req.id, req.days), store), req.ask)
+    if cards.local_parts(card):
+        raise HTTPException(422, f"the card still holds something local: {', '.join(cards.local_parts(card)[:5])}")
+    return {"path": cards.save(card, Path.home() / "Downloads")}
 
 
 class TaskStateReq(BaseModel):
@@ -1415,18 +1552,53 @@ async def write_work_notes(days: int = 30, ids: str = ""):
 
 class ResumeReq(BaseModel):
     session: str
+    run: bool = True  # false: only the command, to copy
 
 
 @app.post("/api/work/resume")
 def resume_session(req: ResumeReq):
-    """Open Terminal in the session's folder and resume the agent session there."""
+    """Open Terminal in the session's folder and resume the agent session there. Only the agent that wrote a
+    session can resume it."""
     cmd = work.resume_command(store, req.session)
     if not cmd:
         raise HTTPException(404, "can't resume that session: its folder is gone, or its agent has no resume command")
-    script = cmd.replace("\\", "\\\\").replace('"', '\\"')
+    if req.run:
+        _terminal(cmd)
+    return {"ok": True, "command": cmd}
+
+
+def _terminal(cmd: str):
+    """Run a shell command in a new Terminal window."""
     import subprocess
+    script = cmd.replace("\\", "\\\\").replace('"', '\\"')
     subprocess.run(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
                     "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True)
+
+
+class ReviveReq(BaseModel):
+    id: str = ""  # a task on the Context tab: its card now
+    days: int = 30
+    thread: str = ""  # or a thread's saved card (history), save n (default the last)
+    n: int = -1
+    run: bool = True  # false: only the prompt with the card in it, to paste into any agent
+
+
+@app.post("/api/work/revive")
+def revive_card(req: ReviveReq):
+    """Start a new agent session in Terminal with a card as its first context: a task's card now, or a card that
+    the history saved, such as one from work that ended. With run=false, the prompt with the card in it."""
+    from pensieve import cards, history
+    if req.thread:
+        saves = history.history(req.thread)
+        if not saves:
+            raise HTTPException(404, f"no saved cards for {req.thread}")
+        card = saves[req.n]["card"]
+    else:
+        card = _local_card(req.id, req.days)
+    if not req.run:
+        return {"ok": True, "prompt": cards.revive_prompt(card)}
+    cmd = cards.revive_command(card, config.DATA_DIR / "threads" / "revive")
+    _terminal(cmd)
     return {"ok": True, "command": cmd}
 
 
