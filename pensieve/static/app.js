@@ -3494,11 +3494,13 @@ function ppLayout(d, W, H) {
   // a narrow graph shows half as many people for each step of Show more
   const others = d.nodes.filter(n => !n.me).slice(0, narrow ? Math.ceil(S.people.n / 2) : S.people.n);
   const cx = W / 2, cy = H / 2, R = Math.max(80, Math.min(W, H) / 2 - 40), R0 = Math.min(118, R * 0.38);
+  // the camera: more people spread over a larger area and the view zooms out to fit them; fewer zoom back in
+  const z = Math.max(1, Math.sqrt(others.length / (narrow ? PP_STEP / 2 : PP_STEP)));
   const pos = new Map(), vis = new Set(others.map(n => n.id));
   if (me) pos.set(me.id, {x: cx, y: cy, r: 32, n: me});
-  const small = (others.length > 60 ? 0.7 : 1) * (narrow ? 0.8 : 1);
+  const small = narrow ? 0.8 : 1;
   others.forEach((n, i) => {
-    const c = Math.max(0, Math.min(1, n.closeness || 0)), dist = R0 + Math.pow(1 - c, 0.85) * (R - R0), a = i * 2.39996 + 0.4;
+    const c = Math.max(0, Math.min(1, n.closeness || 0)), dist = (R0 + Math.pow(1 - c, 0.85) * (R - R0)) * z, a = i * 2.39996 + 0.4;
     pos.set(n.id, {x: cx + dist * Math.cos(a), y: cy + dist * Math.sin(a), r: (12 + 16 * Math.sqrt(c)) * small, dist, n});
   });
   const links = d.edges.filter(e => vis.has(e.a) && vis.has(e.b));
@@ -3518,13 +3520,16 @@ function ppLayout(d, W, H) {
       p.x = cx + dx / dd * t; p.y = cy + dy / dd * t;
     }
   }
+  const shrink = Math.pow(z, 0.6);  // back to the view: positions by the zoom, circles a little less so they stay legible
+  P.forEach(p => { p.x = cx + (p.x - cx) / z; p.y = cy + (p.y - cy) / z; p.r /= shrink; });
+  if (me) pos.get(me.id).r /= shrink;
   const sx = Math.max(1, Math.min(1.45, (W / 2 - 60) / R));  // a wide panel: the rings become ellipses
   P.forEach(p => { p.x = cx + (p.x - cx) * sx; });
-  return {pos, links, me, others, cx, cy, R, R0, sx};
+  return {pos, links, me, others, cx, cy, R, R0, sx, z};
 }
 function ppSvg(d, W, H) {
   const L = ppLayout(d, W, H), sel = S.people.sel;
-  S.people.drawn = L.others.length;
+  S.people.drawn = L.others.length; S.people._L = L;
   const rings = [0, 0.5, 1].map(f => { const r = L.R0 + f * (L.R - L.R0);
     return `<ellipse class="pp-ring" cx="${L.cx}" cy="${L.cy}" rx="${(r * L.sx).toFixed(1)}" ry="${r.toFixed(1)}"/>`; }).join('');
   const mp = L.me && L.pos.get(L.me.id);
@@ -3580,6 +3585,19 @@ function ppDrawGraph() {
   const drawn = S.people.drawn, sh = box.querySelector('.pp-shown'), more = box.querySelector('[data-pp-n="1"]');
   if (sh) sh.textContent = drawn;
   if (more) more.hidden = drawn >= d.total - 1;
+  ppAnimate(box.querySelector('svg'));
+  if (!box.dataset.wheel) {  // the wheel or a pinch zooms: down or pinch in shows more people, up or pinch out fewer
+    box.dataset.wheel = '1';
+    let acc = 0, busy = 0;
+    box.addEventListener('wheel', e => {
+      e.preventDefault();
+      if (performance.now() < busy) return;
+      acc += e.deltaY;
+      if (Math.abs(acc) < 60) return;
+      const dir = acc > 0 ? 1 : -1; acc = 0;
+      if (ppStep(dir)) busy = performance.now() + 700;
+    }, {passive: false});
+  }
   const svg = box.querySelector('svg'), byId = new Map(d.nodes.map(n => [n.id, n]));
   const hl = id => {
     svg.classList.toggle('hl', !!id);
@@ -3596,6 +3614,56 @@ function ppDrawGraph() {
     g.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ppPick(n.id); } };
   });
 }
+// One step of Show more (dir 1) or Fewer (dir -1). False when there is nothing to add or take away.
+function ppStep(dir) {
+  const P = S.people, d = P.data;
+  if (!d) return false;
+  const n = Math.max(PP_STEP, P.n + PP_STEP * dir);
+  if (n === P.n || dir > 0 && (P.drawn || 0) >= d.total - 1) return false;
+  P.n = n; store.set('peopleN', P.n); renderPeople();
+  return true;
+}
+// When the people on the graph change, they move like a camera: the ones that stay glide from where they were, new
+// ones come in from where the old zoom had them (off the edge when zooming out), and the ones that go leave the same
+// way. A redraw with the same people does not move.
+function ppAnimate(svg) {
+  const P = S.people, L = P._L;
+  if (!svg || !L) return;
+  const before = P.lastPos, zOld = P.lastZ || L.z, gone = P.lastNodes;
+  P.lastPos = new Map([...L.pos].map(([id, p]) => [id, {x: p.x, y: p.y, r: p.r}]));
+  P.lastZ = L.z;
+  P.lastNodes = new Map($$('.pp-n', svg).map(g => [g.dataset.pid, g.outerHTML]));
+  if (!before || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (before.size === L.pos.size && [...L.pos.keys()].every(k => before.has(k))) return;
+  const k = L.z / zOld, cx = L.cx, cy = L.cy, moves = [];
+  $$('.pp-n', svg).forEach(g => {
+    const to = L.pos.get(g.dataset.pid), was = before.get(g.dataset.pid);
+    const from = was || {x: cx + (to.x - cx) * k, y: cy + (to.y - cy) * k, r: to.r * Math.pow(k, 0.6)};
+    moves.push({g, from, to: {x: to.x, y: to.y, s: 1}, s0: from.r / to.r, enter: !was});
+  });
+  for (const [id, html] of gone || []) {
+    const was = before.get(id);
+    if (L.pos.has(id) || !was) continue;
+    svg.insertAdjacentHTML('beforeend', html.replace(/ppc(\d+)/g, 'ppx$1'));  // its own clip ids, not the new nodes'
+    const g = svg.lastElementChild; g.style.pointerEvents = 'none';
+    moves.push({g, from: was, to: {x: cx + (was.x - cx) / k, y: cy + (was.y - cy) / k, s: Math.pow(k, -0.6)}, s0: 1, exit: true});
+  }
+  svg.classList.add('pp-anim');
+  const t0 = performance.now(), dur = 650, ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const frame = now => {
+    const e = ease(Math.min(1, (now - t0) / dur));
+    for (const m of moves) {
+      const x = m.from.x + (m.to.x - m.from.x) * e, y = m.from.y + (m.to.y - m.from.y) * e, sc = m.s0 + (m.to.s - m.s0) * e;
+      m.g.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)}) scale(${sc.toFixed(3)})`);
+      if (m.enter) m.g.style.opacity = e;
+      if (m.exit) m.g.style.opacity = 1 - e;
+    }
+    if (e < 1) return requestAnimationFrame(frame);
+    moves.forEach(m => m.exit ? m.g.remove() : m.g.setAttribute('transform', `translate(${m.to.x.toFixed(1)},${m.to.y.toFixed(1)})`));
+    svg.classList.remove('pp-anim');
+  };
+  requestAnimationFrame(frame);
+}
 async function ppPick(id) {
   const P = S.people;
   if (P.merging && P.merging !== id) {
@@ -3609,7 +3677,7 @@ async function ppPick(id) {
 function bindPeople(el) {
   const P = S.people;
   $('[data-pp-refresh]', el)?.addEventListener('click', () => { toast('Building the people graph again…'); loadPeople(true); });
-  $$('[data-pp-n]', el).forEach(b => b.onclick = () => { P.n = Math.max(PP_STEP, P.n + PP_STEP * +b.dataset.ppN); store.set('peopleN', P.n); renderPeople(); });
+  $$('[data-pp-n]', el).forEach(b => b.onclick = () => ppStep(+b.dataset.ppN));
   $('[data-pp-merge-cancel]', el)?.addEventListener('click', () => { P.merging = null; renderPeople(); });
   $('[data-pp-pics]', el)?.addEventListener('click', async e => {
     e.currentTarget.disabled = true; toast('Looking up Slack profiles with read-only tools. This can take a minute…');

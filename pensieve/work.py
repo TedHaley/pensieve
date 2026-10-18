@@ -360,7 +360,7 @@ def _tasks(store, days, until: float | None = None):
             last_summary=(ss[0]["summary"] or "")[:800] if ss else "",
             earlier=[(s["title"], (s["summary"] or "")[:400]) for s in ss[1:3]],  # what the note's decisions come from
             events=_events(ss, its, cs),
-            id=_task_id(keys, brs, ss, prs_seen), title=title, kind="ticket" if keys else "branch" if brs else "work",
+            id=_task_id(keys, brs, ss, its), title=title, kind="ticket" if keys else "branch" if brs else "work",
             keys=keys, status=main["status"] if main else "", updated=updated,
             # tickets the sessions talk about without being their work; a key named once is often an example or a typo
             ticket_refs=[dict(key=k, url=f"{sites[k.split('-')[0]]}/{k}" if k.split("-")[0] in sites else "")
@@ -1047,16 +1047,16 @@ def _server_label(sid: str) -> str:
     return "agent sessions" if sid == connections.SESSIONS else sid.removeprefix("claude_ai_").split("_")[-1]
 
 
-def _task_id(keys, branches, sessions, prs=()) -> str:
-    """Stable while the task grows: its first ticket key, else its first branch, else its oldest session, else its
-    first pull request (a pull request on its own, from a connection)."""
+def _task_id(keys, branches, sessions, items=()) -> str:
+    """Stable while the task grows: its first ticket key, else its first branch, else its oldest session, else (a
+    collected PR with no branch or session) its first PR's URL."""
     if keys:
         return f"t:{keys[0]}"
     if branches:
         return f"b:{branches[0]}"
     if sessions:
         return f"s:{min(sessions, key=lambda s: s['started'] or s['updated'])['id']}"
-    return "p:" + hashlib.sha1(min(p["url"] or p["path"] for p in prs).encode()).hexdigest()[:12]
+    return f"p:{min(i['url'] for i in items if i['pr'])}"
 
 
 NOTE_PROMPT = """You write the status line of one task on a developer's work dashboard.
@@ -1332,6 +1332,25 @@ def _part_of_main(ev: dict, note: dict) -> bool:
     return any(re.search(rf"(?<![\w-]){re.escape(x)}(?![\w-])", nxt) for x in names)
 
 
+def _in_branch(root: str, head: str, branch: str) -> bool:
+    """True when the tip of branch `head` (the remote copy first) is already in `branch`."""
+    tip = next((x for x in (_git(root, "rev-parse", "--verify", "-q", ref, ttl=300) for ref in (f"origin/{head}", head)) if x), "")
+    return bool(tip) and _git(root, "merge-base", tip, branch, ttl=300) == tip
+
+
+def _folded(t: dict, g: dict) -> bool:
+    """A goal whose work went back into the task's own branch: it has PRs and no ticket, every PR was closed without
+    a merge on GitHub, and each PR's branch is already in one of the task's branches. Its goal became part of the
+    main work, so it stays on the main card (a merge, docs/threads.md) and is not a card of its own."""
+    prs = [p for p in t["prs"] if p["url"] in g["prs"]]
+    if not prs or g["keys"] or any(p.get("state") != "closed" for p in prs):
+        return False
+    homes = [(b["repo"], b["branch"]) for b in t.get("branches", [])] + \
+            [(p["path"], p["branch"]) for p in t.get("places", []) if p.get("path") and p.get("branch")]
+    homes = [(r, b) for r, b in homes if Path(r).is_dir()]
+    return all(p.get("head") and any(_in_branch(r, p["head"], b) for r, b in homes) for p in prs)
+
+
 def _goal_tasks(out: list[dict], have: dict) -> list[dict]:
     """The cards of the goals that the notes split off their tasks (_split_goals): the same sessions and folders,
     with only the goal's own PRs, tickets and commits. A PR or commit that only another goal names leaves the main
@@ -1343,7 +1362,8 @@ def _goal_tasks(out: list[dict], have: dict) -> list[dict]:
             continue
         main = n.get("main") or {}
         t["commits"] = t["commits"] + [c for c in main.get("commits", []) if c["sha"] not in {x["sha"] for x in t["commits"]}]
-        split = [g for g in n.get("split") or [] if not _part_of_main(g, n)]  # notes written before that rule
+        split = [g for g in n.get("split") or [] if not _part_of_main(g, n)  # notes written before that rule
+                 and not _folded(t, g)]
         if not split:
             continue
         mine = set(main.get("prs", [])) | {c["sha"] for c in main.get("commits", [])}
