@@ -3008,6 +3008,7 @@ async function openProject(id, {quiet = false} = {}) {
   $$('#pjlist [data-pj]').forEach(b => b.classList.toggle('sel', b.dataset.pj === id));
   let card;
   try { card = await api('/api/projects/' + enc(id)); } catch { if (!quiet) toast('That project is no longer there. The list was built again.'); P.sel = null; return; }
+  if (P.sel !== id) return;  // another project was clicked while this one loaded
   P.card = card;
   if (S.view !== 'projects') return;
   const box = $('#pjcard'); if (!box) return renderProjects();
