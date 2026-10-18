@@ -11,6 +11,8 @@ can open it, and so what a shared card does with it:
               links it, names the service, and adds a summary in case the reader lacks access.
   restricted  online, but likely private to its owner: a Claude artifact. A shared card links it and summarizes it.
   public      anyone can open it. A shared card links it.
+  private     a direct message, a group message or a private channel. Context for this Mac's cards and agents; a
+              shared card leaves it out whole: no link, no title, no summary.
 
 `collect` lists a task's resources, most useful first. `read_full` reads a local or restricted resource whole, at
 share time, for its summary; `summarize` writes that summary for someone who continues the work."""
@@ -21,7 +23,7 @@ from pathlib import Path
 
 from pensieve import work
 
-LOCAL, GIT, MCP, RESTRICTED, PUBLIC = "local", "git", "mcp", "restricted", "public"
+LOCAL, GIT, MCP, RESTRICTED, PUBLIC, PRIVATE = "local", "git", "mcp", "restricted", "public", "private"
 
 KINDS = {  # kind -> (what it is, its reach)
     "session": ("an agent session transcript", LOCAL),
@@ -93,10 +95,11 @@ def collect(t: dict) -> list[Resource]:
                             {"url": k.get("url") or "", "key": k["key"], "status": k.get("status") or "",
                              "source": work._server_label(k["server"]) if k.get("server") else ""}, relevance=0.8))
     for i in t.get("items", []):
-        if i.get("url"):
+        if i.get("url") or i.get("private"):
             src = work._server_label(i["server"]) if i.get("server") else ""
-            kind = "message" if re.search(r"slack|teams|chat|mail", src, re.I) else "page"
-            out.append(Resource(kind, i["title"], {"url": i["url"], "source": src, "path": i.get("path") or ""}, relevance=0.6))
+            kind = "message" if i.get("private") or re.search(r"slack|teams|chat|mail", src, re.I) else "page"
+            out.append(Resource(kind, i["title"], {"url": i.get("url") or "", "source": src, "path": i.get("path") or ""},
+                                relevance=0.6, reach=PRIVATE if i.get("private") else ""))
     seen = set()
     for n, s in enumerate(t["sessions"][:MAX["session"]]):
         out.append(Resource("session", s["title"], {"session": s["id"]}, relevance=0.9 - 0.1 * n))

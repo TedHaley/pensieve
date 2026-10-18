@@ -75,7 +75,9 @@ def _ts(s) -> float:
 
 
 def _items() -> list[dict]:
-    """Connection items: {path, server, key, title, status, assignee, updated, url, text}."""
+    """Connection items: {path, server, key, title, status, assignee, updated, url, text, private}. `private`: a
+    direct message, a group message or a private channel (marked when stored, or found now in an item stored before
+    the mark), which local cards use and shared cards and notes leave out."""
     out = []
     if not connections.DIR.is_dir():
         return out
@@ -88,6 +90,10 @@ def _items() -> list[dict]:
                 text = md.read_text()
             except (OSError, ValueError):
                 continue
+            tool = re.search(r"^- Source: .*\(([^()\n]+)\)$", text, re.M)
+            tool = tool.group(1) if tool else ""
+            private = bool(raw.get("_private")) or connections.private_tool(tool) or \
+                connections.private_item(raw, bool(connections.CHAT.search(f"{d.name} {tool}")))
             kn = connections._id_key(raw)
             key = str(raw.get(kn, "")) if kn in ("key", "identifier") else ""
             url = next((raw[k] for k in ("webUrl", "url", "permalink", "html_url") if isinstance(raw.get(k), str)
@@ -100,7 +106,8 @@ def _items() -> list[dict]:
                             pr=bool(PR_URL.fullmatch(url)) if url else False,
                             status=connections._render(raw.get("status") or raw.get("state")) if raw.get("status") or raw.get("state") else "",
                             assignee=connections._render(raw.get("assignee")) if raw.get("assignee") else "",
-                            updated=_ts(raw.get("updated") or raw.get("updated_at") or md.stat().st_mtime), text=text))
+                            updated=_ts(raw.get("updated") or raw.get("updated_at") or md.stat().st_mtime), text=text,
+                            private=private))
     return out
 
 
@@ -358,7 +365,7 @@ def _tasks(store, days, until: float | None = None):
                     [dict(key=k, title="", status="", assignee="", url=f"{sites[k.split('-')[0]]}/{k}", server="",
                           path="", updated=0) for k in keys
                      if k not in {i["key"] for i in tickets} and k.split("-")[0] in sites],  # known only by its key
-            items=[{k: i[k] for k in ("title", "url", "server", "path", "updated")}
+            items=[{k: i[k] for k in ("title", "url", "server", "path", "updated", "private")}
                    for i in sorted(its, key=lambda i: -i["updated"]) if not i["key"]][:30],
             sessions=[dict(id=s["id"], title=s["title"], updated=s["updated"], branch=s["branch"], repo=s["repo"],
                            project=s["project"], artifacts=_artifacts(s, texts.get(s["id"], []))) for s in ss],
@@ -1003,7 +1010,8 @@ def _quote(path: str) -> str:
 
 def _events(ss, its, cs) -> list[dict]:
     """The task's data points from every source, newest first: sessions, commits, connection items, and the field
-    changes that connections recorded (a ticket's status going from To Do to In Progress)."""
+    changes that connections recorded (a ticket's status going from To Do to In Progress). A private item's points
+    are marked `private`: the note and shared cards leave them out."""
     ev = [dict(ts=s["updated"], source="session", title=s["title"] or "Agent session", detail=s["branch"], ref=s["id"])
           for s in ss]
     ev += [dict(ts=c["ts"], source="commit", title=c["subject"], detail=f"{c['author']} · {c['sha']}", ref=c["sha"])
@@ -1012,7 +1020,7 @@ def _events(ss, its, cs) -> list[dict]:
         src = "ticket" if i["key"] else "pr" if i["pr"] else "message"
         ev.append(dict(ts=i["updated"], source=src, title=(f"{i['key']} " if i["key"] else "") + i["title"],
                        detail=" · ".join(x for x in (i["status"], i["assignee"], _server_label(i["server"])) if x),
-                       url=i["url"], ref=i["path"]))
+                       url=i["url"], ref=i["path"], private=i.get("private", False)))
         hist = Path(i["path"]).parent / ".history" / f"{Path(i['path']).stem}.jsonl"
         try:
             for line in hist.read_text().splitlines():
@@ -1020,7 +1028,8 @@ def _events(ss, its, cs) -> list[dict]:
                 for k, (a, b) in h["changes"].items():
                     ev.append(dict(ts=_ts(h["at"].replace("Z", ":00+00:00")), source="change",
                                    title=f"{i['key'] or i['title'][:40]}: {k} {a or '(empty)'} → {b or '(empty)'}",
-                                   detail=_server_label(i["server"]), url=i["url"], ref=i["path"]))
+                                   detail=_server_label(i["server"]), url=i["url"], ref=i["path"],
+                                   private=i.get("private", False)))
         except (OSError, ValueError, KeyError):
             pass
     return sorted(ev, key=lambda e: -e["ts"])[:80]
@@ -1050,9 +1059,12 @@ Its data points, newest first (date, source, what happened):
 How it ended:
 {last_words}
 
-Sessions, a long one most of all, can work on more than one goal. The main goal is the one that the last session
-worked toward. A question the developer asked on the way (explain this, reply to that) is not a goal, and neither is
-a step that serves a goal (a change it needs, a revert, a CI fix, a rebase, a review round): that is part of the goal. The first six fields are about the main goal only: what is done and left for
+Sessions, a long one most of all, can work on more than one goal. The main goal is the newest goal that a session
+did work toward (changed code, made a commit or PR, ran a job, made a decision). A session that only explained code
+or answered questions does not set the main goal. A question the developer asked on the way (explain this, reply to
+that) is not a goal, and neither is a step that serves a goal (a change it needs, a revert, a CI fix, a rebase, a
+review round): that is part of the goal. Each PR, commit and ticket in the data belongs to the goal it was made for:
+a PR made for another goal makes that goal one of the goals below, with the PR as its evidence. The first six fields are about the main goal only: what is done and left for
 another goal goes in that goal's fields, not in these.
 Answer with these fields:
 - title: at most 8 words that name the goal as an outcome, in sentence case, with no ticket key or branch name.
@@ -1158,25 +1170,27 @@ def write_note(task: dict, all_tasks: list[dict]) -> str:
     return cur[task["id"]]
 
 
+def note_fields(task: dict) -> dict:
+    """The task's data for NOTE_PROMPT: its PRs, folders, data points and how its last session ended."""
+    day = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+    events = "\n".join(f"- {day(e['ts'])} {e['source']}: {e['title'][:140]}" + (f" ({e['detail'][:60]})" if e.get("detail") else "")
+                       for e in [e for e in task["events"] if not e.get("private")][:25])  # the note goes on shared cards
+    prs = "; ".join(f"{p['url']} ({p['state'] or 'state unknown'})" + (f": {p['title'][:90]}" if p.get("title") else "")
+                    for p in task["prs"]) or "none"
+    places = "; ".join(f"{p['path']}" + (f" on {p['branch']}, {p['changed']} uncommitted files" if p.get("branch") else "")
+                       for p in task.get("places", [])) or "none"
+    return dict(title=task["title"], keys=f" [{', '.join(task['keys'][:3])}]" if task["keys"] else "",
+                status=f", ticket status {task['status']}" if task["status"] else "", prs=prs, places=places, events=events,
+                last_words=task.get("ending") or task.get("last_words") or "(none)",
+                last_title=(task["sessions"] or [{}])[0].get("title", "(none)"), last_summary=task.get("last_summary") or "",
+                earlier="".join(f'An earlier session: "{title}"\n{summary}\n' for title, summary in task.get("earlier", []) if summary))
+
+
 def make_note(task: dict) -> dict:
     """The insights engine's note for a task ({problem, goal, state, next, question}), not saved: write_note keeps
     it; a replay writes notes for past snapshots with it."""
     from pensieve import llm
-    day = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-    events = "\n".join(f"- {day(e['ts'])} {e['source']}: {e['title'][:140]}" + (f" ({e['detail'][:60]})" if e.get("detail") else "")
-                       for e in task["events"][:25])
-    prs = "; ".join(f"{p['url']} ({p['state'] or 'state unknown'})" for p in task["prs"]) or "none"
-    places = "; ".join(f"{p['path']}" + (f" on {p['branch']}, {p['changed']} uncommitted files" if p.get("branch") else "")
-                       for p in task.get("places", [])) or "none"
-    ans = llm.complete(NOTE_PROMPT.format(title=task["title"], keys=f" [{', '.join(task['keys'][:3])}]" if task["keys"] else "",
-                                          status=f", ticket status {task['status']}" if task["status"] else "",
-                                          prs=prs, places=places, events=events,
-                                          last_words=task.get("ending") or task.get("last_words") or "(none)",
-                                          last_title=(task["sessions"] or [{}])[0].get("title", "(none)"),
-                                          last_summary=task.get("last_summary") or "",
-                                          earlier="".join(f'An earlier session: "{title}"\n{summary}\n'
-                                                          for title, summary in task.get("earlier", []) if summary)),
-                       max_tokens=700, schema=NOTE_SCHEMA, kind="task note")
+    ans = llm.complete(NOTE_PROMPT.format(**note_fields(task)), max_tokens=700, schema=NOTE_SCHEMA, kind="task note")
     note = {k: str(ans.get(k, "")).strip() for k in ("title",) + CORE}
     note["evidence"] = [str(x) for x in ans.get("evidence") or []]
     note["goals"] = [{k: (g.get(k) if k == "evidence" else str(g.get(k, "")).strip()) for k in ("title", "evidence", "state", "next", "question")}

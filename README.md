@@ -333,9 +333,10 @@ A context card follows [`context-card.schema.json`](pensieve/context-card.schema
 |---|---|---|
 | local | session transcripts, agent memory files, uncommitted or unpushed changes, files outside git, folders | a summary, written from the whole document when you share; no path |
 | git | the branch on the remote, files at a pushed commit, PRs | a link (a permalink at the commit) |
-| mcp | tickets, messages, pages from your connections | a link and its service, with a summary |
+| mcp | tickets, messages, pages from your connections | a link and its service, with a summary. A message goes as a link only, without its text. |
 | restricted | Claude artifacts | a link marked "may need access", with a summary |
 | public | public web pages | a link |
+| private | direct messages, group messages, private channels | nothing: no link, no text, no summary. Your local cards and agents use them, and the note's problem, goal, state and next are written without them. |
 
 On the Context tab, the eye button shows a card's page, and the Compact view lists one card a line (a click opens it in full). Each card belongs to a thread: one goal followed over time ([`docs/threads.md`](docs/threads.md)). Pensieve saves a thread's card when it changes. The thread chip on a card opens its saved cards, and "New session from card" starts an agent that reads a card first. Agents get the same with `thread_history`. The Share button at the bottom right of each card opens a preview. Pensieve reads the local and restricted resources whole and writes a summary of each one. You write what you need from the reader, edit the core and the summaries, untick what doesn't belong, and save one page to Downloads. The page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so the reader's agent reads the same file. A shared card has no local paths, session ids, resume command or secrets, and leaves out sentences about your own machine. Agents share a card with the `share_card` MCP tool.
 

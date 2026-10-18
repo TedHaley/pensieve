@@ -75,7 +75,8 @@ def build(t: dict, note: dict, hist: list[dict]) -> dict:
         core=core, since_last_session=since, outdated=changed,
         resources=[r.to_dict() for r in res.collect(t)],
         last_words=work._clean_words(t.get("last_words") or ""),
-        timeline=[dict(at=_iso(e["ts"]), source=e["source"], title=e["title"]) for e in t["events"][:20]],
+        timeline=[_clean(dict(at=_iso(e["ts"]), source=e["source"], title=e["title"], private=e.get("private") or None))
+                  for e in t["events"][:20]],
         history=[dict(at=_iso(h["at"]), state=h["state"], by=h["by"], reason=h["reason"]) for h in hist[-10:]],
         local=_clean(dict(resume=(t.get("resume") or {}).get("command", ""))))
     card["handoff"] = handoff(card)
@@ -128,15 +129,25 @@ def draft_share(card: dict, store, include: list[int] | None = None) -> dict:
 
 def share(card: dict, ask: str = "") -> dict:
     """The card to send. No `local` part and no local path anywhere: a local resource keeps its summary and loses its
-    path, or is left out when it has no summary. Secrets become [secret], a branch card's id becomes the same on
+    path, or is left out when it has no summary. A private resource (a direct or group message, a private channel)
+    and its timeline points are left out whole; another message keeps its link and loses its text (its title is the
+    message's first line) and any summary. Secrets become [secret], a branch card's id becomes the same on
     every machine (b:org/repo@branch), and `ask` (what the sender needs from the reader) leads the card."""
     c = json.loads(json.dumps(card))
     c.pop("local", None)
     c.pop("last_words", None)  # a transcript's words: the session's summary says what matters
     c["core"] = {k: v if k == "as_of" else " ".join(s for s in re.split(r"(?<=[.;!?])\s+", v) if not _OWN_MACHINE.search(s))
                  for k, v in c.get("core", {}).items()}
+    c["timeline"] = [dict(x, title="A message") if x.get("source") == "message" else x
+                     for x in c.get("timeline", []) if not x.get("private")]
     kept = []
     for r in c.get("resources", []):
+        if r["reach"] == res.PRIVATE:  # a direct or group message, or a private channel: not even its link
+            continue
+        if r["kind"] == "message":  # a message's title is its own text: the reader gets the link, not the words
+            src = (r.get("ref") or {}).get("source") or ""
+            r["title"] = f"{src} message" if src else "A message"
+            r.pop("summary", None)
         if r["reach"] == res.LOCAL:
             if not r.get("summary") or r["kind"] == "folder":
                 continue
@@ -170,7 +181,9 @@ def local_parts(card: dict) -> list[str]:
     """Why a card is not fit to share: its `local` part, a local resource with a path, and each field that still holds a
     local path. [] when it is fit. A shared space refuses a card that this finds anything in."""
     found = ["local"] if "local" in card else []
-    found += [f"resources[{i}]" for i, r in enumerate(card.get("resources", [])) if r.get("reach") == res.LOCAL and r.get("ref")]
+    found += [f"resources[{i}]" for i, r in enumerate(card.get("resources", []))
+              if r.get("reach") == res.PRIVATE or (r.get("reach") == res.LOCAL and r.get("ref"))]
+    found += [f"timeline[{i}]" for i, x in enumerate(card.get("timeline", [])) if x.get("private")]
 
     def walk(x, at):
         if isinstance(x, str) and _LOCAL_PATH.search(x):
@@ -202,7 +215,8 @@ STATE_LABEL = {"latent": "Defined", "conscious": "In progress", "subconscious": 
                "forgotten": "Left"}
 NOTE_LABEL = {"session": "Session", "memory": "Memory", "change": "Changes", "file": "File", "artifact": "Artifact",
               "message": "Message", "page": "Page", "ticket": "Ticket"}
-REACH_LABEL = {res.LOCAL: "summary", res.GIT: "git", res.MCP: "via MCP", res.RESTRICTED: "may need access", res.PUBLIC: "public"}
+REACH_LABEL = {res.LOCAL: "summary", res.GIT: "git", res.MCP: "via MCP", res.RESTRICTED: "may need access", res.PUBLIC: "public",
+               res.PRIVATE: "private, never shared"}
 CSS = """
 :root{--bg:#f5f5f7;--card:#fff;--ink:#1d1d1f;--ink-2:#6e6e73;--ink-3:#86868b;--line:rgba(0,0,0,.08);--link:#0066cc;
 --good:#1f7a43;--warn:#a34700;--bad:#c4281c;--chip:rgba(0,0,0,.05);--ask:#fff7e6;--ask-line:#f2c46d;--merged:#8250df;

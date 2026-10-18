@@ -13,8 +13,8 @@
         "kind": {"enum": ["session", "memory", "change", "file", "folder", "branch", "code", "pr", "ticket", "message", "page", "artifact", "link"],
                  "description": "session: an agent session transcript; memory: an agent memory file; change: uncommitted or unpushed changes; file: a file outside any git remote, or one that differs from it; folder: a checkout or worktree; branch: a branch on the remote; code: a file at a pushed commit; pr: a pull request; ticket: a ticket; message: a message or thread; page: a page or document in a service; artifact: a Claude artifact; link: a public web page"},
         "title": {"type": "string"},
-        "reach": {"enum": ["local", "git", "mcp", "restricted", "public"],
-                  "description": "local: only on the machine that made the card; git: on the repo's remote; mcp: in a service that agents reach through an MCP server; restricted: online but likely private to its owner; public: anyone can open it"},
+        "reach": {"enum": ["local", "git", "mcp", "restricted", "public", "private"],
+                  "description": "local: only on the machine that made the card; git: on the repo's remote; mcp: in a service that agents reach through an MCP server; restricted: online but likely private to its owner; public: anyone can open it; private: a direct message, a group message or a private channel, on local cards only and never in a shared card"},
         "ref": {"type": "object", "description": "How to open it: path (local only), url, git and branch and commit, repo and path, source (the service), key, state"},
         "summary": {"type": "string", "description": "What it tells someone who continues the work, written from the whole document when the card was shared. A shared card has it for every local resource, which has no ref there."},
         "relevance": {"type": "number"}
@@ -75,7 +75,8 @@
     "timeline": {
       "type": "array",
       "items": {"type": "object", "properties": {"at": {"type": "string", "format": "date-time"},
-                                                 "source": {"type": "string"}, "title": {"type": "string"}}}
+                                                 "source": {"type": "string"}, "title": {"type": "string"},
+                                                 "private": {"type": "boolean", "description": "from a private resource: local cards only"}}}
     },
     "history": {
       "type": "array",

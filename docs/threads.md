@@ -102,7 +102,9 @@ A thread is the smallest unit that you hand off or report in a standup. These it
 
 A long session can work toward several goals. Each goal that has its own PR, ticket or commit is a thread, and has its own card. A goal that only the session talks about is a line on the card of the main goal ("Also in these sessions"). It becomes a thread when its first PR, ticket or commit appears.
 
-The main goal is the goal that the last session worked toward. A question asked on the way is not a goal. A step that serves a goal (a change it needs, a revert, a CI fix, a review round) is part of that goal (rule 1).
+The main goal is the newest goal that a session did work toward: it changed code, made a commit or PR, ran a job or made a decision. A session that only explained code or answered questions does not set the main goal. A step that serves a goal (a change it needs, a revert, a CI fix, a review round) is part of that goal (rule 1). Each PR, commit and ticket belongs to the goal that it was made for.
+
+`bench/goals.py` measures this rule on labelled tasks: is the main goal right, and do the PRs, tickets and commits land in the right goals?
 
 Pensieve finds the goals in the note that the model writes for each task: each goal names its evidence (PR numbers, ticket keys, commit hashes). Pensieve keeps only the evidence that is real: a PR or ticket of the task, or a commit that git has in the task's repos. A model cannot add a member.
 
