@@ -533,10 +533,17 @@ def team(repo: str, days: int = 90) -> dict:
 def person(who: str) -> dict:
     """One person's card from the user's side: role, repos and areas, recent pull requests, and how the user works
     with them (closeness 0..1, shared areas, tasks, reviews). `who`: a name, an email or a GitHub login."""
-    from pensieve import people
+    from pensieve import directory, people
     pid = people.find(who)
     if not pid:
-        raise ValueError(f"no person for {who!r} (the People tab builds its graph in the background)")
+        d = directory.find(who)  # found earlier by a search of the user's GitHub or Slack, with no shared work yet
+        if not d:
+            raise ValueError(f"no person for {who!r} (the People tab builds its graph in the background; its Find a "
+                             "person field searches GitHub and Slack)")
+        return dict(name=d["name"], you=False, title=d["title"], identities=(
+            [f"email:{e}" for e in d["emails"]] + ([f"gh:{d['login']}"] if d["login"] else [])
+            + ([f"slack:{d['slack']}"] if d["slack"] else [])), found_in=d["sources"], relation=None,
+            note="Found in the user's services; no shared work with the user yet.")
     p = people.profile(pid)
     r = p.get("relation") or {}
     return dict(
