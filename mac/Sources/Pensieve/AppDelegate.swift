@@ -169,23 +169,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var syncJobs: [Backend.SyncJob] = []
     private var syncTimer: Timer?
-    private var spin = 0.0
+    private var breathTime = 0.0
+    private var breathBlend = 0.0
 
-    /// While anything is indexing, the mark turns; the menu lists what is being indexed.
+    /// While anything is indexing, the mark breathes; the menu lists what is being indexed. The motion fades in
+    /// over 0.6 s when indexing starts and out over 0.4 s after it stops.
     private func showSyncing(_ jobs: [Backend.SyncJob]) {
         syncJobs = jobs
-        if jobs.isEmpty {
-            syncTimer?.invalidate()
-            syncTimer = nil
-            spin = 0
-            statusItem.button?.image = Mark.menuBarImage()
-        } else if syncTimer == nil {
-            syncTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.spin += 2 * .pi / 60  // one turn every 3 s
-                    self.statusItem.button?.image = Mark.menuBarImage(spin: self.spin)
+        guard !jobs.isEmpty, syncTimer == nil else { return }
+        let dt = 1.0 / 20
+        syncTimer = Timer.scheduledTimer(withTimeInterval: dt, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let indexing = !self.syncJobs.isEmpty
+                self.breathBlend = indexing ? min(1, self.breathBlend + dt / 0.6) : max(0, self.breathBlend - dt / 0.4)
+                self.breathTime += dt
+                if !indexing && self.breathBlend == 0 {
+                    self.syncTimer?.invalidate()
+                    self.syncTimer = nil
+                    self.breathTime = 0
+                    self.statusItem.button?.image = Mark.menuBarImage()
+                    return
                 }
+                self.statusItem.button?.image = Mark.menuBarImage(shape: Mark.breathing(self.breathTime, blend: self.breathBlend))
             }
         }
     }
