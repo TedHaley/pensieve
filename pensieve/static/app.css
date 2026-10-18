@@ -706,6 +706,11 @@ body[data-view=work] #loading{display:none!important}
 .wk-btn.pr.open{color:#30a14e}.wk-btn.pr.merged{color:#a855f7}.wk-btn.pr.closed{color:var(--text-3)}
 .wk-btn.icon{width:30px;padding:0;justify-content:center;background:none;color:var(--text-3)}
 .wk-btn.icon:hover{background:var(--card-2);color:var(--text)}.wk-btn.icon.on{color:var(--accent)}
+/* an action and its copy button are one split button: the copy half shares the action's colour, after a thin divider */
+.wk-split{display:inline-flex}
+.wk-split .wk-btn:first-child{border-radius:9px 0 0 9px}
+.wk-split .wk-btn.copy{width:30px;padding:0;justify-content:center;border-radius:0 9px 9px 0;box-shadow:inset 1px 0 0 color-mix(in srgb,var(--text) 14%,transparent)}
+.wk-split .wk-btn.copy.primary{box-shadow:inset 1px 0 0 color-mix(in srgb,var(--accent-ink) 28%,transparent)}
 .wk-loc{flex:1;min-width:0;font:11.5px var(--mono);color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;padding-left:8px}
 .wk-loc i{font-style:normal;color:var(--text-2)}
 .wk-icons{display:flex;gap:2px}
