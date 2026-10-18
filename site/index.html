@@ -3,24 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pensieve: never lose the thread</title>
-<meta name="description" content="Free Mac app for developers and their AI agents. A context card for every task, agents that find the right code first, cards you can hand off, and who knows what in your repos. Local and open source.">
+<title>Pensieve: never lose the thread · MCP server for AI agents</title>
+<meta name="description" content="Pensieve MCP server for AI coding agents: context for Claude Code, Codex and Cursor in one search. Local, free and open source. Mac app for developers.">
 <meta name="robots" content="index,follow,max-image-preview:large">
-<meta name="keywords" content="context cards, context engineering, MCP server, Claude Code, Codex, AI coding agents, semantic code search, git blame ownership, knowledge gaps, Mac">
+<meta name="keywords" content="Pensieve, Pensieve MCP, Pensieve MCP server, Pensieve AI, Pensieve Claude Code, MCP server, Claude Code, Codex, Cursor, AI coding agents, context engineering, context cards, semantic code search, git blame ownership, Mac">
 <link rel="canonical" href="https://pensieve.tools/">
 <meta name="theme-color" content="#121211">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Pensieve">
-<meta property="og:title" content="Pensieve: never lose the thread">
-<meta property="og:description" content="A context card for every task, agents that start on the right code, cards you can hand off, and who knows what. Free, local and open source, for Mac.">
+<meta property="og:title" content="Pensieve: never lose the thread · MCP server for AI agents">
+<meta property="og:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A context card for every task. Free and open source, for Mac.">
 <meta property="og:url" content="https://pensieve.tools/">
 <meta property="og:image" content="https://pensieve.tools/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Pensieve for Mac">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pensieve: never lose the thread">
-<meta name="twitter:description" content="A context card for every task, agents that start on the right code, cards you can hand off, and who knows what. Free for Mac.">
+<meta name="twitter:title" content="Pensieve: never lose the thread · MCP server for AI agents">
+<meta name="twitter:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A context card for every task. Free and open source, for Mac.">
 <meta name="twitter:image" content="https://pensieve.tools/og.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23121211'/%3E%3Cpath fill='%23f4f3ee' fill-rule='evenodd' d='M6.39 6.5a2.42 2.42 0 1 0 4.84 0a2.42 2.42 0 1 0-4.84 0ZM6.39 17.5a2.42 2.42 0 1 0 4.84 0a2.42 2.42 0 1 0-4.84 0ZM7.93 8.92a4.84 4.84 0 1 0 9.68 0a4.84 4.84 0 1 0-9.68 0Z'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -29,28 +29,49 @@
 <script type="application/ld+json">
 {
  "@context": "https://schema.org",
- "@type": "SoftwareApplication",
- "name": "Pensieve",
- "applicationCategory": "DeveloperApplication",
- "operatingSystem": "macOS 14 or later (Apple Silicon)",
- "description": "Context for developers and their AI agents. A context card for every task, joined across agent sessions, branches, pull requests, tickets and messages. An MCP server that helps coding agents find the right code in fewer tool calls: in a benchmark, 91% of tasks solved against 85% with grep, with 43% fewer tool calls and 18% lower cost per lookup. Context cards that you share as one HTML file. Code ownership and knowledge gaps from git blame. Everything runs on the Mac.",
- "featureList": [
-  "Context cards: one card per task with its sessions, branch, worktree, pull requests, tickets and messages, a state and an AI note",
-  "MCP server that points coding agents to the most relevant passages, scoped to the repo they work in",
-  "Shared context cards: one HTML page with the card's JSON inside, for a teammate or their agent",
-  "Who knows what: code ownership and domain knowledge from git blame",
-  "Knowledge gaps: code mostly written by people no longer active in the repo",
-  "Local semantic and exact search over files, repos and agent sessions, on Control+Shift",
-  "Runs entirely on your Mac; AI notes optional"
- ],
- "url": "https://pensieve.tools/",
- "installUrl": "https://pensieve.tools/install.sh",
- "codeRepository": "https://github.com/TedHaley/pensieve",
- "license": "https://opensource.org/licenses/MIT",
- "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
- "author": {"@type": "Person", "name": "Ted Haley", "url": "https://tedhaley.ca"},
- "dateModified": "2026-10-17",
- "screenshot": "https://pensieve.tools/og.png"
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://pensieve.tools/#website",
+   "url": "https://pensieve.tools/",
+   "name": "Pensieve",
+   "alternateName": ["Pensieve MCP", "Pensieve for developers"],
+   "description": "Pensieve: never lose the thread. A local MCP server and Mac app that gives AI coding agents your context.",
+   "inLanguage": "en"
+  },
+  {
+   "@type": "SoftwareApplication",
+   "@id": "https://pensieve.tools/#app",
+   "name": "Pensieve",
+   "alternateName": ["Pensieve MCP", "Pensieve MCP server", "Pensieve AI", "Pensieve for developers"],
+   "slogan": "Never lose the thread",
+   "applicationCategory": "DeveloperApplication",
+   "applicationSubCategory": "MCP server",
+   "operatingSystem": "macOS 14 or later (Apple Silicon)",
+   "description": "Pensieve is a local MCP server and Mac app for developers and their AI coding agents (Claude Code, Codex, Cursor, Gemini CLI and others). A context card for every task, joined across agent sessions, branches, pull requests, tickets and messages. The MCP server helps coding agents find the right code in fewer tool calls: in a benchmark, it solved as many tasks as grep with 47% fewer tool calls and 23% lower cost per lookup. Context cards that you share as one HTML file. Code ownership and knowledge gaps from git blame. Everything runs on the Mac. Free and open source.",
+   "keywords": "MCP server, Claude Code, Codex, Cursor, AI coding agents, context engineering, context cards, semantic code search, local, open source",
+   "featureList": [
+    "Context cards: one card per task with its sessions, branch, worktree, pull requests, tickets and messages, a state and an AI note",
+    "MCP server that points coding agents to the most relevant passages, scoped to the repo they work in",
+    "Shared context cards: one HTML page with the card's JSON inside, for a teammate or their agent",
+    "Who knows what: code ownership and domain knowledge from git blame",
+    "Knowledge gaps: code mostly written by people no longer active in the repo",
+    "Local semantic and exact search over files, repos and agent sessions, on Control+Shift",
+    "Runs entirely on your Mac; AI notes optional"
+   ],
+   "url": "https://pensieve.tools/",
+   "installUrl": "https://pensieve.tools/install.sh",
+   "downloadUrl": "https://github.com/TedHaley/pensieve/releases",
+   "codeRepository": "https://github.com/TedHaley/pensieve",
+   "sameAs": ["https://github.com/TedHaley/pensieve"],
+   "isAccessibleForFree": true,
+   "license": "https://opensource.org/licenses/MIT",
+   "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+   "author": {"@type": "Person", "name": "Ted Haley", "url": "https://tedhaley.ca"},
+   "dateModified": "2026-10-18",
+   "screenshot": "https://pensieve.tools/og.png"
+  }
+ ]
 }
 </script>
 <style>
@@ -126,6 +147,7 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
 .hero-in{position:relative;z-index:2;width:100%;display:grid;grid-template-columns:1.25fr .75fr;gap:40px;align-items:end;padding:0 var(--gut) clamp(56px,9vh,96px);max-width:1400px;margin:0 auto}
 .hero h1{font-size:clamp(56px,10.5vw,168px);line-height:.9;letter-spacing:-.055em;font-weight:600}
 .hero h1 span{display:block}
+.hero .what{margin-top:clamp(18px,2.4vh,28px);max-width:640px;font-size:clamp(16px,1.35vw,19px);line-height:1.45;color:var(--night-ink-2)}
 .hero .side{padding-bottom:14px;max-width:380px}
 .hero .side p{font-size:clamp(17px,1.5vw,20px);line-height:1.45;color:var(--night-ink-2)}
 .hero .side p b{color:var(--night-ink);font-weight:500}
@@ -420,7 +442,10 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
   <svg class="big-mark" viewBox="0 0 24 24" aria-hidden="true"><path id="heroMark" fill-rule="evenodd" d=""/></svg>
   <div class="scroll-cue">Scroll</div>
   <div class="hero-in">
-    <h1><span>Never lose</span><span>the thread.</span></h1>
+    <div class="head">
+      <h1><span>Never lose</span><span>the thread.</span></h1>
+      <p class="what">Pensieve for developers: a local MCP server that gives AI agents like Claude Code, Codex and Cursor the right context.</p>
+    </div>
     <div class="side">
       <p><b>Pensieve keeps every task, file and agent session in one place</b>, so you and your coding agents always pick up with the right context.</p>
       <div class="ctas">
@@ -536,12 +561,12 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
       </div>
     </div>
     <div class="stats">
-      <div class="stat rv"><div class="v" data-count="91">91<small>%</small></div><div class="k">of tasks solved</div><div class="d">against 85% with grep alone</div></div>
-      <div class="stat rv d1"><div class="v" data-count="43">43<small>%</small></div><div class="k">fewer tool calls</div><div class="d">2.0 per lookup, not 3.4</div></div>
-      <div class="stat rv d2"><div class="v" data-count="18">18<small>%</small></div><div class="k">cheaper</div><div class="d">$0.041 per lookup, not $0.050</div></div>
-      <div class="stat rv d3"><div class="v" data-count="21">21<small>%</small></div><div class="k">faster</div><div class="d">8.6 s per lookup, not 10.9 s</div></div>
+      <div class="stat rv"><div class="v" data-count="47">47<small>%</small></div><div class="k">fewer tool calls</div><div class="d">1.8 per lookup, not 3.4</div></div>
+      <div class="stat rv d1"><div class="v" data-count="23">23<small>%</small></div><div class="k">cheaper</div><div class="d">$0.039 per lookup, not $0.051</div></div>
+      <div class="stat rv d2"><div class="v" data-count="29">29<small>%</small></div><div class="k">faster</div><div class="d">6.8 s per lookup, not 9.5 s</div></div>
+      <div class="stat rv d3"><div class="v" data-count="90">90<small>%</small></div><div class="k">of tasks solved</div><div class="d">the same as with grep alone</div></div>
     </div>
-    <p class="fine">Claude Sonnet in Claude Code, 72 held-out tasks in four real repos (504 to 34,847 files), each run twice, with and without Pensieve. <a href="https://github.com/TedHaley/pensieve/tree/main/bench">Method and scripts</a>. The terminals above are illustrative.</p>
+    <p class="fine">Latest batch, October 2026: Claude Sonnet in Claude Code, 72 held-out tasks in four real repos (504 to 34,847 files), each run twice, with and without Pensieve. <a href="https://github.com/TedHaley/pensieve/tree/main/bench">Method and scripts</a>. The terminals above are illustrative.</p>
     <p class="agents-lbl rv">Works with the agents you already use</p>
     <div class="agents rv" role="list">
       <div class="track">
