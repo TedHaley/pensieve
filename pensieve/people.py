@@ -26,12 +26,13 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from pensieve import config, connections, identity, org, repos as repos_mod, settings, work
+from pensieve import config, connections, identity, org, orgstore, repos as repos_mod, settings, work
 
 DIR = config.DATA_DIR / "people"
 RAW = DIR / "raw.json"            # identities and interactions, by identity key (the slow part)
 GRAPH = DIR / "graph.json"        # people, edges and profiles (resolved from RAW and the overrides)
 OVERRIDES = DIR / "overrides.json"
+ORG_EVIDENCE = DIR / "org_evidence.json"  # org evidence over all builds (orgstore.py)
 PROFILES = DIR / "slack_profiles.json"
 AVATARS = DIR / "avatars"
 CACHE = DIR / "cache"
@@ -418,12 +419,18 @@ def _collect_github(raw: _Raw, repo_rows, my_emails: set[str]):
     rows = sorted([r for r in rows if r[2]], key=lambda r: -mine(r[0]))[:MAX_PR_REPOS]
     with ThreadPoolExecutor(4) as pool:
         results = list(pool.map(lambda r: (r[1], _gh_repo(r[2])), rows))
+    log = raw.extra.setdefault("pr_log", [])  # each pull request's people, for the org evidence store (orgstore.py)
     for name, prs in results:
         for p in prs:
             raw.stats["prs"] += 1
             a = p["author"]
             if not a["login"] or a["bot"] or is_bot(a["name"], login=a["login"]):
                 continue
+            if p.get("url"):
+                log.append(dict(url=p["url"], repo=name, ts=p["ts"], author=a["login"].lower(),
+                                reviewers=[x.lower() for x in p["reviewers"] if x != a["login"] and not is_bot(login=x)],
+                                approvers=[x.lower() for x in p.get("approvers") or []
+                                           if x != a["login"] and not is_bot(login=x)]))
             ak = raw.ident("github", name=a["name"], login=a["login"],
                            avatar=f"https://github.com/{a['login']}.png?size=128")
             for c in p["commit_authors"]:
@@ -961,7 +968,12 @@ def resolve(raw: dict, ovr: dict, prev: dict | None = None) -> dict:
     for pid, p in people.items():
         p["last"] = profiles[pid]["last"]
         p["function"] = profiles[pid]["function"]
-    chart = org.infer(people, profiles, work_of, edges, raw)
+    ev = orgstore.load(ORG_EVIDENCE)
+    new_build = orgstore.merge(ev, raw, now, org.is_manager_title)
+    chart = org.infer(people, profiles, work_of, edges, raw, ev)
+    orgstore.add_teams(ev, chart["teams"], lambda q: people[q]["keys"][0] if people[q]["keys"] else "", now, new_build)
+    orgstore.save(ORG_EVIDENCE, ev)
+    chart["evidence"] = orgstore.summary(ev)
     for pid, pr in profiles.items():
         pr["joined_because"] = [_join_view(j) for j in people[pid]["joins"]]
         pr["maybe"] = [dict(id=m["id"], name=people[m["id"]]["name"], reason=m["reason"], score=m["score"],
@@ -1280,6 +1292,99 @@ def profile(pid: str) -> dict | None:
     return pr
 
 
+REL_PEERS = 8
+REL_COLLABS = 6
+
+
+def relations(pid: str) -> dict | None:
+    """GET /api/people/<id>/relations: the person's nearest org around them, each link with its inferred relation,
+    confidence and evidence. Managers and reports come from the org chart's reporting lines, peers from the same
+    inferred team, and collaborators are the strongest graph edges outside those."""
+    g = graph()
+    if g and pid not in g["people"]:
+        pid = current_id(pid) or pid
+    if not g or pid not in g["people"]:
+        return None
+    ppl, ch, me = g["people"], g.get("org") or {}, g["me"]
+    ops = ch.get("people", {})
+    op = ops.get(pid, {})
+    teams = {t["id"]: t for t in ch.get("teams", [])}
+    team = teams.get(op.get("team"))
+    first = "your" if pid == me else ppl[pid]["name"].split()[0] + "'s"
+    who = "you" if pid == me else ppl[pid]["name"].split()[0]
+
+    def node(q, relation, label, conf, evidence, **extra):
+        p, o = ppl[q], ops.get(q, {})
+        return dict(id=q, name=p["name"], me=p["me"], function=p.get("function", ""), title=p["title"],
+                    avatar=bool(p["avatar_url"] and _avatar_file(p["avatar_url"])), level=o.get("level"),
+                    level_confidence=o.get("level_confidence", 0), relation=relation, label=label,
+                    confidence=round(conf or 0, 2), evidence=evidence, **extra)
+
+    edges = {}   # the other person -> the graph edge between them
+    for e in g["edges"]:
+        if pid in (e["a"], e["b"]):
+            o = e["b"] if e["a"] == pid else e["a"]
+            if o in ppl:
+                edges[o] = e
+    wmax = max((e["w"] for e in edges.values()), default=0) or 1
+    rv = ch.get("reviews") or {}
+
+    def why_edge(q):
+        e = edges.get(q)
+        if not e:
+            return []
+        out = [f"{KIND_LABEL.get(k, k)}: {n:,}" for k, n in sorted(e["kinds"].items(), key=lambda kv: -kv[1])]
+        if e.get("last"):
+            out.append("last together " + time.strftime("%Y-%m-%d", time.localtime(e["last"])))
+        return out
+
+    def link_label(q):
+        """The strongest kind of work between them, said from the selected person's side."""
+        e = edges.get(q)
+        theirs, mine = rv.get(q, {}).get(pid, 0), rv.get(pid, {}).get(q, 0)
+        if theirs or mine:
+            if theirs >= mine:
+                return f"reviews {first} PRs" + (f" · {theirs}" if theirs > 1 else ""), theirs + mine
+            return f"{who} review{'' if pid == me else 's'} their PRs" + (f" · {mine}" if mine > 1 else ""), theirs + mine
+        if not e:
+            return "", 0
+        k = max(e["kinds"], key=lambda k: KIND_WEIGHT.get(k, 1) * math.log1p(e["kinds"][k]))
+        return {"code": "works on the same files", "pr": "pull request reviews", "task": "shares tasks",
+                "thread": "talks in Slack threads", "dm": "direct messages", "channel": "same Slack channels"}.get(k, k), 0
+
+    up = [x for x in ch.get("edges", []) if x["report"] == pid and x["manager"] in ppl][:3]
+    down = [x for x in ch.get("edges", []) if x["manager"] == pid and x["report"] in ppl][:12]
+    managers = [node(x["manager"], "manager", f"manager · inferred {x['confidence']:.0%}", x["confidence"],
+                     x["evidence"]) for x in up]
+    reports = [node(x["report"], "report", f"report · inferred {x['confidence']:.0%}", x["confidence"],
+                    x["evidence"]) for x in down]
+    taken = {pid} | {x["manager"] for x in up} | {x["report"] for x in down}
+    peers = []
+    if team:
+        mates = [q for q in team["members"] if q not in taken and q in ppl]
+        mates.sort(key=lambda q: (-(edges[q]["w"] if q in edges else 0), ppl[q].get("rank", 1e9)))
+        for q in mates[:REL_PEERS]:
+            conf = min(op.get("team_confidence", 0), ops.get(q, {}).get("team_confidence", 0))
+            lab, _ = link_label(q)
+            peers.append(node(q, "peer", "peer · same team", conf,
+                              [f"both in the inferred team {team['name']}"] + team.get("evidence", [])[:2] + why_edge(q),
+                              also=lab))
+        taken |= set(mates[:REL_PEERS]) | set(team["members"])
+    others = sorted((q for q in edges if q not in taken), key=lambda q: -edges[q]["w"])[:REL_COLLABS]
+    collabs = []
+    for q in others:
+        lab, _ = link_label(q)
+        collabs.append(node(q, "collaborator", lab or "works together", edges[q]["w"] / wmax, why_edge(q)))
+    p = ppl[pid]
+    center = dict(id=pid, name=p["name"], me=p["me"], function=p.get("function", ""), title=p["title"],
+                  avatar=bool(p["avatar_url"] and _avatar_file(p["avatar_url"])), level=op.get("level"),
+                  level_confidence=op.get("level_confidence", 0), level_evidence=op.get("level_evidence", []))
+    return dict(id=pid, center=center, managers=managers, peers=peers, reports=reports, collaborators=collabs,
+                team=dict(id=team["id"], name=team["name"], size=team["size"], confidence=op.get("team_confidence", 0),
+                          evidence=op.get("team_evidence", [])) if team else None,
+                evidence=ch.get("evidence") or {}, note="Inferred from the work Pensieve can see. Not an HR record.")
+
+
 def org_chart() -> dict:
     """GET /api/people/org: inferred teams, each person's function, seniority and team with confidence and
     evidence, and inferred manager -> report edges. Each node has what the UI needs to draw it."""
@@ -1295,7 +1400,8 @@ def org_chart() -> dict:
         ppl[pid] = {**op, "me": p["me"], "rank": p.get("rank"), "closeness": p.get("closeness", 0), "title": p["title"],
                     "avatar": bool(p["avatar_url"] and _avatar_file(p["avatar_url"]))}
     return dict(me=g["me"], built=g["built"], note=ch.get("note", ""), teams=ch["teams"], people=ppl,
-                edges=ch["edges"], leaders=ch.get("leaders", []), building=_state["building"])
+                edges=ch["edges"], leaders=ch.get("leaders", []), evidence=ch.get("evidence") or {},
+                building=_state["building"])
 
 
 def _uniq(refs, key):
