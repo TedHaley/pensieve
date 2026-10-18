@@ -4227,7 +4227,7 @@ function drawProjTable(ss) {
 const pl = {items: [], sel: 0, q: '', seq: 0};
 // Search lives at the top of the left panel: a query swaps the filters for results; clearing it brings them back.
 async function openPalette(prefill = null, {focus = true} = {}) {
-  if (S.view === 'settings') await setView(dataType());
+  if (S.view !== 'data') await setView(dataType());  // search lives in the Map's panel
   toggleSide(true);
   const i = $('#palin');
   if (prefill != null) i.value = prefill;
@@ -4405,9 +4405,11 @@ $$('#gearmenu [data-go]').forEach(b => b.onclick = () => {
   S.view === 'settings' ? renderSettings() : setView('settings');
 });
 function toggleSide(open) {
-  if (open == null && S.view === 'settings') return;  // Settings has no filter panel
+  if (open == null && S.view !== 'data') return;  // only the Map has the filter panel
   const on = open ?? !document.body.classList.contains('side-open');
   document.body.classList.toggle('side-open', on); store.set('sideOpen', on);
+  const b = $('#sidetoggle'); b.setAttribute('aria-expanded', on); b.title = on ? 'Hide the panel' : 'Show the panel';
+  b.setAttribute('aria-label', on ? 'Hide the filter panel' : 'Show the filter panel');
   setTimeout(() => { if (S.view === 'map') renderTimeline(); }, 260);
 }
 $('#sidetoggle').onclick = () => toggleSide();
