@@ -2016,7 +2016,7 @@ function connectorsHtml(cat) {
   if (!rows.length) return '';
   const sg = srcState.cxSignin;
   return `<details class="src-opts cx" ${srcState.cxShown ?? !rows.some(c => c.state === 'on') ? 'open' : ''} data-cx-details><summary>Cloud connectors · ${rows.filter(c => c.state === 'on').length} of ${rows.length} collecting</summary>
-    <div class="cx-intro">Read-only, from your own account. Each one is off until you switch it on in the list above.</div>
+    <div class="cx-intro">Read-only, from your own account. A connection is on once Pensieve holds data from it, unless you switch it off in the list above.</div>
     ${rows.map(c => `<div class="cx-row">
       <div class="src-tx"><div class="src-l">${esc(c.label)}</div><div class="cx-d"><span class="cx-st cx-${esc(c.state)}">${esc(CX_STATE[c.state] || c.state)}</span> ${esc(c.detail)}</div></div>
       <div class="src-n">${c.items ? srcCount(c.items, 'items') : ''}</div>

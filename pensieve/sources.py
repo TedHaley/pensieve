@@ -11,7 +11,7 @@ CATEGORIES = [
     ("repos", "Git repositories", "Code with git blame and history, including uncommitted changes and linked worktrees."),
     ("apps", "Apps", "Content that lives inside apps on this Mac."),
     ("connections", "Connections", "Tickets, messages and pages from your MCP servers (Jira, Slack, Linear and others), "
-     "collected with read-only tools and kept over time, with each change. Each connection is off until you switch it on."),
+     "collected with read-only tools and kept over time, with each change. A connection is on once Pensieve holds data from it, unless you switch it off."),
 ]
 
 
