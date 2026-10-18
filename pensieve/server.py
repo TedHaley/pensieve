@@ -1392,7 +1392,8 @@ def get_work(days: int = 30):
     stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
     of = {t["id"]: history.thread_of(t["id"]) for t in ts}
     # each note's core (problem, goal, state, next, question); notes in an older format show until written again
-    return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "stale": t["id"] in stale}
+    return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
+                                           "stale": t["id"] in stale}
                                  for t in ts if work.core(have.get(t["id"], {}))},
                 threads={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
                 states=task_states.models(), writing=status.get("work_notes") or [])

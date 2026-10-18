@@ -60,14 +60,15 @@ def build(t: dict, note: dict, hist: list[dict]) -> dict:
     since = [f"PR #{_num(p['url'])} merged {_iso(p['merged_at'])[:10]}" for p in t["prs"] + t.get("branch_prs", [])
              if last and (p.get("merged_at") or 0) > last]
     since += [c for c in changed if not c.startswith("PR #")]
-    asked = work.last_question(t.get("last_words") or "")
+    asked = work.asked_question(t)
     if asked:
         core["question"] = asked
     if core:
         core["as_of"] = _iso(last)
     root = next((p["path"] for p in t.get("places", []) if p.get("git")), "")
     card = dict(
-        schema=SCHEMA, id=t["id"], title=t["title"], kind=t.get("kind", "work"), locality="local",
+        schema=SCHEMA, id=t["id"], title=(note or {}).get("title") or t["title"], label=t["title"],
+        kind=t.get("kind", "work"), locality="local",
         state=dict(value=t["state"], why=t.get("state_why", ""), set_by=t.get("state_by") or "auto"),
         made_at=_iso(datetime.now().timestamp()), last_activity=_iso(t["updated"]), last_session=_iso(last),
         origin=_clean(dict(by=work._git(root, "config", "user.name", ttl=3600) if root else "", generator=_version())),

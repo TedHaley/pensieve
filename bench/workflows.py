@@ -17,6 +17,8 @@ Arms (each a `claude -p` run in the task's repo; sessions are not saved, so they
   pensieve   base plus Pensieve's read-only MCP tools and the plugin's session-start instructions
   teammate   base in a fresh clone, with the owner's Desktop, Documents and ~/.claude closed: someone else's machine
   +v1, +v2   (suffix) the context card that the owner shared, from the task's "cards", added to the prompt
+  +revive    (suffix) a new session from a card: the revive prompt points to the task's card file
+  +nohistory (suffix) without the thread_history tool
   +skills    (suffix) also loads the plugin's skills from pensieve/integrations/skills
   +memory    (suffix) keeps Claude Code's auto memory on (it is off otherwise)
   +inject    (suffix) adds what Pensieve's prompt hook adds to the prompt: a context card or code hits
@@ -40,6 +42,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 API = os.environ.get("PENSIEVE_BENCH_API", "http://127.0.0.1:8765")
+API_ALT = os.environ.get("PENSIEVE_BENCH_API_ALT", "")  # +alt: a second server (other code) for an A/B in one batch
 OUT = Path(__file__).parent / "out" / "workflows"
 ROOT = Path(__file__).parent.parent
 INSTRUCTIONS = (ROOT / "pensieve" / "integrations" / "instructions.md").read_text()
@@ -54,14 +57,16 @@ READ_ONLY_BASH = [f"Bash({c}:*)" for c in (
 # Pensieve's tools that only read; set_task_state, open, settings and setup tools stay out
 PENSIEVE_TOOLS = [f"mcp__pensieve__{t}" for t in (
     "search", "read", "similar", "who_knows", "overview", "team", "unexplored", "knowledge_gaps", "stale", "tasks",
-    "task", "list_repos", "current_scope")]
+    "task", "list_repos", "current_scope", "thread_history")]
 # a repo's own settings can allow much more (deploys, checkouts), so runs load no settings files and deny these too
 OFF = ",".join(["Edit", "Write", "NotebookEdit", "Task", "Agent", "WebFetch", "WebSearch", "TodoWrite"] + [
     f"Bash({c}:*)" for c in ("git checkout", "git switch", "git reset", "git commit", "git push", "git fetch", "git pull",
                              "git merge", "git rebase", "git stash", "git worktree add", "git worktree remove",
                              "git branch -d", "git branch -D", "gh pr merge", "gh pr create", "gh pr edit", "gh pr close",
                              "gh pr comment", "gh pr ready", "gh pr review", "gh api", "curl", "rm", "mv")])
-PROMPT_TAIL = "\n\nOnly look and report: do not change files, branches, PRs or tickets."
+# in the foreground: a background command's end makes the run's last message a reply to it, not the report
+PROMPT_TAIL = ("\n\nOnly look and report: do not change files, branches, PRs or tickets. Run every command in the "
+               "foreground.")
 _HOME = str(Path.home())
 
 
@@ -83,17 +88,20 @@ def skills_plugin():
 
 def arm_config(arm, root):
     base, *extra = arm.split("+")
-    unknown = set(extra) - {"skills", "memory", "inject", "injectjson", "v1", "v2", "v3"}
+    unknown = set(extra) - {"skills", "memory", "inject", "injectjson", "v1", "v2", "v3", "revive", "nohistory", "alt"}
     if unknown:
         raise SystemExit(f"unknown arm suffix {unknown}")
     c = dict(tools="Read,Grep,Glob,Bash", allowed=["Read", "Grep", "Glob", *READ_ONLY_BASH], mcp={}, system=None,
              memory="memory" in extra, skills="skills" in extra,
              inject="json" if "injectjson" in extra else "text" if "inject" in extra else None,
-             card=next((x for x in extra if x in ("v1", "v2", "v3")), None))
+             card=next((x for x in extra if x in ("v1", "v2", "v3", "revive")), None),
+             api=API_ALT if "alt" in extra else API)
+    if "nohistory" in extra:  # Pensieve without the thread history tool
+        c["off"] = c.get("off", []) + ["mcp__pensieve__thread_history"]
     if base == "teammate":  # someone else's machine: no Pensieve, and the owner's folders and agent files are off
         c["off"] = [f"{tool}(/{_HOME}/{d}/**)" for tool in ("Read", "Grep", "Glob") for d in ("Desktop", ".claude", "Documents")]
     elif base == "pensieve":
-        c["mcp"] = {"pensieve": {"type": "http", "url": f"{API}/mcp?" + urllib.parse.urlencode(dict(scope="auto", cwd=root))}}
+        c["mcp"] = {"pensieve": {"type": "http", "url": f"{c['api']}/mcp?" + urllib.parse.urlencode(dict(scope="auto", cwd=root))}}
         c["allowed"] += PENSIEVE_TOOLS + ["Skill"]
         c["system"] = INSTRUCTIONS  # what the plugin's SessionStart hook adds
     elif base != "base":
@@ -120,7 +128,7 @@ def claude(prompt, cwd, model, c, budget=2.0, timeout=900):
     finally:
         if plugin:
             shutil.rmtree(plugin, ignore_errors=True)
-    calls, denied, final = [], 0, {}
+    calls, denied, final, texts = [], 0, {}, []
     for line in p.stdout.splitlines():
         try:
             e = json.loads(line)
@@ -128,6 +136,8 @@ def claude(prompt, cwd, model, c, budget=2.0, timeout=900):
             continue
         if e.get("type") == "assistant":
             for x in e["message"].get("content", []):
+                if x.get("type") == "text" and x.get("text", "").strip():
+                    texts.append(x["text"])
                 if x.get("type") == "tool_use":
                     inp = x.get("input") or {}
                     arg = inp.get("command") or inp.get("query") or inp.get("pattern") or inp.get("file_path") or \
@@ -142,7 +152,11 @@ def claude(prompt, cwd, model, c, budget=2.0, timeout=900):
     mu = final.get("modelUsage") or {}
     error = (p.stderr[-500:] or "no result") if not final else \
         (f"{final.get('subtype')}: {(final.get('result') or '')[:300]}" if final.get("is_error") else None)
-    return dict(result=final.get("result") or "", error=error, cost=final.get("total_cost_usd"),
+    answer = final.get("result") or ""
+    longest = max(texts, key=len, default="")
+    if len(answer) < len(longest) / 2:  # the last message answers a background command's end, not the request
+        answer = f"{longest}\n\n{answer}"
+    return dict(result=answer, error=error, cost=final.get("total_cost_usd"),
                 turns=final.get("num_turns"), secs=round(time.time() - t, 1), calls=calls, denied=denied,
                 tokens=sum(m.get("inputTokens", 0) + m.get("cacheReadInputTokens", 0) +
                            m.get("cacheCreationInputTokens", 0) + m.get("outputTokens", 0) for m in mu.values()),
@@ -151,12 +165,12 @@ def claude(prompt, cwd, model, c, budget=2.0, timeout=900):
                     ("cache_read", "cacheReadInputTokens"), ("output", "outputTokens"))})
 
 
-def injected(prompt, root, card="text"):
+def injected(prompt, root, card="text", api=API):
     """The prompt as Claude sees it with Pensieve's UserPromptSubmit hook: the hook's answer (a context card, as text
     or as the agent JSON, or code hits) from /api/prompt-context appended, as Claude Code adds a hook's
     additionalContext."""
     body = json.dumps({"prompt": prompt, "cwd": root, "hook_event_name": "UserPromptSubmit"}).encode()
-    r = urllib.request.Request(f"{API}/api/prompt-context?card={card}", body, {"content-type": "application/json"})
+    r = urllib.request.Request(f"{api}/api/prompt-context?card={card}", body, {"content-type": "application/json"})
     with urllib.request.urlopen(r, timeout=60) as resp:
         ctx = (json.load(resp).get("hookSpecificOutput") or {}).get("additionalContext")
     return f"{prompt}\n\n{ctx}" if ctx else prompt
@@ -188,9 +202,14 @@ def run(a):
         root = str(Path(t["repo"]).expanduser())
         c = arm_config(arm, root)
         prompt = t["prompt"] + PROMPT_TAIL
-        if c["card"]:  # the context card the owner shared, as the reader's agent gets it (tasks-shared.jsonl)
+        if c["card"] == "revive":  # a new session from a card, as "New session from card" starts it
+            from pensieve import cards
+            path = t["cards"]["revive"]
+            prompt += "\n\n" + cards.REVIVE_PROMPT.format(path=path)
+            c = dict(c, allowed=c["allowed"] + [f"Read(/{Path(path).parent}/**)"])
+        elif c["card"]:  # the context card the owner shared, as the reader's agent gets it (tasks-shared.jsonl)
             prompt += "\n\nTed shared this context card with me:\n" + Path(t["cards"][c["card"]]).read_text()
-        r = claude(injected(prompt, root, c["inject"]) if c["inject"] else prompt, root, a.model, c, a.budget)
+        r = claude(injected(prompt, root, c["inject"], c["api"]) if c["inject"] else prompt, root, a.model, c, a.budget)
         rec = dict(task=t["id"], workflow=t["workflow"], arm=arm, rep=rep, **r)
         print(f"{t['id']:<10} {arm:<16} ${r['cost'] or 0:.3f} {len(r['calls']):>2} calls {r['secs']:>6}s"
               f"{'  ERROR ' + r['error'][:80] if r['error'] else ''}", file=sys.stderr)

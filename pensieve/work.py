@@ -347,6 +347,10 @@ def _tasks(store, days, until: float | None = None):
             events=_events(ss, its, cs),
             id=_task_id(keys, brs, ss), title=title, kind="ticket" if keys else "branch" if brs else "work",
             keys=keys, status=main["status"] if main else "", updated=updated,
+            # tickets the sessions talk about without being their work; a key named once is often an example or a typo
+            ticket_refs=[dict(key=k, url=f"{sites[k.split('-')[0]]}/{k}" if k.split("-")[0] in sites else "")
+                         for k, n in Counter(k for s in ss for k in keys_in("\n".join(texts.get(s["id"], [])))).most_common()
+                         if n >= 2 and k not in keys][:3],
             repos=sorted({s["repo"] for s in ss if s["repo"]} | {c["repo"] for c in cs}),
             branches=[dict(repo=b.split("@", 1)[0], branch=b.split("@", 1)[1]) for b in brs],
             tickets=[{k: i[k] for k in ("key", "title", "status", "assignee", "url", "server", "path", "updated")}
@@ -626,6 +630,13 @@ def reconcile(note: dict, t: dict) -> tuple[dict, list[str]]:
     return out, list(dict.fromkeys(changes))
 
 
+def asked_question(t: dict) -> str:
+    """The last session's own final question, checked like a note against the live state ("Push them all?" after
+    the push gets [outdated: …]), or ""."""
+    q = last_question(t.get("last_words") or "")
+    return reconcile({"v": NOTE_VERSION, "question": q}, t)[0].get("question", "") if q else ""
+
+
 def last_question(words: str) -> str:
     """The question that a session's last message ends with ("Should I add the fix to #2069, or open a follow-up?"),
     with the sentence before it when the question alone is short ("Want me to build it?"), or ""."""
@@ -681,7 +692,7 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
         out.append("Since the last session: " + "; ".join(since))
     if note:
         out += ["", "As of the last session:"] + [f"{label}: {note[k]}" for k, label in CORE_LABELS[:4] if note.get(k)]
-    asked = last_question(t.get("last_words") or "")  # the session's own words, over the note's
+    asked = asked_question(t)  # the session's own words, over the note's
     if asked or note.get("question"):
         out.append(f"Waiting on you: {asked or note['question']}")
     if t.get("last_words"):
@@ -917,7 +928,8 @@ Its data points, newest first (date, source, what happened):
 How it ended:
 {last_words}
 
-Answer with five fields:
+Answer with six fields:
+- title: at most 8 words that name the goal as an outcome, in sentence case, with no ticket key or branch name.
 - problem: at most 25 words on what is wrong or missing, to bring it back to mind.
 - goal: at most 20 words on what "done" looks like, and why it matters.
 - state: at most 40 words on where it stands: what has been done, and what was decided and why (a cause found, an
@@ -930,9 +942,9 @@ State facts from the data above only. Name the real PRs, tickets, functions and 
 folders or file paths: someone on another machine reads this too. Say how something was done or why it worked only
 in the data's own words; if the data doesn't say, leave it out."""
 CORE = ("problem", "goal", "state", "next", "question")
-NOTE_SCHEMA = {"type": "object", "properties": {k: {"type": "string"} for k in CORE},
-               "required": list(CORE), "additionalProperties": False}
-NOTE_VERSION = 8  # a new version writes every note again; 7: the longer ending; 8: problem, goal, state, next
+NOTE_SCHEMA = {"type": "object", "properties": {k: {"type": "string"} for k in ("title",) + CORE},
+               "required": ["title", *CORE], "additionalProperties": False}
+NOTE_VERSION = 9  # a new version writes every note again; 8: problem, goal, state, next; 9: a title that names the goal
 
 
 def core(note: dict) -> dict:
@@ -997,6 +1009,18 @@ def resume_command(store, session_id: str) -> str | None:
 
 def write_note(task: dict, all_tasks: list[dict]) -> str:
     """Ask the insights engine for the task's note, and keep it with the signature of the data it saw."""
+    note = make_note(task)
+    cur = notes()
+    cur[task["id"]] = dict(note, sig=_signature(task), at=time.time(), v=NOTE_VERSION)
+    path = _notes_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cur))
+    return cur[task["id"]]
+
+
+def make_note(task: dict) -> dict:
+    """The insights engine's note for a task ({problem, goal, state, next, question}), not saved: write_note keeps
+    it; a replay writes notes for past snapshots with it."""
     from pensieve import llm
     day = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
     events = "\n".join(f"- {day(e['ts'])} {e['source']}: {e['title'][:140]}" + (f" ({e['detail'][:60]})" if e.get("detail") else "")
@@ -1013,13 +1037,7 @@ def write_note(task: dict, all_tasks: list[dict]) -> str:
                                           earlier="".join(f'An earlier session: "{title}"\n{summary}\n'
                                                           for title, summary in task.get("earlier", []) if summary)),
                        max_tokens=320, schema=NOTE_SCHEMA, kind="task note")
-    cur = notes()
-    cur[task["id"]] = dict({k: str(ans.get(k, "")).strip() for k in NOTE_SCHEMA["required"]},
-                           sig=_signature(task), at=time.time(), v=NOTE_VERSION)
-    path = _notes_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cur))
-    return cur[task["id"]]
+    return {k: str(ans.get(k, "")).strip() for k in NOTE_SCHEMA["required"]}
 
 
 def _me(root: str) -> set[str]:

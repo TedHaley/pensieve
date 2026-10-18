@@ -74,12 +74,13 @@ class Keeper:
                 self._vecs[k] = v / (np.linalg.norm(v) + 1e-9)
         return [self._vecs[k] for k in keys]
 
-    def run_once(self, now: float | None = None) -> list[dict]:
-        """Link the current cards and save the ones that changed. Returns what was saved: {thread, reasons}."""
+    def run_once(self, now: float | None = None, tasks: list[dict] | None = None, notes: dict | None = None) -> list[dict]:
+        """Link the current cards and save the ones that changed. Returns what was saved: {thread, reasons}. A replay
+        gives the tasks and notes of a past time, and that time as `now`."""
         from pensieve import cards, task_states
         now = now or time.time()
-        notes = work.notes()
-        ts = [t for t in work.tasks(self.store, 30)
+        notes = work.notes() if notes is None else notes
+        ts = [t for t in (work.tasks(self.store, 30) if tasks is None else tasks)
               if t["files"] or t["branches"] or t["prs"] or t["keys"] or t["commits"]]  # a question alone is not a thread
         if not ts:
             return []

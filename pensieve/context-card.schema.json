@@ -24,7 +24,8 @@
   "properties": {
     "schema": {"const": "context-card/1"},
     "id": {"type": "string", "description": "Stable id of the work: t:ABC-12 (ticket), b:<repo>@<branch> (branch; org/repo in a shared card) or s:<agent>:<session>"},
-    "title": {"type": "string"},
+    "title": {"type": "string", "description": "The goal in at most 8 words, from the note; the label when there is no note"},
+    "label": {"type": "string", "description": "The work's own name: its ticket's title, its branch or its first session's title"},
     "kind": {"enum": ["ticket", "branch", "work"]},
     "locality": {"enum": ["local", "shared"]},
     "state": {
