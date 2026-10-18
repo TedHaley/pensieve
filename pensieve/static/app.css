@@ -661,7 +661,44 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .pp-idrow .k{width:52px;flex:none;color:var(--text-3);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
 .pp-idrow .v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px var(--mono)}
 .pp-idrow .linkbtn{font-size:12px;color:var(--text-3)}.pp-idrow .linkbtn:hover{color:var(--critical)}
+.pp-seg{display:inline-flex;padding:2px;border-radius:999px;background:var(--surface-2);box-shadow:inset 0 0 0 .5px var(--line);margin-right:auto}
+.pp-seg button{border:0;background:none;color:var(--text-2);font-size:12.5px;font-weight:500;padding:4px 12px;border-radius:999px}
+.pp-seg button.on{background:var(--card);color:var(--text);box-shadow:var(--shadow-sm)}
+.pp-org{overflow:auto;padding:16px 18px 20px}
+.pp-orgnote{font-size:12px;color:var(--text-3);margin:0 2px 12px;line-height:1.45}
+.pp-teams{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;align-items:start}
+.pp-team{border-radius:14px;background:var(--surface-2);box-shadow:inset 0 0 0 .5px var(--line);padding:10px 12px 12px;transition:box-shadow .3s}
+.pp-team.lead,.pp-team.loose{margin-bottom:12px}.pp-team.loose{margin-top:12px}
+.pp-team.flash{box-shadow:inset 0 0 0 2px var(--accent)}
+.pp-team header{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.pp-team header b{font-size:13.5px;overflow-wrap:anywhere}.pp-team header .muted{font-size:11.5px}
+.pp-mgrs,.pp-members{display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin-top:8px}
+.pp-stem{width:1px;height:12px;background:var(--line-2);margin:2px auto 0}
+.pp-mgrs+.pp-why+.pp-stem{margin-top:4px}
+.pp-onode{display:flex;flex-direction:column;align-items:center;gap:3px;width:74px;padding:6px 2px;border:0;border-radius:10px;background:none;color:var(--text);cursor:pointer}
+.pp-onode:hover,.pp-onode:focus-visible{background:var(--card)}
+.pp-onode.sel{background:var(--card);box-shadow:inset 0 0 0 2px var(--c-context)}
+.pp-onode.me .pp-av{box-shadow:0 0 0 2px var(--accent)}
+.pp-onode .nm{font-size:11.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pp-onode.mgr .nm{font-weight:600}
+.pp-lvl{font-size:9.5px;font-weight:600;border-radius:999px;padding:0 6px;background:var(--surface-3);color:var(--text-2);white-space:nowrap}
+.pp-lvl.l2,.pp-lvl.l3{background:var(--accent-soft);color:var(--accent)}.pp-lvl.l4{background:var(--accent);color:#fff}
+.pp-why{font-size:12px;color:var(--text-2);margin:4px 0}
+.pp-why summary{cursor:pointer;color:var(--text-3);font-size:11.5px}
+.pp-why ul{margin:4px 0 2px;padding-left:18px;line-height:1.45}
+.pp-orgrows{font-size:13px}
+.pp-orgrow{display:flex;gap:10px;align-items:baseline;padding:5px 0;border-top:1px solid var(--line)}
+.pp-orgrow:first-child{border-top:0}
+.pp-orgrow .k{width:118px;flex:none;color:var(--text-3);font-size:11.5px}
+.pp-orgrow .v{flex:1;min-width:0}
+.pp-joins{font-size:12px}
+.pp-join{padding:5px 0;border-top:1px solid var(--line)}.pp-join:first-child{border-top:0}
+.pp-join .v{display:block;font:11.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pp-join small{display:block;color:var(--text-3);line-height:1.4;margin-top:2px}
+.pp-join.fact small{font-style:italic}
+.pp-note{font-size:11.5px;color:var(--text-3);margin:6px 0 0}
 @media (max-width:860px){#people{padding:20px 16px 16px;overflow:auto}.pp-body{display:flex;flex-direction:column}
+  .pp-org{max-height:70vh;flex:none}
   .pp-graph{height:62vh;flex:none}.pp-card{overflow:visible}.pp-find input{width:150px}.pp-hits{left:0;right:auto;width:min(260px,80vw)}}
 /* ---- Data tab: tasks, each with its data points (left) and an AI note (right) ---- */
 #work{top:var(--top-h);left:var(--gap);right:var(--gap);bottom:var(--gap);padding:30px 32px 56px}

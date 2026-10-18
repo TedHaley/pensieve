@@ -3466,7 +3466,8 @@ $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'da
 // The people the user works with, as a network around the user: nearer people sit closer to the centre and are drawn
 // larger. Nodes show the person's picture (Slack, then GitHub) or initials. A click opens their card: who they are,
 // what they work on, and the user's relation to them. The server builds the graph in the background (/api/people).
-S.people = {data: null, err: null, n: +store.get('peopleN', 24), sel: null, card: null, q: '', merging: null, stale: true};
+S.people = {data: null, err: null, n: +store.get('peopleN', 24), sel: null, card: null, q: '', merging: null, stale: true,
+            view: store.get('peopleView', 'graph') === 'org' ? 'org' : 'graph', org: null};
 const PP_STEP = 24;
 const ppHue = s => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 8;
 const ppShort = n => { const w = n.split(/\s+/).filter(Boolean); return w.length > 1 ? `${w[0]} ${w[w.length - 1][0]}.` : n; };
@@ -3481,6 +3482,8 @@ async function loadPeople(refresh = false) {
     S.people.data = await api(`/api/people?limit=200${refresh ? '&refresh=true' : ''}`); S.people.err = null; S.people.stale = false;
   } catch (e) { S.people.err = e.message; }
   if (S.view !== 'people') return;
+  if (S.people.view === 'org') await loadOrg();
+  else S.people.org = null;  // the next Org view loads it again, from the new build
   renderPeople();
   const d = S.people.data;
   if (S.people.card?.directory) return;  // a person that a search found stays open
@@ -3557,12 +3560,15 @@ function renderPeople() {
                 st.slack_threads && plural(st.slack_threads, 'Slack thread')].filter(Boolean).join(', ');
   const noPics = (d?.nodes || []).filter(n => n.slack && !n.avatar).length;
   const shown = Math.min(P.n, Math.max(0, (d?.nodes.length || 1) - 1));
+  const org = P.view === 'org';
   el.innerHTML = `<div class="wk-head pp-head"><h2>People</h2>
+      <div class="pp-seg" role="group" aria-label="View"><button class="${org ? '' : 'on'}" data-pp-view="graph" aria-pressed="${!org}">Graph</button><button class="${org ? 'on' : ''}" data-pp-view="org" aria-pressed="${org}" title="Teams, seniority and reporting lines, all inferred">Org</button></div>
       <div class="wk-ctl"><div class="pp-find"><input id="ppq" type="search" placeholder="Find a person" aria-label="Find a person" autocomplete="off" spellcheck="false" value="${esc(P.q)}"><div class="pp-hits" id="pphits" hidden></div></div>
         ${noPics ? `<button class="wk-btn" data-pp-pics title="Look up Slack pictures and titles with your Slack connection's read-only tools">Get Slack pictures</button>` : ''}
         <button class="wk-btn icon" data-pp-refresh title="Build again now" aria-label="Build again now"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
     <div class="pp-body">
-      <div class="pp-graph" id="ppgraph">${!d ? (P.err ? `<div class="empty">Could not load people: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
+      ${org ? `<div class="pp-graph pp-org" id="pporg">${ppOrgHtml()}</div>` : ''}
+      <div class="pp-graph" id="ppgraph" ${org ? 'hidden' : ''}>${!d ? (P.err ? `<div class="empty">Could not load people: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
         : d.nodes.length <= 1 ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Finding the people you work with…' : d.error ? 'Could not build the graph: ' + esc(d.error) : 'No people yet. Pensieve finds them in your indexed repos, pull requests and Slack connection.'}</div>` : ''}
         ${P.merging ? `<div class="pp-banner">Pick the person to merge with <b>${esc(d?.nodes.find(n => n.id === P.merging)?.name || '')}</b>. <button class="linkbtn" data-pp-merge-cancel>Cancel</button></div>` : ''}
         ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}<span class="pp-shown">${shown}</span> of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''} · scroll or pinch to zoom</div>` : ''}
@@ -3576,7 +3582,7 @@ function renderPeople() {
 }
 function ppDrawGraph() {
   const box = $('#ppgraph'), d = S.people.data;
-  if (!box || !d || d.nodes.length <= 1) return;
+  if (!box || !d || d.nodes.length <= 1 || S.people.view === 'org') return;
   box.querySelector('svg')?.remove();
   const W = Math.max(320, box.clientWidth), H = Math.max(320, box.clientHeight);
   box.insertAdjacentHTML('afterbegin', ppSvg(d, W, H));
@@ -3611,6 +3617,44 @@ function ppDrawGraph() {
     g.onclick = () => ppPick(n.id);
     g.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ppPick(n.id); } };
   });
+}
+// The Org view: inferred teams as groups, with a manager above the group only where there is evidence for one (a
+// title that names the team, or one person who approves most of the group's pull requests). Each person is a node
+// with their picture; a click opens their card. Everything here is inferred, and each part says why.
+async function loadOrg() {
+  try { S.people.org = await api('/api/people/org'); } catch (e) { S.people.org = {error: e.message}; }
+}
+const ppPeople = n => n === 1 ? '1 person' : `${n.toLocaleString()} people`;
+const PP_LEVEL = {'IC': 0, 'senior IC': 1, 'lead': 2, 'manager': 3, 'director+': 4};
+function ppOrgHtml() {
+  const o = S.people.org, P = S.people;
+  if (!o) return '<div class="empty">Loading the org chart…</div>';
+  if (o.error) return `<div class="empty">Could not load the org chart: ${esc(o.error)}</div>`;
+  const ppl = o.people || {};
+  if (!o.teams.length && !o.leaders.length) return `<div class="empty">${o.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Building the people graph…' : 'No teams yet. Pensieve infers them from shared repos, GitHub teams and Slack channels.'}</div>`;
+  const rank = id => ppl[id]?.me ? -1 : (ppl[id]?.rank ?? 1e9);
+  const node = (id, cls = '') => {
+    const p = ppl[id]; if (!p) return '';
+    const lv = p.level ? `<span class="pp-lvl l${PP_LEVEL[p.level] ?? 0}" title="Seniority, inferred (${Math.round(p.level_confidence * 100)}% confidence)">${esc(p.level)}</span>` : '';
+    return `<button class="pp-onode ${cls} ${p.me ? 'me' : ''} ${P.sel === id ? 'sel' : ''}" data-pp-onode="${esc(id)}" title="${esc(p.name)}${p.function ? ' · ' + esc(p.function) : ''}">${ppAv({...p, id}, cls === 'mgr' ? 40 : 32)}<span class="nm">${esc(p.me ? 'You' : ppShort(p.name))}</span>${lv}</button>`;
+  };
+  const why = (items, label = 'Why this group') => items?.length ? `<details class="pp-why"><summary>${esc(label)}</summary><ul>${items.map(e => `<li>${esc(e)}</li>`).join('')}</ul></details>` : '';
+  const placed = new Set(o.teams.flatMap(t => t.members));
+  const leaders = o.leaders.filter(id => ppl[id]);
+  const teams = o.teams.map(t => {
+    const mgrs = t.managers.filter(id => ppl[id]), rest = t.members.filter(id => !mgrs.includes(id)).sort((a, b) => rank(a) - rank(b));
+    const ev = mgrs.flatMap(m => o.edges.filter(e => e.manager === m && t.members.includes(e.report)).slice(0, 2).flatMap(e => e.evidence));
+    return `<section class="pp-team" data-pp-team="${esc(t.id)}"><header><b>${esc(t.name)}</b><span class="muted">${ppPeople(t.size)} · inferred${t.github_team ? ' · GitHub team' : ''}</span></header>
+      ${why(t.evidence)}
+      ${mgrs.length ? `<div class="pp-mgrs">${mgrs.map(id => node(id, 'mgr')).join('')}</div>${why([...new Set(ev)].slice(0, 6), 'Why a manager (inferred)')}<div class="pp-stem"></div>` : ''}
+      <div class="pp-members">${rest.map(id => node(id)).join('')}</div></section>`;
+  }).join('');
+  const loose = Object.keys(ppl).filter(id => !placed.has(id) && !leaders.includes(id) && ppl[id].level).sort((a, b) => rank(a) - rank(b)).slice(0, 40);
+  return `${P.merging ? `<div class="pp-banner">Pick the person to merge with <b>${esc(P.data?.nodes.find(n => n.id === P.merging)?.name || '')}</b>. <button class="linkbtn" data-pp-merge-cancel>Cancel</button></div>` : ''}
+    <div class="pp-orgnote">Inferred from repos, pull requests, CODEOWNERS, GitHub teams and Slack: not an HR record. ${o.edges.length ? `${plural(o.edges.length, 'reporting line')} inferred, each with its evidence.` : 'No reporting lines have enough evidence, so teams show as groups.'}</div>
+    ${leaders.length ? `<section class="pp-team lead"><header><b>Leadership</b><span class="muted">from Slack titles</span></header><div class="pp-members">${leaders.map(id => node(id, 'mgr')).join('')}</div></section>` : ''}
+    <div class="pp-teams">${teams}</div>
+    ${loose.length ? `<section class="pp-team loose"><header><b>No clear team</b><span class="muted">too little shared work to place them</span></header><div class="pp-members">${loose.map(id => node(id)).join('')}</div></section>` : ''}`;
 }
 // One step of zoom: out shows more people (dir 1), in shows fewer (dir -1). False when there is nothing to add or take away.
 function ppStep(dir) {
@@ -3675,7 +3719,14 @@ async function ppPick(id) {
 function bindPeople(el) {
   const P = S.people;
   $('[data-pp-refresh]', el)?.addEventListener('click', () => { toast('Building the people graph again…'); loadPeople(true); });
-  $('[data-pp-merge-cancel]', el)?.addEventListener('click', () => { P.merging = null; renderPeople(); });
+  $$('[data-pp-merge-cancel]', el).forEach(b => b.onclick = () => { P.merging = null; renderPeople(); });
+  $$('[data-pp-view]', el).forEach(b => b.onclick = async () => {
+    const v = b.dataset.ppView; if (v === P.view) return;
+    P.view = v; store.set('peopleView', v);
+    renderPeople();
+    if (v === 'org' && !P.org) { await loadOrg(); if (P.view === 'org') renderPeople(); }
+  });
+  $$('[data-pp-onode]', el).forEach(b => b.onclick = () => ppPick(b.dataset.ppOnode));
   $('[data-pp-pics]', el)?.addEventListener('click', async e => {
     e.currentTarget.disabled = true; toast('Looking up Slack profiles with read-only tools. This can take a minute…');
     try { const r = await api('/api/people/profiles', {method: 'POST'}); toast(r.error || `Found ${plural(r.found || 0, 'Slack profile')}. Pictures appear when the graph is built again.`); }
@@ -3810,8 +3861,9 @@ async function openPeopleCard(id, {quiet = false} = {}) {
   P.card = card;
   if (S.view !== 'people') return;
   const vis = $(`#ppgraph .pp-n[data-pid="${CSS.escape(id)}"]`);
-  if (!vis && !card.me && S.people.data?.nodes.some(n => n.id === id)) return renderPeople();  // grown to show them
+  if (!vis && !card.me && S.people.view !== 'org' && S.people.data?.nodes.some(n => n.id === id)) return renderPeople();  // grown to show them
   $$('#ppgraph .pp-n').forEach(g => g.classList.toggle('sel', g.dataset.pid === id));
+  $$('#pporg .pp-onode').forEach(g => g.classList.toggle('sel', g.dataset.ppOnode === id));
   const box = $('#ppcard');
   if (!box) return renderPeople();
   box.innerHTML = ppCardHtml(card); box.scrollTop = 0; bindPeopleCard();
@@ -3836,9 +3888,27 @@ function ppCardHtml(p) {
       <div class="kpi"><div class="l">Last together</div><div class="v sm">${r?.last ? rel(r.last * 1000) : '–'}</div></div>`}
       <div class="kpi"><div class="l">Last active</div><div class="v sm">${p.last ? rel(p.last * 1000) : '–'}</div></div></div>`;
   const ids = p.identities.length > 1;
+  const why = (items, label = 'Evidence') => items?.length ? `<details class="pp-why"><summary>${esc(label)}</summary><ul>${items.map(e => `<li>${esc(e)}</li>`).join('')}</ul></details>` : '';
+  const pct = c => `<span class="muted">· ${Math.round((c || 0) * 100)}% confidence</span>`;
+  const sen = p.seniority, team = p.team;
+  const org = sen?.level || team || p.managers?.length || p.reports?.length ? `<div class="h4">Org <span class="muted">· inferred</span></div><div class="pp-orgrows">
+      ${sen?.level ? `<div class="pp-orgrow"><span class="k">Seniority (inferred)</span><span class="v">${esc(sen.level)} ${pct(sen.confidence)}</span></div>${why(sen.evidence)}` : ''}
+      ${team ? `<div class="pp-orgrow"><span class="k">Team (inferred)</span><span class="v"><button class="linkbtn" data-pp-orgteam="${esc(team.id)}" title="Show this team in the Org view">${esc(team.name)}</button> <span class="muted">· ${ppPeople(team.size)}</span> ${pct(team.confidence)}</span></div>${why(team.evidence)}` : ''}
+      ${(p.managers || []).map(m => `<div class="pp-orgrow"><span class="k">Reports to (inferred)</span><span class="v"><button class="linkbtn" data-pp-open="${esc(m.id)}">${esc(m.name)}</button> ${pct(m.confidence)}</span></div>${why(m.evidence)}`).join('')}
+      ${p.reports?.length ? `<div class="pp-orgrow"><span class="k">Manages (inferred)</span><span class="v">${p.reports.map(x => `<button class="chip" data-pp-open="${esc(x.id)}">${esc(x.name)}</button>`).join(' ')}</span></div>` : ''}
+    </div>` : '';
+  const chan = c => `${esc(c.label)}: ${c.n.toLocaleString()} with ${ppPeople(c.people)}${c.top?.length ? ` (${c.top.map(o => esc(o.name)).join(', ')}${c.people > c.top.length ? '…' : ''})` : ''}`;
+  const profs = p.me && p.profiles?.length ? `<div class="h4">Your profiles</div><div class="list">${p.profiles.map(x => `<div class="item"><div class="t"><span class="grow">${esc(x.label)}</span><span class="muted">${[x.commits && plural(x.commits, 'commit'), x.prs && plural(x.prs, 'PR'), x.reviews && plural(x.reviews, 'review')].filter(Boolean).join(' · ')}</span></div>
+      <div class="s">${x.channels.length ? x.channels.map(chan).join(' · ') : 'No one connects to you through this profile yet.'}</div>${x.how?.length ? `<div class="s muted">How Pensieve knows it is you: ${x.how.map(esc).join('; ')}</div>` : ''}</div>`).join('')}</div>` : '';
+  const via = r?.via?.length ? `<div class="h4">Through your profiles</div><div class="list">${r.via.map(v => `<div class="item"><div class="t"><span class="grow">${esc(v.label)}</span></div><div class="s">${v.kinds.map(k => `${esc(k.label)} (${k.n.toLocaleString()})`).join(' · ')}</div></div>`).join('')}</div>` : '';
+  const shown = (p.joined_because || []).filter(j => j.kind !== 'fact').concat((p.joined_because || []).filter(j => j.kind === 'fact'));
+  const joins = shown.length ? `<div class="h4">Why these are one person</div><div class="pp-joins">${shown.slice(0, 12).map(j => `<div class="pp-join ${esc(j.kind)}"><span class="v" title="${esc(j.a_label)} ↔ ${esc(j.b_label)}">${esc(j.a_label)} ↔ ${esc(j.b_label)}</span><small>${esc(j.reason)}${j.kind === 'evidence' ? ` · score ${j.score}` : ''}${j.evidence?.length ? ' · ' + j.evidence.map(esc).join('; ') : ''}</small></div>`).join('')}</div>
+    <p class="pp-note">Joined in error? Press <b>Not them</b> on the identity that is someone else. The split stays across rebuilds.</p>` : '';
+  const maybe = p.maybe?.length ? `<div class="h4">Maybe also them</div><div class="list">${p.maybe.map(m => `<div class="item"><div class="t"><span class="grow"><button class="linkbtn" data-pp-open="${esc(m.id)}">${esc(m.name)}</button></span><button class="linkbtn" data-pp-maybe="${esc(m.id)}" title="These are one person: merge them">Merge</button></div><div class="s">${esc(m.reason)} · score ${m.score} (too low to join without you)</div></div>`).join('')}</div>` : '';
   return `<div class="meta"><span class="badge">Person</span>${p.sources.map(s => esc({git: 'git', github: 'GitHub', slack: 'Slack', task: 'tasks'}[s] || s)).join(' · ')}</div>
     <div class="pp-id">${ppAv(p, 56)}<div style="min-width:0"><h2>${esc(p.name)}</h2>${fn}</div></div>
     <p class="pp-lead">${lead}</p>${kpis}
+    ${profs}${via}${org}
     ${rels}
     ${p.repos.length ? `<div class="h4">Works on</div><div class="list">${p.repos.map(x => `<div class="item"><div class="t"><span class="grow">${esc(x.repo)}</span><span class="muted">${plural(x.commits, 'commit')} · ${rel(x.last * 1000)}</span></div>${x.areas.length ? `<div class="s">${x.areas.map(esc).join(' · ')}</div>` : ''}</div>`).join('')}</div>` : ''}
     ${p.prs.length ? `<div class="h4">Their pull requests</div><div class="list">${p.prs.map(x => link(x.url, x.t, `<span class="pp-st ${esc(x.state)}">${esc(x.state)}</span>${when(x.ts)}`)).join('')}</div>` : ''}
@@ -3847,6 +3917,7 @@ function ppCardHtml(p) {
     ${p.channels.length ? `<div class="h4">Slack channels</div><div class="chips">${p.channels.map(c => `<span class="chip">${esc(c)}</span>`).join('')}</div>` : ''}
     ${p.peers.length ? `<div class="h4">Works alongside</div><div class="chips">${p.peers.map(o => `<button class="chip" data-pp-open="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>` : ''}
     <div class="h4">Identities</div><div>${p.identities.map(i => `<div class="pp-idrow"><span class="k">${esc(PP_KIND[i.kind] || i.kind)}</span><span class="v" title="${esc(i.value)}">${esc(i.value)}</span>${ids ? `<button class="linkbtn" data-pp-split="${esc(i.key)}" title="This ${esc((PP_KIND[i.kind] || i.kind).toLowerCase())} is someone else: make it a person of its own">Not them</button>` : ''}</div>`).join('')}</div>
+    ${joins}${maybe}
     <div class="actions">${p.repos.length ? '<button class="btn" data-pp-map>Show their work on the map</button>' : ''}<button class="btn" data-pp-merge title="Join this person with another one: the same person under another name or email">Merge with…</button>${p.me ? '' : '<button class="btn" data-pp-me title="Mark this person as you">This is me</button>'}</div>`;
 }
 function bindPeopleCard() {
@@ -3858,6 +3929,18 @@ function bindPeopleCard() {
     P.sel = null; P.card = null; loadPeople();
   });
   $('[data-pp-merge]', box)?.addEventListener('click', () => { P.merging = p.id; renderPeople(); $('#ppq')?.focus(); });
+  $$('[data-pp-maybe]', box).forEach(b => b.onclick = async () => {
+    try { const r = await post('/api/people/merge', {ids: [p.id, b.dataset.ppMaybe]}); toast('Merged. To undo, press Not them on an identity.'); P.sel = r.id; }
+    catch (e) { return toast('Could not merge: ' + e.message); }
+    loadPeople();
+  });
+  $('[data-pp-orgteam]', box)?.addEventListener('click', async e => {
+    const tid = e.currentTarget.dataset.ppOrgteam;
+    if (P.view !== 'org') { P.view = 'org'; store.set('peopleView', 'org'); if (!P.org) await loadOrg(); renderPeople(); }
+    const sec = $(`#pporg [data-pp-team="${CSS.escape(tid)}"]`);
+    sec?.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+    sec?.classList.add('flash'); setTimeout(() => sec?.classList.remove('flash'), 1600);
+  });
   $('[data-pp-me]', box)?.addEventListener('click', async () => { try { await post('/api/people/me', {id: p.id}); toast(`Marked ${p.name} as you.`); } catch (e) { return toast(e.message); } loadPeople(); });
   $('[data-pp-map]', box)?.addEventListener('click', () => {
     const email = p.identities.find(i => i.kind === 'email')?.value;
