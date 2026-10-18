@@ -34,6 +34,7 @@ CACHE = DIR / "cache"
 VERSION = 1
 
 REBUILD_SECONDS = 1800
+PARTIAL_SECONDS = 180
 ACTIVE_DAYS = 120          # an item that changed within this many days is current work
 GIT_DAYS = 180
 HALF_LIFE_DAYS = 45
@@ -41,10 +42,12 @@ MAX_ITEMS = 15000
 COMMIT_FILES_MAX = 120     # a commit that touches more files is a sweep (renames, formatting), not one project's work
 RECLUSTER_SHARE = 1 / 6    # the recent set changed by more than this: cluster again
 RECLUSTER_SECONDS = 7 * 86400
-NEAR_MAX, NEAR_MIN_SCORE = 10, 0.12
+NEAR_MAX, NEAR_MIN_SCORE = 10, 0.15
+TEAM_SHARE = 0.6           # of relevance: the closeness-weighted work of others; the rest is the user's own work
 REPO_WEIGHT = 0.6          # how strongly clusters keep to one repo (a feature added to each item's vector)
 PR_MIN_SIM = 0.30         # a pull request or ticket joins the nearest cluster only when this similar
 
+_ID_WORD = re.compile(r"[0-9a-f]*\d[0-9a-f]*")  # a piece of a hash or an id in a path names nothing
 _lock = threading.RLock()
 _state = {"data": None, "building": False, "error": None, "started": 0.0}
 listeners = []             # called (from a worker thread) when a new build is ready
@@ -204,7 +207,8 @@ def build(store, datamap) -> dict:
     ids_all, C = datamap._cached_vectors()
     pos = {i: k for k, i in enumerate(ids_all)}
     since = now - ACTIVE_DAYS * 86400
-    recent = [p for p in pts.values() if p["id"] in pos and _t(p.get("mtime")) >= since]
+    recent = [p for p in pts.values() if p["id"] in pos and _t(p.get("mtime")) >= since
+              and not (p.get("path") or "").startswith(work._TEMP)]  # scratch files are no project's work
     # code is the bulk in a big repo: the cap applies to code only, so no session or document is left out
     code = sorted((p for p in recent if p["type"] == "code"), key=lambda p: -_t(p.get("mtime")))
     recent = [p for p in recent if p["type"] != "code"]
@@ -240,7 +244,6 @@ def build(store, datamap) -> dict:
     for p in recent:
         if p["type"] == "code" and p.get("repo_root"):
             by_repo[p["repo_root"]][p["path"][len(p["repo_root"]) + 1:]] = of[p["id"]]
-    names = {}
     for root, files in by_repo.items():
         try:
             log = _git_log(root)["commits"]
@@ -253,7 +256,6 @@ def build(store, datamap) -> dict:
                 continue
             tot = sum(hit.values())
             pid = ppl.of(an, email)
-            names.setdefault(pid or email, an)
             for c, n in hit.items():
                 share = n / tot
                 credit(c, pid, share * _decay(ts, now), ts, share)
@@ -276,10 +278,11 @@ def build(store, datamap) -> dict:
             credit(c, pid, 0.5 * _decay(ts, now), ts)
 
     # context cards: the cluster of most of their sessions and files
+    partial = False
     try:
         tasks = work.tasks(store, 30)
     except Exception:
-        tasks = []
+        tasks, partial = [], True
     code_of = {p["path"]: of[p["id"]] for p in recent if p["type"] == "code"}
     in_task = set()
     for t in tasks:
@@ -387,14 +390,14 @@ def build(store, datamap) -> dict:
             elif p["type"] == "doc":
                 areas[(p.get("display") or "").rsplit("/", 1)[0]] += 1
         topic = Counter(p.get("cluster") for p in d["items"] if p.get("cluster") is not None).most_common(1)
-        kw = kws.get(c, "")
+        kw = ", ".join(w for w in kws.get(c, "").split(", ") if w and not _ID_WORD.fullmatch(w))
         out.append(dict(
             id=sigs[c], key=f"dscope:{sigs[c]}", sig=sigs[c], keywords=kw, reps=reps,
             name=datamap._kw_name(kw, c), description="", named=False,
-            score_raw=team + mine, team=round(team, 3), mine=round(mine, 3), me_share=round(share, 3), role=role,
+            team=round(team, 3), mine=round(mine, 3), me_share=round(share, 3), role=role,
             last=last, topic=topic[0][0] if topic else None,
             counts=dict(code=types["code"], docs=types["doc"], sessions=types["session"],
-                        commits=round(sum(d["n"].values())), prs=len(d["prs"]), tickets=len(d["tickets"]),
+                        commits=round(sum(d["repos"].values())), prs=len(d["prs"]), tickets=len(d["tickets"]),
                         tasks=len(d["tasks"]), people=len([p for p in w if p != ppl.me])),
             prefixes=[k for k, _ in d["prefixes"].most_common() if k in known][:3],
             repos=[r for r, _ in d["repos"].most_common(3)],
@@ -415,14 +418,16 @@ def build(store, datamap) -> dict:
                 pr["author_name"] = ppl.people.get(pr["author"], {}).get("name", "")
         for cm in e["commits"]:
             cm["author"] = ppl.people.get(cm.pop("pid") or "", {}).get("name") or cm["author"]
-    top = max((e["score_raw"] for e in out), default=1) or 1
+    # the people near the user count for more than the user's own share, so the list is not only the user's own work
+    top_team = max((e["team"] for e in out), default=1) or 1
+    top_mine = max((e["mine"] for e in out), default=1) or 1
     for e in out:
-        e["relevance"] = round(e.pop("score_raw") / top, 4)
+        e["relevance"] = round(TEAM_SHARE * e["team"] / top_team + (1 - TEAM_SHARE) * e["mine"] / top_mine, 4)
     out.sort(key=lambda e: (-e["relevance"], -e["last"]))
     for i, e in enumerate(out):
         e["rank"] = i + 1
         e["near"] = i < 3 or (i < NEAR_MAX and e["relevance"] >= NEAR_MIN_SCORE)
-    return dict(v=VERSION, built=now, projects=out, items=len(recent), clusters=K, me=ppl.me,
+    return dict(v=VERSION, built=now, projects=out, items=len(recent), clusters=K, me=ppl.me, partial=partial,
                 people_built=(ppl.mod.graph() or {}).get("built"), of={i: sigs[c] for i, c in of.items()})
 
 
@@ -441,7 +446,9 @@ def rebuild(store, datamap, force=False) -> bool:
     with _lock:
         d = data()
         g = people.graph() or {}
-        fresh = d and time.time() - d.get("built", 0) < REBUILD_SECONDS and d.get("people_built") == g.get("built")
+        # a build without the context cards (their build failed) is tried again after a few minutes
+        fresh = d and time.time() - d.get("built", 0) < (PARTIAL_SECONDS if d.get("partial") else REBUILD_SECONDS) \
+            and d.get("people_built") == g.get("built")
         if _state["building"] or (fresh and not force):
             return False
         _state["building"] = True

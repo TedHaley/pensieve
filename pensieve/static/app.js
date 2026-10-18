@@ -3137,7 +3137,7 @@ function syncInsightsTab() {
   const b = $('#tabs [data-view=insights]'); if (!b) return;
   const d = aiState.data, on = insightsOn(), prep = aiPreparing(d);
   b.classList.toggle('off', !on);
-  b.title = on ? 'Insights (4)' : prep ? (d.detail || 'Preparing insights…') : 'Insights are off — click to turn them on (4)';
+  b.title = on ? 'Insights (5)' : prep ? (d.detail || 'Preparing insights…') : 'Insights are off — click to turn them on (5)';
   const pct = prep && d.progress != null ? Math.round(d.progress * 100) : null;
   b.innerHTML = `Insights${prep ? `<i class="tab-ring" style="--p:${pct ?? 25}" ${pct == null ? 'data-spin' : ''}></i>` : !on ? '<span class="tab-off">Off</span>' : ''}`;
 }
