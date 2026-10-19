@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pensieve import settings
+from pensieve import settings, tokens
 from pensieve.config import session_sources
 
 _REMINDER = re.compile(r"<(system-reminder|task-notification|local-command-\w+|command-\w+)>.*?</\1>", re.S)
@@ -22,17 +22,27 @@ class Session:
     turns: list = field(default_factory=list)  # (role, text)
     touched: dict = field(default_factory=dict)  # abs path -> edited?
     mcp: list = field(default_factory=list)  # (full MCP tool name, input, result content) for connections.py
+    offset: int = 0  # bytes of the transcript read so far: whole lines only (see `resume`)
+    state: dict = field(default_factory=dict, repr=False)  # a parser's own state between two reads
 
 
 def _clean(text: str) -> str:
     return _REMINDER.sub("", text).strip()
 
 
-def _lines(path: Path):
-    with open(path, errors="replace") as f:
-        for line in f:
+def _lines(path: Path, s: Session | None = None):
+    """The JSON lines of a transcript from `s.offset` on; `s.offset` moves past each whole line. A last line without
+    its newline is still being written: it is read next time."""
+    with open(path, "rb") as f:
+        if s is not None and s.offset:
+            f.seek(s.offset)
+        for raw in f:
+            if not raw.endswith(b"\n") and s is not None:
+                break
+            if s is not None:
+                s.offset += len(raw)
             try:
-                yield json.loads(line)
+                yield json.loads(raw.decode("utf-8", "replace"))
             except json.JSONDecodeError:
                 continue
 
@@ -60,11 +70,13 @@ def _note_tool(s: Session, name: str, args):
             s.touched[v] = s.touched.get(v, False) or edited
 
 
-def parse_claude(path: Path) -> Session:
-    s = Session(id=f"claude:{path.stem}", source="claude", path=str(path))
-    mcp_uses = {}
-    for d in _lines(path):
+def parse_claude(path: Path, s: Session | None = None) -> Session:
+    s = s or Session(id=f"claude:{path.stem}", source="claude", path=str(path))
+    mcp_uses = s.state.setdefault("mcp_uses", {})
+    tok = s.state.setdefault("tok", tokens.new())
+    for d in _lines(path, s):
         t = d.get("type")
+        tokens.claude_line(d, tok)
         if t == "ai-title":
             s.title = d.get("aiTitle") or d.get("title") or s.title
         if t not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
@@ -83,13 +95,16 @@ def parse_claude(path: Path) -> Session:
             c = "\n".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
         if isinstance(c, str):
             _add(s, t, c, d.get("timestamp", ""))
+    tokens.subagents(path, tok)
     return s
 
 
-def parse_qwen(path: Path) -> Session:
-    s = Session(id=f"qwen:{path.stem}", source="qwen", path=str(path))
-    for d in _lines(path):
+def parse_qwen(path: Path, s: Session | None = None) -> Session:
+    s = s or Session(id=f"qwen:{path.stem}", source="qwen", path=str(path))
+    tok = s.state.setdefault("tok", tokens.new())
+    for d in _lines(path, s):
         t = d.get("type")
+        tokens.qwen_line(d, tok)
         if t not in ("user", "assistant") or d.get("subtype") in ("notification", "cron"):
             continue
         s.project = s.project or d.get("cwd", "")
@@ -103,9 +118,11 @@ def parse_qwen(path: Path) -> Session:
     return s
 
 
-def parse_codex(path: Path) -> Session:
-    s = Session(id=f"codex:{path.stem}", source="codex", path=str(path))
-    for d in _lines(path):
+def parse_codex(path: Path, s: Session | None = None) -> Session:
+    s = s or Session(id=f"codex:{path.stem}", source="codex", path=str(path))
+    tok = s.state.setdefault("tok", tokens.new())
+    for d in _lines(path, s):
+        tokens.codex_line(d, tok)
         p = d.get("payload") or {}
         if d.get("type") == "session_meta":
             s.project = p.get("cwd", s.project)
@@ -192,9 +209,18 @@ def discover():
                         yield name, p
 
 
-def parse(source: str, path: Path) -> Session:
-    s = parse_memory(path) if path.suffix == ".md" else PARSERS[source](path)
-    if not s.title:
+def parse(source: str, path: Path, resume: Session | None = None) -> Session:
+    """A transcript as a Session. With `resume` (this path's Session from an earlier parse, which this call changes),
+    only the lines written after it are read: transcripts only grow. A transcript that is shorter than what
+    `resume` read was written again, and is read whole."""
+    if path.suffix == ".md":
+        s = parse_memory(path)
+    else:
+        if resume is not None and (resume.path != str(path) or path.stat().st_size < resume.offset):
+            resume = None
+        s = PARSERS[source](path, resume)
+    if not s.title or s.state.get("auto_title") == s.title:  # a title from the first prompt: a later ai-title wins
         first = next((t for r, t in s.turns if r == "user"), "")
         s.title = " ".join(first.split())[:80] or path.stem
+        s.state["auto_title"] = s.title
     return s

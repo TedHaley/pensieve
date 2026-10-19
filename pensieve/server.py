@@ -9,11 +9,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, connections, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, task_states, usage, work
+from pensieve import actions, config, connections, content, llm, mcp_server, migrate, onboarding,places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, task_states, usage, work
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -29,6 +29,7 @@ subscribers: set[asyncio.Queue] = set()
 status = {"indexing": False, "message": "starting", "layout": False, "insights_running": False, "insights_scope": None}
 wake_files = asyncio.Event()  # set (thread-safely) by the file watcher
 wake_repos = asyncio.Event()
+wake_sessions = asyncio.Event()
 watch: "Watch | None" = None
 inflight: set[str] = set()
 failed_topics: set[str] = set()  # Data-map topics the AI couldn't name this run (by membership signature)  # background LLM jobs (scoped topic names, team summaries) already running
@@ -40,6 +41,7 @@ def broadcast(event: dict):
 
 FULL_SWEEP_SECONDS = 300  # safety net behind the file watcher; also discovers new repos and folders
 SESSION_BATCH_SECONDS = 30  # a session backlog is indexed in turns this long, with folders swept between them
+SESSION_SWEEP_SECONDS = 60  # every session folder is swept this often; between sweeps, the watcher's transcripts only
 
 
 async def _run(fn, *a):
@@ -76,6 +78,17 @@ def _indexed():
     _layout_due.set()
 
 
+def _save_indexes():
+    """Write each vector index (.tv) that changed since its last save. Indexing saves at most every
+    vectors.SAVE_SECONDS; this runs when indexing is idle and at shutdown."""
+    for corpus in (store, files, repos):
+        try:
+            corpus.save(force=True)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+
 async def map_worker():
     """Map layouts (UMAP) of sessions, documents, code and the joint Data map, kept off the indexing path: they wait
     until nothing has been indexed for MAP_IDLE_SECONDS. A first index of a big repo is searchable as it goes and is
@@ -94,6 +107,7 @@ async def map_worker():
             except Exception:
                 import traceback
                 traceback.print_exc()
+        _save_indexes()  # nothing was indexed for MAP_IDLE_SECONDS: the .tv files catch up
         status.update(layout=False)
         broadcast({"type": "status", **status})
 
@@ -105,7 +119,7 @@ async def watcher():
     status.update(message="building exact-match index")
     broadcast({"type": "status", **status})
     try:
-        await _run(search_mod.ensure_fts, store.db, store.lock, store.meta)
+        await _run(search_mod.ensure_fts, store.db, store.writing, store.meta)
     except Exception:
         import traceback
         traceback.print_exc()
@@ -120,8 +134,15 @@ async def watcher():
     asyncio.create_task(upstream_watcher())
     asyncio.create_task(model_switcher())
     asyncio.create_task(connections_worker())
+    asyncio.create_task(doc_worker())
+    asyncio.create_task(session_watcher())
     work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
-    threading.Thread(target=work.tasks, args=(store, 30), daemon=True).start()  # built now, so the first view of the tab does not wait for git and gh
+    from pensieve import people
+    people.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "people"}))
+    people.blame_fn = repos.people  # each author's share of a repo's lines, for the org chart's ownership signal
+    from pensieve import team_projects
+    team_projects.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "projects"}))
+    _start_cards(loop)
     last_full = 0
     while True:
         if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
@@ -132,16 +153,14 @@ async def watcher():
             d = watch.take()
             if sorted(str(p) for p in files.roots()) != sorted(watch.folders):  # a folder appeared or went away
                 d["full_files"] = True
-            n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
-                on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
-            if n:
-                broadcast({"type": "updated", "sessions": n})
+            n = 0  # sessions: session_watcher
             if d["full_files"] or time.time() - last_full > FULL_SWEEP_SECONDS:
                 last_full = time.time()
                 status.update(indexing=True, message="indexing files")
                 broadcast({"type": "status", **status})
                 if await _run(lambda: files.sync(force=True, on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "files"}))):
                     broadcast({"type": "files"})
+                await _run(migrate.mark_indexed, "files")
                 watch.configure(repos.checkouts())
             elif d["files"]:
                 changed, retry = await _run(files.sync_paths, d["files"])
@@ -164,10 +183,92 @@ async def watcher():
             import traceback
             traceback.print_exc()
             status.update(indexing=False, layout=False, message=f"error: {e!r}")
-        if store.behind:  # sessions left over: go on after the folders, without the pause
-            continue
         await _wait(wake_files, config.POLL_SECONDS)
         await _quiet(wake_files)
+
+
+async def session_watcher():
+    """Agent transcripts, in a loop of their own: a sweep of the folders can take minutes, and a session's new turns
+    should reach its card within seconds (cardbuild.py). A transcript that grows again within ACTIVE_SECONDS is
+    indexed again after that time."""
+    from pensieve import indexer
+    loop = asyncio.get_running_loop()
+    last_sweep = 0.0
+    while True:
+        if not settings.get("setup_done"):
+            await _wait(wake_sessions, config.POLL_SECONDS)
+            continue
+        try:
+            paths = watch.take_sessions() if watch else set()
+            if not last_sweep or store.behind or time.time() - last_sweep > SESSION_SWEEP_SECONDS:
+                last_sweep = time.time()  # every folder: new folders, and what the watcher missed
+                n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
+                    on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
+                if not store.behind:  # every session is indexed
+                    await _run(migrate.mark_indexed, "sessions")
+            elif paths or store.waiting:  # the transcripts that changed, at once
+                n = await _run(lambda: store.sync_paths(paths))
+            else:
+                n = 0
+            if n:
+                broadcast({"type": "updated", "sessions": n})
+                _indexed()
+            if store.deferred:  # a transcript that grew again too soon: index its new turns in a moment
+                loop.call_later(indexer.ACTIVE_SECONDS, wake_sessions.set)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        if store.behind:  # sessions left over: go on at once
+            continue
+        await _wait(wake_sessions, config.POLL_SECONDS)
+        await _quiet(wake_sessions, quiet=0.1, cap=0.5)
+
+
+def _start_cards(loop):
+    """The card builder (cardbuild.py): fed by session indexing, document upserts and commit loads; it sends a
+    `card` event with the ids of the cards that changed, and writes a card's note once the card is quiet."""
+    from pensieve import cardbuild, indexer, repos as repos_mod
+    b = cardbuild.Builder(store)
+
+    def changed(ids, removed):
+        loop.call_soon_threadsafe(broadcast, {"type": "card", "ids": ids, "removed": removed})
+
+    def note(t) -> bool:
+        if llm.provider() == "none" or llm.paused():
+            return False
+        try:
+            work.write_note(t, [])
+            return True
+        except llm.Offline:  # Queued too: your agent answers it later, and agent_pass writes it then
+            return False
+    b.listeners.append(changed)
+    b.note_fn = note
+    indexer.session_listeners.append(lambda sid: cardbuild.emit(cardbuild.SESSION, [sid]))
+    connections.listeners.append(lambda r: cardbuild.emit(cardbuild.DOCUMENT, [r.id]))
+    repos_mod.commit_listeners.append(lambda root: cardbuild.emit(cardbuild.COMMIT, [root]))
+    b.start()
+
+
+wake_docs = asyncio.Event()
+DOC_POLL_SECONDS = 60
+
+
+async def doc_worker():
+    """Chunk and embed the collected documents that changed (docindex.py): at once when a connection or an agent
+    session stores one, else every DOC_POLL_SECONDS (a source switched on or off)."""
+    from pensieve import docindex
+    loop = asyncio.get_running_loop()
+    connections.listeners.append(lambda r: loop.call_soon_threadsafe(wake_docs.set))
+    while True:
+        try:
+            if await _run(lambda: docindex.get().sync(budget=60)):
+                broadcast({"type": "docs"})
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        await _wait(wake_docs, DOC_POLL_SECONDS)
+        wake_docs.clear()
+        await _quiet(wake_docs)
 
 
 UPSTREAM_SECONDS = 1800
@@ -202,6 +303,7 @@ async def repo_watcher():
                 if full:
                     last_full = time.time()
                     n = await _run(lambda: repos.sync(force=True))
+                    await _run(migrate.mark_indexed, "repos")
                 else:
                     n = await _run(lambda: repos.refresh(d_repos, wait=3600)) or 0
                     if repos.unsaved:  # this pass's edits, or ones a search indexed first
@@ -473,6 +575,7 @@ async def lifespan(app):
     def wake():
         loop.call_soon_threadsafe(wake_files.set)
         loop.call_soon_threadsafe(wake_repos.set)
+        loop.call_soon_threadsafe(wake_sessions.set)
     global watch
     watch = Watch(wake)
 
@@ -488,15 +591,19 @@ async def lifespan(app):
     files.requeue = watch.requeue_files
     if settings.get("ai") == "builtin":
         llm.start_download()
+    migrate.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "status", **status}))
+    migrate.start()  # v1 data here: import what v2 keeps, in the background; delete v1 after the first full index
     loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
     loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
+    threading.Thread(target=store.backfill_usage, daemon=True, name="usage-backfill").start()
     tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(card_keeper())]
     async with mcp_server.mcp.session_manager.run():
         yield
     for t in tasks:
         t.cancel()
     llm.stop_builtin()
+    _save_indexes()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -538,8 +645,7 @@ def static(name: str):
 
 @app.get("/api/status")
 def get_status():
-    with store.lock:
-        return _status()
+    return _status()
 
 
 def _status():
@@ -554,12 +660,13 @@ def _status():
             "topics": db.execute("SELECT COUNT(*) FROM topics").fetchone()[0],
             "code_chunks": db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0],
             "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL,
-            "ai": settings.get("ai"), "setup_done": settings.get("setup_done"), "syncing": _syncing()}
+            "ai": settings.get("ai"), "setup_done": settings.get("setup_done"), "syncing": _syncing(),
+            "migration": migrate.view()}
 
 
 @app.get("/api/usage")
 def get_usage(days: float = 7, recent: int = 0):
-    """MCP tool calls over the last `days` (the log is ~/.pensieve/usage.db); `recent`: also the latest calls."""
+    """MCP tool calls over the last `days` (the log is in ~/.pensieve/v2/store.db); `recent`: also the latest calls."""
     return usage.summary(days, min(recent, 200))
 
 
@@ -571,7 +678,7 @@ def get_syncing():
 
 def _syncing() -> list[dict]:
     """What is being indexed right now, with progress where the total is known."""
-    out = []
+    out = [j for j in [migrate.job()] if j]
     for kind, src in (("sessions", store), ("files", files), ("repo", repos)):
         p = getattr(src, "progress", None)
         if p:
@@ -606,8 +713,7 @@ async def model_switcher():
 @app.get("/api/embed_models")
 def embed_models():
     """The models the index can use: the index's own, the one chosen, and how long switching takes on this Mac."""
-    with store.lock:
-        n = sum(store.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in reembed.TABLES)
+    n = sum(store.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in reembed.TABLES)
     return {"current": config.EMBED_MODEL, "wanted": reembed.wanted(), "chunks": n, "progress": reembed.progress,
             "models": [dict(id=k, label=m["label"], about=m["about"], dim=m["dim"],
                             switch_seconds=round(n / repos.embed_rate(k))) for k, m in config.EMBED_MODELS.items()]}
@@ -644,13 +750,12 @@ def delete_part(part: str):
     return get_content()
 
 
-@app.get("/api/projects")
-def projects():
-    """Projects are canonical repos (clones and worktrees merged); non-repo folders stay as-is."""
+@app.get("/api/session-projects")
+def session_projects():
+    """The session map's projects: canonical repos (clones and worktrees merged); non-repo folders stay as-is."""
     scope = repos.session_scope()
     by = {}
-    with store.lock:
-        rows = store.db.execute("SELECT id, n_chunks, updated, project FROM sessions WHERE n_chunks>0").fetchall()
+    rows = store.db.execute("SELECT id, n_chunks, updated, project FROM sessions WHERE n_chunks>0").fetchall()
     home = str(Path.home())
     for sid, n, upd, cwd in rows:
         v = scope.get(sid)
@@ -665,6 +770,38 @@ def projects():
     # `path`: where most of a project's sessions ran (a folder that isn't an indexed repo shows where it is)
     return [{**{k: v for k, v in e.items() if k != "where"}, "folders": sorted(e["folders"]), "path":e["where"].most_common(1)[0][0] if e["where"] else None}
             for e in sorted(by.values(), key=lambda e: -e["sessions"])]
+
+
+@app.get("/api/projects")
+async def get_projects(q: str = "", refresh: bool = False):
+    """The Projects tab: groups of tickets with the branches and pull requests tied to them (project_model.py).
+    The user's projects first (`section` mine), then the others (`section` around); `stale` ones go under "Show
+    older". Served from the last build; a build older than two minutes starts a new one in the background."""
+    from pensieve import team_projects
+    team_projects.rebuild(store, force=refresh)
+    return await _run(team_projects.summary, q)
+
+
+class ProjectMatchReq(BaseModel):
+    ids: list[str]  # Map point ids (file:…, code:…, session:…)
+
+
+@app.post("/api/projects/match")
+def match_projects(req: ProjectMatchReq):
+    """The projects whose context cards hold most of these Map items' sessions: the Map topic panel's "Open as
+    project"."""
+    from pensieve import team_projects
+    return {"projects": team_projects.best_for(req.ids[:5000])}
+
+
+@app.get("/api/projects/{pid}")
+def get_project(pid: str):
+    """One project: its tickets with their states, pull requests, branches, people and the ties between them."""
+    from pensieve import team_projects
+    p = team_projects.project(pid)
+    if p is None:
+        raise HTTPException(404, f"unknown project {pid!r}")
+    return p
 
 
 @app.get("/api/points")
@@ -736,6 +873,87 @@ async def refresh_insights(req: ScopeReq | None = None):
     scope = req.scope if req else None
     asyncio.create_task(run_insights(scope, req.session_ids if req and scope else None))
     return {"running": True}
+
+
+STATS_TTL = 30  # seconds: the stats of the Insights tab are made again at most this often
+_stats = {"value": {}, "busy": set(), "lock": threading.Lock()}  # value: repos key -> (time, stats)
+_gaps = {"value": {}, "building": set(), "lock": threading.Lock()}
+
+
+@app.get("/api/insights/stats")
+def insights_stats_api(fresh: bool = False, names: str = Query("", alias="repos")):
+    """Token use, the value score, deployed lines, peers and momentum (insights_stats.py), for all repos or the
+    comma-separated `repos`. No AI. An answer older than STATS_TTL is returned, and made again in the background.
+    A sync endpoint: it runs on the request thread pool, not behind the indexing jobs of the loop's executor."""
+    from pensieve import insights_stats, people, store as v2
+    sel = sorted({r for r in names.split(",") if r})
+    key = ",".join(sel)
+
+    def make():
+        v = insights_stats.stats(v2.index_db(), v2.store_db(), people.graph(), repos=sel or None,
+                                 deployed_fn=repos.deployed)
+        _stats["value"][key] = (time.time(), v)
+        return v
+
+    def refresh():
+        try:
+            with _stats["lock"]:
+                make()
+        finally:
+            _stats["busy"].discard(key)
+    hit = _stats["value"].get(key)
+    if hit and not fresh:  # an older answer is returned at once, and made again in the background
+        if time.time() - hit[0] >= STATS_TTL and key not in _stats["busy"]:
+            _stats["busy"].add(key)
+            threading.Thread(target=refresh, daemon=True, name="insights-stats").start()
+        return hit[1]
+    with _stats["lock"]:
+        return make()
+
+
+@app.get("/api/insights/gaps")
+def insights_gaps_api(stale_days: int = 90, inactive_days: int = 180, names: str = Query("", alias="repos")):
+    """Knowledge gaps over every indexed repo, or the comma-separated `repos`. The first build reads all blame rows,
+    so it runs in the background: the answer has `building` until it is done, and the last result while a new one
+    builds. A result stays until a repo's head moves."""
+    from pensieve import insights_stats, store as v2
+    from pensieve.store import cache as cache_db, insights as q
+    stale_days, inactive_days = max(7, min(stale_days, 3650)), max(30, min(inactive_days, 3650))
+    key = f"insights:gaps:v6:{stale_days}:{inactive_days}"
+    idx = v2.index_db()
+    heads = [[r, h] for r, h, _ in q.repo_heads(idx)]
+    sel = {r for r in names.split(",") if r}
+
+    def only(res):
+        return insights_stats.gaps_for(res, sel) if sel else res
+    with _gaps["lock"]:
+        hit = _gaps["value"].get(key) or cache_db.get_json(idx, key)
+        if hit and hit.get("heads") == heads:
+            _gaps["value"][key] = hit
+            return dict(only(hit["result"]), building=False)
+        if key not in _gaps["building"]:
+            _gaps["building"].add(key)
+
+            def build():
+                try:
+                    every = [n for _r, n, _rm in q.repos(idx)]
+                    t0 = time.perf_counter()
+                    res = insights_stats.gaps(repos, every, stale_days, inactive_days)
+                    res["ms"] = round((time.perf_counter() - t0) * 1000)
+                    v = {"heads": heads, "result": res}
+                    cache_db.put_json(idx, key, v, 30 * 86400)
+                    with _gaps["lock"]:
+                        _gaps["value"][key] = v
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                finally:
+                    with _gaps["lock"]:
+                        _gaps["building"].discard(key)
+            threading.Thread(target=build, daemon=True, name="insights-gaps").start()
+    last = (hit or {}).get("result")
+    return dict(only(last) if last else {"areas": [], "counts": {}, "stale_days": stale_days,
+                                         "inactive_days": inactive_days}, building=True)
 
 
 class StaleReq(BaseModel):
@@ -1050,8 +1268,7 @@ async def ai_cli_test(req: CliTestReq):
 
 
 def _repo_check(cwd: str) -> dict:
-    with store.lock:
-        indexed = dict(store.db.execute("SELECT root, remote FROM repos").fetchall())
+    indexed = dict(store.db.execute("SELECT root, remote FROM repos").fetchall())
     return repo_check(cwd, indexed)
 
 
@@ -1081,8 +1298,7 @@ def get_places(fresh: bool = False):
 
 
 def _place_rows():
-    with store.lock:
-        return store.db.execute(places_mod.ROWS).fetchall()
+    return store.db.execute(places_mod.ROWS).fetchall()
 
 
 class PlaceReq(BaseModel):
@@ -1319,8 +1535,7 @@ def remove_repos(path: str):
     the folder (the sweep removes the repos in it that nothing else finds)."""
     root = str(Path(path).expanduser())
     settings.update({"repos": [r for r in settings.get("repos") if r != path]})
-    with store.lock:
-        indexed = store.db.execute("SELECT 1 FROM repos WHERE root=?", (root,)).fetchone()
+    indexed = store.db.execute("SELECT 1 FROM repos WHERE root=?", (root,)).fetchone()
     if indexed:
         sources.set_source(f"repos/{root}", False)
         threading.Thread(target=repos.remove, args=(root,), daemon=True).start()
@@ -1373,6 +1588,75 @@ async def add_mcp_server(req: McpServerReq):
     return sources.catalog(store, repos, files)
 
 
+class ConnectorReq(BaseModel):
+    kind: str            # one of the profile's `add` kinds: oauth, header, env or gh
+    secret: str = ""     # the token, for header and env
+    secret2: str = ""    # a second value that the server needs (the Slack team id)
+
+
+@app.post("/api/connectors/{pid}/add")
+async def add_connector(pid: str, req: ConnectorReq):
+    """Add a cloud connector (Notion, Linear …) as one of Pensieve's own servers, in the way the user chose. For
+    OAuth, this starts the sign-in and returns the sign-in page as `signin_url`."""
+    from pensieve import connectors
+    p = connectors.PROFILES.get(pid)
+    a = next((a for a in (p or {}).get("add", []) if a["kind"] == req.kind), None)
+    if not a:
+        raise HTTPException(404, f"no way to add {pid!r} with {req.kind!r}")
+    if a["kind"] == "gh":
+        await asyncio.to_thread(connections.discover_gh)
+        return {"sources": sources.catalog(store, repos, files)}
+    if a["kind"] in ("header", "env") and not req.secret.strip():
+        raise HTTPException(400, "Paste the token first.")
+    name = p["label"]
+    if a["kind"] == "oauth":
+        x = {"name": name, "url": a["url"], "headers": {}, "oauth": True, **({"scope": a["scope"]} if a.get("scope") else {})}
+    elif a["kind"] == "header":
+        x = {"name": name, "url": a["url"], "headers": {a["header"]: a.get("prefix", "") + req.secret.strip(), **a.get("extra", {})}}
+    elif a["kind"] == "env":
+        env = {a["env"]: req.secret.strip(), **({a["env_more"]: req.secret2.strip()} if a.get("env_more") and req.secret2.strip() else {})}
+        x = {"name": name, "command": a["command"], "args": a["args"], "env": env}
+    else:
+        raise HTTPException(400, f"{p['label']} is added in another way: {a['help']}")
+    try:
+        settings.update({"mcp_servers": [c for c in settings.get("mcp_servers") if c["name"] != name] + [x]})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    sid = connections.slug(name)
+    out = {}
+    if a["kind"] == "oauth":
+        r = await asyncio.to_thread(connections.sign_in, sid)
+        out = {"signin_url": r.get("url"), "error": r.get("error")}
+    else:
+        await asyncio.to_thread(connections.discover_own)
+    return {**out, "sid": sid, "sources": sources.catalog(store, repos, files)}
+
+
+@app.post("/api/connectors/signin/{sid}")
+async def connector_signin(sid: str):
+    """Sign in again to one of Pensieve's own servers that uses OAuth: returns the sign-in page as `signin_url`."""
+    try:
+        r = await asyncio.to_thread(connections.sign_in, sid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"signin_url": r.get("url"), "error": r.get("error"), "sources": sources.catalog(store, repos, files)}
+
+
+@app.get("/api/connectors/callback")
+def connector_callback(state: str = "", code: str = "", error: str = "", error_description: str = "", iss: str = ""):
+    """Where the browser comes back after an OAuth sign-in. The code goes to the sign-in that waits for it."""
+    from fastapi.responses import HTMLResponse
+    from pensieve import mcp_oauth
+    ok = mcp_oauth.finish(state, code or None, (error_description or error) or None, iss or None)
+    msg = ("Pensieve is finishing the sign-in. Go back to Pensieve: the connector shows as found when it is done, "
+           "and you can switch it on there."
+           if ok and code else f"The sign-in did not work: {error_description or error or 'no sign-in waits for this page'}.")
+    import html
+    return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>Pensieve</title>"
+                        f"<body style='font:15px -apple-system,sans-serif;padding:40px'><p>{html.escape(msg)}</p>"
+                        f"<p>You can close this tab.</p></body>")
+
+
 @app.delete("/api/sources/connections")
 def remove_mcp_server(path: str):
     """✕ on a server that Pensieve connects to itself: forget it and its collected items."""
@@ -1384,15 +1668,18 @@ def remove_mcp_server(path: str):
 
 
 @app.get("/api/work")
-def get_work(days: int = 30):
+def get_work(days: int = 30, ids: str = ""):
     """The Context tab: context cards (tasks) with their state, their data points from every source, each task's AI
-    note, and its thread (id and number of saved cards) once the card keeper has linked it."""
+    note, and its thread (id and number of saved cards) once the card keeper has linked it. With `ids`
+    (comma-separated), only those cards: the page asks for them after a `card` event."""
     from pensieve import history
-    ts = work.tasks(store, days)
+    only = set(_csv(ids)) if ids else None
+    ts = work.tasks(store, days, ids=only)
     have = work.notes()
     stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
     of = {t["id"]: history.thread_of(t["id"]) for t in ts}
-    work.warm_card_search(ts, have)
+    if only is None:
+        work.warm_card_search(ts, have)
     # each note's core (problem, goal, state, next, question); notes in an older format show until written again
     return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
                                            "stale": t["id"] in stale}
@@ -1445,6 +1732,184 @@ def draft_work_card(req: CardDraftReq):
     card = _local_card(req.id, req.days)
     return {"resources": [{k: r.get(k) for k in ("kind", "title", "reach")} for r in card.get("resources", [])],
             "card": cards.draft_share(card, store, req.include)}
+
+
+def _repo_rows():
+    return repos.db.execute("SELECT root, name, remote FROM repos").fetchall()
+
+
+@app.get("/api/people")
+def get_people(limit: int = 200, refresh: bool = False):
+    """The People tab: the nearest `limit` people with their closeness to the user (0..1, the user is 1), and the
+    weighted edges between them. Served from the last build; a build older than half an hour starts a new one."""
+    from pensieve import people
+    people.rebuild(store, _repo_rows, force=refresh)
+    return people.summary(limit)
+
+
+@app.get("/api/people/org")
+def get_people_org():
+    """The People tab's Org view, all inferred: teams, and each person's function, role and team with confidence
+    and evidence."""
+    from pensieve import people
+    people.rebuild(store, _repo_rows)
+    return people.org_chart()
+
+
+@app.get("/api/people/find")
+def find_person(who: str):
+    """The person id for a name, an email or 'Name <email>' (as the Map shows authors)."""
+    from pensieve import people
+    pid = people.find(who)
+    if not pid:
+        raise HTTPException(404, f"no person for {who!r}")
+    return {"id": pid}
+
+
+@app.get("/api/people/search")
+async def search_people(q: str, remote: bool = True, deep: bool = False):
+    """Find a person, as lines of JSON. The first line has the local matches: the graph, then the people that earlier
+    searches found. Then one line for each remote source as it answers: GitHub through gh, and the switched-on
+    people connectors with their read-only user search tools. A Claude Code server costs a model run, so only a
+    messaging tool (Slack) is asked without `deep`. The last line is {"type": "done"}."""
+    from pensieve import directory
+    q = q.strip()[:100]
+
+    async def gen():
+        yield json.dumps({"type": "local", "hits": await asyncio.to_thread(directory.local, q)}) + "\n"
+        if not remote or len(q) < 2:
+            yield json.dumps({"type": "done"}) + "\n"
+            return
+        jobs = {}
+        if await asyncio.to_thread(directory.gh_on):
+            jobs["github"] = ({"label": "GitHub"}, lambda: directory.search_github(q))
+        skipped = []
+        for r in await asyncio.to_thread(directory.user_servers):
+            # a Claude Code server costs a model run: only a messaging tool is asked on its own, for a query of 3+ letters
+            if r["origin"] == "engine" and not deep and (r["connector"] not in directory.CHAT or len(q) < 3):
+                skipped.append({"id": r["id"], "label": r["label"]})
+            else:
+                jobs[r["id"]] = (r, lambda r=r: directory.search_server(r, q))
+        yield json.dumps({"type": "sources", "asking": [{"id": k, "label": v[0]["label"]} for k, v in jobs.items()],
+                          "skipped": skipped}) + "\n"
+
+        async def one(sid, r, fn):
+            t0 = time.time()
+            try:
+                out = {"hits": await asyncio.to_thread(lambda: directory.hits(fn()))}
+            except Exception as e:
+                out = {"hits": [], "error": str(e)[:200]}
+            return {"type": "source", "id": sid, "label": r["label"], "seconds": round(time.time() - t0, 1),
+                    "cost_usd": (r.get("_cost") or {}).get("cost_usd"), **out}
+        for f in asyncio.as_completed([one(k, *v) for k, v in jobs.items()]):
+            yield json.dumps(await f) + "\n"
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/people/pic/{h}")
+def get_people_pic(h: str):
+    """A picture from the picture folder, by the hash of its address (people found by a search)."""
+    from pensieve import people
+    if len(h) != 16 or set(h) - set("0123456789abcdef"):
+        raise HTTPException(404)
+    f = people.avatar_by_hash(h)
+    if not f:
+        raise HTTPException(404)
+    return FileResponse(f, headers={"Cache-Control": "max-age=3600"})
+
+
+@app.get("/api/people/{pid}")
+def get_person(pid: str):
+    """One person's card: identities, function, what they work on, and the user's relation to them."""
+    from pensieve import people
+    p = people.profile(pid)
+    if p is None:
+        raise HTTPException(404, f"unknown person {pid!r}")
+    return p
+
+
+@app.get("/api/people/{pid}/relations")
+def get_person_relations(pid: str):
+    """The people closest to the person, for the panel under the graph: peers (the same inferred team) and the
+    strongest collaborators outside the team. Each link has a label, a confidence (0..1), its evidence and how the two
+    work together (`about`). `evidence` says how much org evidence the builds have gathered."""
+    from pensieve import people
+    r = people.relations(pid)
+    if r is None:
+        raise HTTPException(404, f"unknown person {pid!r}")
+    return r
+
+
+@app.get("/api/people/{pid}/avatar")
+def get_person_avatar(pid: str):
+    """The person's picture, from the copy in the data folder (never fetched on each view)."""
+    from pensieve import people
+    f = people.avatar(pid)
+    if not f:
+        raise HTTPException(404)
+    return FileResponse(f, headers={"Cache-Control": "max-age=3600"})
+
+
+class PeopleMergeReq(BaseModel):
+    ids: list[str]
+
+
+class PeopleSplitReq(BaseModel):
+    key: str
+
+
+class PeopleMeReq(BaseModel):
+    id: str
+
+
+@app.post("/api/people/merge")
+def merge_people(req: PeopleMergeReq):
+    """These people are one person (kept on this Mac, in store.db)."""
+    from pensieve import people
+    try:
+        return {"id": people.merge(req.ids)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/people/split")
+def split_person(req: PeopleSplitReq):
+    """This identity (email:…, gh:…, slack:…, name:…) is not the person it was joined to."""
+    from pensieve import people
+    people.split(req.key)
+    return {"ok": True}
+
+
+@app.post("/api/people/me")
+def set_me_person(req: PeopleMeReq):
+    """This person is the user."""
+    from pensieve import people
+    try:
+        people.set_me(req.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/people/overrides")
+def reset_people_overrides():
+    """Forget every merge, split and 'this is me' that the user made."""
+    from pensieve import people
+    people.reset_overrides()
+    return {"ok": True}
+
+
+@app.post("/api/people/profiles")
+async def fetch_people_profiles():
+    """Look up the Slack pictures and titles of the nearest people, with the Slack connection's read-only user
+    tools, then build the graph again."""
+    from pensieve import people
+    res = await asyncio.to_thread(people.fetch_profiles)
+    if not res.get("error"):
+        people.rebuild(store, _repo_rows, force=True)
+    return res
 
 
 @app.get("/api/threads")
@@ -1522,7 +1987,7 @@ def set_task_state(req: TaskStateReq):
         r = work.set_state(store, req.id, req.state, "user", req.reason)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    broadcast({"type": "work"})
+    broadcast({"type": "card", "ids": [req.id], "removed": []})
     return r
 
 
@@ -1552,9 +2017,9 @@ async def write_work_notes(days: int = 30, ids: str = ""):
                     import traceback
                     traceback.print_exc()
                 status["work_notes"] = [x for x in status["work_notes"] if x != t["id"]]
-                broadcast({"type": "work"})
+                broadcast({"type": "card", "ids": [t["id"]], "removed": []})
             status["work_notes"] = []
-            broadcast({"type": "work"})
+            broadcast({"type": "card", "ids": [t["id"] for t in todo], "removed": []})
     asyncio.create_task(run())
     return {"started": True}
 
@@ -1590,6 +2055,14 @@ class ReviveReq(BaseModel):
     thread: str = ""  # or a thread's saved card (history), save n (default the last)
     n: int = -1
     run: bool = True  # false: only the prompt with the card in it, to paste into any agent
+    agent: str = ""  # the agent to start (agents.AGENTS); "" = the user's default agent
+
+
+@app.get("/api/agents")
+def list_agents():
+    """The coding agents Pensieve can start: each with whether it is installed, and the user's default."""
+    from pensieve import agents
+    return {"agents": agents.listing(settings.get("default_agent")), "default": settings.get("default_agent") or ""}
 
 
 @app.post("/api/work/revive")
@@ -1606,7 +2079,7 @@ def revive_card(req: ReviveReq):
         card = _local_card(req.id, req.days)
     if not req.run:
         return {"ok": True, "prompt": cards.revive_prompt(card)}
-    cmd = cards.revive_command(card, config.DATA_DIR / "threads" / "revive")
+    cmd = cards.revive_command(card, config.V2_DIR / "revive", req.agent)
     _terminal(cmd)
     return {"ok": True, "command": cmd}
 
@@ -1635,7 +2108,7 @@ async def connections_worker():
             continue
         try:
             st = connections._load()
-            if settings.enabled(f"connections/{connections.SESSIONS}") and not st.get("sessions_backfilled"):
+            if settings.enabled(f"connections/{connections.SESSIONS}") and not st.get("sessions_backfilled2"):
                 if await asyncio.to_thread(connections.backfill_sessions):
                     wake_files.set()
                     broadcast({"type": "repos"})
@@ -1648,6 +2121,7 @@ async def connections_worker():
                     await asyncio.to_thread(connections.collect, sid)
                     wake_files.set()
                     broadcast({"type": "repos"})
+                await asyncio.to_thread(migrate.mark_indexed, "documents")  # each connection that is due was collected
         except Exception:
             import traceback
             traceback.print_exc()

@@ -63,10 +63,13 @@ DEFAULTS = {
     # Connections (connections.py): MCP servers whose data Pensieve collects with read-only tools. Each one is off
     # until it is in `connections_on`. `mcp_servers` are the servers that Pensieve connects to itself:
     # {"name", "url", "headers": {}} or {"name", "command", "args": [], "env": {}}. Secret values stay in this file.
+    # A URL server with "oauth": true signs in through the browser; its tokens are in connections/.oauth/.
     "connections_on": [],
     "mcp_servers": [],
     "connections_every_hours": 6,  # how often to collect from each connection that is on; 0 = only on request
+    "default_agent": "",           # the agent that "New session from thread" starts (agents.AGENTS); "" = automatic
     "connections_days": 30,        # how far back the first collection goes
+    "projects_stale_days": 21,     # Projects tab: a project with no activity for this many days goes under "Show older"
 }
 
 DESCRIPTIONS = {
@@ -109,11 +112,13 @@ DESCRIPTIONS = {
     "llm_model": "Chat model used for summaries and insights.",
     "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
     "llm_connections": "Saved model servers, each with a name, URL, model and optional API key (manage in Settings → Models).",
-    "connections_on": "Connections that Pensieve collects from (easier to change in Sources). A connection is off until it is here.",
+    "connections_on": "Connections switched on by hand (easier to change in Sources). A connection that Pensieve holds data from is on too, unless it is in disabled.",
     "mcp_servers": "MCP servers that Pensieve connects to itself, with a URL and headers, or a command and environment. "
                    "Use them when the insights engine has no MCP servers, for example the built-in engine.",
     "connections_every_hours": "How often Pensieve collects from each connection that is on (0 = only when you ask).",
+    "default_agent": "The coding agent that a new session from a thread starts in Terminal: claude, codex, qwen, gemini or cursor. Empty: the thread's own agent, else the first one installed.",
     "connections_days": "How many days back the first collection from a connection goes.",
+    "projects_stale_days": "In Projects, a project with no activity for this many days goes under Show older.",
 }
 
 _NO_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit"
@@ -311,6 +316,10 @@ def _mcp_servers(v, cur: list) -> list:
         old = saved.get(name, {}).get(f, {})
         x = {"name": name, "url": url} if url else {"name": name, "command": command, "args": args}
         x[f] = {a: b or old.get(a, "") for a, b in vals.items()}
+        if url and c.get("oauth"):  # signs in with OAuth (mcp_oauth); the tokens are kept outside this file
+            x["oauth"] = True
+            if isinstance(c.get("scope"), str) and c["scope"]:
+                x["scope"] = c["scope"]
         out.append(x)
     return out
 
@@ -319,14 +328,44 @@ def on_change(fn):
     _listeners.append(fn)
 
 
+_HAS_DATA: dict[str, tuple[float, bool]] = {}
+
+
+def _has_data(sid: str) -> bool:
+    """True when Pensieve already pulled data from this connection: items it collected, or results that an agent got
+    from the server in a session. The agent-sessions source itself only reads what agents pulled, so it counts too."""
+    import time
+    now = time.monotonic()
+    hit = _HAS_DATA.get(sid)
+    if hit and now - hit[0] < 30:
+        return hit[1]
+    d = config.DATA_DIR / "connections"
+    has = sid == "agent_sessions"
+    if not has:
+        from pensieve import store
+        from pensieve.store import sources
+        has = sources.has_data(store.store_db(), sid)
+    if not has:
+        try:
+            has = sid in json.loads((d / "state.json").read_text()).get("session_servers", [])
+        except (OSError, ValueError):
+            pass
+    _HAS_DATA[sid] = (now, has)
+    return has
+
+
 def enabled(source_id: str) -> bool:
     """A source is on unless it, or any category above it, is in `disabled`. 'files/~/Docs' -> checks 'files' too.
-    A connection is the other way round: it is off until it is in `connections_on`."""
+    A connection is on once it is in `connections_on`, or once Pensieve holds data from it. Switching it off puts it
+    in `disabled`, which wins over both. The same choice is in `sources.switched` of store.db (storage v2); the
+    lists here stay for the Mac app and older versions."""
     off = set(get("disabled"))
-    cat = source_id.split("/", 1)[0]
-    if cat == "connections" and "/" in source_id and source_id not in get("connections_on"):
+    if source_id in off or source_id.split("/", 1)[0] in off:
         return False
-    return source_id not in off and cat not in off
+    cat, _, sid = source_id.partition("/")
+    if cat == "connections" and sid:
+        return source_id in get("connections_on") or _has_data(sid)
+    return True
 
 
 def on_map(source_id: str) -> bool:
@@ -350,9 +389,16 @@ def file_type(t: str) -> dict:
 
 
 def set_enabled(source_id: str, on: bool) -> dict:
-    if source_id.startswith("connections/"):
+    if source_id.startswith("connections/"):  # off is explicit, so data from it does not switch it back on
+        from pensieve import store
+        from pensieve.models import Switched
+        db = store.store_db()
+        db.write(lambda c: c.execute("UPDATE sources SET switched = ? WHERE id = ?",
+                                     (Switched.ON.value if on else Switched.OFF.value, source_id.split("/", 1)[1])))
+        _HAS_DATA.pop(source_id.split("/", 1)[1], None)
         cur = [d for d in get("connections_on") if d != source_id]
-        return update({"connections_on": cur + [source_id] if on else cur})
+        off = [d for d in get("disabled") if d != source_id]
+        return update({"connections_on": cur + [source_id] if on else cur, "disabled": off if on else off + [source_id]})
     off = [d for d in get("disabled") if d != source_id]
     if not on:
         off.append(source_id)

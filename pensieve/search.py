@@ -8,6 +8,7 @@
     person:sam                    -> the same as kind:person sam
 """
 import bisect
+import contextlib
 import hashlib
 import json
 import os
@@ -25,17 +26,11 @@ from pensieve import indexer
 from pensieve.indexer import CODE_QUERY, embed
 from pensieve.layout import unit
 
-CORPORA = {  # kind -> (chunk table, fts table)
+CORPORA = {  # kind -> (chunk table, full-text index of words); the indexes are made in ensure_fts
     "file": ("file_chunks", "fts_files"),
-    "code": ("code_chunks", "fts_code"),
+    "code": ("code_chunks", "fts_code_words"),
     "session": ("chunks", "fts_sessions"),
 }
-FTS_VERSION = "trigram-v1"
-WORDS_VERSION = "words-v3"  # v3: a `repo` column holds the chunk's repo_token; it filters, and bm25 gives it no weight
-WORDS_FTS = "fts_code_words"  # code split into words (camelCase and snake_case too), for keyword ranking
-
-
-_WORDS_OF = "code_words({r}.path || ' ' || {r}.text), repo_token({r}.repo)"  # one chunk's (words, repo) columns
 
 
 def repo_token(root):
@@ -59,6 +54,15 @@ def code_words(text):
     out = []
     for w in re.findall(r"[A-Za-z][A-Za-z0-9]*", text or ""):
         out += [p.lower() for p in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", w) if len(p) > 1]
+    return " ".join(out)
+
+
+def code_tokens(text):
+    """The words of code text that the code index holds: code_words, and also one-letter parts and numbers, so that
+    "s3a", "404" and "2026-01-04" can be found: 'k3s_v2' -> 'k 3 s v 2'."""
+    out = []
+    for w in re.findall(r"[A-Za-z0-9]+", text or ""):
+        out += [p.lower() for p in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", w)]
     return " ".join(out)
 
 
@@ -87,12 +91,39 @@ def parse(q: str) -> dict:
 
 
 # ---- full-text index ----------------------------------------------------------
+# Each full-text index holds words, not trigrams. On 325k code chunks the word index is 94 MB against 1.2 GB for
+# trigrams, and a text lookup takes about an eighth of the time at the median (bench/STRATEGIES.md). contains() finds text in them
+# as grep does.
+#   fts_code_words  code_tokens of the path and the text ("fetchUserID_v2" -> fetch user id v 2), and the
+#                   chunk's repo_token in a `repo` column. Contentless: the text stays in code_chunks.
+#   fts_files, fts_sessions  the chunk text as unicode61 words, with the chunk table as its content.
+FTS_VERSION = "words-v1"  # fts_files and fts_sessions; "trigram-v1" before, which also had a trigram fts_code
+WORDS_VERSION = "words-v4"  # fts_code_words. v3: the `repo` column, which filters and has no bm25 weight; v4: code_tokens
+WORDS_FTS = CORPORA["code"][1]
+_OLD_FTS = ("fts_code",)  # trigram index over the code text (1.2 GB for 325k chunks): removed in words-v1
+_UNICODE61 = "unicode61 remove_diacritics 0"
+_WORDS_OF = "code_tokens({r}.path || ' ' || {r}.text), repo_token({r}.repo)"  # one chunk's (words, repo) columns
+
+
 def ensure_fts(db, lock, meta, log=print):
-    """Trigram FTS5 tables mirroring each chunk table (kept in sync by triggers). Built once in the background."""
+    """Make the full-text indexes, kept in sync with their chunk tables by triggers. An index whose definition
+    changed is made again (in the background, as the server calls this). Returns whether one was made."""
     with lock:
-        for table, fts in CORPORA.values():
+        fresh = meta("fts") == FTS_VERSION
+        words_fresh = meta("fts_words") == WORDS_VERSION
+        drop = []
+        if not fresh:  # the tokenizer changed: CREATE ... IF NOT EXISTS would keep the old table
+            drop += [CORPORA["file"][1], CORPORA["session"][1], *_OLD_FTS]
+        if not words_fresh:  # the columns changed
+            drop += [f"{WORDS_FTS}_vocab", WORDS_FTS]
+        for fts in drop:
+            db.executescript("".join(f"DROP TRIGGER IF EXISTS {fts}_{op};" for op in ("ai", "ad", "au"))
+                             + f"DROP TABLE IF EXISTS {fts};")
+        for kind in ("file", "session"):
+            table, fts = CORPORA[kind]
             db.executescript(f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS {fts} USING fts5(text, content='{table}', content_rowid='id', tokenize='trigram');
+            CREATE VIRTUAL TABLE IF NOT EXISTS {fts} USING fts5(text, content='{table}', content_rowid='id',
+              tokenize='{_UNICODE61}');
             CREATE TRIGGER IF NOT EXISTS {fts}_ai AFTER INSERT ON {table} BEGIN
               INSERT INTO {fts}(rowid, text) VALUES (new.id, new.text); END;
             CREATE TRIGGER IF NOT EXISTS {fts}_ad AFTER DELETE ON {table} BEGIN
@@ -101,9 +132,6 @@ def ensure_fts(db, lock, meta, log=print):
               INSERT INTO {fts}({fts}, rowid, text) VALUES('delete', old.id, old.text);
               INSERT INTO {fts}(rowid, text) VALUES (new.id, new.text); END;
             """)
-        words_fresh = meta("fts_words") == WORDS_VERSION
-        if not words_fresh:  # the table's columns changed: CREATE ... IF NOT EXISTS would keep the old ones
-            db.executescript(f"DROP TABLE IF EXISTS {WORDS_FTS}_vocab; DROP TABLE IF EXISTS {WORDS_FTS};")
         db.executescript(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS {WORDS_FTS} USING fts5(words, repo, content='', contentless_delete=1);
         CREATE VIRTUAL TABLE IF NOT EXISTS {WORDS_FTS}_vocab USING fts5vocab({WORDS_FTS}, 'row');
@@ -118,7 +146,6 @@ def ensure_fts(db, lock, meta, log=print):
           INSERT INTO {WORDS_FTS}(rowid, words, repo) VALUES (new.id, {_WORDS_OF.format(r="new")}); END;
         """)
         db.commit()
-        fresh = meta("fts") == FTS_VERSION
     if fresh and words_fresh:
         return False
     if not words_fresh:
@@ -129,18 +156,109 @@ def ensure_fts(db, lock, meta, log=print):
             meta("fts_words", WORDS_VERSION)
             db.commit()
         log(f"full-text index {WORDS_FTS}: {time.time() - t:.1f}s")
-    if fresh:
-        return True
-    for table, fts in CORPORA.values():
-        t = time.time()
+    if not fresh:
+        for kind in ("file", "session"):
+            fts, t = CORPORA[kind][1], time.time()
+            with lock:
+                db.execute(f"INSERT INTO {fts}({fts}) VALUES('rebuild')")
+                db.commit()
+            log(f"full-text index {fts}: {time.time() - t:.1f}s")
+        meta("fts", FTS_VERSION)
         with lock:
-            db.execute(f"INSERT INTO {fts}({fts}) VALUES('rebuild')")
             db.commit()
-        log(f"full-text index {fts}: {time.time() - t:.1f}s")
-    meta("fts", FTS_VERSION)
-    with lock:
-        db.commit()
     return True
+
+
+def _words(kind, text):
+    """The words that the full-text index of `kind` holds for text, in order."""
+    return code_tokens(text).split() if kind == "code" else re.findall(r"[^\W_]+", text.lower())
+
+
+def _joined(db, s, prefix):
+    """The ways to read one name typed without its capitals or underscores as code words, at most 8: "textarea" is
+    also "text area", as in TextArea. Each part is a word in the code index, except that the last part can be the
+    start of a word when `prefix`. Call with the lock held."""
+    ws = re.findall(r"[A-Za-z][A-Za-z0-9]*", s)
+    if len(ws) != 1 or not (ws[0].islower() or ws[0].isupper()) or not 4 <= len(ws[0]) <= 32:
+        return set()
+    w = ws[0].lower()
+    subs = {w[i:j] for i in range(len(w)) for j in range(i + 2, len(w) + 1)}
+    try:
+        known = {t for (t,) in db.execute(f"SELECT term FROM {WORDS_FTS}_vocab WHERE term IN "
+                                          f"({','.join('?' * len(subs))})", sorted(subs))}
+    except sqlite3.OperationalError:  # no vocabulary table yet
+        return set()
+    out = []
+
+    def walk(i, parts):
+        if len(out) >= 8:
+            return
+        rest = w[i:]
+        if parts and (rest in known or (prefix and len(rest) >= 2)):
+            out.append((*parts, rest))
+        for j in range(i + 2, len(w) - 1):
+            if w[i:j] in known:
+                walk(j, parts + [w[i:j]])
+    walk(0, [])
+    return set(out)
+
+
+def _phrase(words, prefix):
+    """The FTS5 phrase for the words of a text. It only has to find more chunks than the text is in, because
+    contains() reads each chunk's text after. The words that cost the most to look up are left out: a last word
+    of 1 or 2 letters as a prefix (thousands of words start with it), a first word of one letter, and in a long
+    text all but the 8 longest words in a row."""
+    w = list(words)
+    if prefix and len(w) > 1 and len(w[-1]) < 3:
+        w, prefix = w[:-1], False
+    if len(w) > 1 and len(w[0]) < 2:
+        w = w[1:]
+    if len(w) > 8:
+        i = max(range(len(w) - 7), key=lambda i: sum(len(x) for x in w[i:i + 8]))
+        w, prefix = w[i:i + 8], prefix and i + 8 == len(w)
+    return f'"{" ".join(w)}"' + (" *" if prefix else "")
+
+
+def _fts_query(phrases):
+    """An FTS5 query that needs every phrase (the documents' word index, fts_docs)."""
+    return " AND ".join('"' + p.replace('"', '""') + '"' for p in phrases)
+
+
+def contains(db, kind, texts, limit, roots=None, rank=False):
+    """[(chunk id, bm25)] of the `kind` chunks that contain every one of `texts`, ignoring case, as grep finds them:
+    at most `limit`, in id order, or best bm25 first with `rank` (else bm25 is 0). A higher bm25 is better.
+
+    The word index gives the chunks that have each text's words in that order. Then the text of each chunk is
+    checked. A text that ends inside a word matches that word as a prefix ("fetch_us" finds "fetch_user"). A text
+    that starts inside a word ("serId" in "userId") is found only where it starts a word. Code words come from the
+    text as typed, in lowercase, and split into known words (see _joined), so "LinkedIn" finds "linkedin" and
+    "linkedin" finds "LinkedIn". If a text has no words (only punctuation), every chunk's text is read. `roots`:
+    code only, the repos to look in. Call with the lock held."""
+    table, fts = CORPORA[kind]
+    check = " AND ".join("t.text LIKE ? ESCAPE '\\'" for _ in texts)  # LIKE ignores case (ASCII), as lower() does
+    args = ["%" + re.sub(r"([%_\\])", r"\\\1", s) + "%" for s in texts]
+    if kind == "code" and roots:
+        check += f" AND t.repo IN ({','.join('?' * len(roots))})"
+        args += list(roots)
+    parts = []
+    for s in texts:
+        forms = {tuple(_words(kind, v)) for v in (s, s.lower())} - {()}
+        if not forms:
+            return [(c, 0.0) for (c,) in db.execute(f"SELECT t.id FROM {table} t WHERE {check} LIMIT ?", args + [limit])]
+        star = " *" if s[-1:].isalnum() else ""
+        if kind == "code":
+            forms |= _joined(db, s, bool(star))
+        forms = sorted(forms)
+        parts.append("(" + " OR ".join(_phrase(f, bool(star)) for f in forms) + ")")
+    m = " AND ".join(parts)
+    if kind == "code":
+        m = f"words : ({m})"
+        if roots:
+            m += f" AND repo : ({' OR '.join(repo_token(r) for r in roots)})"
+    score = (f"bm25({fts}, 1.0, 0.0)" if kind == "code" else f"bm25({fts})") if rank else "0"
+    return [(c, -bm) for c, bm in db.execute(
+        f"SELECT t.id, {score} FROM {fts} JOIN {table} t ON t.id={fts}.rowid WHERE {fts} MATCH ? AND {check}"
+        + (" ORDER BY 2" if rank else "") + " LIMIT ?", [m] + args + [limit])]
 
 
 _lock_wait = threading.local()  # ms this thread's search has waited for the index lock (_TimedLock)
@@ -154,12 +272,12 @@ class _TimedLock:
 
     def __enter__(self):
         t = time.perf_counter()
-        self._lock.acquire()
+        self._lock.__enter__()
         _lock_wait.ms = getattr(_lock_wait, "ms", 0.0) + (time.perf_counter() - t) * 1000
         return self
 
     def __exit__(self, *exc):
-        self._lock.release()
+        return self._lock.__exit__(*exc)
 
 
 class _Laps:
@@ -208,15 +326,12 @@ def code_names(q):
     return [w for w in ws if "_" in w.strip("_") or re.search(r"[a-z][A-Z]|[A-Z]{2,}[a-z]|[a-z]\d|^[A-Z][a-z]+[A-Z]", w)]
 
 
-def _fts_query(phrases):
-    return " AND ".join('"' + p.replace('"', '""') + '"' for p in phrases)
-
-
 # ---- search ---------------------------------------------------------------------
 class Searcher:
     def __init__(self, store, repos, files):
         self.store, self.repos, self.files = store, repos, files
-        self.db, self.lock = store.db, _TimedLock(store.lock)
+        # reads only: each runs on the thread's own connection and never waits for a writer (no lock)
+        self.db, self.lock = store.db, _TimedLock(contextlib.nullcontext())
         self._fbuilding = False
 
     def _index(self, kind):
@@ -252,7 +367,9 @@ class Searcher:
         pq = parse(q)
         f = pq["filters"]
         kf = f.get("kind")
-        kinds = [k for k in (kinds or CORPORA) if not kf or k in _KIND_CORPORA.get(kf, [kf])]
+        docs_too = (kinds is None or "doc" in kinds) and kf in (None, "doc", "file") and not f.get("ext") \
+            and not f.get("by")  # collected documents (doc:<id>, docindex.py)
+        kinds = [k for k in (kinds or CORPORA) if k in CORPORA and (not kf or k in _KIND_CORPORA.get(kf, [kf]))]
         if f.get("ext"):
             kinds = [k for k in kinds if k != "session"]
         by = f.get("by")
@@ -267,26 +384,20 @@ class Searcher:
         lap("embed")
         code_ranked = {}  # (kind, chunk id) -> file-level score from _code
         hits = {}  # (kind, chunk id) -> score dict
-        exact_short = [p for p in pq["exact"] if len(p) < 3]  # trigram needs 3+ chars: checked by substring instead
-        exact_fts = [p for p in pq["exact"] if len(p) >= 3]
+        exact_short = [p for p in pq["exact"] if len(p) < 3]  # also kept in a file whose name has them
         for kind in kinds:
-            table, fts = CORPORA[kind]
+            table = CORPORA[kind][0]
             allow = scopes.allowlist(scope, kind, self.store, self.repos, self._index(kind)) if scope else None
             if allow is not None and not len(allow):
                 continue
             allowed = set(allow.tolist()) if allow is not None and pq["exact"] else None
             if pq["exact"]:
                 with self.lock:
-                    if exact_fts:
-                        rows = self.db.execute(f"SELECT rowid, bm25({fts}) FROM {fts} WHERE {fts} MATCH ? ORDER BY 2 LIMIT ?",
-                                               (_fts_query(exact_fts), 400 if allowed is None else 5000)).fetchall()
-                    else:
-                        like = " AND ".join("instr(lower(text), ?)>0" for _ in exact_short)
-                        rows = self.db.execute(f"SELECT id, 0 FROM {table} WHERE {like} LIMIT 400",
-                                               [p.lower() for p in exact_short]).fetchall()
+                    rows = contains(self.db, kind, pq["exact"], 400 if allowed is None else 5000,
+                                    roots=scope.repos if scope is not None else None, rank=True)
                 for cid, bm in rows:
                     if allowed is None or cid in allowed:
-                        hits[(kind, cid)] = dict(exact=True, bm25=-bm, sem=None)
+                        hits[(kind, cid)] = dict(exact=True, bm25=bm, sem=None)
                 if kind == "file":  # file names count as an exact hit too
                     with self.lock:
                         for (cid,) in self.db.execute(
@@ -347,6 +458,9 @@ class Searcher:
                             line=r["line"], row=key, score=round(score, 4), ext=r["ext"],
                             match="both" if pq["exact"] and qv is not None else "exact" if pq["exact"] else "semantic",
                             mtime=r.get("mtime"), key=r.get("key"), is_dir=r.get("is_dir", False), author=r.get("author")))
+        if docs_too:
+            out += self._docs(pq, qv, scope, limit, rows, words)
+            lap("docs")
         out.sort(key=lambda x: (-x["score"], -_ts(x["mtime"])))
         best, seen = [], set()
         for x in out:  # best chunk per file / session (code ids are per chunk, so dedupe code by file)
@@ -392,6 +506,49 @@ class Searcher:
                     x["excerpt"] = _excerpt(text, x["chunk_line"], pq["semantic"], pq["exact"])
         lap("lines", done=True)
         return dict(query=pq, results=results, scope=scopes.describe(scope), timing=lap.ms)
+
+    @staticmethod
+    def _docs(pq, qv, scope, limit, rows, words) -> list[dict]:
+        """Hits in the collected documents (index.db), as results with the id doc:<id>. Their rows go into `rows`
+        under ("doc", chunk id), for the snippets."""
+        from pensieve import docindex
+        from pensieve.store import docchunks
+        di = docindex.get()
+        srcs = getattr(scope, "docs", None) if scope is not None else None
+        allow = di.allow(srcs) if srcs is not None else None
+        if allow is not None and not len(allow):
+            return []
+        hits = {}
+        exact_short = [p for p in pq["exact"] if len(p) < 3]
+        exact_fts = [p for p in pq["exact"] if len(p) >= 3]
+        if pq["exact"]:
+            found = docchunks.match(di.idx_db, _fts_query(exact_fts), 400) if exact_fts else \
+                [(c, 0.0) for c in docchunks.contains(di.idx_db, exact_short, 400)]
+            ok = set(allow.tolist()) if allow is not None else None
+            hits = {cid: dict(bm25=-bm, sem=None) for cid, bm in found if ok is None or cid in ok}
+        elif qv is not None:
+            hits = {cid: dict(bm25=0, sem=s) for cid, s in di.search(qv, max(60, limit * 4), allow)}
+        got = di.rows(hits)
+        out = []
+        for cid, r in got.items():
+            h, low = hits[cid], r["text"].lower()
+            if any(p.lower() not in low for p in exact_short):
+                continue
+            where = f"{r['title']} {r['subtitle']}".lower()
+            if any(x.lower() in low or x.lower() in where for x in pq["exclude"]):
+                continue
+            if pq["filters"].get("in") and pq["filters"]["in"] not in r["subtitle"].lower():
+                continue
+            if qv is not None and pq["exact"]:
+                h["sem"] = float(np.frombuffer(r["vec"], np.float16).astype(np.float32) @ qv)
+            score = h["sem"] + (0.05 if any(w in r["title"].lower() for w in words) else 0) if h["sem"] is not None \
+                else h["bm25"]
+            rows[("doc", cid)] = r
+            out.append(dict(id=r["id"], kind="doc", title=r["title"], subtitle=r["subtitle"], path=None, line=None,
+                            row=("doc", cid), score=round(score, 4), ext="", url=r["url"], private=r["private"],
+                            match="both" if pq["exact"] and qv is not None else "exact" if pq["exact"] else "semantic",
+                            mtime=r["mtime"], key=r["key"], is_dir=False, author=None))
+        return out
 
     @staticmethod
     def _on_disk(best, rows, limit):
@@ -519,10 +676,9 @@ class Searcher:
                         kw[cid] = -bm
             cand.update(kw)
             ql = q.strip()
-            phrase = set()
-            if len(ql) >= 8:
-                phrase = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
-                                                        (_fts_query([ql]), 500 if allowed is None else 5000)) if ok(c)}
+            has = lambda s: {c for c, _ in contains(self.db, "code", [s], 500 if allowed is None else 5000, roots)
+                             if ok(c)}  # the chunks that contain s
+            phrase = has(ql) if len(ql) >= 8 else set()
             names = code_names(ql)
             frags, pieces = {}, []  # fragment -> chunks containing it
             if len(ql) >= 8 and not phrase and names != [ql]:
@@ -533,8 +689,7 @@ class Searcher:
                 for f in pieces[:8] if holes else []:
                     if any(f in g for g in frags):
                         continue
-                    hits = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
-                                                          (_fts_query([f]), 500 if allowed is None else 5000)) if ok(c)}
+                    hits = has(f)
                     if hits:
                         frags[f] = hits
                         cand |= hits
@@ -544,8 +699,7 @@ class Searcher:
             for n in names:
                 if len(n) < 3:
                     continue
-                by_name[n] = {c for (c,) in self.db.execute("SELECT rowid FROM fts_code WHERE fts_code MATCH ? LIMIT ?",
-                                                            (_fts_query([n]), 500 if allowed is None else 5000)) if ok(c)}
+                by_name[n] = has(n)
                 cand |= by_name[n]
             cand |= phrase
             if not cand:
@@ -664,24 +818,27 @@ class Searcher:
         home = str(Path.home())
         with self.lock:
             names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
-            code = self.db.execute("SELECT id, repo, path, vec, authors FROM code_chunks WHERE wt=''").fetchall()
-            docs = self.db.execute("SELECT c.id, f.path, c.vec, f.author, f.root FROM file_chunks c JOIN files f ON f.path=c.path "
+            code = self.db.execute("SELECT id, repo, path, NULL, authors FROM code_chunks WHERE wt=''").fetchall()
+            docs = self.db.execute("SELECT c.id, f.path, NULL, f.author, f.root FROM file_chunks c JOIN files f ON f.path=c.path "
                                    "WHERE f.kind!='folder'").fetchall()
-        dirs, ids, vecs = {}, [], []
+        dirs, ids = {}, []
         def add(key, **kw):
             d = dirs.get(key)
             if d is None:
                 d = dirs[key] = dict(kw, idx=[], files=Counter())
             return d
-        for i, (cid, repo, path, vec, _) in enumerate(code):
-            ids.append(("code", cid)); vecs.append(vec)
+        by_file = {}  # (repo, path) -> positions of its chunks: each file's folders are found once
+        for i, (cid, repo, path, _, _) in enumerate(code):
+            ids.append(("code", cid))
+            by_file.setdefault((repo, path), []).append(i)
+        for (repo, path), idx in by_file.items():
             parts = path.split("/")[:-1]
             for depth in range(len(parts) + 1):
                 rel = "/".join(parts[:depth])
                 d = add(f"{repo}/{rel}".rstrip("/"), repo=repo, name=names.get(repo, Path(repo).name), rel=rel, root=not rel)
-                d["idx"].append(i); d["files"][path.rsplit("/", 1)[-1]] += 1
-        for j, (cid, path, vec, _, root) in enumerate(docs):
-            ids.append(("file", cid)); vecs.append(vec)
+                d["idx"].extend(idx); d["files"][path.rsplit("/", 1)[-1]] += len(idx)
+        for j, (cid, path, _, _, root) in enumerate(docs):
+            ids.append(("file", cid))
             parent = str(Path(path).parent)
             base = str(Path(root).expanduser()) if root else home
             if not parent.startswith(base):
@@ -691,9 +848,8 @@ class Searcher:
                 rel = "/".join(parts[:depth])
                 d = add(f"{base}/{rel}", repo=None, name=Path(base).name, rel=rel, root=False, base=base)
                 d["idx"].append(len(code) + j); d["files"][Path(path).name] += 1
-        V = unit(np.stack([np.frombuffer(v, np.float16) for v in vecs]).astype(np.float32)) if vecs else np.zeros((0, 1))
         keys = [k for k, d in dirs.items() if len(d["files"]) >= 1]
-        C = unit(np.stack([V[dirs[k]["idx"]].mean(0) for k in keys])) if keys else np.zeros((0, 1))
+        C = self._folder_vectors(keys, dirs, code, docs) if keys else np.zeros((0, 1))
         by_word = defaultdict(set)  # path word -> folders (positions in keys) whose path has it
         for j, k in enumerate(keys):  # words of the path, by segment (repo name first)
             d = dirs[k]
@@ -710,6 +866,25 @@ class Searcher:
                           authors={("code", c[0]): (c[4] or "").lower() for c in code},
                           doc_author={("file", c[0]): (c[3] or "").lower() for c in docs})
         return self._fidx
+
+    def _folder_vectors(self, keys, dirs, code, docs):
+        """The unit mean vector of each folder's chunks, from the vectors in memory (vectors.Index): one sparse
+        product, a block of dimensions at a time, instead of a copy of every chunk's vector for each folder above it."""
+        from scipy.sparse import csr_matrix
+        dim = self.repos.index.dim
+        V = np.zeros((len(code) + len(docs), dim), np.float16)
+        found, X = self.repos.index.take([c[0] for c in code])
+        V[:len(code)][found] = X
+        found, X = self.files.index.take([c[0] for c in docs])
+        V[len(code):][found] = X
+        sizes = [len(dirs[k]["idx"]) for k in keys]
+        cols = np.fromiter((i for k in keys for i in dirs[k]["idx"]), np.int64, count=sum(sizes))
+        M = csr_matrix((np.ones(len(cols), np.float32), (np.repeat(np.arange(len(keys)), sizes), cols)),
+                       shape=(len(keys), len(V)))
+        C = np.empty((len(keys), dim), np.float32)
+        for a in range(0, dim, 128):
+            C[:, a:a + 128] = M @ V[:, a:a + 128].astype(np.float32)
+        return unit(C)
 
     @staticmethod
     def _path_match(words, segs):

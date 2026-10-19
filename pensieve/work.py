@@ -8,6 +8,7 @@ A task joins agent sessions, git branches, commits and connection items (tickets
 `adjacent` finds what coworkers did near a task: their recent commits on remote branches in the same folders, and
 tickets and threads about the same subject."""
 import hashlib
+from dataclasses import asdict
 import json
 import re
 import subprocess
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import connections, repos as repos_mod, task_states
+from pensieve import cardtext, connections, repos as repos_mod, task_states
 
 KEY = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
 # a ticket's page: Jira (…/browse/KEY) and Linear (…/issue/KEY); group 1 is the site part that comes before the key
@@ -46,26 +47,46 @@ def _not_users(project: str) -> bool:
     return p.startswith(_TEMP) or p.startswith(str(Path.home() / "Library") + "/")
 
 
-def _branch(path: str) -> str:
-    """The last git branch that a Claude Code transcript records."""
+_GIT_BRANCH = re.compile(rb'"gitBranch":"([^"]*)"')
+_LINE_CWD = re.compile(rb'"cwd":"([^"]*)"')
+_LINE_TS = re.compile(rb'"timestamp":"([^"]*)"')
+
+
+def _branches(path: str) -> dict[tuple[str, str], float]:
+    """Every git branch that a Claude Code transcript records, by (cwd, branch), with the time of its last message.
+    "HEAD" is left out: Claude Code records it during some git operations, so it is not the branch the work is on."""
     try:
-        m = Path(path).stat().st_mtime
+        size = Path(path).stat().st_size
     except OSError:
-        return ""
+        return {}
     hit = _branch_cache.get(path)
-    if hit and hit[0] == m:
+    if hit and hit[0] == size:
         return hit[1]
-    b = ""
+    start, out = (hit[0], dict(hit[1])) if hit and hit[0] < size else (0, {})  # a transcript only grows: read the end
     try:
-        data = Path(path).read_bytes()
-        i = data.rfind(b'"gitBranch":"')
-        if i >= 0:
-            j = data.find(b'"', i + 13)
-            b = data[i + 13:j].decode(errors="replace")
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read()
     except OSError:
-        pass
-    _branch_cache[path] = (m, b)
-    return b
+        return out
+    end = data.rfind(b"\n") + 1  # whole lines only: the last one can be half written
+    for line in data[:end].splitlines():
+        b = _GIT_BRANCH.search(line)
+        if not b or b.group(1) in (b"", b"HEAD"):
+            continue
+        c, t = _LINE_CWD.search(line), _LINE_TS.search(line)
+        k = ((c.group(1) if c else b"").decode(errors="replace"), b.group(1).decode(errors="replace"))
+        out[k] = max(out.get(k, 0), _ts(t.group(1).decode()) if t else 0)
+    _branch_cache[path] = (start + end, out)
+    return out
+
+
+def _branch(path: str, cwd: str = "") -> str:
+    """The branch a Claude Code session works on now: its newest recorded branch, in its own folder when one is
+    given."""
+    bs = _branches(path)
+    mine = {k: v for k, v in bs.items() if not cwd or k[0] == cwd or k[0].startswith(cwd + "/")} or bs
+    return max(mine, key=mine.get)[1] if mine else ""
 
 
 def _ts(s) -> float:
@@ -77,41 +98,107 @@ def _ts(s) -> float:
         return 0.0
 
 
-def _items() -> list[dict]:
-    """Connection items: {path, server, key, title, status, assignee, updated, url, text, private}. `private`: a
-    direct message, a group message or a private channel (marked when stored, or found now in an item stored before
-    the mark), which local cards use and shared cards and notes leave out."""
-    out = []
-    if not connections.DIR.is_dir():
-        return out
-    for d in connections.DIR.iterdir():
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        for md in d.glob("*.md"):
-            try:
-                raw = json.loads((d / ".raw" / f"{md.stem}.json").read_text())
-                text = md.read_text()
-            except (OSError, ValueError):
-                continue
-            tool = re.search(r"^- Source: .*\(([^()\n]+)\)$", text, re.M)
-            tool = tool.group(1) if tool else ""
-            private = bool(raw.get("_private")) or connections.private_tool(tool) or \
-                connections.private_item(raw, bool(connections.CHAT.search(f"{d.name} {tool}")))
-            kn = connections._id_key(raw)
-            key = str(raw.get(kn, "")) if kn in ("key", "identifier") else ""
-            url = next((raw[k] for k in ("webUrl", "url", "permalink", "html_url") if isinstance(raw.get(k), str)
-                        and raw[k].startswith("http")), "")
-            head = raw.get("head") if isinstance(raw.get("head"), dict) else {}
-            branch = raw.get("headRefName") or head.get("ref") or raw.get("source_branch") or ""  # a PR or MR
-            out.append(dict(path=str(md), server=d.name, key=key if KEY.fullmatch(key) else "",
-                            title=text.split("\n", 1)[0].lstrip("# ").strip(), url=url,
-                            branch=branch if isinstance(branch, str) else "",
-                            pr=bool(PR_URL.fullmatch(url)) if url else False,
-                            status=connections._render(raw.get("status") or raw.get("state")) if raw.get("status") or raw.get("state") else "",
-                            assignee=connections._render(raw.get("assignee")) if raw.get("assignee") else "",
-                            updated=_ts(raw.get("updated") or raw.get("updated_at") or md.stat().st_mtime), text=text,
-                            private=private))
-    return out
+def _items(since: float = 0, until: float | None = None) -> list[dict]:
+    """Connection items of switched-on sources whose time is in (since, until]: {path, doc, server, key, title,
+    status, assignee, updated, url, branch, pr, text, private}, from the `documents` table (an SQL range on its time
+    index). `path` is the item's id, doc:<id>. `private`: a direct message, a group message or a private channel,
+    which local cards use and shared cards and notes leave out."""
+    from pensieve import store as v2
+    from pensieve.store import documents
+    db = v2.store_db()
+    docs = documents.window(db, int(since), int(until) if until else None, sources=connections.indexed())
+    return [_item(d, ppl) for d, ppl in zip(docs, _assignees(db, [d.id for d in docs]))]
+
+
+def _older_items(items: list[dict], prefixes: set, S: dict, facts: dict, commits, until) -> list[dict]:
+    """Items from before the window that the window's work names: tickets by their keys (in session titles, branches
+    and text, commit subjects, and the window's own tickets) and pull requests by their head branches. A ticket that last changed 40 days ago
+    still gives its title and status to this week's session about it."""
+    from pensieve import store as v2
+    from pensieve.store import documents
+    db, srcs = v2.store_db(), connections.indexed()
+    prefixes = prefixes | documents.ticket_prefixes(db, srcs)
+    have = {i["doc"] for i in items}
+    keys = {f"{a}-{b}" for s in S.values() for t in [s["title"], s["branch"]] for a, b in KEY.findall(t) if a in prefixes}
+    keys |= {f"{a}-{b}" for s in S.values() for a, b in facts[s["id"]]["keys"] if a in prefixes}
+    keys |= {f"{a}-{b}" for c in commits for a, b in KEY.findall(c[4]) if a in prefixes}
+    keys |= {i["key"] for i in items if i["key"]}  # older copies of a window's ticket (another tool's, with its people)
+    branches = {s["branch"] for s in S.values() if s["branch"] not in DEFAULT_BRANCHES}
+    docs = [d for d in documents.by_keys(db, keys, srcs) + documents.by_branches(db, branches, srcs)
+            if d.id not in have and (not until or (d.time or 0) <= until)]
+    docs = list({d.id: d for d in docs}.values())
+    return [_item(d, ppl) for d, ppl in zip(docs, _assignees(db, [d.id for d in docs]))]
+
+
+def _assignees(db, ids) -> list[list]:
+    """The people of each document, in the order of `ids`."""
+    from pensieve.store import documents
+    by = documents.people_of(db, ids)
+    return [by.get(i, []) for i in ids]
+
+
+def _owners(d, people) -> set[str]:
+    """The people a ticket belongs to, by name and email, lower case (see _is_mine): its assignees, authors and
+    owners, and the assignee, reporter and creator of the service's item."""
+    out = set()
+    for p in people:
+        if p.role in ("assignee", "author", "owner"):
+            out.add((p.name or "").strip().lower())
+            kind, _, v = p.key.partition(":")
+            if kind in ("email", "name"):
+                out.add(v.strip().lower())
+    if d.kind == "ticket":
+        try:
+            raw = json.loads(d.raw or "{}")
+        except ValueError:
+            raw = {}
+        for f in ("assignee", "reporter", "creator"):
+            v = raw.get(f) if isinstance(raw.get(f), dict) else (raw.get("fields") or {}).get(f)
+            if isinstance(v, dict):
+                out |= {str(v.get(k) or "").strip().lower() for k in ("displayName", "emailAddress", "name", "email")}
+    return out - {""}
+
+
+def _item(d, people: list) -> dict:
+    url = d.url or ""
+    assignees = [p.name or p.key.split(":", 1)[1] for p in people if p.role == "assignee"]
+    return dict(path=f"doc:{d.id}", doc=d.id, server=d.source_id, key=d.key if d.kind == "ticket" else "",
+                title=d.title, url=url, branch=d.branch or "", pr=bool(PR_URL.fullmatch(url)) if url else False,
+                status=d.status or "", assignee=", ".join(dict.fromkeys(assignees)),
+                updated=float(d.time or 0), text=d.text, private=d.private, owners=_owners(d, people))
+
+
+_my_ids_cache = (0.0, set())
+
+
+def _my_ids() -> set[str]:
+    """The user's names and emails, lower case: from the People graph's "me" person, and git's user.name and
+    user.email."""
+    global _my_ids_cache
+    if time.time() - _my_ids_cache[0] < 300:
+        return _my_ids_cache[1]
+    out = {_git(str(Path.home()), "config", "--global", k, ttl=3600).strip().lower() for k in ("user.name", "user.email")}
+    try:
+        from pensieve import people
+        g = people.graph()
+        me = next((p for p in (g or {}).get("people", {}).values() if p.get("me")), None)
+        for k in (me or {}).get("keys", []):
+            kind, _, v = k.partition(":")
+            if kind in ("email", "name"):
+                out.add(v.lower())
+        if me and me.get("name"):
+            out.add(me["name"].lower())
+    except Exception:
+        pass
+    _my_ids_cache = (time.time(), out - {""})
+    return _my_ids_cache[1]
+
+
+def _is_mine(item: dict) -> bool:
+    """A ticket that belongs to the user: they are its assignee, creator or owner."""
+    me = _my_ids()
+    norm = {n for n in me if "@" not in n}
+    return any(o in me or o in norm for o in item.get("owners", ()))
 
 
 class _Union:
@@ -134,8 +221,40 @@ _refreshing = set()
 _net = {"off": False}     # True: answer gh lookups from the cache only
 
 
-def tasks(store, days: int = 30) -> list[dict]:
-    """The tasks of the last `days` days, newest first. The last result is served at once; when it is older than a
+def tasks(store, days: int = 30, ids=None) -> list[dict]:
+    """The tasks of the last `days` days (or only those in `ids`), in the order of the Context tab. Up to 30 days they
+    are the rows of the `cards` table, which the card builder (cardbuild.py) keeps up to date; a shorter window keeps
+    the cards updated in it. When no builder has written the table yet (the MCP process before the app ran), or for a
+    longer window, they are built here, as below."""
+    from pensieve import cardbuild
+    if days <= cardbuild.DAYS:
+        got = _card_views(ids)
+        if got is not None:
+            since = time.time() - days * 86400
+            return sorted((t for t in got if t["updated"] >= since or t.get("active")), key=_order)
+    out = _built(store, max(days, cardbuild.DAYS) if days <= cardbuild.DAYS else days)
+    return [t for t in out if ids is None or t["id"] in ids]
+
+
+_views_cache = [None, []]
+
+
+def _card_views(ids=None) -> list[dict] | None:
+    """The cards of the `cards` table, parsed (again only after a commit), or None when it has none yet."""
+    from pensieve import store as v2
+    from pensieve.store import cards as store_cards
+    db = v2.store_db()
+    if ids is not None:
+        return [json.loads(v) for v in store_cards.views(db, ids).values()]
+    key = (db.one("PRAGMA data_version")[0], threading.get_ident())
+    if _views_cache[0] != key:
+        views = store_cards.views(db)
+        _views_cache[:] = [key, [json.loads(v) for v in views.values()] if views else None]
+    return _views_cache[1]
+
+
+def _built(store, days: int) -> list[dict]:
+    """The tasks of the last `days` days, built here. The last result is served at once; when it is older than a
     minute, a background refresh replaces it and calls `listeners`. The first build makes no network calls (gh), so
     it is fast; the refresh after it adds the pull request states."""
     hit = _cache.get(days)
@@ -174,29 +293,113 @@ def tasks_at(store, until: float, days: int = 30) -> list[dict]:
 
 
 def _tasks(store, days, until: float | None = None):
-    end = datetime.fromtimestamp(until, timezone.utc) if until else datetime.now(timezone.utc)
-    since = (end - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
-    upto = end.strftime("%Y-%m-%dT%H:%M:%S.999Z")
-    with store.lock:
+    inp = Inputs(days, until)
+    inp.load(store)
+    return finish(group(inp), inp, store)
+
+
+class Inputs:
+    """What a card build reads: the sessions of the window with the facts of their text, their edited files, the
+    repos and worktrees, the commits and the collected items. The card builder (cardbuild.py) keeps one and loads
+    again only the sessions and items that an event names."""
+
+    def __init__(self, days: int, until: float | None = None):
+        self.days, self.until = days, until
+        self.window()
+        self.sessions: dict[str, tuple] = {}  # id -> (id, project, title, summary, updated, started, path)
+        self.facts: dict[str, dict] = {}      # id -> what the session's text names (_facts)
+        self.edits: dict[str, set] = {}
+        self.roots, self.wts, self.commits = [], {}, []
+        self.items: dict[int, dict] = {}      # doc id -> item, of the window
+
+    def window(self):
+        end = datetime.fromtimestamp(self.until, timezone.utc) if self.until else datetime.now(timezone.utc)
+        self.end = end.timestamp()
+        self.since_iso = (end - timedelta(days=self.days)).strftime("%Y-%m-%dT%H:%M:%S")
+        self.upto_iso = end.strftime("%Y-%m-%dT%H:%M:%S.999Z")
+        self.since = _ts(self.since_iso + "+00:00")
+
+    def load(self, store):
+        """Everything, for a full build."""
+        self.sessions, self.facts, self.edits = {}, {}, {}
+        self.load_sessions(store)
+        self.load_repos(store)
+        self.items = {i["doc"]: i for i in _items(self.since, self.until)}
+
+    def load_sessions(self, store, ids=None):
+        """The sessions of the window (or only `ids`, which leave when they are no longer in it), their text facts
+        and their edited files."""
+        sql = ("SELECT id, project, title, summary, updated, started, path FROM sessions WHERE updated > ? AND "
+               "coalesce(started, updated) <= ? AND n_chunks > 0 AND path NOT LIKE '%.md'")
+        args = [self.since_iso, self.upto_iso]
+        if ids is not None:
+            ids = list(ids)
+            sql += f" AND id IN ({','.join('?' * len(ids))})"
+            args += ids
         db = store.db
-        sess = db.execute("SELECT id, project, title, summary, updated, started, path FROM sessions WHERE updated > ? "
-                          "AND coalesce(started, updated) <= ? AND n_chunks > 0 AND path NOT LIKE '%.md' "
-                          "ORDER BY updated DESC", (since, upto)).fetchall()
-        ids = [s[0] for s in sess]
-        texts = defaultdict(list)
-        for sid, t in db.execute(f"SELECT session_id, text FROM chunks WHERE session_id IN "
-                                 f"({','.join('?' * len(ids))}) ORDER BY session_id, idx", ids).fetchall() if ids else []:
-            texts[sid].append(t)
-        edits = defaultdict(set)
-        for sid, p in db.execute(f"SELECT session_id, path FROM session_files WHERE edited=1 AND session_id IN "
-                                 f"({','.join('?' * len(ids))})", ids).fetchall() if ids else []:
-            if not p.startswith(_TEMP):  # scratch files are not the work
-                edits[sid].add(p)
-        roots = [r[0] for r in db.execute("SELECT root FROM repos").fetchall()]
-        wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
-        commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
-                             (_ts(since + "+00:00"), end.timestamp())).fetchall()
-    items = [i for i in _items() if not until or i["updated"] <= until]
+        rows = db.execute(sql + " ORDER BY updated DESC", args).fetchall() if ids is None or ids else []
+        got = [r[0] for r in rows]
+        texts, edits = defaultdict(list), defaultdict(set)
+        for i in range(0, len(got), 50):  # 50 sessions at a time
+            part = got[i:i + 50]
+            q = ",".join("?" * len(part))
+            for sid, t in db.execute(f"SELECT session_id, text FROM chunks WHERE session_id IN ({q}) "
+                                     "ORDER BY session_id, idx", part).fetchall():
+                texts[sid].append(t)
+            for sid, p in db.execute(f"SELECT session_id, path FROM session_files WHERE edited=1 AND session_id "
+                                     f"IN ({q})", part).fetchall():
+                if not p.startswith(_TEMP):  # scratch files are not the work
+                    edits[sid].add(p)
+        for sid in ids or []:
+            self.sessions.pop(sid, None)
+            self.facts.pop(sid, None)
+            self.edits.pop(sid, None)
+        for r in rows:
+            self.sessions[r[0]] = r
+            self.facts[r[0]] = _facts(texts.get(r[0], []))
+            self.edits[r[0]] = edits.get(r[0], set())
+
+    def load_repos(self, store):
+        """The repos, worktrees and commits of the window."""
+        db = store.db
+        self.roots = [r[0] for r in db.execute("SELECT root FROM repos").fetchall()]
+        self.wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
+        self.commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
+                                  (self.since, self.end)).fetchall()
+
+    def load_items(self, ids):
+        """The collected items `ids` again: a changed one is replaced, one that left the window or the switched-on
+        sources goes."""
+        from pensieve import store as v2
+        from pensieve.store import documents
+        db, srcs = v2.store_db(), set(connections.indexed())
+        ids = list(ids)
+        for i in ids:
+            self.items.pop(i, None)
+        docs = [d for d in documents.get_many(db, ids) if d.source_id in srcs and self.since < (d.time or 0)
+                and (not self.until or (d.time or 0) <= self.until)]
+        for d, ppl in zip(docs, _assignees(db, [d.id for d in docs])):
+            self.items[d.id] = _item(d, ppl)
+
+
+def _facts(texts: list[str]) -> dict:
+    """What a session's text names, kept so that a card build does not read the text again: ticket keys (as
+    (prefix, number) pairs, counted), ticket links, pull request links (counted), published Artifact links, and how
+    the session ended."""
+    joined = "\n".join(texts)
+    return dict(keys=Counter(KEY.findall(joined)), ticket_urls=TICKET_URL.findall(joined),
+                prs=Counter(PR_URL.findall(joined)), links=list(dict.fromkeys(ARTIFACT_URL.findall(joined))),
+                last=_tail(texts[-1]) if texts else "",  # where the session stopped
+                ending=_tail("\n".join(texts[-2:]), 2400) if texts else "",  # what the note reads
+                turns=cardtext.turns_from_chunks(texts[-8:]))  # the last turns: the user's words, the agent's reply
+
+
+def group(inp: Inputs) -> list[dict]:
+    """The cards of the inputs, before their folders, PR states and states: sessions, branches, tickets, commits
+    and items joined by the links of the module docstring."""
+    until, wts, roots, commits = inp.until, inp.wts, inp.roots, inp.commits
+    items = list(inp.items.values())
+    facts = inp.facts
 
     def repo_of(cwd):
         for w, (r, b) in wts.items():
@@ -207,25 +410,39 @@ def _tasks(store, days, until: float | None = None):
 
     # ticket keys count only with a known project prefix: from collected tickets and branch names
     prefixes = {KEY.fullmatch(i["key"]).group(1) for i in items if i["key"]}
-    S = {}
-    for sid, project, title, summary, updated, started, path in sess:
+    S, worked_of = {}, {}
+    for sid, project, title, summary, updated, started, path in sorted(inp.sessions.values(), key=lambda r: r[4] or "",
+                                                                       reverse=True):
         if _not_users(project or ""):
             continue
         repo, wt_branch = repo_of(project or "")
-        branch = wt_branch or (_branch(path) if sid.startswith("claude:") else "")
+        branch = wt_branch or (_branch(path, project or "") if sid.startswith("claude:") else "")
+        # every branch the session worked on, by repo: a long session can move between branches and worktrees
+        worked = {}
+        if sid.startswith("claude:") and until is None:
+            for (cwd, b), at in _branches(path).items():
+                r, wb = repo_of(cwd)
+                if r and b not in DEFAULT_BRANCHES:
+                    worked[(r, wb or b)] = max(worked.get((r, wb or b), 0), at)
         S[sid] = dict(id=sid, title=title or "", summary=summary or "", updated=min(_ts(updated), until or 9e18), started=_ts(started),
-                      project=project or "", repo=repo, branch=branch, edited=edits.get(sid, set()), path=path)
+                      project=project or "", repo=repo, branch=branch, edited=inp.edits.get(sid, set()), path=path)
+        worked_of[sid] = worked  # apart from S: its keys are tuples, and S goes into the card builder's JSON
         prefixes |= {m.group(1) for m in KEY.finditer(branch)}
     # ticket links in the sessions' text teach each project prefix and its site, so a key alone becomes a link
     sites = {}
-    for chunks in texts.values():
-        for t in chunks:
-            for base, key in TICKET_URL.findall(t):
-                sites.setdefault(KEY.fullmatch(key).group(1), base)
+    for sid in S:
+        for base, key in facts[sid]["ticket_urls"]:
+            sites.setdefault(KEY.fullmatch(key).group(1), base)
     for i in items:
         if i["key"] and i["url"]:
             sites.setdefault(KEY.fullmatch(i["key"]).group(1), i["url"].rsplit("/" + i["key"], 1)[0])
     prefixes |= set(sites)
+    items += _older_items(items, prefixes, S, facts, commits, until)
+    prefixes |= {KEY.fullmatch(i["key"]).group(1) for i in items if i["key"]}
+
+    def said(sid) -> Counter:
+        """The ticket keys of known projects in a session's text, counted."""
+        return Counter({f"{a}-{b}": n for (a, b), n in facts[sid]["keys"].items() if a in prefixes})
 
     def keys_in(text):
         return [f"{a}-{b}" for a, b in KEY.findall(text) if a in prefixes]
@@ -245,6 +462,26 @@ def _tasks(store, days, until: float | None = None):
             u.join(f"s:{s['id']}", f"b:{k[0]}@{k[1]}")
         for key in keys_in(k[1]):
             u.join(f"b:{k[0]}@{k[1]}", f"t:{key}")
+    # A pull request linked from a session, whose title or head branch names a ticket, ties the ticket to the PR and
+    # to the PR's head branch, when the session worked on that branch at some point. A long session moves on to other
+    # branches: the ticket's thread keeps its PR and branch, and the session is only shared with it. A session that
+    # talks about another ticket's PR, on a branch it never worked on, ties nothing.
+    branch_nodes = {k for k in by_branch if k not in long_lived}
+    for sid, s in S.items():
+        repo = s["repo"]
+        if not repo:
+            continue
+        for url in list(facts[sid]["prs"])[:8]:
+            info = _gh_pr(url) if "github.com" in url else {}
+            head = info.get("head") or ""
+            if not head or head in DEFAULT_BRANCHES or (repo, head) in long_lived \
+                    or ((repo, head) not in worked_of[sid] and (repo, head) not in branch_nodes):
+                continue
+            ks = keys_in(f"{info.get('title', '')} {head}")
+            for key in ks:
+                u.join(f"b:{repo}@{head}", f"t:{key}")
+            if ks:
+                u.join(f"p:{url}", f"b:{repo}@{head}")
     # Ticket keys a session talks about. A key in the session's title or branch always links. A key only in its text
     # links when the session runs in the key's home repo (where a branch, commit or session title names it), so a
     # session that just quotes another repo's ticket does not join that ticket's task.
@@ -262,7 +499,7 @@ def _tasks(store, days, until: float | None = None):
         home_project[key.split("-")[0]] |= repos
     homes = lambda k: home[k] or home_project[k.split("-")[0]]
     for s in S.values():
-        found = Counter(keys_in("\n".join(texts.get(s["id"], []))))
+        found = said(s["id"])
         strong = set(keys_in(s["title"] + " " + s["branch"]))
         weak = {k for k in found if k not in strong and s["repo"] and (not homes(k) or s["repo"] in homes(k))}
         # one ticket per session from its text, so a session that mentions two tickets doesn't merge them; more than
@@ -311,10 +548,10 @@ def _tasks(store, days, until: float | None = None):
                 u.join(node, f"b:{k[0]}@{k[1]}")
         if it["key"]:
             u.join(node, f"t:{it['key']}")
-        ks = set(keys_in(it["text"])) - {it["key"]}
+        ks = [k for k in dict.fromkeys(keys_in(it["text"])) if k != it["key"]]  # in the order of the text
         if it["key"]:
             continue  # a ticket that mentions other tickets stays its own task
-        for key in list(ks)[:3]:
+        for key in ks[:3]:
             u.join(node, f"t:{key}")
         u.find(node)
     for s in S.values():
@@ -335,6 +572,11 @@ def _tasks(store, days, until: float | None = None):
         keys = sorted({n[2:] for n in nodes if n.startswith("t:")} | {i["key"] for i in tickets})
         cs = sorted((C[n] for n in nodes if n.startswith("c:")), key=lambda c: -c["ts"])
         brs = sorted({n[2:] for n in nodes if n.startswith("b:")})
+        # Tickets alone (no session, branch or commit of the user) are a card only when the ticket is the user's:
+        # agents' ticket searches and collection also bring in other people's tickets.
+        if not ss and not brs and tickets and not any(c["author"].lower() in _my_ids() for c in cs) \
+                and not any(_is_mine(i) for i in tickets):
+            continue
         files = Counter(p for s in ss for p in s["edited"])
         updated = max([s["updated"] for s in ss] + [i["updated"] for i in its] + [c["ts"] for c in cs] + [0])
         main = max(tickets, key=lambda i: i["updated"]) if tickets else None
@@ -342,24 +584,26 @@ def _tasks(store, days, until: float | None = None):
         title = main["title"] if main else prs_seen[0]["title"] if prs_seen and not ss else \
             (brs[0].split("@", 1)[1] if brs else ss[0]["title"])
         # pull requests: PR items from connections, and PR links in the sessions' text (most mentioned first)
-        urls = Counter(u_ for s in ss for t in texts.get(s["id"], []) for u_ in PR_URL.findall(t))
+        urls = sum((facts[s["id"]]["prs"] for s in ss), Counter())
         named = {n for s in ss for n in re.findall(r"\bPR #?(\d+)", s["title"])}  # "PR 2074 …" in a session title
         ranked = sorted(urls, key=lambda u_: (u_.rsplit("/", 1)[-1] not in named, -urls[u_]))
         prs = [dict(url=i["url"], title=i["title"], state=i["status"], source=_server_label(i["server"]), head=i["branch"])
                for i in prs_seen]
-        prs += [dict(url=u_, title="", state="", source="session") for u_ in ranked[:4] if u_ not in {p["url"] for p in prs}]
+        tied = [n[2:] for n in nodes if n.startswith("p:")]  # PRs tied to the thread's ticket (see above)
+        prs += [dict(url=u_, title="", state="", source="session") for u_ in dict.fromkeys(tied + ranked[:4])
+                if u_ not in {p["url"] for p in prs}]
         out.append(dict(
             prs=prs[:4], _sessions=ss, _named=named,
-            last_words=_tail((texts.get(ss[0]["id"]) or [""])[-1]) if ss else "",  # where the last session stopped
-            ending=_tail("\n".join(texts.get(ss[0]["id"], [])[-2:]), 2400) if ss else "",  # what the note reads
+            last_words=facts[ss[0]["id"]]["last"] if ss else "",  # where the last session stopped
+            ending=facts[ss[0]["id"]]["ending"] if ss else "",  # what the note reads
             last_summary=(ss[0]["summary"] or "")[:800] if ss else "",
             earlier=[(s["title"], (s["summary"] or "")[:400]) for s in ss[1:3]],  # what the note's decisions come from
             events=_events(ss, its, cs),
-            id=_task_id(keys, brs, ss), title=title, kind="ticket" if keys else "branch" if brs else "work",
+            id=_task_id(keys, brs, ss, its), title=title, kind="ticket" if keys else "branch" if brs else "work",
             keys=keys, status=main["status"] if main else "", updated=updated,
             # tickets the sessions talk about without being their work; a key named once is often an example or a typo
             ticket_refs=[dict(key=k, url=f"{sites[k.split('-')[0]]}/{k}" if k.split("-")[0] in sites else "")
-                         for k, n in Counter(k for s in ss for k in keys_in("\n".join(texts.get(s["id"], [])))).most_common()
+                         for k, n in sum((said(s["id"]) for s in ss), Counter()).most_common()
                          if n >= 2 and k not in keys][:3],
             repos=sorted({s["repo"] for s in ss if s["repo"]} | {c["repo"] for c in cs}),
             branches=[dict(repo=b.split("@", 1)[0], branch=b.split("@", 1)[1]) for b in brs],
@@ -371,13 +615,41 @@ def _tasks(store, days, until: float | None = None):
             items=[{k: i[k] for k in ("title", "url", "server", "path", "updated", "private")}
                    for i in sorted(its, key=lambda i: -i["updated"]) if not i["key"]][:30],
             sessions=[dict(id=s["id"], title=s["title"], updated=s["updated"], branch=s["branch"], repo=s["repo"],
-                           project=s["project"], artifacts=_artifacts(s, texts.get(s["id"], []))) for s in ss],
+                           project=s["project"], artifacts=_artifacts(s, facts[s["id"]]["links"])) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
+    # What the card's sessions read through MCP (Slack threads, tickets, pages): shown on the card, not joined to it,
+    # so that a session that read many items does not merge their cards. v2: the documents that document_sessions
+    # links to the card's sessions.
+    seen_by = _seen_by([s for t in out for s in (x["id"] for x in t["_sessions"])], until)
+    for t in out:
+        have = {i["path"] for i in t["items"]} | {k["path"] for k in t["tickets"] if k.get("path")}
+        keys = set(t["keys"])
+        cand = {i["path"]: i for s in t["_sessions"] for i in seen_by.get(s["id"], []) if i["path"] not in have}
+        ranked = [x for x in (_seen_row(i) for i in cand.values()) if x]
+        ranked.sort(key=lambda x: (not (keys and any(k in x[1]["text"] for k in keys)), -x[1]["updated"]))
+        t["seen"] = [row for row, _ in ranked[:10]]
+        t["seen_more"] = max(0, len(ranked) - 10)
+    # A session that also worked on a card's branch, without being one of its sessions, is shared with the card: a
+    # long session moves between branches, and joining it to every branch would merge their cards into one.
+    for t in out:
+        feat = {(b["repo"], b["branch"]) for b in t["branches"]}
+        own = {s["id"] for s in t["_sessions"]}
+        t["_shared"] = [(dict(id=s["id"], title=s["title"], path=s["path"]),
+                         max(at for k, at in worked_of[s["id"]].items() if k in feat)) for s in S.values()
+                        if s["id"] not in own and feat & worked_of[s["id"]].keys()] if feat else []
+        t["shared_sessions"] = [dict(id=s["id"], title=s["title"], at=at)
+                                for s, at in sorted(t["_shared"], key=lambda x: -x[1])[:5]]
+    return out
+
+
+def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
+    """The cards of `group` with their folders and PRs (`pickup`, git and gh; by default _pickup for every card),
+    PR ownership, split goals, tags and states, in the order of the Context tab."""
     from concurrent.futures import ThreadPoolExecutor
-    if until is None:  # a replay has no live folders or PR states
+    if inp.until is None:  # a replay has no live folders or PR states
         with ThreadPoolExecutor(8) as pool:  # git and gh calls, each cached
-            list(pool.map(lambda t: _pickup(t, wts), out))
+            list(pool.map(pickup or (lambda t: _pickup(t, inp.wts)), out))
     else:
         for t in out:
             t["places"] = []
@@ -386,23 +658,36 @@ def _tasks(store, days, until: float | None = None):
     out += _goal_tasks(out, have)
     for t in out:
         _attention(t)
+        _thread(t, inp, have.get(t["id"], {}))
         task_states.apply(t, have.get(t["id"], {}), manual.get(t["id"]))
         t.pop("_sessions")
+        t.pop("_shared", None)
         t.pop("_named", None)
     out.sort(key=_order)
     return out
 
 
+def _thread(t: dict, inp: "Inputs", note: dict):
+    """What the card says about its thread (pensieve/cardtext.py): its anchor, the user's last words and the agent's
+    last reply in its newest own session, and what is left to close it. The note writer's `resolved` judgment, which
+    reads all of the card's sources, turns an open ticket into "close it"."""
+    s = cardtext.pick_session(t)
+    turns = (inp.facts.get(s["id"]) or {}).get("turns", []) if s else []
+    reply = cardtext.agent_reply(turns) if turns else None
+    t["anchor"] = asdict(cardtext.anchor(t))
+    t["mine"] = cardtext.my_messages(turns)
+    t["reply"] = asdict(reply) if reply and (reply.text or reply.waiting) else None
+    t["left"] = [asdict(x) for x in cardtext.pending(t, reply, resolved=bool(note.get("resolved")))]
+
+
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 
 
-def _artifacts(s: dict, chunks: list[str], limit: int = 12) -> list[dict]:
+def _artifacts(s: dict, links: list[str], limit: int = 12) -> list[dict]:
     """What a session made: the files it created or edited that still exist (not scratch files), and the published
-    Artifact links in its text, newest file first."""
+    Artifact links in its text (`links`), newest file first."""
     files = sorted((p for p in s["edited"] if Path(p).is_file()), key=_mtime, reverse=True)
     out = [dict(kind="file", path=p, name=Path(p).name) for p in files[:limit]]
-    links = list(dict.fromkeys(u for t in chunks for u in ARTIFACT_URL.findall(t)))
-    out += [dict(kind="link", url=u, name="Artifact " + u.rsplit("/", 1)[-1][:8]) for u in links[:limit]]
     return out
 
 
@@ -445,6 +730,9 @@ def _attention(task: dict):
     # only waits (to check CI again later, say) touches its file without doing work
     active = any(s["path"] and now - _mtime(s["path"]) < ACTIVE_MINUTES * 60 and now - s["updated"] < ACTIVE_TURN_MINUTES * 60
                  for s in task["_sessions"])
+    # ... or a shared session that is running and worked on this card's branch in the last half hour
+    active = active or any(s["path"] and now - _mtime(s["path"]) < ACTIVE_MINUTES * 60 and now - at < ACTIVE_TURN_MINUTES * 60
+                           for s, at in task.get("_shared", []))
     reasons = []
     for p in task["prs"]:
         if p["state"] in ("open", "draft"):
@@ -662,23 +950,13 @@ DONE_SCHEMA = {"type": "object", "properties": {"done": {"type": "array", "items
     "required": ["item", "commit"], "additionalProperties": False}}}, "required": ["done"], "additionalProperties": False}
 
 
-def _done_path():
-    from pensieve import config
-    return config.DATA_DIR / "work_done.json"
-
-
 def _done_items() -> dict:
-    """{task: {key, done: {sentence: why}}}: what check_done found, read again when the file changes."""
-    try:
-        m = _done_path().stat().st_mtime
-        if _done_cache[0] != m:
-            _done_cache[:] = [m, json.loads(_done_path().read_text())]
-    except (OSError, ValueError):
-        return {}
-    return _done_cache[1]
-
-
-_done_cache = [None, {}]
+    """{task: {key, done: {sentence: why}}}: what check_done found (the tables card_done and card_done_checks)."""
+    from pensieve import store as v2
+    from pensieve.store import cards as store_cards
+    db = v2.store_db()
+    done = store_cards.done(db)
+    return {k: dict(key=key, done=done.get(k, {})) for k, key in store_cards.done_checks(db).items()}
 
 
 def _left_items(note: dict) -> list[str]:
@@ -730,8 +1008,12 @@ def check_done(ts: list[dict], limit: int = 15) -> int:
             if h and 1 <= d.get("item", 0) <= len(items):
                 done[items[d["item"] - 1]] = f"done in {h} ({subj[h][:80]})"
         saved[t["id"]] = dict(key=key, done=done)
-    if calls:
-        _done_path().write_text(json.dumps(saved))
+        from pensieve import store as v2
+        from pensieve.models import CardDone, CardDoneCheck
+        from pensieve.store import cards as store_cards
+        now = int(time.time())
+        store_cards.put_done(v2.store_db(), t["id"], [CardDone(t["id"], s, now, why) for s, why in done.items()],
+                             CardDoneCheck(t["id"], key, now))
     return calls
 
 
@@ -819,6 +1101,10 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
     asked = asked_question(t)  # the session's own words, over the note's
     if asked or note.get("question"):
         out.append(f"Waiting on you: {asked or note['question']}")
+    who = {"agent": "you, the agent", "you": "the user", "parent": "in its tracker or on GitHub"}
+    if t.get("left"):
+        out += ["", "Left to close this thread (Pensieve only reads: these are steps, not changes it made):"] + \
+            [f"- {x['text']} ({who.get(x['how'], x['how'])})" for x in t["left"]]
     raw = notes().get(t["id"], {})
     if raw.get("also"):
         done = _done_items().get(t["id"], {}).get("done", {})
@@ -847,8 +1133,11 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
 
 
 def set_state(store, task_id: str, state: str, by: str = "user", reason: str = "") -> dict:
-    """Set a task's state by hand (or "auto"), and update the tasks in the cache at once."""
+    """Set a task's state by hand (or "auto"), and update the card at once: the card builder's row (it waits up to 2
+    seconds for it) and the tasks built here."""
+    from pensieve import cardbuild
     ch = task_states.set_state(store, task_id, state, by, reason)
+    cardbuild.emit(cardbuild.STATE, [task_id], wait=2)
     have = notes()
     for _, ts in _cache.values():
         for t in ts:
@@ -928,7 +1217,15 @@ def _gh_pr(url: str) -> dict:
     if hit and (time.time() - hit[0] < 600 or _net["off"]):
         return hit[1]
     out = {}
-    if _net["off"]:
+    if _net["off"]:  # no network now (the first build after a start): the last answer kept on disk, so that a
+        try:          # restart does not drop the PR titles that name threads
+            from pensieve import store as v2
+            from pensieve.store import cache
+            out = cache.get_json(v2.index_db(), "ghpr:" + url) or {}
+        except Exception:
+            out = {}
+        if out:
+            _gh_cache[url] = (0.0, out)  # old: the next build with network asks gh again
         return out
     if shutil.which("gh"):
         try:
@@ -950,6 +1247,13 @@ def _gh_pr(url: str) -> dict:
         except (OSError, subprocess.TimeoutExpired, ValueError, KeyError):
             pass
     _gh_cache[url] = (time.time(), out)
+    if out:
+        try:
+            from pensieve import store as v2
+            from pensieve.store import cache
+            cache.put_json(v2.index_db(), "ghpr:" + url, out, ttl=30 * 86400, wait=False)
+        except Exception:
+            pass
     return out
 
 
@@ -972,12 +1276,16 @@ def _pickup(task: dict, wts: dict):
             p["branch"] = used or head  # the branch the task's sessions used here
             if used and head and head != used:
                 p["head"] = head  # the checkout is on another branch now
-            p["changed"] = len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
+            # uncommitted files belong to the branch that is open: none for the task when another branch is open
+            p["changed"] = 0 if p.get("head") else \
+                len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
             p["worktree"] = root in wts
-            ab = _git(root, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
+            # ahead and behind of the task's branch, not of the branch that is open in the checkout now
+            ref = p["branch"] if p.get("head") else "HEAD"
+            ab = _git(root, "rev-list", "--left-right", "--count", f"{ref}@{{upstream}}...{ref}").split()
             if len(ab) == 2 and ab[0].isdigit():  # commits behind and ahead of the branch's upstream
                 p["behind"], p["ahead"], p["upstream"] = int(ab[0]), int(ab[1]), True
-                p["pushed"] = _git(root, "rev-parse", "--short", "@{upstream}")  # moves on a push: history saves the card
+                p["pushed"] = _git(root, "rev-parse", "--short", f"{ref}@{{upstream}}")  # moves on a push: history saves the card
             p["repo"] = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600) or root).parent.name
             web = web_url(_git(root, "remote", "get-url", "origin", ttl=3600))
             if web and p["branch"] not in DEFAULT_BRANCHES and _git(root, "rev-parse", "--verify", "--quiet",
@@ -1024,31 +1332,93 @@ def _events(ss, its, cs) -> list[dict]:
         ev.append(dict(ts=i["updated"], source=src, title=(f"{i['key']} " if i["key"] else "") + i["title"],
                        detail=" · ".join(x for x in (i["status"], i["assignee"], _server_label(i["server"])) if x),
                        url=i["url"], ref=i["path"], private=i.get("private", False)))
-        hist = Path(i["path"]).parent / ".history" / f"{Path(i['path']).stem}.jsonl"
-        try:
-            for line in hist.read_text().splitlines():
-                h = json.loads(line)
-                for k, (a, b) in h["changes"].items():
-                    ev.append(dict(ts=_ts(h["at"].replace("Z", ":00+00:00")), source="change",
-                                   title=f"{i['key'] or i['title'][:40]}: {k} {a or '(empty)'} → {b or '(empty)'}",
-                                   detail=_server_label(i["server"]), url=i["url"], ref=i["path"],
-                                   private=i.get("private", False)))
-        except (OSError, ValueError, KeyError):
-            pass
+    if its:
+        from pensieve import store as v2
+        from pensieve.store import documents
+        by_doc = {i["doc"]: i for i in its if i.get("doc")}
+        for doc_id, chs in documents.changes_of(v2.store_db(), by_doc).items():
+            i = by_doc[doc_id]
+            ev += [dict(ts=float(c.at), source="change",
+                        title=f"{i['key'] or i['title'][:40]}: {c.field} {c.old or '(empty)'} → {c.new or '(empty)'}",
+                        detail=_server_label(i["server"]), url=i["url"], ref=i["path"], private=i.get("private", False))
+                   for c in chs]
     return sorted(ev, key=lambda e: -e["ts"])[:80]
+
+
+_seen_cache: dict[int, tuple[str, dict]] = {}  # doc id -> (hash, item with via): a card build reads each once
+
+
+def _seen_by(sids, until=None) -> dict[str, list[dict]]:
+    """session id -> the documents of switched-on sources that the session saw, as items with `via`."""
+    from pensieve import store as v2
+    from pensieve.store import documents
+    db, srcs, out, pairs = v2.store_db(), set(connections.indexed()), defaultdict(list), []
+    sids = list(dict.fromkeys(sids))
+    for i in range(0, len(sids), 500):
+        part = sids[i:i + 500]
+        pairs += db.query(f"SELECT ds.session_id, d.id, d.hash FROM document_sessions ds JOIN documents d ON "
+                          f"d.id = ds.doc_id WHERE ds.session_id IN ({','.join('?' * len(part))})", part)
+    need = [d for _, d, h in pairs if _seen_cache.get(d, ("",))[0] != h]
+    for i in range(0, len(need), 500):
+        docs = documents.get_many(db, need[i:i + 500])
+        for d, ppl in zip(docs, _assignees(db, [d.id for d in docs])):
+            try:
+                tool = json.loads(d.raw or "{}").get("_tool") or ""
+            except ValueError:
+                tool = ""
+            _seen_cache[d.id] = (d.hash, {**_item(d, ppl), "via": _via(tool, d.source_id)})
+    for sid, d, _ in pairs:
+        it = _seen_cache.get(d, (None, None))[1]
+        if it and it["server"] in srcs and (not until or it["updated"] <= until):
+            out[sid].append(it)
+    return out
+
+
+_TOOL_TITLE = re.compile(r"^[\w.-]+\.[\w-]+ \{")  # the title store() gives a result without one: "<server>.<tool> {args}"
+_LINE = re.compile(r"^(Title|URL):\s*(.+)$", re.M)
+
+
+def _seen_row(i: dict):
+    """A card's row for an item that its sessions read, with the item: its own title and link, else the "Title:" and
+    "URL:" lines of the content (as browser page reads give them). None when it has neither."""
+    title, url = i["title"], i["url"]
+    if _TOOL_TITLE.match(title):
+        found = dict(_LINE.findall(i["text"][:4000]))
+        title, url = found.get("Title", "").strip(), url or found.get("URL", "").strip()
+        if not title and not url:
+            return None
+    row = dict(title=title or url, url=url, via=i["via"], path=i["path"], updated=i["updated"], key=i["key"],
+               private=i["private"])
+    return row, i
+
+
+def _via(tool: str, server: str) -> str:
+    """The service an item came from (Slack, Jira…), from the MCP tool that read it, else from its source."""
+    from pensieve import connectors
+    pid = connectors.match(tool, server)
+    if pid:
+        return connectors.PROFILES[pid]["label"]
+    for word, label in (("jira", "Jira"), ("confluence", "Confluence"), ("chrome", "Web page"), ("browser", "Web page")):
+        if word in tool.lower():
+            return label
+    srv = tool.split(".", 1)[0] if "." in tool else ""  # tools of agent sessions are "<server>.<tool>"
+    return _server_label(srv or server)
 
 
 def _server_label(sid: str) -> str:
     return "agent sessions" if sid == connections.SESSIONS else sid.removeprefix("claude_ai_").split("_")[-1]
 
 
-def _task_id(keys, branches, sessions) -> str:
-    """Stable while the task grows: its first ticket key, else its first branch, else its oldest session."""
+def _task_id(keys, branches, sessions, items=()) -> str:
+    """Stable while the task grows: its first ticket key, else its first branch, else its oldest session, else (a
+    collected PR with no branch or session) its first PR's URL."""
     if keys:
         return f"t:{keys[0]}"
     if branches:
         return f"b:{branches[0]}"
-    return f"s:{min(sessions, key=lambda s: s['started'] or s['updated'])['id']}"
+    if sessions:
+        return f"s:{min(sessions, key=lambda s: s['started'] or s['updated'])['id']}"
+    return f"p:{min(i['url'] for i in items if i['pr'])}"
 
 
 NOTE_PROMPT = """You write the status line of one task on a developer's work dashboard.
@@ -1061,6 +1431,15 @@ Its data points, newest first (date, source, what happened):
 {last_summary}
 How it ended:
 {last_words}
+The thread is anchored on {anchor}.
+The developer's last words in that session, newest last:
+{mine}
+Where the agent left off: {reply}
+Left to close the thread, from git, GitHub and the tracker:
+{left}
+
+You are the arbiter of this thread: it is what its anchor is for, not the newest message of the session. A question
+asked on the way does not change the thread.
 
 Sessions, a long one most of all, can work on more than one goal. The main goal is the newest goal that a session
 did work toward (changed code, made a commit or PR, ran a job, made a decision). A session that only explained code
@@ -1070,13 +1449,17 @@ review round): that is part of the goal. Each PR, commit and ticket in the data 
 a PR made for another goal makes that goal one of the goals below, with the PR as its evidence. The first six fields are about the main goal only: what is done and left for
 another goal goes in that goal's fields, not in these.
 Answer with these fields:
-- title: at most 8 words that name the goal as an outcome, in sentence case, with no ticket key or branch name.
+- title: at most 8 words that name the thread's goal as an outcome, in sentence case, with no ticket key or branch
+  name. When the thread is anchored on a ticket, name what the ticket asks for.
 - problem: at most 25 words on what is wrong or missing, to bring it back to mind.
 - goal: at most 20 words on what "done" looks like, and why it matters.
 - state: at most 50 words on where it stands: what has been done, the key findings (a cause found, a number measured,
   an idea ruled out, with what it was), and what was decided and why (an approach chosen or dropped).
-- next: at most 25 words on what needs to be done, and whether someone is still working on it; "Nothing" if it is
-  done.
+- next: at most 25 words on the steps left to close the thread, from "Left to close" and where the agent left off,
+  and where each one happens (the tracker, the pull request, a session); "Nothing" if it is done. Pensieve only reads:
+  say what the developer or their agent should do.
+- resolved: true when the sessions show that the thread's problem is fixed (a fix made and checked, or the developer
+  says it is done), even if its ticket is still open; false otherwise.
 - question: at most 20 words on the question that the last session asked the developer and that is not answered;
   "None" if there is no such question.
 - evidence: the PR numbers (#12), ticket keys and commit hashes from the data above that the main goal's work is in.
@@ -1088,12 +1471,13 @@ in the data's own words; if the data doesn't say, leave it out."""
 CORE = ("problem", "goal", "state", "next", "question")
 _REFS = {"type": "array", "items": {"type": "string"}}
 NOTE_SCHEMA = {"type": "object", "properties": {
-    **{k: {"type": "string"} for k in ("title",) + CORE}, "evidence": _REFS,
+    **{k: {"type": "string"} for k in ("title",) + CORE}, "resolved": {"type": "boolean"}, "evidence": _REFS,
     "goals": {"type": "array", "items": {"type": "object", "properties": {
         "title": {"type": "string"}, "evidence": _REFS, **{k: {"type": "string"} for k in ("state", "next", "question")}},
         "required": ["title", "evidence", "state", "next", "question"], "additionalProperties": False}}},
-    "required": ["title", *CORE, "evidence", "goals"], "additionalProperties": False}
-NOTE_VERSION = 10  # a new version writes every note again; 9: a title that names the goal; 10: the sessions' other goals
+    "required": ["title", *CORE, "resolved", "evidence", "goals"], "additionalProperties": False}
+NOTE_VERSION = 11  # a new version writes every note again; 9: a title that names the goal; 10: the sessions' other
+# goals; 11: the arbiter: the thread's anchor, the user's last words, the agent's reply, what is left, `resolved`
 
 
 def core(note: dict) -> dict:
@@ -1168,16 +1552,26 @@ def search_cards(tasks: list[dict], have: dict, q: str) -> list[dict]:
 NOTE_MIN_AGE = 600  # seconds before a note is written again for new data
 
 
-def _notes_path():
-    from pensieve import config
-    return config.DATA_DIR / "work_notes.json"
+_NOTE_FIELDS = ("title", "problem", "goal", "state", "next", "question")
+_notes_cache = [None, {}]  # [(the read connection's data_version, its thread), {task id: note}]
 
 
 def notes() -> dict:
-    try:
-        return json.loads(_notes_path().read_text())
-    except (OSError, ValueError):
-        return {}
+    """{task id: note} from the card_notes table: the note's fields, the rest of the model's answer (`extra`), and
+    `sig`, `at` and `v`. Read again only after a commit (SQLite's data_version). Do not change the notes in place:
+    they are shared."""
+    from pensieve import store as v2
+    from pensieve.store import cards as store_cards
+    db = v2.store_db()
+    key = (db.one("PRAGMA data_version")[0], threading.get_ident())
+    if _notes_cache[0] != key:
+        out = {}
+        for n in store_cards.notes(db).values():
+            d = {k: getattr(n, k) for k in _NOTE_FIELDS if getattr(n, k) is not None}
+            d.update(json.loads(n.extra), sig=n.signature, at=n.written_at, v=n.version)
+            out[n.card_id] = d
+        _notes_cache[:] = [key, out]
+    return dict(_notes_cache[1])
 
 
 def _signature(task: dict) -> str:
@@ -1187,16 +1581,17 @@ def _signature(task: dict) -> str:
     return hashlib.sha1(json.dumps(data).encode()).hexdigest()[:16]
 
 
-def stale_notes(ts: list[dict], limit: int = 10, ids=None) -> list[dict]:
+def stale_notes(ts: list[dict], limit: int = 10, ids=None, min_age: float = NOTE_MIN_AGE) -> list[dict]:
     """The tasks (the first `limit`, or those in `ids`) whose note is missing, of an older format, or older than their
-    data points. A note younger than NOTE_MIN_AGE is kept: a running session changes its data on every turn."""
+    data points. A note younger than `min_age` is kept: a running session changes its data on every turn. (The card
+    builder waits for its card to be quiet instead, and gives 0.)"""
     have, now = notes(), time.time()
 
     def stale(t):
         n = have.get(t["id"])
         if not n or n.get("v") != NOTE_VERSION:
             return True
-        return n.get("sig") != _signature(t) and now - n.get("at", 0) > NOTE_MIN_AGE
+        return n.get("sig") != _signature(t) and now - n.get("at", 0) > min_age
     pick = [t for t in ts if t["id"] in ids] if ids else ts[:limit]
     return [t for t in pick if not t.get("goal_of") and stale(t)]  # a goal's note comes with its task's
 
@@ -1207,29 +1602,32 @@ def resume_command(store, session_id: str) -> str | None:
     source, _, sid = session_id.partition(":")
     if not re.fullmatch(r"[A-Za-z0-9-]{8,80}", sid or ""):
         return None
-    with store.lock:
-        row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
+    row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
     if not row or not row[0] or not Path(row[0]).is_dir():
         return None
-    cmd = {"claude": f"claude --resume {sid}", "codex": f"codex resume {sid}"}.get(source)
+    from pensieve import agents
+    cmd = agents.resume(source, sid)  # only the agent that wrote a session can resume it
     return f"cd {shlex.quote(row[0])} && {cmd}" if cmd else None
 
 
 def write_note(task: dict, all_tasks: list[dict]) -> str:
     """Ask the insights engine for the task's note, and keep it with the signature of the data it saw."""
     note = _split_goals(task, make_note(task))
-    cur, sig, now = notes(), _signature(task), time.time()
-    for k in [k for k, n in cur.items() if n.get("goal_of") == task["id"]]:
-        del cur[k]
+    from pensieve import settings, store as v2
+    from pensieve.models import CardNote
+    from pensieve.store import cards as store_cards
+    sig, now, model = _signature(task), int(time.time()), settings.get("ai") or ""
+    goals = []
     for s in note["split"]:
         g = note["goals"][s["n"]]
-        cur[s["id"]] = dict(title=g["title"], goal=g["title"], **{k: g[k] for k in ("state", "next", "question")},
-                            goal_of=task["id"], sig=sig, at=now, v=NOTE_VERSION)
-    cur[task["id"]] = dict(note, sig=sig, at=now, v=NOTE_VERSION)
-    path = _notes_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cur))
-    return cur[task["id"]]
+        goals.append(CardNote(s["id"], NOTE_VERSION, g["title"], None, g["title"], g["state"], g["next"], g["question"],
+                              sig, model, now, json.dumps({"goal_of": task["id"]})))
+    extra = {k: v for k, v in note.items() if k not in _NOTE_FIELDS}
+    main = CardNote(task["id"], NOTE_VERSION, *(note.get(k) for k in _NOTE_FIELDS), sig, model, now, json.dumps(extra))
+    store_cards.put_note_tree(v2.store_db(), main, goals)
+    from pensieve import cardbuild
+    cardbuild.emit(cardbuild.NOTE, [task["id"]])  # the goals it splits off are cards of their own
+    return notes()[task["id"]]
 
 
 def note_fields(task: dict) -> dict:
@@ -1245,7 +1643,24 @@ def note_fields(task: dict) -> dict:
                 status=f", ticket status {task['status']}" if task["status"] else "", prs=prs, places=places, events=events,
                 last_words=task.get("ending") or task.get("last_words") or "(none)",
                 last_title=(task["sessions"] or [{}])[0].get("title", "(none)"), last_summary=task.get("last_summary") or "",
+                anchor=_anchor_line(task), mine="\n".join(f"- {m}" for m in task.get("mine") or []) or "(none)",
+                reply=_reply_line(task), left="\n".join(f"- {x['text']} ({x['how']})" for x in task.get("left") or []) or "(nothing)",
                 earlier="".join(f'An earlier session: "{title}"\n{summary}\n' for title, summary in task.get("earlier", []) if summary))
+
+
+def _anchor_line(task: dict) -> str:
+    a = task.get("anchor") or {}
+    what = {"ticket": "the ticket", "pr": "the pull request", "branch": "the branch", "goal": "the goal",
+            "session": "the session"}.get(a.get("kind"), "the work")
+    return f'{what} "{a.get("title") or task["title"]}"' + (f" ({a['ref']})" if a.get("kind") in ("ticket", "branch") else "")
+
+
+def _reply_line(task: dict) -> str:
+    r = task.get("reply") or {}
+    if not r:
+        return "(no session)"
+    text = (r.get("text") or "")[-700:]
+    return ("the agent had not replied to the last message; its reply before that: " if r.get("waiting") else "") + (text or "(none)")
 
 
 def make_note(task: dict) -> dict:
@@ -1254,6 +1669,7 @@ def make_note(task: dict) -> dict:
     from pensieve import llm
     ans = llm.complete(NOTE_PROMPT.format(**note_fields(task)), max_tokens=700, schema=NOTE_SCHEMA, kind="task note")
     note = {k: str(ans.get(k, "")).strip() for k in ("title",) + CORE}
+    note["resolved"] = bool(ans.get("resolved"))
     note["evidence"] = [str(x) for x in ans.get("evidence") or []]
     note["goals"] = [{k: (g.get(k) if k == "evidence" else str(g.get(k, "")).strip()) for k in ("title", "evidence", "state", "next", "question")}
                      for g in (ans.get("goals") or [])[:2] if isinstance(g, dict) and g.get("title")]
@@ -1296,7 +1712,7 @@ def _split_goals(task: dict, note: dict) -> dict:
     note["main"] = _evidence(task, note.get("evidence"))
     for i, g in enumerate(note.get("goals", [])):
         ev = _evidence(task, g.get("evidence"))
-        if not any(ev.values()) or _part_of_main(ev, note):
+        if not any(ev.values()) or _part_of_main(ev, note) or _own_work(task, ev):
             note["also"].append(g["title"])
             continue
         first = (ev["keys"] or [f"pr{u.rstrip('/').rsplit('/', 1)[-1]}" for u in ev["prs"]] or [ev["commits"][0]["sha"][:8]])[0]
@@ -1305,6 +1721,17 @@ def _split_goals(task: dict, note: dict) -> dict:
             n, gid = n + 1, f"{task['id']}~{first}-{n + 1}"
         note["split"].append(dict(id=gid, n=i, **ev))
     return note
+
+
+def _own_work(task: dict, ev: dict) -> bool:
+    """True when a goal's evidence is only the thread's own work: PRs from its own branches and commits on them,
+    with no ticket. That work is the thread itself, so a second card for it would hold the same sessions twice."""
+    if ev["keys"]:
+        return False
+    branches = {b.get("branch") for b in task.get("branches", [])}
+    own_prs = {p["url"] for p in task["prs"] if p.get("own") or p.get("head") in branches}
+    own_commits = {c["sha"] for c in task["commits"]}
+    return set(ev["prs"]) <= own_prs and {c["sha"] for c in ev["commits"]} <= own_commits
 
 
 def _refs(ev: dict) -> set:
@@ -1324,6 +1751,25 @@ def _part_of_main(ev: dict, note: dict) -> bool:
     return any(re.search(rf"(?<![\w-]){re.escape(x)}(?![\w-])", nxt) for x in names)
 
 
+def _in_branch(root: str, head: str, branch: str) -> bool:
+    """True when the tip of branch `head` (the remote copy first) is already in `branch`."""
+    tip = next((x for x in (_git(root, "rev-parse", "--verify", "-q", ref, ttl=300) for ref in (f"origin/{head}", head)) if x), "")
+    return bool(tip) and _git(root, "merge-base", tip, branch, ttl=300) == tip
+
+
+def _folded(t: dict, g: dict) -> bool:
+    """A goal whose work went back into the task's own branch: it has PRs and no ticket, every PR was closed without
+    a merge on GitHub, and each PR's branch is already in one of the task's branches. Its goal became part of the
+    main work, so it stays on the main card (a merge, docs/threads.md) and is not a card of its own."""
+    prs = [p for p in t["prs"] if p["url"] in g["prs"]]
+    if not prs or g["keys"] or any(p.get("state") != "closed" for p in prs):
+        return False
+    homes = [(b["repo"], b["branch"]) for b in t.get("branches", [])] + \
+            [(p["path"], p["branch"]) for p in t.get("places", []) if p.get("path") and p.get("branch")]
+    homes = [(r, b) for r, b in homes if Path(r).is_dir()]
+    return all(p.get("head") and any(_in_branch(r, p["head"], b) for r, b in homes) for p in prs)
+
+
 def _goal_tasks(out: list[dict], have: dict) -> list[dict]:
     """The cards of the goals that the notes split off their tasks (_split_goals): the same sessions and folders,
     with only the goal's own PRs, tickets and commits. A PR or commit that only another goal names leaves the main
@@ -1335,7 +1781,8 @@ def _goal_tasks(out: list[dict], have: dict) -> list[dict]:
             continue
         main = n.get("main") or {}
         t["commits"] = t["commits"] + [c for c in main.get("commits", []) if c["sha"] not in {x["sha"] for x in t["commits"]}]
-        split = [g for g in n.get("split") or [] if not _part_of_main(g, n)]  # notes written before that rule
+        split = [g for g in n.get("split") or [] if not _part_of_main(g, n)  # notes written before that rule
+                 and not _folded(t, g)]
         if not split:
             continue
         mine = set(main.get("prs", [])) | {c["sha"] for c in main.get("commits", [])}
@@ -1418,19 +1865,23 @@ def related(task: dict, searcher, limit: int = 8) -> list[dict]:
     mine = {t["path"] for t in task["tickets"]} | {i["path"] for i in task["items"]}
     q = " ".join([task["title"]] + task["keys"][:3])
     try:
-        hits = searcher.find(q, limit=limit * 3, kinds=["file"], scope=scopes._build("data-tab", ["connections"]),
+        hits = searcher.find(q, limit=limit * 3, kinds=["doc"], scope=scopes._build("data-tab", ["connections"]),
                              retry=False)
     except Exception:
         return []
     hits = hits.get("results", hits) if isinstance(hits, dict) else hits
+    from pensieve import store as v2
+    from pensieve.store import documents
     out = []
     for h in hits:
-        p = h.get("path", "")
-        if p and p not in mine and p.startswith(str(connections.DIR)):
-            it = next((i for i in _items() if i["path"] == p), None)
-            out.append(dict(path=p, title=(it or {}).get("title") or h.get("title"), url=(it or {}).get("url", ""),
-                            status=(it or {}).get("status", ""), assignee=(it or {}).get("assignee", ""),
-                            server=Path(p).parent.name, snippet=h.get("snippet", "")))
+        p = h.get("id") or h.get("path", "")
+        if p.startswith("doc:") and p not in mine:
+            d = documents.get(v2.store_db(), int(p[4:]))
+            if d is None:
+                continue
+            it = _item(d, _assignees(v2.store_db(), [d.id])[0])
+            out.append(dict(path=p, title=it["title"], url=it["url"], status=it["status"], assignee=it["assignee"],
+                            server=it["server"], snippet=h.get("snippet", "")))
         if len(out) >= limit:
             break
     return out

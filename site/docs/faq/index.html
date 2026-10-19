@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pensieve FAQ: Mac and Linux, privacy, agents, MCP and grep</title>
+<meta name="description" content="Answers about Pensieve: price, Apple Silicon and Linux, which AI agents work with it, privacy, the generation model, scopes, and how it compares with grep.">
+<link rel="canonical" href="https://pensieve.tools/docs/faq/">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Pensieve FAQ: Mac and Linux, privacy, agents, MCP and grep">
+<meta property="og:description" content="Answers about Pensieve: price, Apple Silicon and Linux, which AI agents work with it, privacy, the generation model, scopes, and how it compares with grep.">
+<meta property="og:url" content="https://pensieve.tools/docs/faq/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/docs/docs.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Frequently asked questions","description":"Answers about Pensieve: price, Apple Silicon and Linux, which AI agents work with it, privacy, the generation model, scopes, and how it compares with grep.","url":"https://pensieve.tools/docs/faq/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="/" aria-label="Pensieve home"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve <span>Docs</span></a>
+  <nav aria-label="Site">
+    <a class="chip gh" href="https://github.com/TedHaley/pensieve"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+    <a class="chip solid" href="/docs/install/">Install</a>
+  </nav>
+</header>
+<div class="layout">
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/" aria-current="page">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<main>
+<p class="crumb">Docs</p>
+<h1>Frequently asked questions</h1>
+<p class="lede">This page answers the questions that people ask most about Pensieve.</p>
+<h2 id="q1">Is Pensieve free?</h2><p>Yes. Pensieve is free and open source under the MIT license. The code is on <a href="https://github.com/TedHaley/pensieve">GitHub</a>. There is no account and no paid plan.</p><h2 id="q2">Does Pensieve need Apple Silicon?</h2><p>The app download needs an Apple Silicon Mac with macOS 14 or later. On Linux and Intel Macs, the same install command installs the backend, the MCP server and the Map in your browser. The search panel is macOS only. See <a href="/docs/install/#requirements">Requirements</a>.</p><h2 id="q3">Does it work on Linux?</h2><p>Yes, without the Mac app. The backend indexes, searches and serves MCP to your agents. The Map opens in your browser. The search model runs on PyTorch (CUDA or CPU). <code>pensieve integrate</code> connects the agents whose settings are in your home folder: Claude Code, Codex, Cursor, Gemini CLI, Qwen Code and Windsurf.</p><h2 id="q4">Which agents can use it?</h2><p>Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code, with one command. Any other MCP client can connect over stdio or HTTP. See <a href="/docs/agents/">Connect your agent</a>.</p><h2 id="q5">Does anything leave my computer?</h2><p>Your files, code and sessions do not leave because of Pensieve. Indexing and search run locally. Pensieve downloads models, finds updates, fetches your repos' default branches, and collects from connections that you switch on. If your agent is a cloud agent, what it reads goes to its provider. See <a href="/docs/privacy/">Privacy and data</a>.</p><h2 id="q6">Do I need an AI model?</h2><p>No. Search, agent context, ownership and knowledge gaps work without a generation model. The AI notes on context cards and the written insights need one. You can use a local model or your own agent.</p><h2 id="q7">How do I make my agent use Pensieve and not grep?</h2><p>Run <code>pensieve integrate recommended</code>. It adds the MCP server, a short “search before you grep” instructions block, and the <code>pensieve-search</code> skill. Without instructions, agents did not call Pensieve in our first test. With them, the agent used Pensieve in all 144 runs of the last benchmark batch.</p><h2 id="q8">Is it better than grep?</h2><p>It finds the right file with fewer tool calls, at lower cost. In our benchmark with Claude Sonnet, the cost per lookup was 18 to 25% lower. Accuracy was 6 points higher in the first batch and level in the later batches. See the <a href="/docs/benchmark/">benchmark</a> for the method and the limits.</p><h2 id="q9">How long does the first index take?</h2><p>About 500 code files a minute on Apple Silicon. A repo with 35,000 files takes a little more than one hour. Search works while Pensieve indexes. After the first index, a change shows in search about half a second after you save.</p><h2 id="q10">Can I limit an agent to one project?</h2><p>Yes. By default, an agent's scope is the repo that it started in. You can make named scopes in Settings → Scopes, and connect an agent with <code>pensieve mcp --scope &lt;name&gt;</code>. See <a href="/docs/agents/#scope">Scopes</a>.</p><h2 id="q11">Does Pensieve read my private messages?</h2><p>Only if you switch on a connection that can read them. Pensieve marks those items private. They help your own cards and agents. A shared card leaves them out whole.</p><h2 id="q12">For Claude Code, which do I use: the plugin or pensieve integrate?</h2><p>Use one of them, not both. The plugin does not change your settings files. <code>pensieve integrate</code> also connects your other agents. See <a href="/docs/agents/claude-code/">Pensieve for Claude Code</a>.</p><h2 id="q13">How do I uninstall it?</h2><p>See <a href="/docs/install/#uninstall">Uninstall</a>.</p><h2 id="q14">How do I report a bug?</h2><p>Use Settings → Feedback in the app, or open an issue on <a href="https://github.com/TedHaley/pensieve/issues/new/choose">GitHub</a>. Agents can call the <code>report_feedback</code> tool. Reports stay on your computer until you send them.</p>
+<nav class="pager" aria-label="Pages"><a class="prev" href="/docs/privacy/"><small>Previous</small>Privacy and data</a></nav>
+<p class="edit">Something wrong or missing? <a href="https://github.com/TedHaley/pensieve/issues/new/choose">Tell us on GitHub</a>.</p>
+</main>
+</div>
+<footer>
+  <div class="in">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <nav><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/TedHaley/pensieve">GitHub</a><a href="https://github.com/TedHaley/pensieve/releases">Releases</a><a href="https://github.com/TedHaley/pensieve/issues/new/choose">Feedback</a></nav>
+  </div>
+</footer>
+<script>
+// on a phone the docs menu starts closed, so the page starts with its own text
+if (matchMedia('(max-width: 860px)').matches) document.getElementById('docnav').removeAttribute('open');
+</script>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</body>
+</html>

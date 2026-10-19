@@ -1,4 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://pensieve.tools/</loc><lastmod>2026-10-14</lastmod></url>
+  <url><loc>https://pensieve.tools/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/install/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/claude-code/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/codex/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/cursor/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/gemini-cli/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/qwen-code/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/windsurf/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/claude-desktop/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/agents/vs-code/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/mcp-tools/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/context-cards/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/connections/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/benchmark/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/privacy/</loc><lastmod>2026-10-18</lastmod></url>
+  <url><loc>https://pensieve.tools/docs/faq/</loc><lastmod>2026-10-18</lastmod></url>
 </urlset>

@@ -4,10 +4,9 @@ insights engine), and the keeper's rules for what to save. For benchmarks of age
 
   PENSIEVE_DATA=<a copy of ~/.pensieve> .venv/bin/python bench/history_backfill.py --days 30 --step 12
 
-It moves the copy's <data>/threads aside first, and leaves the linker's state behind, so a server on the copy goes on
-from the backfill with the same thread ids. Never run it on the real ~/.pensieve."""
+It empties the copy's thread tables first (store.db), and leaves the linker's state behind, so a server on the copy
+goes on from the backfill with the same thread ids. Never run it on the real ~/.pensieve."""
 import argparse
-import shutil
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -26,8 +25,10 @@ def main():
     a = ap.parse_args()
     if config.DATA_DIR.resolve() == (Path.home() / ".pensieve").resolve():
         sys.exit("refusing to backfill the real index: set PENSIEVE_DATA to a copy")
-    if history._dir().exists():
-        shutil.move(str(history._dir()), str(history._dir()) + f".before-backfill-{int(time.time())}")
+    from pensieve import store as v2
+    db = v2.store_db()
+    db.write(lambda c: [c.execute(f"DELETE FROM {t}") for t in ("thread_snapshots", "thread_events", "thread_cards",
+                                                                   "threads")])  # the copy's history starts again
     store = _Store(config.DATA_DIR / "pensieve.db")
     keeper, notes, now = history.Keeper(store), {}, time.time()  # notes: snapshot id -> note
     for k in range(int(a.days * 24 / a.step), -1, -1):
@@ -48,7 +49,7 @@ def main():
         saved = keeper.run_once(now=until, tasks=ts, notes={t["id"]: notes.get(ids[t["id"]], {}) for t in ts})
         print(f"{time.strftime('%m-%d %H:%M', time.localtime(until))}: {len(ts)} tasks, {len(todo)} notes written, "
               f"{len(saved)} cards saved", file=sys.stderr)
-    print(f"{len(history.listing())} threads with history in {history._dir()}", file=sys.stderr)
+    print(f"{len(history.listing())} threads with history in {v2.store_path()}", file=sys.stderr)
 
 
 if __name__ == "__main__":

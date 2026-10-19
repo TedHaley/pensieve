@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, connections, settings
+from pensieve import apps, settings
 
 ALL = None  # no scope: everything
 current = contextvars.ContextVar("pensieve_scope", default=None)  # set per MCP request
@@ -28,6 +28,7 @@ class Scope:
     repos: set | None = field(default_factory=set)     # None = every repo
     folders: list | None = field(default_factory=list)  # None = every indexed file
     agents: set | None = field(default_factory=set)     # None = every agent's sessions; sessions in `repos` always count
+    docs: set | None = field(default_factory=set)       # the sources of collected documents (doc:<id>); None = all
     unindexed: bool = False  # 'auto' in a git repo Pensieve doesn't index
 
     def label(self):
@@ -56,8 +57,10 @@ def _build(name, sources, description=""):
                     if a and a["available"]():
                         s.folders += [str(p.resolve()) for p in a["roots"]()]
         elif cat == "connections":
-            if s.folders is not None:
-                s.folders += [str(p.resolve()) for p in connections.roots(lambda x: not item or x == sid)]
+            if not item:
+                s.docs = None
+            elif s.docs is not None:
+                s.docs.add(item)
         elif cat == "agents":
             if not item:
                 s.agents = None
@@ -86,8 +89,7 @@ def resolve(name: str | None, cwd: str | None = None, repos=None) -> Scope | Non
             root = repos.locate(pr)[0] if pr else None
         if root is None and pr:  # a repo the session history doesn't link to one we index: ask the repos table
             from pensieve.repos import check
-            with repos.lock:
-                indexed = dict(repos.db.execute("SELECT root, remote FROM repos").fetchall())
+            indexed = dict(repos.db.execute("SELECT root, remote FROM repos").fetchall())
             c = check(pr, indexed)
             if c["state"] != "indexed":  # searching everything would return other repos' code as if it were this one's
                 s = _build(f"{c['name']} (not indexed)", [f"repos/{c['root']}"],
@@ -124,8 +126,7 @@ def _under(path: str, folders) -> bool:
 
 
 def session_ids(scope: Scope, store, repos) -> set:
-    with store.lock:
-        rows = store.db.execute("SELECT id, source FROM sessions WHERE n_chunks>0").fetchall()
+    rows = store.db.execute("SELECT id, source FROM sessions WHERE n_chunks>0").fetchall()
     if scope.agents is None:
         return {sid for sid, _ in rows}
     roots = scope.repos
@@ -147,40 +148,37 @@ def allowlist(scope: Scope, kind: str, store, repos, index) -> np.ndarray | None
     if scope is None:
         return None
     table = {"file": "file_chunks", "code": "code_chunks", "session": "chunks"}[kind]
-    with store.lock:  # MAX(id) only: a COUNT(*) scans the whole table, and the cache expires anyway
-        fp = store.db.execute(f"SELECT MAX(id) FROM {table}").fetchone()
+    # MAX(id) only: a COUNT(*) scans the whole table, and the cache expires anyway
+    fp = store.db.execute(f"SELECT MAX(id) FROM {table}").fetchone()
     key = (scope.name, tuple(scope.sources), kind, fp)
     hit = _cache.get(key)
     if hit is not None and time.time() - hit[0] < 120:
         return hit[1]
-    with store.lock:
-        if kind == "code":
-            if scope.repos is None:
-                ids = None
-            elif not scope.repos:
-                ids = []
-            else:
-                ph = ",".join("?" * len(scope.repos))
-                ids = [r[0] for r in store.db.execute(f"SELECT id FROM code_chunks WHERE repo IN ({ph})", list(scope.repos))]
-        elif kind == "file":
-            if scope.folders is None:
-                ids = None
-            elif not scope.folders:
-                ids = []
-            else:
-                ids = [cid for cid, p in store.db.execute("SELECT id, path FROM file_chunks") if _under(p, scope.folders)]
-        else:
+    if kind == "code":
+        if scope.repos is None:
             ids = None
+        elif not scope.repos:
+            ids = []
+        else:
+            ph = ",".join("?" * len(scope.repos))
+            ids = [r[0] for r in store.db.execute(f"SELECT id FROM code_chunks WHERE repo IN ({ph})", list(scope.repos))]
+    elif kind == "file":
+        if scope.folders is None:
+            ids = None
+        elif not scope.folders:
+            ids = []
+        else:
+            ids = [cid for cid, p in store.db.execute("SELECT id, path FROM file_chunks") if _under(p, scope.folders)]
+    else:
+        ids = None
     if kind == "session":
         if scope.agents is None:
             ids = None
         else:
             sids = session_ids(scope, store, repos)
-            with store.lock:
-                ids = [cid for cid, s in store.db.execute("SELECT id, session_id FROM chunks") if s in sids]
+            ids = [cid for cid, s in store.db.execute("SELECT id, session_id FROM chunks") if s in sids]
     if ids is not None:
-        with store.lock:
-            ids = np.array([i for i in ids if index.contains(i)], dtype=np.uint64)
+        ids = np.array([i for i in ids if index.contains(i)], dtype=np.uint64)
     if len(_cache) > 64:
         _cache.clear()
     _cache[key] = (time.time(), ids)
@@ -197,8 +195,7 @@ def contains(scope: Scope, item_id: str, store, repos) -> bool:
     if kind == "code":
         if scope.repos is None:
             return True
-        with store.lock:
-            r = store.db.execute("SELECT repo FROM code_chunks WHERE id=?", (int(ref),)).fetchone()
+        r = store.db.execute("SELECT repo FROM code_chunks WHERE id=?", (int(ref),)).fetchone()
         return bool(r) and r[0] in scope.repos
     if kind == "session":
         return ref in session_ids(scope, store, repos)
@@ -207,6 +204,12 @@ def contains(scope: Scope, item_id: str, store, repos) -> bool:
         return in_repo or scope.folders is None or _under(ref, scope.folders)
     if kind == "person":
         return True
+    if kind == "doc":
+        if scope.docs is None:
+            return True
+        from pensieve import store as v2
+        r = v2.store_db().one("SELECT source_id FROM documents WHERE id = ?", (int(ref) if ref.isdigit() else -1,))
+        return bool(r) and r[0] in scope.docs
     return False
 
 

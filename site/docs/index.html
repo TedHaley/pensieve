@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pensieve docs: context cards and an MCP server for AI coding agents</title>
+<meta name="description" content="Pensieve documentation. A free, local Mac app and MCP server that gives you and your AI coding agents the right context: context cards, code search, who knows what, and knowledge gaps.">
+<link rel="canonical" href="https://pensieve.tools/docs/">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Pensieve docs: context cards and an MCP server for AI coding agents">
+<meta property="og:description" content="Pensieve documentation. A free, local Mac app and MCP server that gives you and your AI coding agents the right context: context cards, code search, who knows what, and knowledge gaps.">
+<meta property="og:url" content="https://pensieve.tools/docs/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/docs/docs.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Pensieve documentation","description":"Pensieve documentation. A free, local Mac app and MCP server that gives you and your AI coding agents the right context: context cards, code search, who knows what, and knowledge gaps.","url":"https://pensieve.tools/docs/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="/" aria-label="Pensieve home"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve <span>Docs</span></a>
+  <nav aria-label="Site">
+    <a class="chip gh" href="https://github.com/TedHaley/pensieve"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+    <a class="chip solid" href="/docs/install/">Install</a>
+  </nav>
+</header>
+<div class="layout">
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/" aria-current="page">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<main>
+<p class="crumb">Docs</p>
+<h1>Pensieve documentation</h1>
+<p class="lede">This page tells you what Pensieve is, what its parts do, and where to start.</p>
+<p>Pensieve keeps the context of your work in one place on your Mac. It indexes your files, git repos, AI agent
+sessions, tickets and messages. You search it from a panel. Your coding agents search it over MCP. Each person's
+context is different, so Pensieve builds it from your own work and keeps it on your Mac.</p>
+<p>Pensieve is free and open source under the MIT license. It is for developers and their AI agents.</p>
+
+<div class="cards">
+  <a href="/docs/install/"><b><i style="--c:var(--ink)"></i>Install</b><span>One command for the app and the backend, then one command for your agents.</span></a>
+  <a href="/docs/agents/"><b><i style="--c:var(--c-agents)"></i>Connect your agent</b><span>Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code.</span></a>
+  <a href="/docs/mcp-tools/"><b><i style="--c:var(--c-agents)"></i>MCP tools</b><span>Each tool, its arguments and what it returns.</span></a>
+  <a href="/docs/benchmark/"><b><i style="--c:var(--c-owners)"></i>Benchmark</b><span>The method, the results and what we did not measure.</span></a>
+</div>
+
+<h2 id="parts">The main parts</h2>
+
+<h3 id="context-cards">Context cards</h3>
+<p>Pensieve makes one context card for each piece of your work. A card joins the agent sessions, the branch, the
+PRs, the tickets and the messages of one task. It says the problem, the goal, the state and what is next. It also
+gives the command that resumes the last agent session. Each card has one of five states, from
+<span class="state" style="--sc:var(--s-conscious)">Conscious</span> to
+<span class="state" style="--sc:var(--s-forgotten)">Forgotten</span>. You can share a card as one HTML file.
+<a href="/docs/context-cards/">Read about context cards</a>.</p>
+
+<h3 id="mcp-server">MCP server</h3>
+<p>Pensieve is an MCP server. Your coding agent asks it one question and gets the few files and lines that match.
+Each hit shows the path, the line, the enclosing definition and the line that matched. Each agent connection works
+in a scope. By default, the scope is the repo that the agent started in.
+<a href="/docs/agents/">Connect your agent</a>, or read the <a href="/docs/mcp-tools/">MCP tools reference</a>.</p>
+
+<h3 id="search">Search</h3>
+<p>Search finds items by meaning and by exact words. It blends a vector search with a full-text search. Then it
+gives more weight to exact text and to names that a file defines. A search takes about 0.1 to 0.2 seconds. On a Mac,
+press <kbd>Control</kbd>+<kbd>Shift</kbd> to open the search panel.</p>
+<div class="tbl"><table><thead><tr><th>Query</th><th>Finds</th></tr></thead><tbody><tr><td><code>pricing model</code></td><td>Items about that subject, by meaning</td></tr><tr><td><code>"rate limit"</code></td><td>Items that contain those exact words (case-insensitive)</td></tr><tr><td><code>-draft</code></td><td>Leaves out items with that word</td></tr><tr><td><code>kind:code</code></td><td>Code only. Also <code>kind:doc</code>, <code>kind:session</code>, <code>kind:folder</code>, <code>kind:repo</code>, <code>kind:person</code></td></tr><tr><td><code>by:sam terraform</code></td><td>Only what that person wrote (code by git blame, documents by author)</td></tr><tr><td><code>ext:pdf</code></td><td>One file type</td></tr><tr><td><code>in:my-app</code></td><td>The path or the repo contains this text</td></tr></tbody></table></div>
+
+<h3 id="who-knows">Who knows what</h3>
+<p>Pensieve reads git blame for each indexed repo. Ask about a subject, not a file, and it names the people who
+wrote the most related code. Agents get the same data from the <code>who_knows</code> and <code>team</code> tools.</p>
+
+<h3 id="knowledge-gaps">Knowledge gaps</h3>
+<p>A knowledge gap is an area of a repo that people who are no longer active wrote most of. For each area, Pensieve
+shows who wrote it, which active person knows it best, and its bus factor. The bus factor is the number of active
+people who hold 10% or more of the lines. By default, a person with no commit in 180 days is not active.</p>
+
+<h3 id="connections">Connections</h3>
+<p>Connections collect your tickets, threads and pages from MCP servers such as Jira, Slack and Linear. Pensieve
+calls only read-only tools. Each connection is off until you switch it on.
+<a href="/docs/connections/">Read about connections</a>.</p>
+
+<h2 id="what-gets-indexed">What Pensieve indexes</h2>
+<p>You choose each source at setup. You can change your choice in Settings → Sources.</p>
+<ul>
+  <li><strong>AI agent sessions:</strong> Claude Code, Codex and Qwen Code transcripts.</li>
+  <li><strong>Files and folders:</strong> documents in <code>~/Documents</code>, <code>~/Desktop</code>, <code>~/Downloads</code> and the folders that you add.</li>
+  <li><strong>Git repositories:</strong> committed, staged, modified and untracked files, and linked worktrees.</li>
+  <li><strong>Apps:</strong> Obsidian vaults and, with your permission, Apple Notes.</li>
+  <li><strong>Connections:</strong> items from MCP servers. Each one is off by default.</li>
+</ul>
+<p>Pensieve never indexes files that look like secrets, such as <code>.env</code> files, keys and credentials.</p>
+
+<h2 id="models">Models</h2>
+<p>Pensieve uses two models. The search model turns text into vectors. It always runs on your computer. The default
+for a new index is EmbeddingGemma 2.</p>
+<p>The generation model writes task notes, summaries and insights. It is optional. Search, agent context, ownership
+and knowledge gaps work without it. You can use a built-in model (Qwen 3.5 9B on Apple Silicon), a local server such
+as LM Studio, a command-line tool, or your own agent.</p>
+<nav class="pager" aria-label="Pages"><a class="next" href="/docs/install/"><small>Next</small>Install</a></nav>
+<p class="edit">Something wrong or missing? <a href="https://github.com/TedHaley/pensieve/issues/new/choose">Tell us on GitHub</a>.</p>
+</main>
+</div>
+<footer>
+  <div class="in">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <nav><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/TedHaley/pensieve">GitHub</a><a href="https://github.com/TedHaley/pensieve/releases">Releases</a><a href="https://github.com/TedHaley/pensieve/issues/new/choose">Feedback</a></nav>
+  </div>
+</footer>
+<script>
+// on a phone the docs menu starts closed, so the page starts with its own text
+if (matchMedia('(max-width: 860px)').matches) document.getElementById('docnav').removeAttribute('open');
+</script>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</body>
+</html>

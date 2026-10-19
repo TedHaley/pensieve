@@ -11,11 +11,11 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from pensieve import actions, onboarding, scopes, settings, sources, usage
+from pensieve import actions, migrate, onboarding, scopes, settings, sources, usage
 
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
-AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "unexplored", "knowledge_gaps", "list_repos",
+AGENT_TOOLS = {"search", "read", "similar", "overview", "who_knows", "team", "person", "projects", "unexplored", "knowledge_gaps", "list_repos",
                "current_scope", "open", "index_path", "report_feedback", "stale", "tasks", "task", "set_task_state",
                "share_card", "thread_history"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
@@ -72,7 +72,7 @@ def _check_repo(repo):
 
 def tool(name=None):
     """Register an MCP tool; bad input (ValueError, unknown id) reaches the agent as a readable error. Every call is
-    logged to usage.db (see usage.py)."""
+    logged to store.db (see usage.py)."""
     def deco(fn):
         @functools.wraps(fn)
         def wrap(*a, **k):
@@ -113,8 +113,7 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc)
     cwd = (agent_cwd.get() or "").rstrip("/")
     s = _c()["searcher"]
-    with s.lock:
-        wts = [p for (p,) in s.db.execute("SELECT path FROM worktrees")]
+    wts = [p for (p,) in s.db.execute("SELECT path FROM worktrees")]
 
     def elsewhere(x):  # a linked worktree's copy (another branch) that the agent isn't working in: ranked last
         if " @ " not in (x.get("subtitle") or ""):
@@ -143,9 +142,8 @@ def _without_live_sessions(results, searcher, cwd):
     sids = [x["id"][8:] for x in results if str(x.get("id", "")).startswith("session:")]
     if not cwd or not sids:
         return results
-    with searcher.lock:
-        rows = searcher.db.execute(f"SELECT id, project, path FROM sessions WHERE id IN ({','.join('?' * len(sids))})",
-                                   sids).fetchall()
+    rows = searcher.db.execute(f"SELECT id, project, path FROM sessions WHERE id IN ({','.join('?' * len(sids))})",
+                               sids).fetchall()
     now, live = time.time(), set()
     for sid, project, path in rows:
         p = (project or "").rstrip("/")
@@ -163,13 +161,12 @@ def _to_own_checkout(results, searcher, cwd):
     that copy is the same: the index holds a worktree's files only where they differ from the main checkout."""
     if not cwd:
         return
-    with searcher.lock:
-        row = next(((w, repo) for w, repo in searcher.db.execute("SELECT path, repo FROM worktrees")
-                    if cwd == w or cwd.startswith(w + "/")), None)
-        if not row:
-            return
-        wt, root = row
-        changed = {p for (p,) in searcher.db.execute("SELECT path FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
+    row = next(((w, repo) for w, repo in searcher.db.execute("SELECT path, repo FROM worktrees")
+                if cwd == w or cwd.startswith(w + "/")), None)
+    if not row:
+        return
+    wt, root = row
+    changed = {p for (p,) in searcher.db.execute("SELECT path FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
     for x in results:
         path = x.get("path") or ""
         if str(x.get("id", "")).startswith("code:") and path.startswith(root + "/"):
@@ -191,8 +188,7 @@ def _mark_near_copies(results, searcher):
     if len(code) < 2:
         return
     ids = [int(x["id"][5:]) for x in code]
-    with searcher.lock:
-        text = dict(searcher.db.execute(f"SELECT id, text FROM code_chunks WHERE id IN ({','.join('?' * len(ids))})", ids))
+    text = dict(searcher.db.execute(f"SELECT id, text FROM code_chunks WHERE id IN ({','.join('?' * len(ids))})", ids))
     for j, b in enumerate(code):
         tb = text.get(ids[j]) or ""
         for i in range(j):
@@ -218,6 +214,8 @@ def _lines(results):
         kind = x.get("kind") or str(x.get("id", "")).partition(":")[0]
         if kind == "session":
             where = f'session "{x.get("title") or ""}" ({x.get("subtitle") or x.get("updated") or ""})'
+        elif kind == "doc":  # a collected ticket, PR, message or page
+            where = f'"{x.get("title") or ""}" ({x.get("subtitle") or ""})' + (f" {x['url']}" if x.get("url") else "")
         else:
             line = x.get("focus_line") or x.get("line")
             where = path + (f":{line}" if line else "") if path else x.get("title") or ""
@@ -242,10 +240,11 @@ def _lines(results):
 def read(id: str, max_chars: int = 12000) -> dict:
     """Full text of a search result id: code with its owners and recent commits, a document, or a session. Several
     ids, separated by spaces, are read in one call ("code:12 code:40 session:…"), sharing max_chars."""
-    ids = [i for i in id.replace(",", " ").split() if i]
+    ids = [migrate.compat_id(i) for i in id.replace(",", " ").split() if i]  # old file ids of connection items too
     if len(ids) <= 1:
-        _check(id.strip())
-        return actions.read(id.strip(), max_chars)
+        id = ids[0] if ids else id.strip()
+        _check(id)
+        return actions.read(id, max_chars)
     each = max(2000, max_chars // len(ids))
     out = []
     for i in ids[:8]:
@@ -378,9 +377,16 @@ def similar(id: str, limit: int = 8) -> str:
 
 
 def _similar(id, limit):
+    id = migrate.compat_id(id)  # an old file id of a connection item: its doc:<id>
     _check(id)
     kind, _, ref = id.partition(":")
     sc, st, rp = _scope(), _c()["store"], _c()["repos"]
+    if kind == "doc" or (kind == "file" and "/connections/" in ref):  # a collected item (a v1 file id: one release)
+        from pensieve import docindex
+        doc_id = (int(ref) if ref.isdigit() else None) if kind == "doc" else docindex.resolve_path(ref)
+        if doc_id is None:
+            raise KeyError(id)
+        return [x for x in docindex.similar(doc_id, limit * 3) if scopes.contains(sc, x["id"], st, rp)][:limit]
     if kind == "file":
         return [x for x in _c()["files"].similar(ref, limit * 3) if scopes.contains(sc, x["id"], st, rp)][:limit]
     if kind == "session":
@@ -393,7 +399,7 @@ def _similar(id, limit):
         text = re.sub(r'["\']|(?<!\S)-(?=\S)|\b(kind|ext|in):', " ", c["text"][:1500]) if c else ""
         hits = _c()["searcher"].find(text, limit + 1, ["code"], scope=sc)["results"] if c else []
         return [h for h in hits if h["id"] != id][:limit]
-    raise ValueError("id must start with file:, code: or session:")
+    raise ValueError("id must start with file:, code:, session: or doc:")
 
 
 @tool()
@@ -474,11 +480,11 @@ def overview(repo: str | None = None) -> str:
     out.append("largest files: " + ", ".join(f"{rel(p)} ({p['chunks']} chunks)" for p in big))
     s = _c()["searcher"]
     first = {}
-    with s.lock:  # what it is and what it's built with, from the index (the README's start, the manifests' dependencies)
-        for path, text in s.db.execute(
-                "SELECT path, text FROM code_chunks WHERE repo=? AND wt='' AND path IN (?,?,?,?,?,?) ORDER BY path, start",
-                (root, "README.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "Gemfile")):
-            first[path] = first.get(path, "") + text + "\n"
+    # what it is and what it's built with, from the index (the README's start, the manifests' dependencies)
+    for path, text in s.db.execute(
+            "SELECT path, text FROM code_chunks WHERE repo=? AND wt='' AND path IN (?,?,?,?,?,?) ORDER BY path, start",
+            (root, "README.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "Gemfile")):
+        first[path] = first.get(path, "") + text + "\n"
     if first.get("README.md"):
         out.append("README starts: " + " ".join(first["README.md"].split())[:600])
     deps = _dependencies(first)
@@ -530,6 +536,87 @@ def team(repo: str, days: int = 90) -> dict:
 
 
 @tool()
+def person(who: str) -> dict:
+    """One person's card from the user's side: role, repos and areas, recent pull requests, and how the user works
+    with them (closeness 0..1, shared areas, tasks, reviews). `who`: a name, an email or a GitHub login."""
+    from pensieve import directory, people
+    pid = people.find(who)
+    if not pid:
+        d = directory.find(who)  # found earlier by a search of the user's GitHub or Slack, with no shared work yet
+        if not d:
+            raise ValueError(f"no person for {who!r} (the People tab builds its graph in the background; its Find a "
+                             "person field searches GitHub and Slack)")
+        return dict(name=d["name"], you=False, title=d["title"], identities=(
+            [f"email:{e}" for e in d["emails"]] + ([f"gh:{d['login']}"] if d["login"] else [])
+            + ([f"slack:{d['slack']}"] if d["slack"] else [])), found_in=d["sources"], relation=None,
+            note="Found in the user's services; no shared work with the user yet.")
+    p = people.profile(pid)
+    r = p.get("relation") or {}
+    return dict(
+        name=p["name"], you=p["me"], function=p["function"], function_inferred=p["function_inferred"],
+        identities=[i["key"] for i in p["identities"]], repos=p["repos"][:5],
+        recent_prs=[{k: x.get(k) for k in ("t", "url", "state", "repo")} for x in p["prs"][:5]],
+        recent_commits=[s["subject"] for s in p["subjects"][:5]], works_with=[x["name"] for x in p["peers"]],
+        relation=None if p["me"] else dict(
+            closeness=r.get("closeness"), rank=r.get("rank"), kinds={k["label"]: k["n"] for k in r.get("kinds", [])},
+            shared_areas=r.get("shared_areas", []), tasks=[t.get("t") for t in r.get("tasks", [])],
+            reviews=[x.get("url") for x in r.get("prs", [])], slack_threads=len(r.get("threads", []))))
+
+
+@tool()
+def projects(query: str = "", limit: int = 8, project: str = "") -> dict:
+    """The user's projects, then the projects of the people around them. A project is a group of tickets (an epic
+    or parent issue, or tickets joined by links, shared pull requests or a title prefix) with the branches and pull
+    requests tied to each ticket. Each ticket has a state from its status and its pull requests (merged: done; in
+    review: close to done). query: words that a project's name, tickets, pull requests or people must have.
+    project: a project id, a ticket key or a name, for one project with every ticket, who is on it and why each
+    pull request or branch is tied to it."""
+    from pensieve import team_projects
+    team_projects.rebuild(_c()["store"])
+    day = lambda ts: time.strftime("%Y-%m-%d", time.localtime(ts)) if ts else None
+    people = lambda ms: [m["name"] + (" (you)" if m["me"] else "") + f" [{', '.join(m['roles'])}]" for m in ms if m["name"]]
+    if project:
+        e = team_projects.find(project)
+        if not e:
+            return {"error": f"no project matches {project!r}"}
+        prs = {p["url"]: p for p in e["prs"]}
+        why = {}
+        for t in e["ties"]:
+            why.setdefault((t["ticket"], t["ref"]), t["why"])
+        return dict(
+            id=e["id"], name=e["name"], group=e["kind"], url=e["url"] or None, yours=e["section"] == "mine",
+            your_roles=e["my_roles"], likely_done=e["likely_done"], last_active=day(e["last"]), counts=e["counts"],
+            people=people(e["members"]),
+            tickets=[dict(key=t["key"], title=t["title"], url=t["url"] or None, status=t["status"] or None,
+                          state=t["state"], why_state=t["why"], last_active=day(t["updated"]), people=people(t["people"]),
+                          prs=[dict(url=u, title=prs[u]["title"], state=prs[u]["state"], review=prs[u]["review"] or None,
+                                    branch=prs[u]["head"] or None, tied_because=why.get((t["key"], u)))
+                               for u in t["prs"] if u in prs],
+                          branches=[dict(branch=b, tied_because=why.get((t["key"], b))) for b in t["branches"]])
+                     for t in e["tickets"]],
+            prs_without_ticket=[{k: p[k] for k in ("url", "title", "state", "repo")} for p in e["prs"]]
+            if e["kind"] == "pr" else None)
+    res = team_projects.summary(query)
+    out = []
+    for e in res["projects"]:
+        if e["stale"] and not query:
+            continue
+        c = e["counts"]
+        out.append(dict(
+            id=e["id"], name=e["name"], yours=e["section"] == "mine", your_roles=e["my_roles"] or None,
+            likely_done=e["likely_done"], last_active=day(e["last"]),
+            status=f"{c['tickets']} tickets: {c['done']} done, {c['close']} close to done, {c['progress']} in progress; "
+                   f"{c['prs']} PRs: {c['merged']} merged, {c['review']} in review, {c['draft'] + c['open']} open",
+            people=people(e["members"][:8]),
+            tickets=[f"{t['key']} {t['title']} ({t['state']})" for t in e["tickets"][:5]] or None))
+        if len(out) >= max(1, min(limit, 30)):
+            break
+    return {"projects": out, "building": res["building"] or None,
+            "note": None if out else "No projects yet: they are built in the background from tickets, branches and "
+                                     "pull requests."}
+
+
+@tool()
 def unexplored(repo: str) -> dict:
     """Areas of a repo next to the user's own work that their agent sessions haven't touched yet, and who owns them."""
     _check_repo(repo)
@@ -548,6 +635,24 @@ def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
     if r is None:
         raise ValueError(f"unknown repo {repo!r}")
     return r
+
+
+@tool()
+def token_value(repos: list[str] | None = None) -> dict:
+    """The user's token use and what it shipped, last 7 days against the 4 weeks before, for all repos or `repos`:
+    tokens by kind and model, estimated cost (Anthropic list prices), cache-read share, merged PRs, commits, closed
+    threads, deployed lines per million tokens, the value score (points per million weighted tokens) and the
+    formulas. Read only; no AI."""
+    from pensieve import insights_stats, people, store as v2
+    r = (_c() or {}).get("repos")
+    s = insights_stats.stats(v2.index_db(), v2.store_db(), people.graph(), repos=repos or None,
+                             deployed_fn=r.deployed if r else None)
+    g = s["game"]
+    return dict(last_7_days=s["tokens"]["windows"][0], output_last_7_days=g["windows"][0], deployed=g["lines"],
+                kpis=[{k: x[k] for k in ("key", "label", "value", "base", "delta")} for x in s["kpis"]],
+                models_last_4_weeks=s["tokens"]["recent_models"], score=g["score"], score_4wk_median=g["prev_median"],
+                best=g["best"], streak=g["streak"], badges=[{k: b[k] for k in ("name", "rule", "earned")} for b in g["badges"]],
+                formula=g["formula"], note=s["tokens"]["note"])
 
 
 @tool()
@@ -728,13 +833,12 @@ def show_search(query: str = "") -> dict:
 @tool()
 def status() -> dict:
     """Index size (files, repos, code chunks, sessions) and whether indexing is running."""
-    with _c()["store"].lock:
-        db = _c()["store"].db
-        n = lambda q: db.execute(q).fetchone()[0]
-        return {**{k: v for k, v in _c()["status"].items()},
-                "files": n("SELECT COUNT(*) FROM files"), "repos": n("SELECT COUNT(*) FROM repos"),
-                "code_chunks": n("SELECT COUNT(*) FROM code_chunks"),
-                "sessions": n("SELECT COUNT(*) FROM sessions WHERE n_chunks>0")}
+    db = _c()["store"].db
+    n = lambda q: db.execute(q).fetchone()[0]
+    return {**{k: v for k, v in _c()["status"].items()},
+            "files": n("SELECT COUNT(*) FROM files"), "repos": n("SELECT COUNT(*) FROM repos"),
+            "code_chunks": n("SELECT COUNT(*) FROM code_chunks"),
+            "sessions": n("SELECT COUNT(*) FROM sessions WHERE n_chunks>0")}
 
 
 @tool()

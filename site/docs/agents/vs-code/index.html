@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pensieve MCP server for VS Code: mcp.json setup</title>
+<meta name="description" content="Add Pensieve to VS Code agent mode as an MCP server in the user mcp.json file. Local code search, context cards and who knows what for GitHub Copilot and other agents.">
+<link rel="canonical" href="https://pensieve.tools/docs/agents/vs-code/">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Pensieve MCP server for VS Code: mcp.json setup">
+<meta property="og:description" content="Add Pensieve to VS Code agent mode as an MCP server in the user mcp.json file. Local code search, context cards and who knows what for GitHub Copilot and other agents.">
+<meta property="og:url" content="https://pensieve.tools/docs/agents/vs-code/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/docs/docs.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Pensieve for VS Code","description":"Add Pensieve to VS Code agent mode as an MCP server in the user mcp.json file. Local code search, context cards and who knows what for GitHub Copilot and other agents.","url":"https://pensieve.tools/docs/agents/vs-code/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="/" aria-label="Pensieve home"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve <span>Docs</span></a>
+  <nav aria-label="Site">
+    <a class="chip gh" href="https://github.com/TedHaley/pensieve"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+    <a class="chip solid" href="/docs/install/">Install</a>
+  </nav>
+</header>
+<div class="layout">
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/" aria-current="page">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<main>
+<p class="crumb">Connect your agent</p>
+<h1>Pensieve for VS Code</h1>
+<p class="lede">This page tells you how to connect VS Code to Pensieve over MCP, and what changes on your computer.</p>
+<h2 id="connect">Connect VS Code</h2>
+<ol>
+  <li>Install Pensieve (see <a href="/docs/install/">Install</a>).</li>
+  <li>Run one of these commands:
+<pre><code>pensieve integrate recommended   <span class="c"># every agent on this computer</span>
+pensieve integrate vscode-mcp pensieve-search   <span class="c"># only VS Code</span></code></pre></li>
+  <li>Restart VS Code. It loads its MCP servers when it starts.</li>
+  <li>Ask VS Code a question about your code, for example “where do we retry failed webhooks?”.</li>
+</ol>
+
+<h2 id="what-changes">What Pensieve adds</h2>
+<div class="tbl"><table><thead><tr><th>Add-on</th><th>Id</th><th>File</th></tr></thead><tbody><tr><td>MCP server</td><td><code>vscode-mcp</code></td><td><code>~/Library/Application Support/Code/User/mcp.json</code></td></tr><tr><td>Skills</td><td><code>pensieve-search</code></td><td><code>~/.agents/skills</code></td></tr></tbody></table></div>
+<p>VS Code has no global instructions file that Pensieve writes to. Copy the <a href="https://github.com/TedHaley/pensieve/blob/main/pensieve/integrations/instructions.md">instructions block</a> into the rules of VS Code. It tells the agent to call <code>search</code> before it greps.</p>
+
+<h2 id="manual">Connect by hand</h2>
+<p>Add this entry to <code>~/Library/Application Support/Code/User/mcp.json</code>. Use the full path of your <code>pensieve</code> command. To find it, run
+<code>which pensieve</code>.</p>
+<pre><code>{
+  &quot;servers&quot;: {
+    &quot;pensieve&quot;: {
+      &quot;type&quot;: &quot;stdio&quot;,
+      &quot;command&quot;: &quot;/Users/you/.local/bin/pensieve&quot;,
+      &quot;args&quot;: [&quot;mcp&quot;]
+    }
+  }
+}</code></pre>
+
+
+<p>VS Code uses the key <code>servers</code>, not <code>mcpServers</code>, and each server has a
+<code>type</code>. The path above is the macOS path. <code>pensieve integrate</code> looks only there. On Linux,
+add the same entry to the user <code>mcp.json</code> of VS Code by hand.</p>
+
+<h2 id="remove">Remove</h2>
+<pre><code>pensieve integrate vscode-mcp --remove</code></pre>
+<p>Pensieve removes only the entries that it added.</p>
+<p>See also: <a href="/docs/agents/#scope">scopes</a>, the <a href="/docs/mcp-tools/">MCP tools</a>, and the
+<a href="/docs/benchmark/">benchmark</a>.</p>
+<nav class="pager" aria-label="Pages"><a class="prev" href="/docs/agents/claude-desktop/"><small>Previous</small>Claude Desktop</a><a class="next" href="/docs/mcp-tools/"><small>Next</small>MCP tools</a></nav>
+<p class="edit">Something wrong or missing? <a href="https://github.com/TedHaley/pensieve/issues/new/choose">Tell us on GitHub</a>.</p>
+</main>
+</div>
+<footer>
+  <div class="in">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <nav><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/TedHaley/pensieve">GitHub</a><a href="https://github.com/TedHaley/pensieve/releases">Releases</a><a href="https://github.com/TedHaley/pensieve/issues/new/choose">Feedback</a></nav>
+  </div>
+</footer>
+<script>
+// on a phone the docs menu starts closed, so the page starts with its own text
+if (matchMedia('(max-width: 860px)').matches) document.getElementById('docnav').removeAttribute('open');
+</script>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</body>
+</html>

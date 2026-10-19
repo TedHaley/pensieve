@@ -1,6 +1,7 @@
 """SQLite metadata + turbovec ANN index + embedding + 3D projection."""
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -10,12 +11,15 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import config, connections, parsers, settings
+from pensieve import config, connections, parsers, settings, tokens, vectors
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 from pensieve.projects import project_name
+from pensieve.store import tokens as tokens_db
 
 LAYOUT_VERSION = "umap-v1"
-ACTIVE_SECONDS = 30  # re-index a transcript that's still growing at most this often
+ACTIVE_SECONDS = 1.5  # re-index a transcript that's still growing at most this often (its card follows within 2 s)
+session_listeners = []  # fn(session id) after a session is indexed (the card builder)
+PARSED_KEEP = 16  # transcripts whose last parse stays in memory: the ones that grow now
 
 _embedder = None
 _embed_lock = threading.Lock()
@@ -78,9 +82,11 @@ def model_texts(texts, query=False, titles=None, name=None, m=None):
     """The texts as model `name` (the index's model by default) reads them. A query gets the model's instruction:
     `query` is True (general search), an instruction string such as CODE_QUERY, or one of those per text. A document
     gets the model's document format, with its title (a path) when there is one."""
-    name, m = name or config.EMBED_MODEL, m or embedder()
-    general = (getattr(m, "prompts", None) or {}).get("query", "")
+    name = name or config.EMBED_MODEL
     gemma = name == config.GEMMA
+    general = ""
+    if (any(query) if isinstance(query, list) else query):  # only a query needs the loaded model, for its prompt
+        general = (getattr(m or embedder(), "prompts", None) or {}).get("query", "")
 
     def instruction(p):
         if p is True or (gemma and p == CODE_QUERY):  # EmbeddingGemma: its search query beat its code query
@@ -198,24 +204,50 @@ def embed(texts, query=False, titles=None, model=None) -> np.ndarray:
     during indexing waits for one slice (a quarter second at most), not for a whole batch of files."""
     searching = bool(query) if not isinstance(query, list) else any(query)
     name, m = model if model else (config.EMBED_MODEL, None)
-    m = m or embedder()
-    texts = model_texts(texts, query, titles, name, m)
     kw = dict(batch_size=16, normalize_embeddings=True, show_progress_bar=False)
     if searching:
+        m = m or embedder()
+        texts = model_texts(texts, query, titles, name, m)
         queries_waiting.add(1)
         try:
             with _embed_lock:
                 return np.asarray(m.encode(texts, **kw), dtype=np.float32)
         finally:
             queries_waiting.add(-1)
-    order = sorted(range(len(texts)), key=lambda i: -len(texts[i]))  # similar lengths in a slice: less padding
+    from pensieve import migrate
+    if migrate.started and not migrate.cache_ready.is_set():  # the first start of v2: v1's vectors fill the cache
+        migrate.cache_ready.wait(migrate.CACHE_WAIT)
+    texts = model_texts(texts, query, titles, name, m)
     out = np.zeros((len(texts), config.EMBED_MODELS[name]["dim"] if name in config.EMBED_MODELS else config.EMBED_DIM),
                    np.float32)
+    # each distinct text is embedded once: a text in the cache, or twice in this call, is not embedded again
+    from pensieve import embedcache
+    cache = embedcache.get()
+    keys = [embedcache.key(t) for t in texts]
+    have = cache.get(name, keys) if cache else {}
+    first = {}  # key -> position of the first text with it that is not in the cache
+    for i, k in enumerate(keys):
+        if k in have:
+            out[i] = have[k]
+        else:
+            first.setdefault(k, i)
+    todo = list(first.values())
+    if cache:
+        cache.hits += len(texts) - len(todo)
+        cache.misses += len(todo)
+    if todo:
+        m = m or embedder()
+    order = sorted(todo, key=lambda i: -len(texts[i]))  # similar lengths in a slice: less padding
     for i in range(0, len(order), BULK_SLICE):
         _wait_while(queries_waiting)
         idx = order[i:i + BULK_SLICE]
         with _embed_lock:
             out[idx] = m.encode([texts[j] for j in idx], **kw)
+    if cache and todo:
+        cache.put(name, [(keys[i], out[i]) for i in todo])
+    for i, k in enumerate(keys):  # copies within this call
+        if k not in have and first[k] != i:
+            out[i] = out[first[k]]
     return out
 
 
@@ -287,18 +319,6 @@ def chunk_session(turns):
     return out
 
 
-def reconcile(index, db, table):
-    """Re-add vectors present in SQLite but missing from the ANN index (e.g. after an unclean shutdown)."""
-    ids, vecs = [], []
-    for cid, blob in db.execute(f"SELECT id, vec FROM {table}"):
-        if not index.contains(cid):
-            ids.append(cid)
-            vecs.append(np.frombuffer(blob, np.float16).astype(np.float32))
-    if ids:
-        index.add_with_ids(np.stack(vecs), np.array(ids, dtype=np.uint64))
-    return len(ids)
-
-
 
 _TEMP = re.compile(r"^(/private)?/(tmp|var/folders)/")
 
@@ -308,21 +328,55 @@ def in_temp(path: str) -> bool:
     calls through the Claude Code CLI, scripts, tests), not the user's work."""
     return bool(path) and bool(_TEMP.match(path)) and settings.get("skip_temp_sessions")
 
+class WriteHold:
+    """`with store.writing:` runs the block with index.db's writer connection on this thread (Db.hold): the block's
+    statements commit together when it ends. Reads need no hold: they run on the thread's own connection and never
+    wait. Nested blocks on one thread are one hold. With PENSIEVE_LOCK_DEBUG=1, a hold longer than a second prints
+    where it was taken."""
+
+    def __init__(self, db):
+        self.db, self._local = db, threading.local()
+        self.debug = bool(os.environ.get("PENSIEVE_LOCK_DEBUG"))
+
+    def __enter__(self):
+        import time
+        stack = getattr(self._local, "stack", None)
+        if stack is None:
+            stack = self._local.stack = []
+        cm = self.db.hold()
+        cm.__enter__()
+        if not stack:
+            self._local.at = time.monotonic()
+        stack.append(cm)
+        return self
+
+    def __exit__(self, *exc):
+        import time
+        cm = self._local.stack.pop()
+        if not self._local.stack and self.debug and (held := time.monotonic() - self._local.at) > 1:
+            import traceback
+            print(f"index.db writer held {held:.1f} s by:\n" + "".join(traceback.format_stack(limit=8)[:-2]),
+                  flush=True)
+        return cm.__exit__(*exc)
+
+
 class Store:
     def __init__(self):
-        from turbovec import IdMapIndex
-        self.lock = threading.RLock()
+        from pensieve import store as v2
+        from pensieve.store.db import Conn
+        self.v2 = v2.index_db()  # the sessions, files and code tables are in v2's index.db (docs/design/storage.md)
+        self.writing = WriteHold(self.v2)
         self._indexed_at = {}
         self.behind = False  # the last sync_files ran out of time with sessions left to index
+        self.deferred = False  # ... or left a growing transcript for ACTIVE_SECONDS
+        self._parsed: dict[str, parsers.Session] = {}  # path -> its last parse, to read only what was added
+        self.waiting: set[str] = set()  # transcripts that sync_paths left for ACTIVE_SECONDS
         self.progress = None  # sessions being indexed now: {name: agent, root, done, total=None}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
-        self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
-        # write-ahead log: a commit appends instead of rewriting a journal, and NORMAL syncs at checkpoints rather
-        # than every commit (still crash-safe; a power cut can lose only the last few commits, which re-index)
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=NORMAL")
-        from pensieve.search import code_words, repo_token
-        self.db.create_function("code_words", 1, code_words, deterministic=True)  # used by the code keyword index
+        self.db = Conn(self.v2)
+        from pensieve.search import code_tokens, code_words, repo_token
+        self.db.create_function("code_tokens", 1, code_tokens, deterministic=True)  # used by the code word index
+        self.db.create_function("code_words", 1, code_words, deterministic=True)  # its triggers before words-v4
         self.db.create_function("repo_token", 1, repo_token, deterministic=True)
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions(
@@ -346,12 +400,8 @@ class Store:
         for sid, proj in self.db.execute("SELECT id, project FROM sessions WHERE project_name IS NULL").fetchall():
             self.db.execute("UPDATE sessions SET project_name=? WHERE id=?", (project_name(proj or ""), sid))
         self.db.commit()
-        if config.INDEX_PATH.exists():
-            self.index = IdMapIndex.load(str(config.INDEX_PATH))
-        else:
-            self.index = IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
-        if reconcile(self.index, self.db, "chunks"):
-            self.index.sync(str(config.INDEX_PATH))
+        self.index = vectors.Index(config.INDEX_PATH, config.EMBED_DIM)
+        self.index.load(self.db, "chunks")
 
     # ---- ingestion -------------------------------------------------------
     def sync_files(self, log=lambda m: print(m, flush=True), on_progress=None, budget=None) -> int:
@@ -359,10 +409,9 @@ class Store:
         after that long and sets `behind`: the caller sweeps folders and calls again for the rest."""
         import time
         end = time.monotonic() + budget if budget else None
-        self.behind = False
+        self.behind = self.deferred = False
         touched = self._purge_disabled(log) + self._purge_own(log) + self._purge_memories(log)
-        with self.lock:
-            known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
+        known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
         for source, path in parsers.discover():
             if end and time.monotonic() > end:
                 self.behind = True
@@ -373,26 +422,63 @@ class Store:
             # transcripts are append-only JSONL (a half-written last line is skipped), so no need to wait for quiet;
             # a session that's still being written re-indexes at most every ACTIVE_SECONDS (new turns only)
             if str(path) in known and time.time() - self._indexed_at.get(str(path), 0) < ACTIVE_SECONDS:
+                self.deferred = True  # the caller looks again in ACTIVE_SECONDS (sync_paths)
+                self.waiting.add(str(path))
                 continue
-            self._indexed_at[str(path)] = time.time()
-            if self._ignored.get(str(path)) == (st.st_mtime, st.st_size):
-                continue
-            try:
-                if not self._index_session(source, path, st):
-                    self._ignored[str(path)] = (st.st_mtime, st.st_size)
-                    continue
+            if self._index_one(source, path, st, log):
                 touched += 1
-                log(f"indexed {source}:{path.stem[:8]}")
                 if touched >= 5:  # a first index or a batch of new sessions, not one live session's new turns
                     self.progress = dict(name=source, root=str(path.parent), done=touched, total=None)
                 if on_progress and touched % 8 == 0:
                     on_progress(touched)
-            except Exception as e:  # one bad file shouldn't stop the sweep
-                log(f"skip {path}: {e!r}")
         self.progress = None
         if touched:  # the map catches up later (server.map_worker)
-            with self.lock:
-                self.index.sync(str(config.INDEX_PATH))
+            self.save()
+        return touched
+
+    def _index_one(self, source, path: Path, st, log) -> bool:
+        """Index one changed transcript; False when it is not the user's work or it failed."""
+        import time
+        self._indexed_at[str(path)] = time.time()
+        if self._ignored.get(str(path)) == (st.st_mtime, st.st_size):
+            return False
+        t0 = time.perf_counter()
+        try:
+            if not self._index_session(source, path, st):
+                self._ignored[str(path)] = (st.st_mtime, st.st_size)
+                return False
+        except Exception as e:  # one bad file shouldn't stop the sweep
+            log(f"skip {path}: {e!r}")
+            return False
+        log(f"indexed {source}:{path.stem[:8]} in {(time.perf_counter() - t0) * 1000:.0f} ms")
+        return True
+
+    def sync_paths(self, paths, log=lambda m: print(m, flush=True)) -> int:
+        """Index these transcripts now (the ones the file watcher saw change), without the sweep of every session
+        folder. A transcript indexed less than ACTIVE_SECONDS ago waits in `waiting`, and sets `deferred`."""
+        import time
+        self.deferred = False
+        roots = [(name, root, pattern) for sid, name, root, pattern in config.session_sources()
+                 if settings.enabled(sid) and settings.enabled(f"agents/{name}")]
+        touched = 0
+        for p in sorted(set(paths) | self.waiting):
+            self.waiting.discard(p)
+            path = Path(p)
+            hit = next(((n, r) for n, r, pat in roots if p.startswith(str(r) + "/")
+                        and path.relative_to(r).full_match(pat)), None)
+            if not hit or "subagents" in path.parts or not path.is_file():
+                continue
+            st = path.stat()
+            row = self.db.execute("SELECT mtime, size FROM sessions WHERE path=?", (p,)).fetchone()
+            if row is not None and tuple(row) == (st.st_mtime, st.st_size):
+                continue
+            if row is not None and time.time() - self._indexed_at.get(p, 0) < ACTIVE_SECONDS:
+                self.waiting.add(p)
+                self.deferred = True
+                continue
+            touched += self._index_one(hit[0], path, st, log)
+        if touched:
+            self.save()
         return touched
 
     def _purge_disabled(self, log):
@@ -401,7 +487,7 @@ class Store:
         for sid, name, root, _ in config.session_sources():
             if settings.enabled(sid):
                 roots[name].append(str(root) + "/")
-        with self.lock:
+        with self.writing:
             off = [s for (s,) in self.db.execute("SELECT DISTINCT source FROM sessions") if not settings.enabled(f"agents/{s}")]
             n = 0
             for src in off:
@@ -416,7 +502,7 @@ class Store:
 
     def _purge_own(self, log):
         """Drop sessions that ran in temp folders (e.g. Pensieve's own AI calls through the Claude Code CLI)."""
-        with self.lock:
+        with self.writing:
             own = [sid for sid, proj in self.db.execute(
                 "SELECT id, project FROM sessions WHERE project LIKE '/tmp/%' OR project LIKE '/private/%' "
                 "OR project LIKE '/var/folders/%'") if in_temp(proj)]
@@ -428,16 +514,15 @@ class Store:
     def _purge_memories(self, log):
         """Drop memory files that were deleted. Transcripts stay after their file goes, but a deleted memory was
         usually wrong or out of date."""
-        with self.lock:
-            gone = [sid for sid, path in self.db.execute("SELECT id, path FROM sessions WHERE id LIKE 'claude:memory/%'")
-                    if not Path(path).exists()]
+        gone = [sid for sid, path in self.db.execute("SELECT id, path FROM sessions WHERE id LIKE 'claude:memory/%'")
+                if not Path(path).exists()]
         n = self._delete_sessions(gone)
         if n:
             log(f"removed {n} deleted memory files")
         return n
 
     def _delete_sessions(self, sids):
-        with self.lock:
+        with self.writing:
             for i in range(0, len(sids), 500):
                 part = sids[i:i + 500]
                 q = ",".join("?" * len(part))
@@ -448,36 +533,71 @@ class Store:
                         pass
                 self.db.execute(f"DELETE FROM chunks WHERE session_id IN ({q})", part)
                 self.db.execute(f"DELETE FROM session_files WHERE session_id IN ({q})", part)
+                tokens_db.delete_sessions(self.v2.held(), part)
                 self.db.execute(f"DELETE FROM sessions WHERE id IN ({q})", part)
             if sids:
                 self.db.commit()
         return len(sids)
 
     def save_session_files(self, sid, touched: dict):
-        with self.lock:
+        with self.writing:
             self.db.execute("DELETE FROM session_files WHERE session_id=?", (sid,))
             rows = [(sid, p, int(e)) for p, e in touched.items()] or [(sid, "", 0)]
             self.db.executemany("INSERT OR REPLACE INTO session_files VALUES(?,?,?)", rows)
             self.db.commit()
 
+    USAGE_BACKFILL = "usage_backfill_v1"  # meta key: the sessions indexed before session_usage have their rows
+
+    def backfill_usage(self, log=lambda m: print(m, flush=True)) -> int:
+        """Token rows for the sessions that were indexed before `session_usage` existed. Reads each transcript for
+        usage only (tokens.scan), and writes 25 sessions per write job, so the writer is never held for long. Runs
+        once per data folder; the session indexer keeps the rows up to date after that."""
+        import time
+        if self.meta(self.USAGE_BACKFILL):
+            return 0
+        t0 = time.monotonic()
+        have = tokens_db.sessions_with_usage(self.v2)
+        todo = [(sid, src, path) for sid, src, path in self.db.execute("SELECT id, source, path FROM sessions")
+                if sid not in have and path and path.endswith(".jsonl")]
+        batch, n = [], 0
+        for sid, src, path in todo:
+            usage = tokens.rows(tokens.scan(src, Path(path)))
+            if usage:
+                batch.append((sid, usage))
+                n += 1
+            if len(batch) >= 25:
+                tokens_db.write_sessions(self.v2, batch)
+                batch = []
+        tokens_db.write_sessions(self.v2, batch)
+        self.meta(self.USAGE_BACKFILL, str(int(time.time())))
+        log(f"token use of {n} of {len(todo)} sessions read in {time.monotonic() - t0:.1f} s")
+        return n
+
     def _index_session(self, source, path: Path, st):
-        """Index one transcript; returns False for one that ran in a temp folder (not the user's work)."""
-        s = parsers.parse(source, path)
+        """Index one transcript; returns False for one that ran in a temp folder (not the user's work). A transcript
+        parsed before in this process is read from where it stopped (parsers.parse with `resume`)."""
+        old_s = self._parsed.pop(str(path), None)
+        mcp_done = len(old_s.mcp) if old_s else 0
+        s = parsers.parse(source, path, resume=old_s)
+        if s is not old_s:
+            mcp_done = 0
+        self._parsed[str(path)] = s  # the newest last: the oldest goes when there are too many
+        while len(self._parsed) > PARSED_KEEP:
+            self._parsed.pop(next(iter(self._parsed)))
         if in_temp(s.project):
             return False
         self.save_session_files(s.id, s.touched)
-        if s.mcp and settings.enabled(f"connections/{connections.SESSIONS}"):
-            connections.from_session(s.id, s.mcp)
+        if len(s.mcp) > mcp_done and settings.enabled(f"connections/{connections.SESSIONS}"):
+            connections.from_session(s.id, s.mcp[mcp_done:], s.updated or s.started)
         chunks = chunk_session(s.turns)
         hashes = [hashlib.sha1(c.encode()).hexdigest() for c in chunks]
-        with self.lock:
-            old = {(r[1], r[2]): r[0] for r in self.db.execute(
-                "SELECT id, idx, hash FROM chunks WHERE session_id=?", (s.id,))}
-            keep = {(i, h) for i, h in enumerate(hashes)}
-            stale = [cid for k, cid in old.items() if k not in keep]
-            new = [i for i, h in enumerate(hashes) if (i, h) not in old]
+        old = {(r[1], r[2]): r[0] for r in self.db.execute(
+            "SELECT id, idx, hash FROM chunks WHERE session_id=?", (s.id,))}
+        keep = {(i, h) for i, h in enumerate(hashes)}
+        stale = [cid for k, cid in old.items() if k not in keep]
+        new = [i for i, h in enumerate(hashes) if (i, h) not in old]
         vecs = embed([chunks[i] for i in new]) if new else np.zeros((0, config.EMBED_DIM), np.float32)
-        with self.lock:
+        with self.writing:
             for cid in stale:
                 self.index.remove(cid)
                 self.db.execute("DELETE FROM chunks WHERE id=?", (cid,))
@@ -498,33 +618,49 @@ class Store:
                  s.started, s.updated, len(chunks)))
             if new or stale:
                 self.db.execute("UPDATE sessions SET summary=NULL, tags=NULL WHERE id=?", (s.id,))
+            tokens_db.replace_session(self.v2.held(), s.id, tokens.rows(s.state.get("tok")))
             self.db.commit()
+        for fn in session_listeners:
+            fn(s.id)
         return True
 
+    def save(self, force=False):
+        """Write the session vector index to its file: at most every vectors.SAVE_SECONDS, unless `force`."""
+        with self.writing:
+            return self.index.save(force)
+
     # ---- projection + topics -------------------------------------------
+    def read(self):
+        """This thread's read connection: in WAL mode it sees the last commit and never waits for the writer."""
+        return self.v2.conn
+
     def meta(self, key, value=None):
-        with self.lock:
-            if value is None:
-                r = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-                return r[0] if r else None
+        if value is None:
+            r = self.read().execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return r[0] if r else None
+        with self.writing:
+            # Commit at once: some callers never commit after it. A caller that wrote rows before this marker
+            # commits them here too, which is safe because the marker comes after the rows it describes.
             self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(value)))
+            self.db.commit()
 
     def needs_layout(self):
-        with self.lock:
-            return bool(self.db.execute("SELECT 1 FROM chunks WHERE x IS NULL LIMIT 1").fetchone())
+        return bool(self.db.execute("SELECT 1 FROM chunks WHERE x IS NULL LIMIT 1").fetchone())
 
     def reproject(self, force=False):
         """UMAP refit and new topics when the corpus grew or shrank meaningfully (or on first run); otherwise place
         new points by neighbours. Shrinking counts too: after a big removal the old topics describe what's gone."""
-        with self.lock:
-            rows = self.db.execute("SELECT id, session_id, vec, x, y, z FROM chunks").fetchall()
+        with self.writing:
+            rows = self.db.execute("SELECT id, session_id, x, y, z FROM chunks").fetchall()
             fit_n = int(self.meta("session_fit_n") or 0)
             version_ok = self.meta("layout") == LAYOUT_VERSION
+        found, V = self.index.take([r[0] for r in rows])
+        rows = [r[:2] + (None,) + r[2:] for r, ok in zip(rows, found) if ok]  # r[3:6]: x, y, z as before
         if len(rows) < 4:
             return False
         cid = np.array([r[0] for r in rows])
         sid = np.array([r[1] for r in rows])
-        X = unit(np.stack([np.frombuffer(r[2], np.float16) for r in rows]).astype(np.float32))
+        X = unit(V.astype(np.float32))
         have = np.array([r[3] is not None for r in rows])
         n = len(rows)
         full = force or not version_ok or have.sum() < 0.5 * n or abs(n - fit_n) > max(60, 0.15 * fit_n)
@@ -534,7 +670,7 @@ class Store:
             P = fit3d(X, n_neighbors=15, min_dist=0.1)
             SP = fit3d(C, n_neighbors=10, min_dist=0.35)
             lab = cluster(C)
-            with self.lock:
+            with self.writing:
                 self.db.executemany("UPDATE chunks SET x=?, y=?, z=? WHERE id=?",
                                     [(*map(float, p), int(i)) for p, i in zip(P, cid)])
                 self.db.executemany("UPDATE sessions SET x=?, y=?, z=?, cluster=? WHERE id=?",
@@ -547,10 +683,10 @@ class Store:
         if not have.all():
             P_old = np.array([[r[3], r[4], r[5]] for r in rows if r[3] is not None], dtype=np.float32)
             P_new = place_new(X[have], P_old, X[~have])
-            with self.lock:
+            with self.writing:
                 self.db.executemany("UPDATE chunks SET x=?, y=?, z=? WHERE id=?",
                                     [(*map(float, p), int(i)) for p, i in zip(P_new, cid[~have])])
-        with self.lock:
+        with self.writing:
             placed = {r[0]: (r[1], r[2], r[3], r[4]) for r in self.db.execute(
                 "SELECT id, x, y, z, cluster FROM sessions WHERE x IS NOT NULL")}
             missing = [i for i, s in enumerate(sessions) if s not in placed]
@@ -572,8 +708,12 @@ class Store:
         info = {r[0]: r[1:] for r in self.db.execute("SELECT id, title, tags, summary FROM sessions")}
         ids = sorted(by)
         docs = [" ".join(f"{info[s][0]} {info[s][1] or ''} {info[s][2] or ''}" for s in by[c] if s in info) for c in ids]
+        from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+        # words that every agent session has (its turns are labelled User, Assistant and Memory), so they name no topic
+        stop = list(ENGLISH_STOP_WORDS | {"memory", "memories", "user", "assistant", "session", "sessions", "agent",
+                                          "claude", "codex", "conversation", "chat", "file", "files"})
         try:
-            vec = TfidfVectorizer(stop_words="english", max_features=4000, token_pattern=r"[A-Za-z][A-Za-z_\-]{2,}")
+            vec = TfidfVectorizer(stop_words=stop, max_features=4000, token_pattern=r"[A-Za-z][A-Za-z_\-]{2,}")
             M = vec.fit_transform(docs)
             terms = np.array(vec.get_feature_names_out())
             return {c: ", ".join(terms[np.argsort(-M[i].toarray()[0])[:5]]) for i, c in enumerate(ids)}
@@ -593,7 +733,7 @@ class Store:
         by = defaultdict(list)
         for s, c in zip(sub, lab):
             by[int(c)].append(s)
-        with self.lock:
+        with self.writing:
             kw = self._keywords(by)
             out = []
             for c in sorted(by):
@@ -625,27 +765,25 @@ class Store:
 
     # ---- queries -----------------------------------------------------------
     def topics(self):
-        with self.lock:
-            rows = self.db.execute("SELECT id, name, description, keywords, members FROM topics ORDER BY id").fetchall()
+        rows = self.db.execute("SELECT id, name, description, keywords, members FROM topics ORDER BY id").fetchall()
         return [dict(id=r[0], name=r[1] or (r[3] or "").split(",")[0].strip().title() or f"Topic {r[0] + 1}",
                      named=bool(r[1]), description=r[2] or "", keywords=r[3] or "", sessions=json.loads(r[4] or "[]"))
                 for r in rows]
 
     def points(self, level="session"):
-        with self.lock:
-            if level == "chunk":
-                rows = self.db.execute(
-                    "SELECT c.id, c.session_id, s.title, s.source, s.cluster, c.x, c.y, c.z, s.project_name, c.summary, "
-                    "s.started, c.idx FROM chunks c JOIN sessions s ON s.id=c.session_id WHERE c.x IS NOT NULL").fetchall()
-                return {"level": level, "points": [
-                    dict(id=r[0], session=r[1], title=r[2], source=r[3], cluster=r[4], p=r[5:8], project=r[8],
-                         summary=r[9], started=r[10], idx=r[11]) for r in rows]}
+        if level == "chunk":
             rows = self.db.execute(
-                "SELECT id, title, source, project_name, cluster, started, updated, n_chunks, x, y, z, summary, tags "
-                "FROM sessions WHERE x IS NOT NULL AND n_chunks>0").fetchall()
+                "SELECT c.id, c.session_id, s.title, s.source, s.cluster, c.x, c.y, c.z, s.project_name, c.summary, "
+                "s.started, c.idx FROM chunks c JOIN sessions s ON s.id=c.session_id WHERE c.x IS NOT NULL").fetchall()
             return {"level": level, "points": [
-                dict(id=r[0], session=r[0], title=r[1], source=r[2], project=r[3], cluster=r[4], started=r[5],
-                     updated=r[6], n=r[7], p=r[8:11], summary=r[11], tags=r[12]) for r in rows]}
+                dict(id=r[0], session=r[1], title=r[2], source=r[3], cluster=r[4], p=r[5:8], project=r[8],
+                     summary=r[9], started=r[10], idx=r[11]) for r in rows]}
+        rows = self.db.execute(
+            "SELECT id, title, source, project_name, cluster, started, updated, n_chunks, x, y, z, summary, tags "
+            "FROM sessions WHERE x IS NOT NULL AND n_chunks>0").fetchall()
+        return {"level": level, "points": [
+            dict(id=r[0], session=r[0], title=r[1], source=r[2], project=r[3], cluster=r[4], started=r[5],
+                 updated=r[6], n=r[7], p=r[8:11], summary=r[11], tags=r[12]) for r in rows]}
 
     def _allow(self, session_id=None, projects=None, sources=None, since=None, until=None, session_ids=None):
         if not (session_id or projects or sources or since or until or session_ids is not None):
@@ -667,7 +805,7 @@ class Store:
 
     def search(self, query, k=8, session_id=None, projects=None, sources=None, since=None, until=None, session_ids=None):
         q = embed([query], query=True)
-        with self.lock:
+        with self.writing:
             allow = self._allow(session_id, projects, sources, since, until, session_ids)
             if allow is not None and not len(allow):
                 return []
@@ -685,13 +823,11 @@ class Store:
             return out
 
     def centroids(self):
-        with self.lock:
-            rows = self.db.execute("SELECT session_id, vec FROM chunks").fetchall()
+        rows = self.db.execute("SELECT id, session_id FROM chunks").fetchall()
         by = {}
-        for s, v in rows:
-            by.setdefault(s, []).append(np.frombuffer(v, np.float16).astype(np.float32))
-        ids = list(by)
-        return ids, unit(np.stack([np.mean(by[s], axis=0) for s in ids])) if ids else np.zeros((0, config.EMBED_DIM))
+        for cid, s in rows:
+            by.setdefault(s, []).append(cid)
+        return vectors.centroids(by, self.index)
 
     def similar(self, sid, k=6):
         ids, C = self.centroids()
@@ -700,17 +836,15 @@ class Store:
         sims = C @ C[ids.index(sid)]
         out = []
         for j in np.argsort(-sims)[1:k + 1]:
-            with self.lock:
-                r = self.db.execute("SELECT title, project_name, source, started, summary FROM sessions WHERE id=?",
-                                    (ids[j],)).fetchone()
+            r = self.db.execute("SELECT title, project_name, source, started, summary FROM sessions WHERE id=?",
+                                (ids[j],)).fetchone()
             if r:
                 out.append(dict(id=ids[j], title=r[0], project=r[1], source=r[2], started=r[3], summary=r[4], score=float(sims[j])))
         return out
 
     def session(self, sid):
-        with self.lock:
-            r = self.db.execute("SELECT id,source,project_name,title,path,started,updated,summary,tags,cluster,project "
-                                "FROM sessions WHERE id=?", (sid,)).fetchone()
+        r = self.db.execute("SELECT id,source,project_name,title,path,started,updated,summary,tags,cluster,project "
+                            "FROM sessions WHERE id=?", (sid,)).fetchone()
         if not r:
             return None
         s = parsers.parse(r[1], Path(r[4]))

@@ -1,7 +1,8 @@
 """Operations shared by the REST API and the MCP server: resolve an item id, read it, open it on this Mac.
 
-Item ids: 'file:/abs/path', 'code:<chunk id>', 'session:<session id>', 'folder:/abs/dir', 'person:<name>'
-(as returned by search)."""
+Item ids: 'file:/abs/path', 'code:<chunk id>', 'session:<session id>', 'folder:/abs/dir', 'person:<name>',
+'doc:<document id>' (a collected ticket, PR, message or page; as returned by search). A 'file:' id of a connection
+file from before storage v2 resolves to its document, for one release."""
 import subprocess
 import urllib.parse
 import webbrowser
@@ -16,8 +17,26 @@ def bind(**kw):
     ctx.update(kw)
 
 
+def _doc(doc_id: int, id: str) -> dict:
+    from pensieve import store
+    from pensieve.store import documents
+    d = documents.get(store.store_db(), doc_id)
+    if d is None:
+        raise KeyError(id)
+    return dict(kind="doc", path=None, line=None, title=d.title, doc=d)
+
+
 def resolve(id: str) -> dict:
     kind, _, ref = id.partition(":")
+    if kind == "doc":
+        if not ref.isdigit():
+            raise KeyError(id)
+        return _doc(int(ref), id)
+    if kind == "file" and "/connections/" in ref:  # a v1 connection file: its document (for one release)
+        from pensieve import docindex
+        doc_id = docindex.resolve_path(ref)
+        if doc_id is not None:
+            return _doc(doc_id, id)
     if kind == "file":
         if not Path(ref).exists():
             raise KeyError(id)
@@ -44,8 +63,7 @@ def resolve(id: str) -> dict:
 
 def _code_rows(where, args):
     repos = ctx["repos"]
-    with repos.lock:
-        return repos.db.execute(f"SELECT repo, path, authors, last_ts FROM code_chunks WHERE wt='' AND {where}", args).fetchall()
+    return repos.db.execute(f"SELECT repo, path, authors, last_ts FROM code_chunks WHERE wt='' AND {where}", args).fetchall()
 
 
 def _folder(path, max_files=60):
@@ -93,6 +111,14 @@ def read(id: str, max_chars=20000) -> dict:
     """Text of an item: a file's extracted text, a code chunk with its owners and recent commits, or a transcript;
     a folder's files and owners; where a person wrote code."""
     r = resolve(id)
+    if r["kind"] == "doc":
+        from pensieve import store
+        from pensieve.store import documents
+        d = r["doc"]
+        text = documents.markdown(store.store_db(), d.id) or ""
+        return dict(id=f"doc:{d.id}", kind="doc", title=d.title, url=d.url, source=d.source_id, key=d.key,
+                    doc_kind=d.kind.value, status=d.status, private=d.private, updated=d.time, text=text[:max_chars],
+                    truncated=len(text) > max_chars)
     if r["kind"] == "folder":
         return _folder(r["path"])
     if r["kind"] == "person":
@@ -145,6 +171,10 @@ def open_item(id: str, action="open"):
     if action not in ("open", "reveal", "visualize", "editor", "terminal"):
         raise ValueError("action must be open, reveal, visualize, editor or terminal")
     r = resolve(id)
+    if r["kind"] == "doc":  # a collected item: its page in the service, else the app
+        if action == "open" and r["doc"].url and _open_url(r["doc"].url):
+            return dict(ok=True, url=r["doc"].url)
+        return visualize(id=f"doc:{r['doc'].id}")
     if action in ("editor", "terminal"):  # a folder where work happens: open it to pick the work back up
         if r["kind"] != "folder":
             raise ValueError(f"{action} opens a folder")

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Install Pensieve on Mac or Linux: the MCP server for AI coding agents</title>
+<meta name="description" content="Install Pensieve with one command, connect Claude Code, Codex, Cursor and other agents with pensieve integrate recommended, and choose what to index. Requirements for Mac and Linux.">
+<link rel="canonical" href="https://pensieve.tools/docs/install/">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Install Pensieve on Mac or Linux: the MCP server for AI coding agents">
+<meta property="og:description" content="Install Pensieve with one command, connect Claude Code, Codex, Cursor and other agents with pensieve integrate recommended, and choose what to index. Requirements for Mac and Linux.">
+<meta property="og:url" content="https://pensieve.tools/docs/install/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/docs/docs.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Install Pensieve","description":"Install Pensieve with one command, connect Claude Code, Codex, Cursor and other agents with pensieve integrate recommended, and choose what to index. Requirements for Mac and Linux.","url":"https://pensieve.tools/docs/install/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="/" aria-label="Pensieve home"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve <span>Docs</span></a>
+  <nav aria-label="Site">
+    <a class="chip gh" href="https://github.com/TedHaley/pensieve"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+    <a class="chip solid" href="/docs/install/">Install</a>
+  </nav>
+</header>
+<div class="layout">
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/" aria-current="page">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<main>
+<p class="crumb">Docs</p>
+<h1>Install Pensieve</h1>
+<p class="lede">This page tells you how to install Pensieve, connect your agents and choose what to index.</p>
+<h2 id="requirements">Requirements</h2>
+<div class="tbl"><table><thead><tr><th>Computer</th><th>What you get</th></tr></thead><tbody><tr><td>Mac with Apple Silicon, macOS 14 or later</td><td>The app (search panel, menu bar, Context tab, Map) and the <code>pensieve</code> backend. This is the main platform.</td></tr><tr><td>Intel Mac</td><td>The backend and the Map in your browser. If the Xcode command-line tools are installed, the script also builds the app from source. The release download is for Apple Silicon only.</td></tr><tr><td>Linux</td><td>The backend, the MCP server and the Map in your browser. The search panel app is macOS only.</td></tr></tbody></table></div>
+<p>On Apple Silicon, the search model runs on MLX. On other computers, it runs on sentence-transformers and
+PyTorch (CUDA or CPU). This makes the install about 650 MB larger. The built-in generation model needs Apple Silicon
+with 16 GB of memory.</p>
+
+<h2 id="install">Install</h2>
+<ol>
+  <li>Open Terminal and run the install script:
+<pre><code>curl -fsSL https://pensieve.tools/install.sh | sh</code></pre></li>
+  <li>Connect the coding agents on your computer:
+<pre><code>pensieve integrate recommended</code></pre></li>
+  <li>Restart each agent that is open. An agent loads its MCP servers when it starts.</li>
+  <li>Do the setup steps in the app, or ask your agent to do them (see <a href="#setup">Choose what to index</a>).</li>
+</ol>
+<p>You can also give the two commands to your coding agent. When an agent runs the install script, the script
+installs only and does not open the app.</p>
+
+<h3 id="what-the-script-does">What the install script does</h3>
+<ul>
+  <li><strong>On an Apple Silicon Mac:</strong> it downloads the latest <code>Pensieve.dmg</code> from GitHub Releases and copies the app to Applications. Then it installs the <code>pensieve</code> backend from the package inside the app. You do not need git, the Xcode tools or Python.</li>
+  <li><strong>On Linux and Intel Macs:</strong> it installs <a href="https://docs.astral.sh/uv/">uv</a> if it is not there. Then it installs the backend from source with git, starts the backend and opens the Map at <code>http://localhost:8765</code>.</li>
+  <li>The <code>pensieve</code> command goes in <code>~/.local/bin</code>.</li>
+</ul>
+<p>Two environment variables change the script. <code>PENSIEVE_NO_START=1</code> never starts Pensieve.
+<code>PENSIEVE_NO_APP=1</code> skips the Mac app.</p>
+
+<h3 id="what-integrate-does">What <code>pensieve integrate recommended</code> does</h3>
+<p>The command finds the agents on your computer. It gives each one Pensieve as an MCP server, a short
+“search before you grep” instructions block, and the <code>pensieve-search</code> skill. For Claude Code, it also
+adds three hooks. <a href="/docs/agents/">Connect your agent</a> lists each change, file by file.</p>
+
+<h2 id="setup">Choose what to index</h2>
+<p>Pensieve indexes nothing until you finish setup. This is also true after a reset. When the app opens, it shows
+these steps:</p>
+<ol>
+  <li>Read what Pensieve does.</li>
+  <li>Choose how you use your computer: software development, AI coding agents, documents and office work, or research and notes.</li>
+  <li>Let Pensieve look for sources in the folders that those choices need. macOS can ask you to allow access to some folders.</li>
+  <li>Choose what to index. Add folders or repos that Pensieve did not find.</li>
+  <li>Choose whether Pensieve reads images, video and audio by what they show or say. These are off by default.</li>
+  <li>Choose the generation model.</li>
+  <li>Start indexing.</li>
+</ol>
+<p>To do setup from a terminal, use these commands:</p>
+<pre><code>pensieve setup                  <span class="c"># list the sources that Pensieve found, with their sizes</span>
+pensieve setup recommended      <span class="c"># index the sources marked [x]</span>
+pensieve setup recommended images audio   <span class="c"># also read images and sound by content</span></code></pre>
+<p>An agent can also do setup in its chat. Until setup is done, every MCP connection gets the tools
+<code>setup_guide</code>, <code>setup_scan</code>, <code>setup_add_source</code> and <code>setup_start</code>.</p>
+
+<h2 id="first-index">The first index</h2>
+<p>The first index uses a lot of energy. The search model runs until it finishes, at about 500 code files a minute
+on Apple Silicon. A repo with 35,000 files takes a little more than one hour. Search works while Pensieve indexes.
+Settings → Sources shows what is syncing now.</p>
+<div class="note"><p>If you use a laptop, connect it to power before the first index.</p></div>
+
+<h2 id="by-hand">Install by hand</h2>
+<pre><code>uv tool install git+https://github.com/TedHaley/pensieve   <span class="c"># the backend: `pensieve`</span>
+git clone https://github.com/TedHaley/pensieve &amp;&amp; pensieve/mac/build.sh --install   <span class="c"># the Mac app (needs the Xcode tools)</span></code></pre>
+
+<h2 id="update">Update</h2>
+<p>The Mac app finds new releases on GitHub and installs them. You can also run the install script again.</p>
+
+<h2 id="uninstall">Uninstall</h2>
+<ol>
+  <li>Remove what <code>pensieve integrate</code> added. Name each add-on that you installed:
+<pre><code>pensieve integrate claude claude-mcp claude-hook --remove</code></pre></li>
+  <li>Remove the backend, the index and the app:
+<pre><code>rm -rf ~/.local/share/uv/tools/pensieve ~/.local/bin/pensieve ~/.pensieve ~/Applications/Pensieve.app</code></pre></li>
+</ol>
+<p>If the app is in <code>/Applications</code>, remove it from there.</p>
+<nav class="pager" aria-label="Pages"><a class="prev" href="/docs/"><small>Previous</small>Overview</a><a class="next" href="/docs/agents/"><small>Next</small>Connect your agent</a></nav>
+<p class="edit">Something wrong or missing? <a href="https://github.com/TedHaley/pensieve/issues/new/choose">Tell us on GitHub</a>.</p>
+</main>
+</div>
+<footer>
+  <div class="in">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <nav><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/TedHaley/pensieve">GitHub</a><a href="https://github.com/TedHaley/pensieve/releases">Releases</a><a href="https://github.com/TedHaley/pensieve/issues/new/choose">Feedback</a></nav>
+  </div>
+</footer>
+<script>
+// on a phone the docs menu starts closed, so the page starts with its own text
+if (matchMedia('(max-width: 860px)').matches) document.getElementById('docnav').removeAttribute('open');
+</script>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</body>
+</html>

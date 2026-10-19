@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pensieve connections: collect Jira, Slack and Linear over MCP, read-only</title>
+<meta name="description" content="Pensieve connections collect tickets, threads and pages from MCP servers such as Jira, Slack and Linear with read-only tools, keep each change, and add them to your context cards.">
+<link rel="canonical" href="https://pensieve.tools/docs/connections/">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Pensieve">
+<meta property="og:title" content="Pensieve connections: collect Jira, Slack and Linear over MCP, read-only">
+<meta property="og:description" content="Pensieve connections collect tickets, threads and pages from MCP servers such as Jira, Slack and Linear with read-only tools, keep each change, and add them to your context cards.">
+<meta property="og:url" content="https://pensieve.tools/docs/connections/">
+<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/docs/docs.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Connections","description":"Pensieve connections collect tickets, threads and pages from MCP servers such as Jira, Slack and Linear with read-only tools, keep each change, and add them to your context cards.","url":"https://pensieve.tools/docs/connections/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></symbol>
+  <symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="/" aria-label="Pensieve home"><svg aria-hidden="true"><use href="#mark"/></svg>Pensieve <span>Docs</span></a>
+  <nav aria-label="Site">
+    <a class="chip gh" href="https://github.com/TedHaley/pensieve"><svg aria-hidden="true"><use href="#gh"/></svg><span>GitHub</span></a>
+    <a class="chip solid" href="/docs/install/">Install</a>
+  </nav>
+</header>
+<div class="layout">
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/" aria-current="page">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<main>
+<p class="crumb">Docs</p>
+<h1>Connections</h1>
+<p class="lede">This page tells you how Pensieve collects tickets, messages and pages from your MCP servers, and how it keeps the collection read-only.</p>
+<p>A connection is an MCP server that Pensieve collects data from. Pensieve writes each item as a Markdown file in
+<code>~/.pensieve/connections</code> and indexes it like a document. Each item keeps a list of its changes over time.
+Collected tickets and threads also join your <a href="/docs/context-cards/">context cards</a>.</p>
+<div class="note"><p>Each connection is off until you switch it on in Settings → Sources.</p></div>
+
+<h2 id="kinds">Where the servers come from</h2>
+<p>Pensieve finds your MCP servers by itself:</p>
+<ul>
+  <li><strong>Claude Code's servers.</strong> If Claude Code is on your computer, Sources lists its MCP servers. This includes the claude.ai connectors of your account. To collect, Pensieve runs Claude Code headless with the Haiku model and only the read tools of one server. Every other tool is blocked.</li>
+  <li><strong>Your other agents' servers.</strong> Pensieve reads the MCP settings of Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code. It connects to those servers itself, with the credentials in those settings. If Claude Code also has a server, Pensieve leaves that server to Claude Code.</li>
+  <li><strong>Your own servers.</strong> Add a server in Sources. Give a URL with headers, or a command with environment variables. Pensieve does not show the header or environment values again. They stay in <code>~/.pensieve/settings.json</code>, which only you can read.</li>
+  <li><strong>Your agent sessions.</strong> The results that your agents already got from MCP tools. Pensieve fetches nothing new for this source.</li>
+</ul>
+<p>For the servers that Pensieve connects to itself, the generation model chooses the search calls, and Pensieve makes them.</p>
+
+<h2 id="read-only">How Pensieve keeps it read-only</h2>
+<p>Pensieve calls a tool only if the tool is read-only. A tool is read-only when these conditions are true:</p>
+<ol>
+  <li>Its name has a read verb, such as get, list, search, read or fetch.</li>
+  <li>Its name has no write verb, such as create, update, send or delete. The list has almost 100 write verbs.</li>
+  <li>The server does not mark it <code>readOnlyHint: false</code> or <code>destructiveHint: true</code>.</li>
+</ol>
+<p>A server's hints can only make the rule stricter. Pensieve never calls a write tool.</p>
+
+<h2 id="private">Private messages</h2>
+<p>Pensieve marks an item as private when it comes from a direct message, a group message or a private channel. It
+also marks every item from a tool that can read those, such as a tool with “private” or “dm” in its name. Private
+items are context for your own cards and agents. A shared card leaves them out whole.</p>
+
+<h2 id="schedule">When Pensieve collects</h2>
+<div class="tbl"><table><thead><tr><th>Setting</th><th class=n>Default</th><th>What it does</th></tr></thead><tbody><tr><td><code>connections_every_hours</code></td><td class=n>6</td><td>How often Pensieve collects from each connection that is on. 0 collects only when you ask.</td></tr><tr><td><code>connections_days</code></td><td class=n>30</td><td>How far back the first collection goes.</td></tr></tbody></table></div>
+<p><strong>Collect now</strong> in Sources collects at once.</p>
+<p>See <a href="/docs/privacy/#network">Privacy and data</a> for what goes over the network when Pensieve collects.</p>
+<nav class="pager" aria-label="Pages"><a class="prev" href="/docs/context-cards/"><small>Previous</small>Context cards</a><a class="next" href="/docs/benchmark/"><small>Next</small>Benchmark</a></nav>
+<p class="edit">Something wrong or missing? <a href="https://github.com/TedHaley/pensieve/issues/new/choose">Tell us on GitHub</a>.</p>
+</main>
+</div>
+<footer>
+  <div class="in">
+    <span>Pensieve · made by <a href="https://tedhaley.ca">Ted Haley</a> · MIT license</span>
+    <nav><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/TedHaley/pensieve">GitHub</a><a href="https://github.com/TedHaley/pensieve/releases">Releases</a><a href="https://github.com/TedHaley/pensieve/issues/new/choose">Feedback</a></nav>
+  </div>
+</footer>
+<script>
+// on a phone the docs menu starts closed, so the page starts with its own text
+if (matchMedia('(max-width: 860px)').matches) document.getElementById('docnav').removeAttribute('open');
+</script>
+<script data-goatcounter="https://pensieve.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # Pensieve
 
-> Pensieve is a free, open source Mac app: one place for all your information, for context engineering. It searches your files, git repos, AI agent sessions, tickets and messages by meaning or by exact words. Coding agents (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop, VS Code) connect to it over MCP and get the most relevant files in one search instead of many grep calls. Everything runs on the Mac. MIT license.
+> Pensieve: never lose the thread. Pensieve is a local MCP server and Mac app for developers and their AI coding agents. It is free and open source. It searches your files, git repos, AI agent sessions, tickets and messages by meaning or by exact words. Coding agents (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop, VS Code) connect to it over MCP and get the most relevant files in one search instead of many grep calls. Everything runs on the Mac. MIT license.
 
 Pensieve needs an Apple Silicon Mac with macOS 14 or later. The backend and the Map also work on Linux. The search panel app is macOS only.
 
@@ -24,13 +24,26 @@ Pensieve indexes nothing until setup is done. Until then, every MCP connection g
 - `similar`: code that is similar to a result. Use it before you write new code.
 - `overview`: where things are in a repo, from the index.
 - `who_knows`, `team`, `knowledge_gaps`, `unexplored`: who owns an area, from git blame.
+- `tasks`, `task`, `set_task_state`, `share_card`, `thread_history`: the user's context cards (one per task), their state, and a card to share as one HTML file.
 - `list_repos`, `open`, `current_scope`, `index_path`, `stale`, `report_feedback`.
 
-Each agent works in a scope. By default, the scope is the repo that the agent started in.
+Each agent works in a scope. By default, the scope is the repo that the agent started in. The full list, with arguments and return values: https://pensieve.tools/docs/mcp-tools/
 
 ## Benchmark
 
-Claude Sonnet in Claude Code, 72 held-out tasks in four repos (504 to 34,847 files), each run twice. With Pensieve, the agent solved 91% of tasks (85% without), used 43% fewer tool calls, and cost 18% less per lookup.
+Claude Sonnet in Claude Code, 72 held-out tasks in four repos (504 to 34,847 files), each run twice. In the latest batch (2026-10-13, clean Claude Code settings), the agent with Pensieve solved as many tasks as with grep (129 of 144), with 47% fewer tool calls, 23% lower cost and 29% less time per lookup. An earlier batch with Pensieve 0.5.6 solved 91% against 85%. The later clean batches did not repeat that gain. Method and limits: https://pensieve.tools/docs/benchmark/
+
+## Docs
+
+- [Overview](https://pensieve.tools/docs/): what Pensieve is and its main parts
+- [Install](https://pensieve.tools/docs/install/): requirements (Mac and Linux), install, setup, uninstall
+- [Connect your agent](https://pensieve.tools/docs/agents/): `pensieve integrate`, scopes, add-ons, and one page for each agent: [Claude Code](https://pensieve.tools/docs/agents/claude-code/), [Codex](https://pensieve.tools/docs/agents/codex/), [Cursor](https://pensieve.tools/docs/agents/cursor/), [Gemini CLI](https://pensieve.tools/docs/agents/gemini-cli/), [Qwen Code](https://pensieve.tools/docs/agents/qwen-code/), [Windsurf](https://pensieve.tools/docs/agents/windsurf/), [Claude Desktop](https://pensieve.tools/docs/agents/claude-desktop/), [VS Code](https://pensieve.tools/docs/agents/vs-code/)
+- [MCP tools](https://pensieve.tools/docs/mcp-tools/): every tool, its arguments and what it returns
+- [Context cards](https://pensieve.tools/docs/context-cards/): the five states, threads, and sharing a card as HTML
+- [Connections](https://pensieve.tools/docs/connections/): read-only collection from MCP servers
+- [Benchmark](https://pensieve.tools/docs/benchmark/): method, results and limits
+- [Privacy and data](https://pensieve.tools/docs/privacy/): what stays local and what uses the network
+- [FAQ](https://pensieve.tools/docs/faq/)
 
 ## Links
 

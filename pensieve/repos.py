@@ -14,13 +14,14 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import config, places, settings
+from pensieve import config, embedcache, places, settings, vectors
 from pensieve.files import IMAGE_MAX_BYTES, READ_IMAGE_EXT, images_on, secret
-from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, embed_images, reconcile, yield_to_searches
+from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, embed_images, yield_to_searches
 from pensieve.layout import fit3d, place_new, unit
 from pensieve.projects import project_root
 
-CODE_INDEX_PATH = config.DATA_DIR / "code.tv"
+CODE_INDEX_PATH = config.VECTORS_DIR / "code.tv"
+commit_listeners = []  # fn(repo root) after a repo's commits or worktrees changed (the card builder)
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip", ".gz", ".lock", ".woff", ".woff2",
             ".ttf", ".mp4", ".mov", ".parquet", ".pkl", ".csv", ".ipynb", ".map", ".snap"}
 SKIP_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock", "Cargo.lock"}
@@ -45,6 +46,9 @@ EMBED_GROUP = 48    # chunks gathered from several files before one embed() call
 SHADOW_MIN_FILES = 20  # files to (re)index before blame goes through the commit-graph shadow (see blame_shadow)
 PROGRESS_MIN_FILES = 20  # checkouts with at least this many files to index report their progress (Sources, status)
 GENERATED_DIRS = {"dist", "build", "vendor", "third_party", "node_modules", "out", "target", ".venv"}
+# files whose added lines are not written work: lock files and minified bundles (Insights' deployed lines)
+DEPLOY_SKIP = re.compile(r"(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|uv\.lock|poetry\.lock|Gemfile\.lock|"
+                         r"Cargo\.lock|composer\.lock|go\.sum)$|\.min\.(js|css)$|\.map$")
 CODE_CHUNK_CHARS = 1500
 CHARS_PER_CHUNK = 1000  # chunk_code's average size: an estimate of a repo's chunks from file sizes comes within 10%
 RATE_MIN_CHUNKS = 2000  # an index this big measures the Mac's speed
@@ -77,6 +81,37 @@ def default_branch(root) -> str | None:
     return None
 
 
+def deploy_ref(root) -> str | None:
+    """The ref whose commits count as deployed: origin's default branch, else a local main or master."""
+    b = default_branch(root)
+    if b:
+        return f"refs/remotes/origin/{b}"
+    return next((f"refs/heads/{x}" for x in ("main", "master")
+                 if git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{x}").strip()), None)
+
+
+def deployed_commits(root, ref, days) -> list[tuple[int, str, int]]:
+    """(time, author email, lines added) of the non-merge commits reachable from `ref` in the last `days`, without
+    lock files, minified files and generated folders."""
+    out = git(root, "log", ref, f"--since={days}.days", "--no-merges", "--numstat", "--format=%x1e%at%x1f%ae")
+    rows = []
+    for rec in out.split("\x1e")[1:]:
+        head, _, body = rec.partition("\n")
+        ts, _, email = head.partition("\x1f")
+        added = 0
+        for ln in body.splitlines():
+            parts = ln.split("\t")
+            if len(parts) < 3 or not parts[0].isdigit():
+                continue  # a binary file
+            path = parts[2]
+            if DEPLOY_SKIP.search(path) or any(p in GENERATED_DIRS for p in path.split("/")[:-1]):
+                continue
+            added += int(parts[0])
+        if ts.strip().isdigit():
+            rows.append((int(ts), email.strip().lower(), added))
+    return rows
+
+
 def upstream(root) -> dict | None:
     """How far the local default branch is behind origin's, as of the last fetch: {branch, behind, current}."""
     b = default_branch(root)
@@ -96,6 +131,55 @@ def fetch_default(root, timeout=30) -> bool:
                               capture_output=True, timeout=timeout).returncode == 0
     except (subprocess.TimeoutExpired, OSError):
         return False
+
+
+PROTECTED_EVERY = 86400  # each protected branch is fetched at least once a day
+_protected_at: dict[str, float] = {}
+
+
+def protected_branches(root) -> list[str]:
+    """The branches that origin's protection rules name exactly (main, develop, release-2026…), read from GitHub
+    through gh: classic branch protection patterns (a read-only GraphQL query) and rulesets (GET). A wildcard rule
+    (`*`, `release/*`) is left out: it often covers every personal branch. Empty without gh or a GitHub origin."""
+    import shutil
+    m = re.search(r"github\.com[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", git(root, "remote", "get-url", "origin").strip())
+    if not m or not shutil.which("gh"):
+        return []
+    owner, name = m.groups()
+
+    def gh(*args):
+        try:
+            r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+            return r.stdout if r.returncode == 0 else ""
+        except (subprocess.TimeoutExpired, OSError):
+            return ""
+    names = gh("graphql", "-f", "query=query($o:String!,$n:String!){repository(owner:$o,name:$n){"
+               "branchProtectionRules(first:100){nodes{pattern}}}}", "-f", f"o={owner}", "-f", f"n={name}",
+               "-q", ".data.repository.branchProtectionRules.nodes[].pattern").split()
+    for rid in gh(f"repos/{owner}/{name}/rulesets", "-q", '.[] | select(.target == "branch") | .id').split():
+        names += [x.removeprefix("refs/heads/") for x in
+                  gh(f"repos/{owner}/{name}/rulesets/{rid}", "-q", ".conditions.ref_name.include[]?").split()]
+    return sorted({n for n in names if n and not set(n) & set("*?[]~")})  # ~DEFAULT_BRANCH, ~ALL: the default fetch covers them
+
+
+def fetch_protected(root, timeout=120) -> int:
+    """Once a day: fetch every protected branch of origin into refs/remotes/origin/<branch>, so that the index, the
+    cards and who-knows see the team's shared branches. The working tree and local branches are not touched. Returns
+    how many branches were fetched."""
+    import time
+    if time.time() - _protected_at.get(root, 0) < PROTECTED_EVERY:
+        return 0
+    _protected_at[root] = time.time()  # also after a failure: try again tomorrow, not every half hour
+    branches = [b for b in protected_branches(root) if b != default_branch(root)]
+    if not branches:
+        return 0
+    try:
+        r = subprocess.run(["git", "-C", root, "fetch", "--quiet", "--no-tags", "origin",
+                            *[f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in branches]],
+                           env=_QUIET_GIT, capture_output=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return 0
+    return len(branches) if r.returncode == 0 else 0
 
 
 def pull_default(root) -> tuple[bool, str]:
@@ -157,7 +241,7 @@ def locked(fn):
 
     @functools.wraps(fn)
     def wrap(self, *a, **k):
-        with self.lock:
+        with self.writing:
             return fn(self, *a, **k)
     return wrap
 
@@ -238,7 +322,7 @@ def worktree_list(root):
     return out
 
 
-SHADOW_DIR = config.DATA_DIR / "git"
+SHADOW_DIR = config.V2_DIR / "git"
 
 
 def shadow_dir(root) -> Path:
@@ -307,10 +391,9 @@ def blame_lines(root, path, me=None, shadow=None):
 
 class Repos:
     def __init__(self, store):
-        from turbovec import IdMapIndex
         self.store = store
         self.db = store.db
-        self.lock = store.lock
+        self.writing = store.writing
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS repos(root TEXT PRIMARY KEY, name TEXT, remote TEXT, head TEXT, indexed REAL);
         CREATE TABLE IF NOT EXISTS code_files(repo TEXT, path TEXT, blob TEXT, PRIMARY KEY(repo, path));
@@ -326,15 +409,21 @@ class Repos:
             except Exception:
                 pass
         self.db.executescript("""
+        DROP INDEX IF EXISTS cc_wt;  -- cc_files below starts with wt, so it serves the same reads
+        DROP INDEX IF EXISTS cc_meta;  -- cc_files has its columns and last_ts
         CREATE TABLE IF NOT EXISTS checkout_files(repo TEXT, wt TEXT, path TEXT, blob TEXT, PRIMARY KEY(repo, wt, path));
         CREATE TABLE IF NOT EXISTS worktrees(path TEXT PRIMARY KEY, repo TEXT, branch TEXT);
         """)
+        # the folder index and the Data map read these columns of every main-checkout chunk. Without this covering
+        # index, SQLite reads each row's vector pages too (wt and authors come after vec): 10 s instead of 0.1 s.
+        # It also serves the map's fingerprint, which counts main-checkout chunks by wt, and the Data map's points
+        # (datamap.points), which also read last_ts.
+        self.db.execute("CREATE INDEX IF NOT EXISTS cc_files ON code_chunks(wt, repo, path, authors, last_ts)")
         if not self.db.execute("SELECT 1 FROM checkout_files LIMIT 1").fetchone():  # carry over the old per-repo table
             self.db.execute("INSERT OR IGNORE INTO checkout_files SELECT repo, '', path, blob FROM code_files")
         self.db.commit()
-        self.index = IdMapIndex.load(str(CODE_INDEX_PATH)) if CODE_INDEX_PATH.exists() else IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
-        if reconcile(self.index, self.db, "code_chunks"):
-            self.index.sync(str(CODE_INDEX_PATH))
+        self.index = vectors.Index(CODE_INDEX_PATH, config.EMBED_DIM)
+        self.index.load(self.db, "code_chunks")
         self._cache = {}
         self.pending = None   # callable -> set of repo roots with changes waiting (set by the server's file watcher)
         self.requeue = None   # callable(set) to put them back
@@ -350,6 +439,8 @@ class Repos:
         self.upstream = {}  # root -> {branch, behind, current}, from check_upstream
         self.reused = 0  # chunks whose vector was copied from an identical chunk, not embedded (since start)
         self._last = 0
+        self._layout_due = None  # repos whose code changed since the last reproject; None: all (the first one)
+        self._due_lock = threading.Lock()
         self._scope = (None, None)
         self._team = {}
 
@@ -436,11 +527,10 @@ class Repos:
     def session_scope(self):
         """sid -> {project, folder, dirs}: the canonical repo a session belongs to and the repo directories it
         touched (as 'repo/dir/sub' keys). Cached until sessions or touched files change."""
-        with self.lock:
-            fp = self.db.execute("SELECT (SELECT COUNT(*) FROM sessions), (SELECT MAX(mtime) FROM sessions), "
-                                 "(SELECT COUNT(*) FROM session_files)").fetchone()
-            file_rows = self.db.execute("SELECT session_id, path FROM session_files WHERE path!=''").fetchall()
-            sess_rows = self.db.execute("SELECT id, project, project_name FROM sessions").fetchall()
+        fp = self.db.execute("SELECT (SELECT COUNT(*) FROM sessions), (SELECT MAX(mtime) FROM sessions), "
+                             "(SELECT COUNT(*) FROM session_files)").fetchone()
+        file_rows = self.db.execute("SELECT session_id, path FROM session_files WHERE path!=''").fetchall()
+        sess_rows = self.db.execute("SELECT id, project, project_name FROM sessions").fetchall()
         if self._scope[0] == fp and time.time() - getattr(self, "_scope_t", 0) < 120:
             return self._scope[1]
         files = defaultdict(list)
@@ -495,8 +585,7 @@ class Repos:
             return None
         self._refreshing = True
         try:
-            with self.lock:
-                remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
+            remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
             n = 0
             for r in roots & remotes.keys():
                 if self.switched_off(r):
@@ -511,12 +600,13 @@ class Repos:
             self._refreshing = False
             self.sync_lock.release()
 
-    def save(self):
-        """After `refresh`: write the vector index to disk. The map catches up later (server.map_worker), so new code
-        is searchable without waiting for a layout."""
+    def save(self, force=False):
+        """After `refresh` or a sweep: write the vector index to disk, at most every vectors.SAVE_SECONDS unless
+        `force` (a sync after many removes rewrites the whole file). The map catches up later (server.map_worker), so
+        new code is searchable without waiting for a layout."""
         self.unsaved = False
-        with self.lock:
-            self.index.sync(str(CODE_INDEX_PATH))
+        with self.writing:
+            self.index.save(force)
 
     def _sync(self, log, force, only):
         if not force and only is None and time.time() - self._last < 30:
@@ -529,7 +619,7 @@ class Repos:
         self.found = found
         if only is None:  # repos gone from disk, or no longer found while discovery is on: remove them
             keep = {r for r, _ in found}
-            with self.lock:
+            with self.writing:
                 stale = [r for (r,) in self.db.execute("SELECT root FROM repos")
                          if r not in keep and (not Path(r).is_dir() or not self.switched_off(r))]
             for r in stale:
@@ -560,8 +650,7 @@ class Repos:
         return touched
 
     def _place_rows(self):
-        with self.lock:
-            return self.db.execute(places.ROWS).fetchall()
+        return self.db.execute(places.ROWS).fetchall()
 
     @staticmethod
     def switched_off(root):
@@ -607,8 +696,7 @@ class Repos:
                 if self.store.meta(f"tree:{current}") != sig:
                     n += self._index_checkout(current, "", state, None, log)
                     self.store.meta(f"tree:{current}", sig)
-            with self.lock:
-                remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
+            remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
             for r in roots - {current}:
                 if r in remotes and not self.switched_off(r):
                     try:
@@ -621,21 +709,21 @@ class Repos:
 
     def checkouts(self):
         """Every checkout path we index -> canonical repo root (main checkouts and their linked worktrees)."""
-        with self.lock:
-            out = {r[0]: r[0] for r in self.db.execute("SELECT root FROM repos")}
-            out.update({r[0]: r[1] for r in self.db.execute("SELECT path, repo FROM worktrees")})
+        out = {r[0]: r[0] for r in self.db.execute("SELECT root FROM repos")}
+        out.update({r[0]: r[1] for r in self.db.execute("SELECT path, repo FROM worktrees")})
         return out
 
     def check_upstream(self, fetch=True) -> dict:
-        """Fetch origin's default branch of every indexed repo, then record how far each local one is behind."""
-        with self.lock:
-            roots = [r[0] for r in self.db.execute("SELECT root FROM repos")]
+        """Fetch origin's default branch of every indexed repo (and once a day its protected branches), then record
+        how far each local one is behind."""
+        roots = [r[0] for r in self.db.execute("SELECT root FROM repos")]
         out = {}
         for root in roots:
             if not Path(root).is_dir():
                 continue
             if fetch:
                 fetch_default(root)
+                fetch_protected(root)
             if u := upstream(root):
                 out[root] = u
         self.upstream = out
@@ -650,7 +738,7 @@ class Repos:
     def _sync_repo(self, root, remote, log):
         name = Path(root).name
         head = git(root, "rev-parse", "HEAD").strip()
-        with self.lock:
+        with self.writing:
             row = self.db.execute("SELECT head FROM repos WHERE root=?", (root,)).fetchone()
             if not row:
                 self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, None, time.time()))
@@ -675,7 +763,7 @@ class Repos:
             if self.store.meta(f"tree:{wt}") != sig:
                 n += self._index_checkout(root, wt, ws, state, log, branch)
                 self.store.meta(f"tree:{wt}", sig)
-        with self.lock:
+        with self.writing:
             gone = [r[0] for r in self.db.execute("SELECT path FROM worktrees WHERE repo=?", (root,)) if r[0] not in live]
             for wt in gone:  # worktree removed: its branch-only chunks go too
                 for (path,) in self.db.execute("SELECT path FROM checkout_files WHERE repo=? AND wt=?", (root, wt)).fetchall():
@@ -688,6 +776,8 @@ class Repos:
         if n:
             self._cache.clear()
             self._team.clear()
+            for fn in commit_listeners:  # a worktree came or went: cards read the worktrees with the commits
+                fn(root)
         return n
 
     def embed_rate(self, model=None) -> float:
@@ -704,18 +794,16 @@ class Repos:
         """(path, text) -> the stored vector of each chunk of these files already in this repo's index, from the
         main checkout or any worktree."""
         paths = list(paths)
-        with self.lock:
-            return {(p, t): v for p, t, v in self.db.execute(
-                f"SELECT path, text, vec FROM code_chunks WHERE repo=? AND path IN ({','.join('?' * len(paths))})",
-                (root, *paths))}
+        return {(p, t): v for p, t, v in self.db.execute(
+            f"SELECT path, text, vec FROM code_chunks WHERE repo=? AND path IN ({','.join('?' * len(paths))})",
+            (root, *paths))}
 
     def estimate_chunks(self, root) -> dict:
         """What indexing the main checkout of `root` still has to do, from file sizes (only the start of a file not yet
         indexed is read, to leave out binary files):
         {files (tracked), indexed (files already indexed with their current content), chunks (still to embed)}."""
         state = tree_state(root)
-        with self.lock:
-            have = dict(self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=''", (root,)))
+        have = dict(self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=''", (root,)))
         secrets, chunks = settings.get("exclude_files"), 0
         for path, blob in state.items():
             p = Path(path)
@@ -741,8 +829,7 @@ class Repos:
         imgs = images_on()
         if not imgs:  # images indexed while the switch was on are dropped below, as changed files
             target = {p: b for p, b in target.items() if Path(p).suffix.lower() not in READ_IMAGE_EXT}
-        with self.lock:
-            have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
+        have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
         changed = [p for p in have if target.get(p) != have[p]]
         # an edited file keeps most of its chunks: their vectors, before the old version is dropped
         prior = self._known_vectors(root, changed) if changed and len(changed) <= 500 else {}
@@ -782,8 +869,8 @@ class Repos:
             chunks = chunk_code(raw.decode("utf8", "replace"))
             return (path, blob, chunks, blame_lines(checkout, path, me, shadow)) if chunks else None
 
-        # code.tv is written once, when the sweep ends (save): rewriting the whole file under the lock mid-sweep
-        # stalled searches for seconds on a big repo, and after a crash reconcile re-adds vectors from the database
+        # code.tv is not written during the sweep (save, at most every vectors.SAVE_SECONDS): a sync after many removes
+        # rewrites the whole file under the lock. After a crash, vectors.Index.load makes it match the database again
         n_new, group, writing = 0, [], None
 
         def write(group, vecs):  # on the writer thread, while the model embeds the next group
@@ -799,13 +886,14 @@ class Repos:
                     au = Counter(bl[i][0] if i in bl else f"{me[0]} <{me[1]}>" for i in range(s, e + 1))
                     ts = max((bl[i][1] if i in bl else now for i in range(s, e + 1)), default=0)
                     rows.append((root, path, d, s, e, text, vecs[k + j].astype(np.float16).tobytes(), json.dumps(au), ts, wt))
-                with self.lock:  # one file at a time, so a search waits for a few inserts at most
+                with self.writing:  # one file at a time, so a search waits for a few inserts at most
                     ids = [self.db.execute("INSERT INTO code_chunks(repo,path,dir,start,end,text,vec,authors,last_ts,wt) "
                                            "VALUES(?,?,?,?,?,?,?,?,?,?)", r).lastrowid for r in rows]
                     self.index.add_with_ids(vecs[k:k + len(ids)], np.array(ids, dtype=np.uint64))
                     self.db.execute("INSERT OR REPLACE INTO checkout_files VALUES(?,?,?,?)", (root, wt, path, blob))
+                    self._changed(root)
                 k += len(ids)
-            with self.lock:
+            with self.writing:
                 self.db.commit()
             for _ in group:
                 n_new += 1
@@ -813,6 +901,8 @@ class Repos:
                     log(f"  {label}: {n_new} files")
 
         embedded, t0 = 0, time.time()
+        cache = embedcache.get()
+        hits0 = cache.hits if cache else 0  # texts that embed() found in the cache: not embedded, not in the rate
 
         def flush():
             nonlocal writing, embedded
@@ -870,6 +960,7 @@ class Repos:
                 flush()
                 if writing:
                     writing.result()
+                embedded -= (cache.hits - hits0) if cache else 0
                 if embedded >= RATE_MIN_CHUNKS:
                     self.store.meta(f"embed_rate:{config.EMBED_MODEL}", round(embedded / (time.time() - t0), 1))
             finally:
@@ -879,8 +970,15 @@ class Repos:
             log(f"repo {label}: {n_new} files updated")
         return n_new
 
+    def _changed(self, root):
+        """The code of `root` changed: its map layout is due (reproject). Called with the lock held."""
+        with self._due_lock:
+            if self._layout_due is not None:
+                self._layout_due.add(root)
+
     def purge(self, root):
-        with self.lock:
+        with self.writing:
+            self._changed(root)
             for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=?", (root,)).fetchall():
                 try:
                     self.index.remove(cid)
@@ -895,7 +993,8 @@ class Repos:
         shutil.rmtree(shadow_dir(root), ignore_errors=True)
 
     def _drop_file(self, root, path, wt=""):
-        with self.lock:
+        with self.writing:
+            self._changed(root)
             for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=? AND path=? AND wt=?", (root, path, wt)).fetchall():
                 try:
                     self.index.remove(cid)
@@ -904,13 +1003,15 @@ class Repos:
             self.db.execute("DELETE FROM code_chunks WHERE repo=? AND path=? AND wt=?", (root, path, wt))
             self.db.execute("DELETE FROM checkout_files WHERE repo=? AND wt=? AND path=?", (root, wt, path))
 
-    @locked
     def _load_commits(self, root):
-        out = git(root, "log", "--format=%H%x1f%at%x1f%ae%x1f%s", "-n", "5000")
+        out = git(root, "log", "--format=%H%x1f%at%x1f%ae%x1f%s", "-n", "5000")  # outside the lock: git is slow
         rows = [l.split("\x1f") for l in out.strip().split("\n") if l]
-        self.db.executemany("INSERT OR REPLACE INTO commits VALUES(?,?,?,?,?)",
-                            [(root, r[0], int(r[1]), r[2], r[3]) for r in rows if len(r) == 4])
-        self.db.commit()
+        with self.writing:
+            self.db.executemany("INSERT OR REPLACE INTO commits VALUES(?,?,?,?,?)",
+                                [(root, r[0], int(r[1]), r[2], r[3]) for r in rows if len(r) == 4])
+            self.db.commit()
+        for fn in commit_listeners:
+            fn(root)
 
     @locked
     def backfill_session_files(self):
@@ -931,13 +1032,23 @@ class Repos:
         """Per-repo UMAP plus one joint layout across repos. A layout is refit when new or grown >15%;
         otherwise new chunks are placed next to their nearest neighbours."""
         changed = False
-        with self.lock:
-            roots = [r[0] for r in self.db.execute("SELECT root FROM repos").fetchall()]
-            multi = self.db.execute("SELECT COUNT(DISTINCT repo) FROM code_chunks").fetchone()[0] > 1
-        for root in roots:
-            changed |= self._layout(root, "WHERE repo=?", (root,), ("x", "y", "z"), force)
-        if multi:
-            changed |= self._layout(ALL, "", (), ("gx", "gy", "gz"), force)
+        roots = [r[0] for r in self.db.execute("SELECT root FROM repos").fetchall()]
+        multi = self.db.execute("SELECT COUNT(DISTINCT repo) FROM code_chunks").fetchone()[0] > 1
+        with self._due_lock:
+            due, self._layout_due = self._layout_due, set()
+        if not force and due is not None:  # a layout reads every row of its repo: only the repos that changed
+            roots = [r for r in roots if r in due]
+            if not roots and not due:
+                return False
+        try:
+            for root in roots:
+                changed |= self._layout(root, "WHERE repo=?", (root,), ("x", "y", "z"), force)
+            if multi:
+                changed |= self._layout(ALL, "", (), ("gx", "gy", "gz"), force)
+        except Exception:  # the next pass tries these repos again
+            with self._due_lock:
+                self._layout_due = None if due is None else self._layout_due | due
+            raise
         return changed
 
     @locked
@@ -954,13 +1065,15 @@ class Repos:
         placed next to their nearest main-checkout code instead (usually the same file on the main branch)."""
         cx, cy, cz = cols
         version = LAYOUT_VERSION + "+mainfit"
-        with self.lock:
-            rows = self.db.execute(f"SELECT id, vec, {cx}, {cy}, {cz}, wt FROM code_chunks {where}", args).fetchall()
+        with self.writing:
+            rows = self.db.execute(f"SELECT id, NULL, {cx}, {cy}, {cz}, wt FROM code_chunks {where}", args).fetchall()
             fit_n = int(self.store.meta(f"code_fit_n:{key}") or 0)
             ok = self.store.meta(f"code_layout:{key}") == version
+        found, V = self.index.take([r[0] for r in rows])
+        rows = [r for r, f in zip(rows, found) if f]
         if len(rows) < 4:
             return False
-        X = unit(np.stack([np.frombuffer(r[1], np.float16) for r in rows]).astype(np.float32))
+        X = unit(V.astype(np.float32))
         have = np.array([r[2] is not None for r in rows])
         main = np.array([not r[5] for r in rows])
         if main.sum() < 4:  # nothing on the main checkout yet: lay out what there is
@@ -972,7 +1085,7 @@ class Repos:
             P[main] = fit3d(X[main], n_neighbors=20, min_dist=0.08)
             P[~main] = place_new(X[main], P[main], X[~main], k=3, jitter=0.01) if (~main).any() else P[~main]
             todo = np.ones(len(rows), bool)
-            with self.lock:
+            with self.writing:
                 self.store.meta(f"code_fit_n:{key}", n_main)
                 self.store.meta(f"code_layout:{key}", version)
         elif not have.all():
@@ -984,7 +1097,7 @@ class Repos:
                 P[todo] = place_new(X[have], P[have], X[todo])
         else:
             return False
-        with self.lock:
+        with self.writing:
             self.db.executemany(f"UPDATE code_chunks SET {cx}=?, {cy}=?, {cz}=? WHERE id=?",
                                 [(*map(float, P[i]), int(ids[i])) for i in np.flatnonzero(todo)])
             self.db.commit()
@@ -993,7 +1106,7 @@ class Repos:
 
     # ---- queries -----------------------------------------------------------
     def list(self):
-        with self.lock:
+        with self.writing:
             return self._list()
 
     def _list(self):
@@ -1007,7 +1120,7 @@ class Repos:
     def _sel(self, name, cols, extra=""):
         """Rows for one repo, or for every repo when name == ALL. `cols` must start with path; under ALL the
         path comes back prefixed with the repo name ('my-app/docs/x.md') so trees and areas span repos."""
-        with self.lock:
+        with self.writing:
             if name == ALL:
                 names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
                 rows = self.db.execute(f"SELECT repo, {cols} FROM code_chunks WHERE 1=1 {extra}").fetchall()
@@ -1018,8 +1131,7 @@ class Repos:
     def _root(self, name):
         if name == ALL:
             return ALL
-        with self.lock:
-            r = self.db.execute("SELECT root FROM repos WHERE name=? OR root=?", (name, name)).fetchone()
+        r = self.db.execute("SELECT root FROM repos WHERE name=? OR root=?", (name, name)).fetchone()
         return r[0] if r else None
 
     @locked
@@ -1117,8 +1229,9 @@ class Repos:
         key = ("areas", root)
         if key in self._cache:
             return self._cache[key]
-        with self.lock:
-            rows = self.db.execute("SELECT path, vec, authors, last_ts FROM code_chunks WHERE repo=?", (root,)).fetchall()
+        rows = self.db.execute("SELECT path, id, authors, last_ts FROM code_chunks WHERE repo=?", (root,)).fetchall()
+        found, V = self.index.take([r[1] for r in rows])
+        rows = [(r[0], v, r[2], r[3]) for r, v in zip([r for r, f in zip(rows, found) if f], V)]
         dirs = [r[0].rsplit("/", 1)[0] if "/" in r[0] else "." for r in rows]
         limit = max(120, 0.06 * len(rows))
         areas = {"."}
@@ -1136,7 +1249,7 @@ class Repos:
         for (path, vec, au, ts), d in zip(rows, dirs):
             a = self._area_for(d, areas)
             e = acc.setdefault(a, [np.zeros(config.EMBED_DIM, np.float32), 0, Counter(), 0])
-            e[0] += np.frombuffer(vec, np.float16).astype(np.float32)
+            e[0] += vec.astype(np.float32)
             e[1] += 1
             e[3] = max(e[3], ts or 0)
             for k, n in json.loads(au or "{}").items():
@@ -1248,8 +1361,130 @@ class Repos:
         return owners, ppl
 
     def _rows_for_root(self, root, cols):
-        with self.lock:
-            return self.db.execute(f"SELECT {cols} FROM code_chunks WHERE repo=?", (root,)).fetchall()
+        return self.db.execute(f"SELECT {cols} FROM code_chunks WHERE repo=?", (root,)).fetchall()
+
+    def _blame_areas(self, root):
+        """Blame lines per area and author name, the newest blamed line of each area, each name's emails and the
+        repo's newest commit. Cached until the next reindex (it reads every code chunk of the repo)."""
+        key = ("blame_areas", root)
+        if key in self._cache:
+            return self._cache[key]
+        rows = self.db.execute("SELECT path, authors, last_ts FROM code_chunks WHERE repo=? AND wt=''", (root,)).fetchall()
+        last_by_email = dict(self.db.execute("SELECT lower(author), MAX(ts) FROM commits WHERE repo=? GROUP BY lower(author)", (root,)).fetchall())
+        # the kept commits are the newest 5000, which in a busy repo reach back a few months only: the People build's
+        # git log of a year dates the authors that they miss
+        from pensieve import people
+        for e, a in (people.cache_get("people:git:" + root, {}) or {}).get("authors", {}).items():
+            if a.get("last"):
+                last_by_email[e.lower()] = max(last_by_email.get(e.lower(), 0), int(a["last"]))
+        ref = self.db.execute("SELECT MAX(ts) FROM commits WHERE repo=?", (root,)).fetchone()[0] or 0
+
+        def who(a):  # "Name <email>" -> (name, email)
+            m = re.match(r"(.*?)\s*<([^>]*)>", a)
+            return (m.group(1).strip(), m.group(2).strip().lower()) if m else (a.strip(), "")
+        # one person can commit under several emails: a name counts as active when any of its emails is active
+        emails_by_name = defaultdict(set)
+        area_lines, lines_by, area_last = defaultdict(Counter), Counter(), Counter()
+        deep_lines, deep_last = defaultdict(Counter), Counter()  # three-level areas, for the age of smaller parts
+        own_last = Counter()  # name -> the newest chunk that only they wrote
+        for path, au, ts in rows:
+            area = area_of(path)
+            parts = path.split("/")
+            deep = "/".join(parts[:3]) if len(parts) > 3 else area
+            area_last[area] = max(area_last[area], ts or 0)
+            deep_last[deep] = max(deep_last[deep], ts or 0)
+            names = set()
+            for a, n in json.loads(au or "{}").items():
+                if is_bot(a):
+                    continue
+                nm, em = who(a)
+                names.add(nm)
+                emails_by_name[nm.lower()].add(em)
+                area_lines[area][nm] += n
+                deep_lines[deep][nm] += n
+                lines_by[nm] += n
+            if len(names) == 1:  # one author: the chunk's newest line is theirs (uncommitted lines too)
+                nm = names.pop()
+                own_last[nm] = max(own_last[nm], ts or 0)
+        out = dict(area_lines=area_lines, lines_by=lines_by, area_last=area_last, ref=ref,
+                   deep_lines=deep_lines, deep_last=deep_last, own_last=own_last,
+                   emails_by_name=emails_by_name, last_by_email=last_by_email)
+        self._cache[key] = out
+        return out
+
+    @staticmethod
+    def _departed(b, inactive_days):
+        """Each author's last commit, and the authors with none in `inactive_days` before the repo's newest commit
+        (or none in the commits Pensieve keeps: long gone). Lines that only one author wrote date them too, so
+        uncommitted work counts."""
+        cutoff = b["ref"] - inactive_days * 86400
+        own = b.get("own_last") or {}
+        last = {nm: max(max((b["last_by_email"].get(e, 0) for e in b["emails_by_name"][nm.lower()]), default=0),
+                        own.get(nm, 0)) for nm in b["lines_by"]}
+        return last, {nm for nm, t in last.items() if not t or t < cutoff}
+
+    def deployed(self, name, days=56) -> list[tuple[int, str, int]]:
+        """(time, author email, lines added) of each commit of the last `days` that reached the repo's default
+        branch: origin's (as of the last fetch), or the local main or master of a repo without an origin. Commits
+        of a branch count once they are merged; merge commits are skipped (their lines are in the commits they
+        merge, or in the squash commit). Lock files, minified files and generated folders do not count. Cached in
+        index.db until the branch moves, or the next day."""
+        from pensieve.store import cache as cache_db
+        root = self._root(name)
+        if not root or root == ALL:
+            return []
+        ref = deploy_ref(root)
+        sha = git(root, "rev-parse", "--verify", "--quiet", ref).strip() if ref else ""
+        if not sha:
+            return []
+        key, today = f"deployed:{root}:{days}", time.strftime("%Y-%m-%d")
+        hit = cache_db.get_json(self.store.v2, key)
+        if hit and hit.get("sha") == sha and hit.get("day") == today:
+            return [tuple(r) for r in hit["rows"]]
+        rows = deployed_commits(root, ref, days)
+        cache_db.put_json(self.store.v2, key, {"sha": sha, "day": today, "rows": rows}, 7 * 86400, wait=False)
+        return rows
+
+    def area_health(self, name, stale_days=90, inactive_days=180, min_lines=150):
+        """For the manager view of Insights: each sizeable area of a repo with its age (the newest blamed line,
+        against the repo's newest commit), the share of its lines by authors who stopped committing
+        (`inactive_days`), and the active people who know it best. Only areas that are stale or mostly by
+        inactive authors (or with no active author holding 10%) are listed."""
+        root = self._root(name)
+        if not root or root == ALL:
+            return None
+        b = self._blame_areas(root)
+        last, gone = self._departed(b, inactive_days)
+        ref, out, listed = b["ref"], [], set()
+
+        def entry(area, c, newest):
+            total = sum(c.values())
+            if total < min_lines or area == "." or area.split("/")[0] in GENERATED_DIRS:
+                return None
+            gone_lines = sum(n for nm, n in c.items() if nm in gone)
+            active = [(nm, n) for nm, n in c.most_common() if nm not in gone]
+            age = max(0, (ref - newest) // 86400) if newest else None
+            return dict(area=area, lines=total, age_days=age, stale=age is not None and age >= stale_days,
+                        departed_share=round(gone_lines / total, 3),
+                        bus_factor=sum(1 for _, n in active if n / total >= 0.10),
+                        departed=[dict(name=nm, share=round(n / total, 3), last_active=last.get(nm) or None)
+                                  for nm, n in c.most_common() if nm in gone][:3],
+                        knows=[dict(name=nm, share=round(n / total, 3), last_active=last.get(nm) or None)
+                               for nm, n in active[:3]])
+        for area, c in b["area_lines"].items():
+            e = entry(area, c, b["area_last"][area])
+            if e and (e["stale"] or e["departed_share"] >= 0.5 or e["bus_factor"] == 0):
+                out.append(e)
+                if e["stale"]:
+                    listed.add(area)
+        # a big area changes somewhere every week: its parts one level down show what nobody touched
+        for deep, c in b["deep_lines"].items():
+            if deep in b["area_lines"] or "/".join(deep.split("/")[:2]) in listed:
+                continue
+            e = entry(deep, c, b["deep_last"][deep])
+            if e and e["stale"]:
+                out.append(e)
+        return dict(repo=name, as_of=ref, stale_days=stale_days, inactive_days=inactive_days, areas=out)
 
     def knowledge_gaps(self, name, inactive_days=180, min_lines=150):
         """Areas whose knowledge left with their authors: most of the code (by git blame) was written by people who
@@ -1259,34 +1494,9 @@ class Repos:
         root = self._root(name)
         if not root or root == ALL:
             return None
-        with self.lock:
-            rows = self.db.execute("SELECT path, authors FROM code_chunks WHERE repo=? AND wt=''", (root,)).fetchall()
-            last_by_email = dict(self.db.execute("SELECT lower(author), MAX(ts) FROM commits WHERE repo=? GROUP BY lower(author)", (root,)).fetchall())
-            ref = self.db.execute("SELECT MAX(ts) FROM commits WHERE repo=?", (root,)).fetchone()[0] or 0
-        cutoff = ref - inactive_days * 86400
-
-        def who(a):  # "Name <email>" -> (name, email)
-            m = re.match(r"(.*?)\s*<([^>]*)>", a)
-            return (m.group(1).strip(), m.group(2).strip().lower()) if m else (a.strip(), "")
-        # one person can commit under several emails: they're active if any email with their name is
-        emails_by_name = defaultdict(set)
-        area_lines, lines_by = defaultdict(Counter), Counter()
-        for path, au in rows:
-            area = area_of(path)
-            for a, n in json.loads(au or "{}").items():
-                if is_bot(a):
-                    continue
-                nm, em = who(a)
-                emails_by_name[nm.lower()].add(em)
-                area_lines[area][nm] += n
-                lines_by[nm] += n
-        canon = {}
-        for nm in lines_by:
-            canon[nm] = nm
-        last = {nm: max((last_by_email.get(e, 0) for e in emails_by_name[nm.lower()]), default=0) for nm in lines_by}
-        departed = {nm for nm, t in last.items() if t and t < cutoff}
-        unknown = {nm for nm, t in last.items() if not t}  # never seen in the last 5000 commits: long gone
-        gone = departed | unknown
+        b = self._blame_areas(root)
+        area_lines, lines_by, ref = b["area_lines"], b["lines_by"], b["ref"]
+        last, gone = self._departed(b, inactive_days)
         people = [dict(name=nm, lines=lines_by[nm], last_active=last[nm] or None, departed=nm in gone)
                   for nm, _ in lines_by.most_common(40)]
         gaps = []
@@ -1353,7 +1563,7 @@ class Repos:
         if not paths:
             return None
         allowed = set(int(x) for x in allow) if allow is not None else None
-        with self.lock:
+        with self.writing:
             root = self._root(repo) if repo and repo != ALL else None
             rows = []
             for p in paths[:4]:
@@ -1400,7 +1610,7 @@ class Repos:
         qv = vec.reshape(1, -1).astype(np.float32)
         if allow is not None and not len(allow):
             return dict(chunks=[], experts=[], hit_ids=[])
-        with self.lock:  # DB rows are inserted before the index add; hold the lock so we only allow indexed ids
+        with self.writing:  # DB rows are inserted before the index add; hold the lock so we only allow indexed ids
             if repo and repo != ALL:
                 root = self._root(repo)
                 ids = [r[0] for r in self.db.execute("SELECT id FROM code_chunks WHERE repo=?", (root,))
@@ -1437,10 +1647,11 @@ class Repos:
             commits = [dict(sha=r[0][:8], ts=r[1], author=r[2], subject=r[3]) for r in self.db.execute(
                 "SELECT sha, ts, author, subject FROM commits WHERE repo=? AND ts BETWEEN ? AND ? AND lower(author)=? ORDER BY ts",
                 (root, lo, hi, me))]
-        rows = self.db.execute("SELECT vec FROM chunks WHERE session_id=?", (sid,)).fetchall()
+        rows = self.db.execute("SELECT id FROM chunks WHERE session_id=?", (sid,)).fetchall()
         near = dict(chunks=[], experts=[])
-        if rows and self.db.execute("SELECT 1 FROM code_chunks LIMIT 1").fetchone():
-            c = np.mean([np.frombuffer(r[0], np.float16).astype(np.float32) for r in rows], axis=0)
+        _, V = self.store.index.take([r[0] for r in rows])
+        if len(V) and self.db.execute("SELECT 1 FROM code_chunks LIMIT 1").fetchone():
+            c = V.astype(np.float32).mean(axis=0)
             c /= np.linalg.norm(c) + 1e-9
             near = self.experts(vec=c, repo=Path(root).name if root else None)
         return dict(repo=Path(root).name if root else None, files=files, commits=commits,
@@ -1449,21 +1660,20 @@ class Repos:
     def overlaps(self, name, top=15):
         """Conceptual overlap: directory pairs (2 levels deep) whose embedding centroids are closest."""
         cross = name == ALL  # across repos: only pairs from different repos are interesting
-        rows = self._sel(name, "path, vec, authors")
+        rows = self._sel(name, "path, id, authors")
         depth = 3 if cross else 2
         groups, owners = defaultdict(list), defaultdict(Counter)
-        for path, vec, au in rows:
+        for path, cid, au in rows:
             parts = path.split("/")
             key = "/".join(parts[:depth]) if len(parts) > depth else "/".join(parts[:-1]) or "."
-            groups[key].append(np.frombuffer(vec, np.float16).astype(np.float32))
+            groups[key].append(cid)
             for a, n in json.loads(au or "{}").items():
                 if not is_bot(a):
                     owners[key][a] += n
-        keys = [k for k, v in groups.items() if len(v) >= 3 and (not cross or "/" in k)]
+        keys, C = vectors.centroids({k: v for k, v in groups.items() if len(v) >= 3 and (not cross or "/" in k)},
+                                    self.index)
         if len(keys) < 2:
             return []
-        C = np.stack([np.mean(groups[k], axis=0) for k in keys])
-        C /= np.linalg.norm(C, axis=1, keepdims=True) + 1e-9
         S = C @ C.T
         pairs = []
         for i in range(len(keys)):

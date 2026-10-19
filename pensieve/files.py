@@ -15,11 +15,11 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, config, connections, content, media, settings
-from pensieve.indexer import LAYOUT_VERSION, embed, embed_images, embed_media, reconcile
-from pensieve.layout import cluster, fit3d, nearest, place_new, unit
+from pensieve import apps, config, connections, content, media, settings, vectors
+from pensieve.indexer import LAYOUT_VERSION, embed, embed_images, embed_media
+from pensieve.layout import cluster, fit3d, nearest, place_new
 
-FILES_INDEX_PATH = config.DATA_DIR / "files.tv"
+FILES_INDEX_PATH = config.VECTORS_DIR / "files.tv"
 TEXT_EXT = {".txt", ".md", ".markdown", ".rst", ".org", ".tex", ".csv", ".tsv", ".json", ".yaml", ".yml", ".toml",
             ".ini", ".cfg", ".conf", ".xml", ".html", ".htm", ".css", ".scss", ".py", ".js", ".ts", ".tsx", ".jsx",
             ".java", ".kt", ".swift", ".go", ".rs", ".rb", ".php", ".c", ".h", ".cc", ".cpp", ".hpp", ".m", ".cs",
@@ -259,8 +259,7 @@ def author_of(p: Path, kind: str):
 
 class Files:
     def __init__(self, store):
-        from turbovec import IdMapIndex
-        self.store, self.db, self.lock = store, store.db, store.lock
+        self.store, self.db, self.writing = store, store.db, store.writing
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS files(
           path TEXT PRIMARY KEY, root TEXT, name TEXT, ext TEXT, kind TEXT, mtime REAL, size INTEGER,
@@ -275,9 +274,8 @@ class Files:
                 self.db.execute(f"ALTER TABLE files ADD COLUMN {col}")
             except Exception:
                 pass
-        self.index = IdMapIndex.load(str(FILES_INDEX_PATH)) if FILES_INDEX_PATH.exists() else IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
-        if reconcile(self.index, self.db, "file_chunks"):
-            self.index.sync(str(FILES_INDEX_PATH))
+        self.index = vectors.Index(FILES_INDEX_PATH, config.EMBED_DIM)
+        self.index.load(self.db, "file_chunks")
         self._last = 0
         self.progress = {}
         self.sync_lock = threading.RLock()  # one indexing pass at a time: the watcher's, or a search catching up
@@ -319,11 +317,12 @@ class Files:
         finally:
             self.sync_lock.release()
 
-    def save(self):
-        """After `refresh`: write the vector index to disk. The map catches up later (server.map_worker)."""
+    def save(self, force=False):
+        """After `refresh` or a sweep: write the vector index to disk, at most every vectors.SAVE_SECONDS unless
+        `force`. The map catches up later (server.map_worker)."""
         self.unsaved = False
-        with self.lock:
-            self.index.sync(str(FILES_INDEX_PATH))
+        with self.writing:
+            self.index.save(force)
 
     def _sync(self, log, force, on_progress):
         if not force and time.time() - self._last < 30:
@@ -333,9 +332,8 @@ class Files:
         apps.refresh(settings.enabled)
         roots = self.roots()
         exclude, max_bytes = set(s["exclude"]), s["max_file_mb"] * 1_000_000
-        with self.lock:
-            known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM files")}
-            modes = dict(self.db.execute("SELECT path, mode FROM files"))
+        known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM files")}
+        modes = dict(self.db.execute("SELECT path, mode FROM files"))
         stale = self.store.meta("files_v") != FILES_VERSION
         seen, touched, name_only = set(), 0, Counter()
         levels = {}  # extension -> content | name | off
@@ -382,8 +380,8 @@ class Files:
                     log(f"skip {p}: {e!r}")
                 if touched % 50 == 0 and touched:
                     log(f"files: {touched} indexed")
-                    with self.lock:
-                        self.index.sync(str(FILES_INDEX_PATH))
+                    with self.writing:
+                        self.index.save()
                     if on_progress:
                         on_progress(touched)
         if stale:
@@ -393,7 +391,7 @@ class Files:
         for p in gone:
             self._drop(p)
         if gone:
-            with self.lock:
+            with self.writing:
                 self.db.commit()
         if touched or gone or self.unsaved:
             self.save()
@@ -430,8 +428,7 @@ class Files:
             if root is None:
                 continue
             if not p.exists():
-                with self.lock:
-                    gone = [r[0] for r in self.db.execute("SELECT path FROM files WHERE path=? OR path LIKE ?", (sp, sp + "/%"))]
+                gone = [r[0] for r in self.db.execute("SELECT path FROM files WHERE path=? OR path LIKE ?", (sp, sp + "/%"))]
                 for g in gone:
                     self._drop(g)
                 changed += len(gone)
@@ -443,8 +440,7 @@ class Files:
                 retry.append(sp)
                 continue
             lv = level_of(p)
-            with self.lock:
-                row = self.db.execute("SELECT mtime, size, mode FROM files WHERE path=?", (sp,)).fetchone()
+            row = self.db.execute("SELECT mtime, size, mode FROM files WHERE path=?", (sp,)).fetchone()
             if lv == "off":
                 if row:
                     self._drop(sp)
@@ -459,7 +455,7 @@ class Files:
             except Exception as e:
                 log(f"skip {p}: {e!r}")
         if changed:
-            with self.lock:
+            with self.writing:
                 self.db.commit()
             if layout:
                 self.save()
@@ -484,7 +480,7 @@ class Files:
         rel = p.relative_to(root.parent)
         text = f"{p.name}\nFolder {rel}\nContains: " + ", ".join(children[:80])
         vec = embed([text])
-        with self.lock:
+        with self.writing:
             self._drop(str(p))
             cur = self.db.execute("INSERT INTO file_chunks(path, idx, start, end, text, vec) VALUES(?,?,?,?,?,?)",
                                   (str(p), 0, 0, 0, text, vec[0].astype(np.float16).tobytes()))
@@ -495,14 +491,13 @@ class Files:
 
     def backfill_authors(self, limit=400):
         """Fill in who wrote documents (a bounded batch per sweep, so the first run doesn't stall indexing)."""
-        with self.lock:
-            todo = self.db.execute("SELECT path, kind FROM files WHERE author_source IS NULL AND kind!='folder' LIMIT ?", (limit,)).fetchall()
+        todo = self.db.execute("SELECT path, kind FROM files WHERE author_source IS NULL AND kind!='folder' LIMIT ?", (limit,)).fetchall()
         rows = []
         for path, kind in todo:
             a, src = author_of(Path(path), kind)
             rows.append((a, src or "none", path))
         if rows:
-            with self.lock:
+            with self.writing:
                 self.db.executemany("UPDATE files SET author=?, author_source=? WHERE path=?", rows)
                 self.db.commit()
 
@@ -531,7 +526,7 @@ class Files:
                 vecs = np.stack([v for *_, v in parts]).astype(np.float32)
         if vecs is None:
             vecs = embed([c[2] for c in chunks], titles=[str(rel)] * len(chunks))
-        with self.lock:
+        with self.writing:
             self._drop(str(p))
             ids = []
             for i, ((a, b, t), v) in enumerate(zip(chunks, vecs)):
@@ -546,7 +541,7 @@ class Files:
             self.db.commit()
 
     def _drop(self, path):
-        with self.lock:
+        with self.writing:
             for (cid,) in self.db.execute("SELECT id FROM file_chunks WHERE path=?", (path,)).fetchall():
                 try:
                     self.index.remove(cid)
@@ -574,8 +569,6 @@ class Files:
                 folders.update({str(Path(r).resolve()): f"apps/{k}" for r in (a["roots"]() if a["available"]() else [])})
             except Exception:
                 pass
-        if connections.DIR.is_dir():
-            folders.update({str(p.resolve()): f"connections/{p.name}" for p in connections.DIR.iterdir() if p.is_dir()})
         src = {}
 
         def ok(path, root):
@@ -588,23 +581,20 @@ class Files:
 
     # ---- layout ------------------------------------------------------------
     def centroids(self):
-        with self.lock:
-            rows = self.db.execute("SELECT c.path, f.root, c.vec FROM file_chunks c JOIN files f ON f.path=c.path "
-                                   "WHERE f.kind!='folder'").fetchall()
+        rows = self.db.execute("SELECT c.path, f.root, c.id FROM file_chunks c JOIN files f ON f.path=c.path "
+                               "WHERE f.kind!='folder'").fetchall()
         ok = self.map_filter()
         by = {}
-        for p, root, v in rows:
+        for p, root, cid in rows:
             if ok(p, root):
-                by.setdefault(p, []).append(np.frombuffer(v, np.float16).astype(np.float32))
-        paths = list(by)
-        return paths, (unit(np.stack([np.mean(by[p], axis=0) for p in paths])) if paths else np.zeros((0, config.EMBED_DIM)))
+                by.setdefault(p, []).append(cid)
+        return vectors.centroids(by, self.index)
 
     def needs_layout(self):
         if self.store.meta("files_map") != self.map_sig():
             return True
         ok = self.map_filter()
-        with self.lock:
-            rows = self.db.execute("SELECT path, root FROM files WHERE x IS NULL AND kind!='folder'").fetchall()
+        rows = self.db.execute("SELECT path, root FROM files WHERE x IS NULL AND kind!='folder'").fetchall()
         return any(ok(p, r) for p, r in rows)
 
     def reproject(self, force=False):
@@ -612,14 +602,14 @@ class Files:
         sig = self.map_sig()
         if self.store.meta("files_map") != sig:  # files left the map or joined it: drop old positions, fit again
             force = True
-            with self.lock:
+            with self.writing:
                 self.db.execute("UPDATE files SET x=NULL, y=NULL, z=NULL")
                 self.store.meta("files_map", sig)
                 self.db.commit()
         paths, C = self.centroids()
         if len(paths) < 4:
             return False
-        with self.lock:
+        with self.writing:
             placed = {r[0]: r[1:] for r in self.db.execute("SELECT path, x, y, z, cluster FROM files WHERE x IS NOT NULL")}
             fit_n = int(self.store.meta("files_fit_n") or 0)
             ok = self.store.meta("files_layout") == LAYOUT_VERSION
@@ -627,7 +617,7 @@ class Files:
         if force or not ok or len(placed) < 0.5 * n or abs(n - fit_n) > max(60, 0.15 * fit_n):
             P = fit3d(C, n_neighbors=12, min_dist=0.2)
             lab = cluster(C)
-            with self.lock:
+            with self.writing:
                 self.db.executemany("UPDATE files SET x=?, y=?, z=?, cluster=? WHERE path=?",
                                     [(*map(float, q), int(c), p) for q, c, p in zip(P, lab, paths)])
                 self.store.meta("files_fit_n", n)
@@ -641,7 +631,7 @@ class Files:
         Pk = np.array([placed[paths[i]][:3] for i in known], dtype=np.float32)
         Pn = place_new(C[known], Pk, C[missing], k=3, jitter=0.04)
         near = nearest(C[missing], C[known])
-        with self.lock:
+        with self.writing:
             for j, i in enumerate(missing):
                 self.db.execute("UPDATE files SET x=?, y=?, z=?, cluster=? WHERE path=?",
                                 (*map(float, Pn[j]), placed[paths[known[near[j]]]][3], paths[i]))
@@ -650,9 +640,8 @@ class Files:
 
     # ---- queries -----------------------------------------------------------
     def points(self):
-        with self.lock:
-            rows = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, n_chunks, x, y, z, cluster, author, author_source "
-                                   "FROM files WHERE x IS NOT NULL AND kind!='folder'").fetchall()
+        rows = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, n_chunks, x, y, z, cluster, author, author_source "
+                               "FROM files WHERE x IS NOT NULL AND kind!='folder'").fetchall()
         home = str(Path.home())
         out = []
         ok = self.map_filter()
@@ -668,11 +657,10 @@ class Files:
         return out
 
     def file(self, path):
-        with self.lock:
-            r = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, n_chunks, author, author_source FROM files WHERE path=?", (path,)).fetchone()
-            if not r:
-                return None
-            chunks = self.db.execute("SELECT idx, start, end, text FROM file_chunks WHERE path=? ORDER BY idx", (path,)).fetchall()
+        r = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, n_chunks, author, author_source FROM files WHERE path=?", (path,)).fetchone()
+        if not r:
+            return None
+        chunks = self.db.execute("SELECT idx, start, end, text FROM file_chunks WHERE path=? ORDER BY idx", (path,)).fetchall()
         return dict(id=f"file:{r[0]}", path=r[0], root=r[1], name=r[2], ext=r[3], kind=r[4], mtime=r[5], size=r[6],
                     n=r[7], display=r[0].replace(str(Path.home()), "~", 1), author=r[8],
                     author_source=r[9] if r[9] != "none" else None, is_dir=r[4] == "folder",
@@ -694,8 +682,7 @@ class Files:
     def types(self):
         """Each file type with its settings, how many files it has, and how long their text is: counts per size bin
         (bin i holds texts up to SIZE_BINS[i] chunks of 1500 characters; the last bin holds the rest)."""
-        with self.lock:
-            rows = self.db.execute("SELECT path, chars FROM files WHERE kind!='folder'").fetchall()
+        rows = self.db.execute("SELECT path, chars FROM files WHERE kind!='folder'").fetchall()
         size = settings.get("chunk_chars")
         out = {t: dict(id=t, label=label, description=desc, exts=sorted(e.lstrip(".") for e in exts)[:12],
                        readable=readable(t), **settings.file_type(t), files=0, read=0,
@@ -716,5 +703,4 @@ class Files:
                     chunk_chars=size, max_chunks=cap)
 
     def stats(self):
-        with self.lock:
-            return dict(self.db.execute("SELECT kind, COUNT(*) FROM files GROUP BY kind").fetchall())
+        return dict(self.db.execute("SELECT kind, COUNT(*) FROM files GROUP BY kind").fetchall())

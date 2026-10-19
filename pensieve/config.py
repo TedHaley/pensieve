@@ -5,10 +5,32 @@ HOME = Path.home()
 DATA_DIR = Path(os.environ.get("PENSIEVE_DATA", HOME / ".pensieve")).expanduser()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_PATH = DATA_DIR / "pensieve.db"
-INDEX_PATH = DATA_DIR / "index.tv"
+V2_DIR = DATA_DIR / "v2"  # storage v2 (docs/design/storage.md); the v1 files are in DATA_DIR until migrate removes them
+VECTORS_DIR = V2_DIR / "vectors"
+DB_PATH = V2_DIR / "index.db"  # sessions, files and code, with the other derived tables (store.index_db)
+INDEX_PATH = VECTORS_DIR / "sessions.tv"
+V1_DB_PATH = DATA_DIR / "pensieve.db"  # read only by migrate.py and the model choice below
 PORT = int(os.environ.get("PENSIEVE_PORT", 8765))
 URL = f"http://127.0.0.1:{PORT}"
+
+
+def write_atomic(path: Path, text: str):
+    """Write text to a file in one step: a reader sees the old file or the new one, never a part of it. The temporary
+    file starts with a dot, so that the file indexer skips it."""
+    import tempfile
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 # Where each agent keeps its transcripts, and their file pattern below that folder. Add more agents here.
 SESSION_GLOB = {"claude": "*/*.jsonl", "qwen": "*/chats/*.jsonl", "codex": "**/rollout-*.jsonl"}
@@ -49,18 +71,18 @@ EMBED_MODELS = {  # the embedding models Pensieve can index with; an index holds
                 about="About twice as fast to index and 25% smaller, with the same search quality in our tests. "
                       "270M parameters (its text part): a 550 MB download the first time."),
 }
-EMBED_MODEL_FILE = DATA_DIR / "embed_model"  # the model the index was built with, written at the first start
+EMBED_MODEL_FILE = V2_DIR / "embed_model"  # the model the index was built with, written at the first start
 
 
 DEFAULT_EMBED_MODEL = GEMMA  # for a new index; an index from before models could be chosen stays Qwen's
 
 
-def _has_vectors() -> bool:
+def _has_vectors(path: Path) -> bool:
     import sqlite3
-    if not DB_PATH.exists():
+    if not path.exists():
         return False
     try:
-        db = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
             return any(db.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone()
                        for (t,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN "
@@ -82,7 +104,13 @@ def _index_model() -> str:
         name = ""
     if name in EMBED_MODELS:
         return name
-    if _has_vectors():
+    try:  # the first start of v2 on v1 data: v1's model, so that the vectors of v1 fill the embed cache
+        name = "" if _has_vectors(DB_PATH) else (DATA_DIR / "embed_model").read_text().strip()
+    except OSError:
+        name = ""
+    if name in EMBED_MODELS:
+        pass
+    elif _has_vectors(DB_PATH) or _has_vectors(V1_DB_PATH):
         name = QWEN
     else:  # a new or reset index: the model chosen in Settings, else the default (settings.json, read directly:
         try:  # importing settings here would be circular)
@@ -91,6 +119,7 @@ def _index_model() -> str:
         except (OSError, ValueError, AttributeError):
             name = ""
         name = name if name in EMBED_MODELS else DEFAULT_EMBED_MODEL
+    EMBED_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
     EMBED_MODEL_FILE.write_text(name + "\n")
     return name
 
@@ -119,7 +148,7 @@ if "HF_HUB_OFFLINE" not in os.environ:
 
 CHUNK_CHARS = 1800
 POLL_SECONDS = 5
-SETTLE_SECONDS = 3  # don't index a file modified more recently than this
+SETTLE_SECONDS = 1  # don't index a file modified more recently than this (it can be half written)
 
 
 def device():

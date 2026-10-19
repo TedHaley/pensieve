@@ -2,7 +2,7 @@
 item. Switching a source off removes what it had indexed on the next sweep."""
 from pathlib import Path
 
-from pensieve import apps, config, connections, settings
+from pensieve import apps, config, connections, connectors, settings
 
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
 CATEGORIES = [
@@ -11,7 +11,7 @@ CATEGORIES = [
     ("repos", "Git repositories", "Code with git blame and history, including uncommitted changes and linked worktrees."),
     ("apps", "Apps", "Content that lives inside apps on this Mac."),
     ("connections", "Connections", "Tickets, messages and pages from your MCP servers (Jira, Slack, Linear and others), "
-     "collected with read-only tools and kept over time, with each change. Each connection is off until you switch it on."),
+     "collected with read-only tools and kept over time, with each change. A connection is on once Pensieve holds data from it, unless you switch it off."),
 ]
 
 
@@ -33,8 +33,7 @@ def connection_items() -> list[dict]:
     rank = {"connected": 0, "pending": 1, "failed": 2, "unknown": 3}
     for r in sorted(connections.servers(), key=lambda r: (rank.get(r["status"], 4), r["name"].lower())):
         reads, total = sum(t["read"] for t in r["tools"]), len(r["tools"])
-        via = "via Claude Code" if r["origin"] == "engine" else \
-            f"from the {' and '.join(r.get('agents') or [])} config" if r["origin"] == "agent" else "added here"
+        via = _via(r)
         if r["status"] == "connected":
             parts = [f"{reads} of {total} tools read-only", via]
             if r.get("error"):
@@ -45,6 +44,10 @@ def connection_items() -> list[dict]:
                     parts.append(f"{r['tokens'] / 1000:,.0f}k tokens a run" +
                                  (f" (${r['cost_usd']:.2f} at API prices)" if r.get("cost_usd") else ""))
             detail = " · ".join(parts)
+        elif r["status"] == "needs-auth" and r["origin"] == "own":
+            detail = "Needs sign-in: use Sign in under Cloud connectors"
+        elif r["status"] == "needs-auth" and r["origin"] == "cli":
+            detail = "Needs sign-in: run gh auth login in a terminal"
         elif r["status"] == "needs-auth":
             detail = "Needs sign-in: sign in to it in Claude Code (/mcp) or on claude.ai"
         elif r["status"] == "pending":
@@ -58,6 +61,54 @@ def connection_items() -> list[dict]:
                         collect=r["status"] == "connected" and reads > 0,
                         remove=dict(kind="connections", path=r["name"]) if r["origin"] == "own" else None))
     return out
+
+
+def _via(r: dict) -> str:
+    return {"engine": "via Claude Code", "cli": "through the gh command line", "own": "added here"}.get(
+        r["origin"]) or f"from the {' and '.join(r.get('agents') or [])} config"
+
+
+_RANK = {"connected": 0, "pending": 1, "needs-auth": 2, "failed": 3}
+
+
+def connector_rows() -> list[dict]:
+    """The cloud connectors that Pensieve knows (connectors.PROFILES), each with its state on this Mac: the servers
+    found for it (through Claude Code, another agent's config, gh, or added here), whether one is on, and the ways to
+    add it as one of Pensieve's own servers."""
+    from pensieve import mcp_oauth
+    found = connections.servers()
+    skip = connections.covered(found)
+    rows = []
+    for pid in connectors.ORDER:
+        p = connectors.PROFILES[pid]
+        mine = sorted((r for r in found if connectors.match(r["name"], r["id"]) == pid),
+                      key=lambda r: (not settings.enabled(f"connections/{r['id']}"), r["id"] in skip,
+                                     _RANK.get(r["status"], 4)))
+        best = mine[0] if mine else None
+        on = bool(best) and settings.enabled(f"connections/{best['id']}")
+        if not best:
+            state, detail = "none", "Not connected"
+        elif best["status"] == "connected":
+            state = "on" if on else "found"
+            detail = f"{'Collecting' if on else 'Found'} {_via(best)}" + ("" if on else ": switch it on below")
+        elif best["status"] == "needs-auth" or best.get("oauth"):
+            state, detail = "needs-auth", f"Needs sign-in ({_via(best)})"
+        else:
+            state, detail = best["status"], f"{best['status'].capitalize()} ({_via(best)})"
+        if best and len(mine) > 1:
+            detail += f" · also {', '.join(_via(r) + (' (not collected: one copy is enough)' if r['id'] in skip else '') for r in mine[1:])}"
+        signin = next((r["id"] for r in mine if r.get("oauth") and r["status"] != "connected"), None)
+        folders = [str(f) for f in connectors.drive_folders()] if pid == "drive" else []
+        if folders and not best:
+            have = {str(Path(f).expanduser()) for f in settings.get("folders")}
+            state = "on" if any(f in have for f in folders) else "folder"
+            detail = "Your Drive for desktop folder is in Files & folders" if state == "on" else \
+                "Drive for desktop is on this Mac: add its folder"
+        rows.append(dict(id=pid, label=p["label"], state=state, detail=detail, sid=best["id"] if best else None,
+                         items=sum(r["items"] for r in mine), signin=signin, folders=folders,
+                         signed_in=bool(signin) and mcp_oauth.signed_in(signin),
+                         add=[{k: v for k, v in a.items() if k not in ("command", "args")} for a in p["add"]]))
+    return rows
 
 
 def connections_note() -> str:
@@ -77,20 +128,18 @@ def _home(p) -> str:
 
 def catalog(store, repos, files) -> list[dict]:
     on = settings.enabled
-    with store.lock:
-        db = store.db
-        per_root = dict(db.execute("SELECT root, COUNT(*) FROM files GROUP BY root").fetchall())
-        per_repo = dict(db.execute("SELECT repo, COUNT(DISTINCT path) FROM code_chunks GROUP BY repo").fetchall())
-        repo_rows = db.execute("SELECT root, name FROM repos ORDER BY name").fetchall()
-        wt_rows = db.execute("SELECT path, repo, branch FROM worktrees ORDER BY path").fetchall()
-        per_wt = dict(db.execute("SELECT wt, COUNT(*) FROM checkout_files WHERE wt!='' GROUP BY wt").fetchall())
+    db = store.db
+    per_root = dict(db.execute("SELECT root, COUNT(*) FROM files GROUP BY root").fetchall())
+    per_repo = dict(db.execute("SELECT repo, COUNT(DISTINCT path) FROM code_chunks GROUP BY repo").fetchall())
+    repo_rows = db.execute("SELECT root, name FROM repos ORDER BY name").fetchall()
+    wt_rows = db.execute("SELECT path, repo, branch FROM worktrees ORDER BY path").fetchall()
+    per_wt = dict(db.execute("SELECT wt, COUNT(*) FROM checkout_files WHERE wt!='' GROUP BY wt").fetchall())
 
     agents = []
     for sid, k, root, _ in config.session_sources():
         extra = "@" in sid
-        with store.lock:
-            n = store.db.execute("SELECT COUNT(*) FROM sessions WHERE n_chunks>0 AND source=? AND path LIKE ?",
-                                 (k, str(root) + "/%")).fetchone()[0]
+        n = store.db.execute("SELECT COUNT(*) FROM sessions WHERE n_chunks>0 AND source=? AND path LIKE ?",
+                             (k, str(root) + "/%")).fetchone()[0]
         where = root.parent.name if root.name in ("projects", "sessions") else root.name
         agents.append(dict(id=sid, label=AGENTS.get(k, k) + (f" · {where}" if extra else ""), detail=_home(root),
                            available=root.is_dir(), enabled=on(sid), count=n, unit="sessions",
@@ -165,7 +214,8 @@ def catalog(store, repos, files) -> list[dict]:
         it["map"] = settings.on_map(it["id"])
     return [dict(id=c, label=label, description=desc, enabled=on(c), map=settings.on_map(c), items=items[c],
                  count=sum(i.get("count", 0) for i in items[c] if i.get("kind") not in ("rule", "worktree")),
-                 addable=c != "apps", **({"note": connections_note()} if c == "connections" else {}))
+                 addable=c != "apps",
+                 **({"note": connections_note(), "connectors": connector_rows()} if c == "connections" else {}))
             for c, label, desc in CATEGORIES]
 
 

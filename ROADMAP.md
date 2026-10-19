@@ -2,6 +2,27 @@
 
 This file tracks the improvements that we investigate, with their evidence, how we measure them and their status.
 
+## Mandate
+
+Strong focus on your context. This is how we stay focused on individuals. Context is unique to individuals.
+
+- **Why:** each person has access to different things at a different level. So each person's context is different.
+  Pensieve keeps context personal: it shows what you can see, it runs on your Mac, and it only reads. Within that
+  limit, it tracks all of your context.
+- **How this differs:** "company brain" products build one shared picture of the company for everyone. Pensieve
+  builds one picture for each person, from that person's point of view.
+- **Tabs, in this order:**
+  1. **Context:** the context cards (D5). It is about you, and it stays as it is.
+  2. **Projects:** clusters of content and the project that each one belongs to (D8). It is about your team.
+  3. **People:** the people you work closest with, as a graph (D9, D10).
+  4. **Map:** stays, with a lower priority.
+  5. **Insights**
+  6. **Settings**
+- **Names:** "Context" and "Projects" are working names. One collection is about you, the other about your team.
+  Both names are open for discussion.
+- **Sources:** read-only connectors with your own access (E6).
+- **Reach:** a docs section, search ranking and MCP directory listings (F1–F3).
+
 ## How we decide
 
 A change becomes the default only if it beats the agent's built-in tools, or the current Pensieve, on accuracy, speed
@@ -44,11 +65,18 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D5 | The Context tab: context cards across sources, in five states | Product | testing |
 | D6 | Context cards as files to share | Product | testing |
 | D7 | Threads: one goal followed over time | Product | idea |
+| D8 | The Projects tab: content in clusters, by project | Product | idea |
+| D9 | The People tab: the people you work closest with, as a graph | Product | investigating |
+| D10 | One identity for each person across Slack and GitHub | Product | investigating |
 | E1 | Connections as one list | Connections | idea |
 | E2 | Remote disks | Connections | idea |
 | E3 | Database metadata | Connections | idea |
 | E4 | Collect from MCP servers, read-only | Connections | testing |
 | E5 | Rolling expiry for collected items | Connections | idea |
+| E6 | Read-only connectors for cloud tools | Connections | investigating |
+| F1 | A docs section on the website | Website | investigating |
+| F2 | Search ranking for "pensieve mcp" and "pensieve ai" | Website | investigating |
+| F3 | Listings in MCP directories | Website | investigating |
 
 ## A. Indexing efficiency
 
@@ -470,6 +498,8 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Before building:** talk to engineering managers. Check the employment agreement and the MIT license first.
 - **Status:** idea
 - **Notes:**
+  - 2026-10-18, the mandate: the team view comes first from each person's own data, on their Mac (Projects, D8,
+    and People, D9). A shared team edition stays an idea. It must not become one shared picture of the company.
 
 ### D2. Opt-in usage counts
 
@@ -513,6 +543,8 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   get.
 - **Status:** idea
 - **Notes:**
+  - 2026-10-18, the mandate: the People tab (D9) shows the people you already work with, from your own data on
+    your Mac. It needs no server. D4 finds people you do not know yet, across users, so it keeps the risks above.
 
 ### D5. The Context tab: context cards across sources, in five states
 
@@ -581,6 +613,8 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - Not fixed: gh shows "state unknown" for PRs in a repo that only a second gh account can see. A fix would try
     each logged-in account; the auto-mode classifier blocks an agent from writing code that reads gh tokens.
   - A skill for these workflows (`pensieve-work`) added calls and tokens for no gain in facts: dropped.
+  - 2026-10-18, the mandate: the Context tab stays as it is, and it stays the first tab. It is about the user. The
+    team view goes to Projects (D8).
 
 ### D6. Context cards as files to share
 
@@ -661,6 +695,52 @@ benchmark run. The instructions keep grep for the cases where grep is better.
     saves) that opens the thread's history, where each save has Preview and "New session from this card". `tasks`
     lines end with the thread id, `task` takes a thread id too, and `thread_history` lists a thread's saves or
     returns one as an agent card. `/api/work` returns `threads` ({task: {id, saves}}).
+
+### D8. The Projects tab: content in clusters, by project
+
+- **Why:** the Context tab shows your own work. Your team works on projects that are larger than one card. A
+  project joins the content of several people, and you see it from your own point of view.
+- **Try:**
+  - Group the content into clusters, as the topics on the Map do. Give each cluster the project that it belongs to.
+  - Start from the projects of the people closest to you (D9). These stay in your context. Projects further away
+    can show too, with a lower rank.
+  - Show only what you can access. Pensieve reads with your own access (E6) and only reads.
+- **Questions:**
+  - The name. "Projects" is a working name for the collection about the team. "Context" is the one about you.
+  - How a project gets its name: from a ticket project, a repo, a Slack channel, or a model-written label.
+  - How a project relates to a thread (D7). A project can hold many threads.
+- **Measure:** the share of your context cards that join a project, and how often you open the tab.
+- **Status:** idea
+- **Notes:**
+
+### D9. The People tab: the people you work closest with, as a graph
+
+- **Why:** you work with some people much more than with others. Pensieve already knows who wrote which code
+  (`who_knows`, `team`) and who is in which ticket and thread. A graph of these links shows the people closest to
+  you.
+- **Try:**
+  - A network graph. Each person is a node with their Slack picture. A link is shared work: code, PRs, tickets,
+    threads and meetings.
+  - Data from Slack and GitHub, with one identity for each person (D10).
+  - A click on a person opens a card: who they are, their function, what they worked on, their projects (D8), and
+    your relation to them.
+  - The graph starts with you and the people closest to you.
+- **Rule:** the graph uses only what you can access, on your Mac. It shares no profile with other users (D4 is
+  about that case).
+- **Measure:** you name the 10 people you work closest with. Compare your list with the top 10 of the graph.
+- **Status:** investigating
+- **Notes:**
+
+### D10. One identity for each person across Slack and GitHub
+
+- **Why:** one person has a git author name, one or more commit emails, a GitHub login and a Slack account. The
+  People tab (D9) and `who_knows` must show this person once.
+- **Try:** join the accounts by email first, then by the GitHub login in a Slack profile, then by name. Show a
+  join by name as a suggestion that you accept or reject.
+- **Risk:** a wrong join puts one person's work on another person's card. Two people can have the same name.
+- **Measure:** on a sample of people that you know, wrong joins and missed joins.
+- **Status:** investigating
+- **Notes:**
 
 ## E. Connections
 
@@ -791,4 +871,51 @@ each connection, and each hit shows its connection.
 - **Measure:** the size of `~/.pensieve/connections` and the number of connection chunks over time, and the share of
   used hits that point to an expired item.
 - **Status:** idea
+- **Notes:**
+
+### E6. Read-only connectors for cloud tools
+
+- **Why:** much of your context is in cloud tools, not on your disk. E4 collects from MCP servers that an agent
+  already has. Many users have no such server for each tool.
+- **Tools:** Notion, Slack, Google Drive, HubSpot, GitHub, Granola and Linear.
+- **Rule:** read-only, with your own access. Pensieve sees what you can see, and no more. It never writes. The rule
+  of E4 applies to each tool call.
+- **Try:** for each tool, use its MCP server through E4 when it has one. Otherwise sign in with your own account
+  and read its API. Show each tool in the one list of connections (E1).
+- **Questions:**
+  - Where tokens stay: the macOS Keychain, not a settings file.
+  - What to collect first: items that join to your work (D5), or everything that you can access in a time window.
+  - Expiry: E5 applies to each connector.
+- **Measure:** for each tool, the time and cost of a collection run, and the share of searches that return one of
+  its items that you or your agent then use.
+- **Status:** investigating
+- **Notes:**
+
+## F. Website
+
+### F1. A docs section on the website
+
+- **Why:** the README holds all the documentation. A user who comes from a search or a directory needs a page for
+  each topic: install, setup, MCP tools, connectors and settings.
+- **Try:** pages on the website made from the README and `docs/`, so the text has one source.
+- **Measure:** visits to the docs pages, and install commands copied from them.
+- **Status:** investigating
+- **Notes:**
+
+### F2. Search ranking for "pensieve mcp" and "pensieve ai"
+
+- **Why:** people who hear of Pensieve search for it by these words. The website must be the first result.
+- **Try:** page titles, descriptions and headings with these words; structured data for a software app; links from
+  the docs (F1) and the directories (F3).
+- **Measure:** the rank of the website for each query, each month.
+- **Status:** investigating
+- **Notes:**
+
+### F3. Listings in MCP directories
+
+- **Why:** developers look for MCP servers in directories and registries.
+- **Try:** list Pensieve in the official MCP registry and in the main directories, with the same name, description
+  and install command.
+- **Measure:** the number of listings, and installs that come from each one.
+- **Status:** investigating
 - **Notes:**

@@ -1,7 +1,8 @@
-"""One map of everything: documents, code files and agent sessions laid out together by meaning.
+"""One map of everything: documents, code files, agent sessions and the items collected from connections, laid out
+together by meaning.
 
 Each point is a file-like item: a document, a file in a git repo (the main checkout; worktree versions sit with it
-in search, not on the map), or an agent session. Positions come from one joint UMAP over item centroids, kept in
+in search, not on the map), an agent session, or a collected item (a ticket, a page, a thread…). Positions come from one joint UMAP over item centroids, kept in
 `data_points` and refit when the set grows; new items are placed beside their nearest neighbours in between.
 
 Topics are KMeans clusters of the same centroids (kept in `data_points.cluster`). Each gets keyword names at once and,
@@ -17,7 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import settings
+from pensieve import config, settings, vectors
+from pensieve import store as v2
 from pensieve.indexer import LAYOUT_VERSION
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 
@@ -35,8 +37,8 @@ AGENT = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
 class DataMap:
     def __init__(self, store, repos, files):
         self.store, self.repos, self.files = store, repos, files
-        self.db, self.lock = store.db, store.lock
-        with self.lock:
+        self.db, self.writing = store.db, store.writing
+        with self.writing:
             self.db.execute("CREATE TABLE IF NOT EXISTS data_points(id TEXT PRIMARY KEY, x REAL, y REAL, z REAL, cluster INTEGER)")
             self.db.execute("CREATE TABLE IF NOT EXISTS data_topics(id INTEGER PRIMARY KEY, sig TEXT, name TEXT, description TEXT, "
                             "keywords TEXT, reps TEXT)")
@@ -50,7 +52,7 @@ class DataMap:
     # ---- items + vectors -------------------------------------------------------
     def _vectors(self):
         """id -> (unit centroid). Ids: 'file:<abs>', 'code:<repo root>:<path>', 'session:<sid>'."""
-        by = {}
+        files, code, sessions = {}, {}, {}  # item id -> chunk ids
         file_ok = self.files.map_filter()
         shown = {}  # source id -> on the map (settings `off_map`)
 
@@ -58,38 +60,60 @@ class DataMap:
             if sid not in shown:
                 shown[sid] = settings.on_map(sid)
             return shown[sid]
-        with self.lock:
-            for path, root, v in self.db.execute("SELECT c.path, f.root, c.vec FROM file_chunks c JOIN files f ON f.path=c.path "
-                                                 "WHERE f.kind!='folder'"):
-                if file_ok(path, root):
-                    by.setdefault(f"file:{path}", []).append(v)
-            for repo, path, v in self.db.execute("SELECT repo, path, vec FROM code_chunks WHERE wt=''"):
-                if on(f"repos/{repo}"):
-                    by.setdefault(f"code:{repo}:{path}", []).append(v)
-            for sid, src, v in self.db.execute("SELECT c.session_id, s.source, c.vec FROM chunks c "
-                                               "JOIN sessions s ON s.id=c.session_id"):
-                if on(f"agents/{src}"):
-                    by.setdefault(f"session:{sid}", []).append(v)
-        ids = list(by)
+        for path, root, cid in self.db.execute("SELECT c.path, f.root, c.id FROM file_chunks c JOIN files f ON f.path=c.path "
+                                               "WHERE f.kind!='folder'"):
+            if file_ok(path, root):
+                files.setdefault(f"file:{path}", []).append(cid)
+        for repo, path, cid in self.db.execute("SELECT repo, path, id FROM code_chunks WHERE wt=''"):
+            if on(f"repos/{repo}"):
+                code.setdefault(f"code:{repo}:{path}", []).append(cid)
+        for sid, src, cid in self.db.execute("SELECT c.session_id, s.source, c.id FROM chunks c "
+                                             "JOIN sessions s ON s.id=c.session_id"):
+            if on(f"agents/{src}"):
+                sessions.setdefault(f"session:{sid}", []).append(cid)
+        ids, parts = [], []
+        for groups, index in ((files, self.files.index), (code, self.repos.index), (sessions, self.store.index)):
+            keys, C = vectors.centroids(groups, index)
+            ids += keys
+            parts.append(C)
+        keys, C = self._doc_vectors(on)
+        ids += keys
+        parts.append(C)
         if not ids:
-            return [], np.zeros((0, 1024), np.float32)
-        C = np.stack([np.mean([np.frombuffer(b, np.float16).astype(np.float32) for b in by[i]], axis=0) for i in ids])
-        return ids, unit(C)
+            return [], np.zeros((0, self.store.index.dim), np.float32)
+        return ids, np.concatenate(parts)
+
+    def _doc_vectors(self, on):
+        """The collected documents of connections (docindex.py): 'doc:<id>' -> the unit mean of its chunk vectors,
+        which doc_chunks keeps as float16. Only the documents of sources that are on the map."""
+        src = dict(v2.store_db().query("SELECT id, source_id FROM documents"))
+        sums, n = {}, Counter()
+        for doc_id, blob in self.db.execute("SELECT doc_id, vec FROM doc_chunks"):
+            if doc_id not in src or not on(f"connections/{src[doc_id]}"):
+                continue
+            v = np.frombuffer(blob, np.float16).astype(np.float32)
+            sums[doc_id] = sums[doc_id] + v if doc_id in sums else v
+            n[doc_id] += 1
+        if not sums:
+            return [], np.zeros((0, self.store.index.dim), np.float32)
+        keys = list(sums)
+        C = np.stack([sums[k] for k in keys])
+        C /= np.linalg.norm(C, axis=1, keepdims=True) + 1e-12  # the direction of the mean
+        return [f"doc:{k}" for k in keys], C
 
     def fingerprint(self):
-        with self.lock:
-            row = self.db.execute(
-                "SELECT (SELECT COUNT(*) FROM file_chunks), (SELECT MAX(id) FROM file_chunks), "
-                "(SELECT COUNT(*) FROM code_chunks WHERE wt=''), (SELECT MAX(id) FROM code_chunks), "
-                "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks)").fetchone()
+        row = self.db.execute(
+            "SELECT (SELECT COUNT(*) FROM file_chunks), (SELECT MAX(id) FROM file_chunks), "
+            "(SELECT COUNT(*) FROM code_chunks WHERE wt=''), (SELECT MAX(id) FROM code_chunks), "
+            "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks), "
+            "(SELECT COUNT(*) FROM doc_chunks), (SELECT MAX(id) FROM doc_chunks)").fetchone()
         return (*row, self.files.map_sig())
 
     def needs_layout(self):
         """Changed since the last layout, or the set has drifted far from what the layout (and its topics) were fit
         on, e.g. after a big source was switched off."""
         fit_n = int(self.store.meta("data_fit_n") or 0)
-        with self.lock:
-            n = self.db.execute("SELECT COUNT(*) FROM data_points").fetchone()[0]
+        n = self.db.execute("SELECT COUNT(*) FROM data_points").fetchone()[0]
         return (self.store.meta("data_layout_fp") != json.dumps(self.fingerprint())
                 or self.store.meta("data_topic_v") != TOPIC_VERSION
                 or (fit_n and abs(n - fit_n) > max(100, 0.15 * fit_n)))
@@ -100,13 +124,13 @@ class DataMap:
         fp = json.dumps(self.fingerprint())
         ids, C = self._vectors()
         if len(ids) < 4:  # too few to lay out: show none rather than keep points that left the map
-            with self.lock:
+            with self.writing:
                 gone = self.db.execute("DELETE FROM data_points").rowcount
                 self.store.meta("data_layout_fp", fp)
                 self.db.commit()
             self._cache = (None, None)
             return gone > 0
-        with self.lock:
+        with self.writing:
             placed = {r[0]: r[1:] for r in self.db.execute("SELECT id, x, y, z, cluster FROM data_points")}
             fit_n = int(self.store.meta("data_fit_n") or 0)
             ok = self.store.meta("data_layout") == VERSION
@@ -115,7 +139,7 @@ class DataMap:
             P = fit3d(C, n_neighbors=20, min_dist=0.1)
             lab = self._cluster(C)
             rows = [(i, *map(float, p), int(c)) for i, p, c in zip(ids, P, lab)]
-            with self.lock:
+            with self.writing:
                 self.db.execute("DELETE FROM data_points")
                 self.db.executemany("INSERT INTO data_points VALUES(?,?,?,?,?)", rows)
                 self.store.meta("data_fit_n", n)
@@ -124,12 +148,12 @@ class DataMap:
         elif self.store.meta("data_topic_v") != TOPIC_VERSION or not self._has_topics():  # topics changed, positions kept
             self._place(ids, C, placed)
             lab = self._cluster(C)
-            with self.lock:
+            with self.writing:
                 self.db.executemany("UPDATE data_points SET cluster=? WHERE id=?", [(int(c), i) for i, c in zip(ids, lab)])
             self._save_topics(ids, C, lab)
         else:
             self._place(ids, C, placed)
-        with self.lock:
+        with self.writing:
             self.store.meta("data_layout_fp", fp)
             self.db.commit()
         self._cache = (None, None)
@@ -148,7 +172,7 @@ class DataMap:
             Pn = place_new(C[Kk], Pk, C[[idx[i] for i in new]], k=3, jitter=0.03)
             near = nearest(C[[idx[i] for i in new]], C[Kk])
             rows = [(i, *map(float, p), placed[known[j]][3]) for i, p, j in zip(new, Pn, near)]
-        with self.lock:
+        with self.writing:
             self.db.executemany("INSERT OR REPLACE INTO data_points VALUES(?,?,?,?,?)", rows)
             self.db.executemany("DELETE FROM data_points WHERE id=?", [(i,) for i in gone])
 
@@ -160,8 +184,7 @@ class DataMap:
         return cluster(C, kmin=k, kmax=k) if k > 1 else np.zeros(len(C), int)
 
     def _has_topics(self):
-        with self.lock:
-            return self.db.execute("SELECT 1 FROM data_topics LIMIT 1").fetchone() is not None
+        return self.db.execute("SELECT 1 FROM data_topics LIMIT 1").fetchone() is not None
 
     def _save_topics(self, ids, C, lab):
         """Keywords and representative items per topic; written names are cleared since the members changed."""
@@ -178,7 +201,7 @@ class DataMap:
             reps = [ids[ks[j]] for j in np.argsort(-(C[ks] @ cen))[:24]]
             sig = hashlib.sha1(("|".join(sorted(ids[k] for k in ks[:500])) + TOPIC_VERSION).encode()).hexdigest()[:16]
             rows.append((c, sig, None, None, kw.get(c, ""), json.dumps(reps)))
-        with self.lock:
+        with self.writing:
             self.db.execute("DELETE FROM data_topics")
             self.db.executemany("INSERT INTO data_topics VALUES(?,?,?,?,?,?)", rows)
             self.store.meta("data_topic_v", TOPIC_VERSION)
@@ -187,6 +210,8 @@ class DataMap:
     def _text(self, p):
         home = str(Path.home())
         bits = [p.get("title") or "", (p.get("path") or "").replace(home, ""), p.get("repo") or "", p.get("summary") or ""]
+        if p.get("author_source") == "connection":  # its path is the same few folders for every item of a source
+            bits = [p.get("title") or ""]
         t = " ".join(bits)
         t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)  # camelCase -> camel Case
         return re.sub(r"[_\-./\\]+", " ", t).lower()
@@ -209,16 +234,17 @@ class DataMap:
             return {c: "" for c in ids}
 
     def topics(self):
-        with self.lock:
-            rows = self.db.execute("SELECT id, sig, name, description, keywords, reps FROM data_topics ORDER BY id").fetchall()
+        rows = self.db.execute("SELECT id, sig, name, description, keywords, reps FROM data_topics ORDER BY id").fetchall()
         return [dict(id=c, sig=sig, named=bool(name), keywords=kw or "", reps=json.loads(reps or "[]"),
                      name=name or self._kw_name(kw or "", c),
                      description=desc or "") for c, sig, name, desc, kw, reps in rows]
 
     def _cached_vectors(self):
-        """All item centroids, refreshed at most every two minutes (building them reads every chunk vector)."""
+        """All item centroids, refreshed at most every two minutes (building them reads the ids of every chunk).
+        The key is the version of each vector index in memory, which changes with every add and remove: unlike
+        `fingerprint`, it does not scan the chunk tables."""
         import time
-        fp = self.fingerprint()
+        fp = (self.files.index.version, self.repos.index.version, self.store.index.version, self.files.map_sig())
         if self._vec[0] != fp and (self._vec[0] is None or time.time() - self._vec_at > 120):
             self._vec = (fp, *self._vectors())
             self._vec_at = time.time()
@@ -316,7 +342,7 @@ class DataMap:
         return out
 
     def set_scoped_name(self, topic, name, description):
-        with self.lock:
+        with self.writing:
             self.store.meta(topic["key"], json.dumps(dict(name=name.strip()[:48], description=description.strip())))
             self.db.commit()
 
@@ -324,7 +350,7 @@ class DataMap:
         return [t for t in self.topics() if not t["named"]]
 
     def set_topic_name(self, topic, name, description):
-        with self.lock:  # only if the topic hasn't been reclustered while the AI was writing
+        with self.writing:  # only if the topic hasn't been reclustered while the AI was writing
             self.db.execute("UPDATE data_topics SET name=?, description=? WHERE id=? AND sig=?",
                             (name.strip()[:48], description.strip(), topic["id"], topic["sig"]))
             self.db.commit()
@@ -337,11 +363,16 @@ class DataMap:
             head = ""
         if not head:
             return {}
-        if self._ctimes.get(root, (None,))[0] == head:
-            return self._ctimes[root][1]
+        old_head, old = self._ctimes.get(root, (None, None))
+        if old_head == head:
+            return old
+        # HEAD moved on from the cached one (a new commit, a pull): read only the new commits, not the whole history
+        newer = bool(old_head) and subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor", old_head, head],
+                                                  capture_output=True, timeout=10).returncode == 0
         out = {}
         try:
-            log = subprocess.run(["git", "-C", root, "log", "--format=%x1e%ct", "--name-only", "--no-renames"],
+            log = subprocess.run(["git", "-C", root, "log", "--format=%x1e%ct", "--name-only", "--no-renames",
+                                  *([f"{old_head}..{head}"] if newer else [])],
                                  capture_output=True, text=True, timeout=120, errors="replace").stdout
         except (OSError, subprocess.SubprocessError):
             log = ""
@@ -353,6 +384,8 @@ class DataMap:
             for f in lines[1:]:
                 if f and f not in out:
                     out[f] = t
+        if newer:
+            out = {**old, **out}  # the new commits' times win
         self._ctimes[root] = (head, out)
         return out
 
@@ -362,15 +395,14 @@ class DataMap:
         if self._cache[0] == fp and not fresh:
             return self._cache[1]
         home = str(Path.home())
-        with self.lock:
-            pos = {r[0]: r[1:] for r in self.db.execute("SELECT id, x, y, z, cluster FROM data_points")}
-            files = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, author, author_source FROM files "
-                                    "WHERE kind!='folder'").fetchall()
-            repo_names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
-            code = self.db.execute("SELECT repo, path, MIN(id), MAX(last_ts), COUNT(*), GROUP_CONCAT(authors, '\x1f') "
-                                   "FROM code_chunks WHERE wt='' GROUP BY repo, path").fetchall()
-            sess = self.db.execute("SELECT id, title, source, project, project_name, updated, n_chunks, summary "
-                                   "FROM sessions WHERE n_chunks>0").fetchall()
+        pos = {r[0]: r[1:] for r in self.db.execute("SELECT id, x, y, z, cluster FROM data_points")}
+        files = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, author, author_source FROM files "
+                                "WHERE kind!='folder'").fetchall()
+        repo_names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
+        code = self.db.execute("SELECT repo, path, MIN(id), MAX(last_ts), COUNT(*), GROUP_CONCAT(authors, '\x1f') "
+                               "FROM code_chunks WHERE wt='' GROUP BY repo, path").fetchall()
+        sess = self.db.execute("SELECT id, title, source, project, project_name, updated, n_chunks, summary "
+                               "FROM sessions WHERE n_chunks>0").fetchall()
         out = []
         for path, root, name, ext, kind, mtime, size, author, src in files:
             k = f"file:{path}"
@@ -415,6 +447,18 @@ class DataMap:
                             display=(cwd or "").replace(home, "~", 1), repo=sc.get("project") if sc.get("root") else None,
                             repo_root=sc.get("root"), mtime=upd, chunks=n, summary=summary, author=AGENT.get(src, src),
                             author_source="agent", p=pos[k][:3], cluster=pos[k][3]))
+        # collected documents sit where v1 kept them as files (~/.pensieve/connections/<source>/), so the folder tree
+        # and the Connections source group find them
+        names = dict(v2.store_db().query("SELECT id, name FROM sources"))
+        for doc_id, src, kind, title, url, upd, seen in v2.store_db().query(
+                "SELECT id, source_id, kind, title, url, updated_at, seen_at FROM documents"):
+            k = f"doc:{doc_id}"
+            if k not in pos:
+                continue
+            leaf = title.replace("/", "∕")  # a slash in a title would make a folder in the tree
+            out.append(dict(id=k, type="doc", open=k, title=title, path=f"{config.DATA_DIR}/connections/{src}/{leaf}",
+                            display=f"{names.get(src, src)} · {kind}", ext="", kind=kind, url=url, mtime=upd or seen,
+                            author=names.get(src, src), author_source="connection", p=pos[k][:3], cluster=pos[k][3]))
         rev = hashlib.sha1(json.dumps(fp).encode()).hexdigest()[:12]  # names this list for index-based requests
         res = dict(points=out, repos=[dict(root=r, name=nm) for r, nm in repo_names.items()], home=home, rev=rev)
         self._cache = (fp, res)

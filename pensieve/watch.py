@@ -19,6 +19,7 @@ class Watch:
         self.wake = wake               # callable, thread-safe: wakes the indexer loop
         self.lock = threading.Lock()
         self.sessions = False
+        self.session_paths: set[str] = set()  # transcripts that changed: indexed at once (Store.sync_paths)
         self.files: set[str] = set()
         self.repos: set[str] = set()   # canonical repo roots
         self.full_files = False
@@ -77,6 +78,8 @@ class Watch:
         with self.lock:
             if any(path.startswith(s + "/") for s in self.sources):
                 self.sessions = hit = True
+                if not is_dir:
+                    self.session_paths.add(path)
             else:
                 repo = self._repo_for(path)
                 if repo:
@@ -113,6 +116,12 @@ class Watch:
         with self.lock:
             out = dict(sessions=self.sessions, files=self.files, full_files=self.full_files)
             self.sessions, self.files, self.full_files = False, set(), False
+        return out
+
+    def take_sessions(self) -> set[str]:
+        """The transcripts that changed since the last call."""
+        with self.lock:
+            out, self.session_paths = self.session_paths, set()
         return out
 
     def take_repos(self):
