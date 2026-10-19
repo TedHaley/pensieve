@@ -258,6 +258,22 @@ def test_turns_from_chunks():
                                          ("user", "ok"), ("assistant", "Added a limit of three.")]
 
 
+
+def test_goal_with_the_threads_own_pr_stays_on_the_thread():
+    """A goal whose only evidence is the thread's own PR is the thread itself: no second card with its sessions.
+    A goal with another branch's PR, or a ticket, is still a card of its own."""
+    from pensieve import work
+    repo = "https://github.com/example/app/pull/"
+    task = dict(id="b:/r@main", keys=[], ticket_refs=[], repos=[], commits=[],
+                branches=[dict(repo="/r", branch="feature")],
+                prs=[dict(url=repo + "49", head="feature", own=True), dict(url=repo + "50", head="other")])
+    note = dict(evidence=[], next="Push the fix", goals=[dict(title="Fix the map", evidence=["#49"]),
+                                                         dict(title="Fix the login", evidence=["#50"])])
+    out = work._split_goals(task, note)
+    assert out["also"] == ["Fix the map"]
+    assert [s["id"] for s in out["split"]] == ["b:/r@main~pr50"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     for t in tests:

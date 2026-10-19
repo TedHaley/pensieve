@@ -1712,7 +1712,7 @@ def _split_goals(task: dict, note: dict) -> dict:
     note["main"] = _evidence(task, note.get("evidence"))
     for i, g in enumerate(note.get("goals", [])):
         ev = _evidence(task, g.get("evidence"))
-        if not any(ev.values()) or _part_of_main(ev, note):
+        if not any(ev.values()) or _part_of_main(ev, note) or _own_work(task, ev):
             note["also"].append(g["title"])
             continue
         first = (ev["keys"] or [f"pr{u.rstrip('/').rsplit('/', 1)[-1]}" for u in ev["prs"]] or [ev["commits"][0]["sha"][:8]])[0]
@@ -1721,6 +1721,17 @@ def _split_goals(task: dict, note: dict) -> dict:
             n, gid = n + 1, f"{task['id']}~{first}-{n + 1}"
         note["split"].append(dict(id=gid, n=i, **ev))
     return note
+
+
+def _own_work(task: dict, ev: dict) -> bool:
+    """True when a goal's evidence is only the thread's own work: PRs from its own branches and commits on them,
+    with no ticket. That work is the thread itself, so a second card for it would hold the same sessions twice."""
+    if ev["keys"]:
+        return False
+    branches = {b.get("branch") for b in task.get("branches", [])}
+    own_prs = {p["url"] for p in task["prs"] if p.get("own") or p.get("head") in branches}
+    own_commits = {c["sha"] for c in task["commits"]}
+    return set(ev["prs"]) <= own_prs and {c["sha"] for c in ev["commits"]} <= own_commits
 
 
 def _refs(ev: dict) -> set:

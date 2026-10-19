@@ -4473,6 +4473,14 @@ function wkOrder(d) {
 }
 // A `card` event: the server built these cards again (or removed them). Ask for those cards only; when the page shows
 // the same cards in the same places, draw only the changed ones, else draw the tab again.
+// Thread changes from the server wait, and the whole Threads list loads again at most once a minute: one update a
+// minute, not a card at a time while its sessions are still being grouped.
+const WK_EVERY = 60e3;
+function wkStage() {
+  const st = S.work.stage ||= {t: null, at: 0};
+  if (st.t) return;
+  st.t = setTimeout(() => { st.t = null; st.at = Date.now(); loadWork(); }, Math.max(0, st.at + WK_EVERY - Date.now()));
+}
 async function patchWork(ids = [], removed = []) {
   const d = S.work.data;
   if (!d || S.work.hits) return loadWork();
@@ -5280,8 +5288,7 @@ async function handleEvent(m) {
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); reloadRepoSoon(); }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'upstream') loadUpstream();
-    else if (m.type === 'work') { if (S.view === 'work') loadWork(); }
-    else if (m.type === 'card') { if (S.work.data) patchWork(m.ids || [], m.removed || []); }
+    else if (m.type === 'work' || m.type === 'card') { if (S.work.data) wkStage(); }
     else if (m.type === 'people') { if (S.view === 'people') loadPeople(); else S.people.stale = true; }
     else if (m.type === 'projects') { if (S.view === 'projects') loadProjects(); else S.proj.stale = true; }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
