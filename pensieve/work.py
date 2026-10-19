@@ -128,18 +128,75 @@ def _older_items(items: list[dict], prefixes: set, S: dict, facts: dict, commits
     return [_item(d, ppl) for d, ppl in zip(docs, _assignees(db, [d.id for d in docs]))]
 
 
-def _assignees(db, ids) -> list[list[str]]:
+def _assignees(db, ids) -> list[list]:
+    """The people of each document, in the order of `ids`."""
     from pensieve.store import documents
     by = documents.people_of(db, ids)
-    return [[p.name or p.key.split(":", 1)[1] for p in by.get(i, []) if p.role == "assignee"] for i in ids]
+    return [by.get(i, []) for i in ids]
 
 
-def _item(d, assignees: list[str]) -> dict:
+def _owners(d, people) -> set[str]:
+    """The people a ticket belongs to, by name and email, lower case (see _is_mine): its assignees, authors and
+    owners, and the assignee, reporter and creator of the service's item."""
+    out = set()
+    for p in people:
+        if p.role in ("assignee", "author", "owner"):
+            out.add((p.name or "").strip().lower())
+            kind, _, v = p.key.partition(":")
+            if kind in ("email", "name"):
+                out.add(v.strip().lower())
+    if d.kind == "ticket":
+        try:
+            raw = json.loads(d.raw or "{}")
+        except ValueError:
+            raw = {}
+        for f in ("assignee", "reporter", "creator"):
+            v = raw.get(f) if isinstance(raw.get(f), dict) else (raw.get("fields") or {}).get(f)
+            if isinstance(v, dict):
+                out |= {str(v.get(k) or "").strip().lower() for k in ("displayName", "emailAddress", "name", "email")}
+    return out - {""}
+
+
+def _item(d, people: list) -> dict:
     url = d.url or ""
+    assignees = [p.name or p.key.split(":", 1)[1] for p in people if p.role == "assignee"]
     return dict(path=f"doc:{d.id}", doc=d.id, server=d.source_id, key=d.key if d.kind == "ticket" else "",
                 title=d.title, url=url, branch=d.branch or "", pr=bool(PR_URL.fullmatch(url)) if url else False,
                 status=d.status or "", assignee=", ".join(dict.fromkeys(assignees)),
-                updated=float(d.time or 0), text=d.text, private=d.private)
+                updated=float(d.time or 0), text=d.text, private=d.private, owners=_owners(d, people))
+
+
+_my_ids_cache = (0.0, set())
+
+
+def _my_ids() -> set[str]:
+    """The user's names and emails, lower case: from the People graph's "me" person, and git's user.name and
+    user.email."""
+    global _my_ids_cache
+    if time.time() - _my_ids_cache[0] < 300:
+        return _my_ids_cache[1]
+    out = {_git(str(Path.home()), "config", "--global", k, ttl=3600).strip().lower() for k in ("user.name", "user.email")}
+    try:
+        from pensieve import people
+        g = people.graph()
+        me = next((p for p in (g or {}).get("people", {}).values() if p.get("me")), None)
+        for k in (me or {}).get("keys", []):
+            kind, _, v = k.partition(":")
+            if kind in ("email", "name"):
+                out.add(v.lower())
+        if me and me.get("name"):
+            out.add(me["name"].lower())
+    except Exception:
+        pass
+    _my_ids_cache = (time.time(), out - {""})
+    return _my_ids_cache[1]
+
+
+def _is_mine(item: dict) -> bool:
+    """A ticket that belongs to the user: they are its assignee, creator or owner."""
+    me = _my_ids()
+    norm = {n for n in me if "@" not in n}
+    return any(o in me or o in norm for o in item.get("owners", ()))
 
 
 class _Union:
@@ -405,6 +462,19 @@ def group(inp: Inputs) -> list[dict]:
             u.join(f"s:{s['id']}", f"b:{k[0]}@{k[1]}")
         for key in keys_in(k[1]):
             u.join(f"b:{k[0]}@{k[1]}", f"t:{key}")
+    # A pull request linked from a branch's sessions whose title or head branch names a ticket joins that ticket to
+    # the PR's own head branch, when its sessions worked on that branch. Only the PR's branch joins, not the session,
+    # so a session that talks about another ticket's PR does not merge the two cards.
+    branch_nodes = {k for k in by_branch if k not in long_lived}
+    for (repo, _b), v in by_branch.items():
+        if (repo, _b) in long_lived:
+            continue
+        for url in list(dict.fromkeys(x for s in v for x in facts[s["id"]]["prs"]))[:6]:
+            info = _gh_pr(url) if "github.com" in url else {}
+            head = info.get("head") or ""
+            if (repo, head) in branch_nodes:
+                for key in keys_in(f"{info.get('title', '')} {head}"):
+                    u.join(f"b:{repo}@{head}", f"t:{key}")
     # Ticket keys a session talks about. A key in the session's title or branch always links. A key only in its text
     # links when the session runs in the key's home repo (where a branch, commit or session title names it), so a
     # session that just quotes another repo's ticket does not join that ticket's task.
@@ -495,6 +565,11 @@ def group(inp: Inputs) -> list[dict]:
         keys = sorted({n[2:] for n in nodes if n.startswith("t:")} | {i["key"] for i in tickets})
         cs = sorted((C[n] for n in nodes if n.startswith("c:")), key=lambda c: -c["ts"])
         brs = sorted({n[2:] for n in nodes if n.startswith("b:")})
+        # Tickets alone (no session, branch or commit of the user) are a card only when the ticket is the user's:
+        # agents' ticket searches and collection also bring in other people's tickets.
+        if not ss and not brs and tickets and not any(c["author"].lower() in _my_ids() for c in cs) \
+                and not any(_is_mine(i) for i in tickets):
+            continue
         files = Counter(p for s in ss for p in s["edited"])
         updated = max([s["updated"] for s in ss] + [i["updated"] for i in its] + [c["ts"] for c in cs] + [0])
         main = max(tickets, key=lambda i: i["updated"]) if tickets else None

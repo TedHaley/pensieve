@@ -566,25 +566,56 @@ def person(who: str) -> dict:
 
 
 @tool()
-def projects(query: str = "", limit: int = 8) -> dict:
-    """The projects around the user, nearest first: clusters of recent code, documents and sessions, each with its
-    people, the user's role, recent pull requests and tickets. A project is near when the people closest to the user
-    work on it. query: words that a project's name, areas, people, pull requests or tickets must have."""
+def projects(query: str = "", limit: int = 8, project: str = "") -> dict:
+    """The user's projects, then the projects of the people around them. A project is a group of tickets (an epic
+    or parent issue, or tickets joined by links, shared pull requests or a title prefix) with the branches and pull
+    requests tied to each ticket. Each ticket has a state from its status and its pull requests (merged: done; in
+    review: close to done). query: words that a project's name, tickets, pull requests or people must have.
+    project: a project id, a ticket key or a name, for one project with every ticket, who is on it and why each
+    pull request or branch is tied to it."""
     from pensieve import team_projects
-    team_projects.rebuild(_c()["store"], _c()["datamap"])
-    res = team_projects.summary(_c()["datamap"], query)
+    team_projects.rebuild(_c()["store"])
+    day = lambda ts: time.strftime("%Y-%m-%d", time.localtime(ts)) if ts else None
+    people = lambda ms: [m["name"] + (" (you)" if m["me"] else "") + f" [{', '.join(m['roles'])}]" for m in ms if m["name"]]
+    if project:
+        e = team_projects.find(project)
+        if not e:
+            return {"error": f"no project matches {project!r}"}
+        prs = {p["url"]: p for p in e["prs"]}
+        why = {}
+        for t in e["ties"]:
+            why.setdefault((t["ticket"], t["ref"]), t["why"])
+        return dict(
+            id=e["id"], name=e["name"], group=e["kind"], url=e["url"] or None, yours=e["section"] == "mine",
+            your_roles=e["my_roles"], likely_done=e["likely_done"], last_active=day(e["last"]), counts=e["counts"],
+            people=people(e["members"]),
+            tickets=[dict(key=t["key"], title=t["title"], url=t["url"] or None, status=t["status"] or None,
+                          state=t["state"], why_state=t["why"], last_active=day(t["updated"]), people=people(t["people"]),
+                          prs=[dict(url=u, title=prs[u]["title"], state=prs[u]["state"], review=prs[u]["review"] or None,
+                                    branch=prs[u]["head"] or None, tied_because=why.get((t["key"], u)))
+                               for u in t["prs"] if u in prs],
+                          branches=[dict(branch=b, tied_because=why.get((t["key"], b))) for b in t["branches"]])
+                     for t in e["tickets"]],
+            prs_without_ticket=[{k: p[k] for k in ("url", "title", "state", "repo")} for p in e["prs"]]
+            if e["kind"] == "pr" else None)
+    res = team_projects.summary(query)
     out = []
-    for e in res["projects"][:max(1, min(limit, 30))]:
-        full = team_projects.project(_c()["datamap"], e["id"]) or {}
+    for e in res["projects"]:
+        if e["stale"] and not query:
+            continue
+        c = e["counts"]
         out.append(dict(
-            name=e["name"], description=e["description"] or None, near=e["near"], relevance=e["relevance"],
-            your_role=e["role"], repos=e["repos"], areas=e["areas"], tickets_prefix=e["prefixes"] or None,
-            people=[m["name"] + (" (you)" if m["me"] else "") for m in e["members"]],
-            prs=[{k: x.get(k) for k in ("title", "url", "state")} for x in full.get("prs", [])[:4]] or None,
-            tickets=[{k: x.get(k) for k in ("key", "title", "status")} for x in full.get("tickets", [])[:4]] or None,
-            last_active=time.strftime("%Y-%m-%d", time.localtime(e["last"])) if e["last"] else None))
+            id=e["id"], name=e["name"], yours=e["section"] == "mine", your_roles=e["my_roles"] or None,
+            likely_done=e["likely_done"], last_active=day(e["last"]),
+            status=f"{c['tickets']} tickets: {c['done']} done, {c['close']} close to done, {c['progress']} in progress; "
+                   f"{c['prs']} PRs: {c['merged']} merged, {c['review']} in review, {c['draft'] + c['open']} open",
+            people=people(e["members"][:8]),
+            tickets=[f"{t['key']} {t['title']} ({t['state']})" for t in e["tickets"][:5]] or None))
+        if len(out) >= max(1, min(limit, 30)):
+            break
     return {"projects": out, "building": res["building"] or None,
-            "note": None if out else "No projects yet: they are built in the background from the indexed work."}
+            "note": None if out else "No projects yet: they are built in the background from tickets, branches and "
+                                     "pull requests."}
 
 
 @tool()

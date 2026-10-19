@@ -68,6 +68,7 @@ DEFAULTS = {
     "mcp_servers": [],
     "connections_every_hours": 6,  # how often to collect from each connection that is on; 0 = only on request
     "connections_days": 30,        # how far back the first collection goes
+    "projects_stale_days": 21,     # Projects tab: a project with no activity for this many days goes under "Show older"
 }
 
 DESCRIPTIONS = {
@@ -115,6 +116,7 @@ DESCRIPTIONS = {
                    "Use them when the insights engine has no MCP servers, for example the built-in engine.",
     "connections_every_hours": "How often Pensieve collects from each connection that is on (0 = only when you ask).",
     "connections_days": "How many days back the first collection from a connection goes.",
+    "projects_stale_days": "In Projects, a project with no activity for this many days goes under Show older.",
 }
 
 _NO_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit"

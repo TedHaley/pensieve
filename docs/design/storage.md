@@ -402,10 +402,85 @@ CREATE TABLE person_edges (       -- the People graph, built from store.db and t
   PRIMARY KEY (a, b, kind)
 ) STRICT;
 
-CREATE TABLE projects (...) STRICT;          -- the Projects tab, one row per project, members in project_members
 CREATE TABLE cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGER NOT NULL) STRICT;  -- gh and git
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 ```
+
+### Projects
+
+The Projects tab groups tickets into projects and ties branches and pull requests to each ticket
+(`pensieve/project_model.py`). The v1 code keeps one build in `projects/ticket_projects.json`. In v2, these tables
+in `index.db` hold the same data. The builder can then change only the rows of a ticket that changed. The
+dataclasses `Project`, `ProjectTicket`, `Tie`, `PullRequest`, `Branch` and `Member` have the same fields.
+
+```sql
+CREATE TABLE projects (           -- one group of tickets, or the pull requests of a repo that have no ticket
+  id           TEXT PRIMARY KEY,                  -- sha1 of '<kind>:<ref>', stable while the group stays
+  kind         TEXT NOT NULL CHECK (kind IN ('parent', 'linear', 'component', 'milestone', 'linked', 'ticket', 'pr')),
+  ref          TEXT NOT NULL,                     -- the parent key, project name, milestone, first key or repo
+  name         TEXT NOT NULL,
+  url          TEXT,
+  section      TEXT NOT NULL CHECK (section IN ('mine', 'around')),
+  last_at      INTEGER NOT NULL,                  -- the newest activity of a ticket, pull request or branch
+  my_last_at   INTEGER,                           -- the newest activity on a ticket that the user is on
+  involvement  REAL NOT NULL CHECK (involvement BETWEEN 0 AND 1),
+  closeness    REAL NOT NULL CHECK (closeness BETWEEN 0 AND 1),
+  score        REAL NOT NULL,
+  likely_done  INTEGER NOT NULL CHECK (likely_done IN (0, 1)),
+  built_at     INTEGER NOT NULL
+) STRICT;
+CREATE INDEX projects_order ON projects (section, score DESC);
+
+CREATE TABLE project_tickets (    -- a ticket in a project; each ticket is in one project
+  key          TEXT PRIMARY KEY,                  -- ABC-123
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title        TEXT NOT NULL,
+  url          TEXT,
+  status       TEXT,                              -- the status as the service gives it
+  state        TEXT NOT NULL CHECK (state IN ('done', 'close', 'progress', 'todo')),
+  state_why    TEXT NOT NULL,                     -- "its pull request is merged"
+  parent_key   TEXT,
+  known        INTEGER NOT NULL CHECK (known IN (0, 1)),  -- 0: only a branch, a pull request or a commit names it
+  doc_id       INTEGER,                           -- the collected ticket in documents, when there is one
+  updated_at   INTEGER NOT NULL
+) STRICT;
+CREATE INDEX project_tickets_project ON project_tickets (project_id);
+
+CREATE TABLE ticket_links (       -- a tie between a ticket and a branch, pull request, commit or context card
+  key          TEXT NOT NULL REFERENCES project_tickets(key) ON DELETE CASCADE,
+  kind         TEXT NOT NULL CHECK (kind IN ('branch_name', 'pr_title', 'pr_branch', 'pr_body', 'commit', 'card')),
+  ref          TEXT NOT NULL,                     -- PR url, repo@branch, repo@sha or CardId
+  why          TEXT NOT NULL,
+  PRIMARY KEY (key, kind, ref)
+) STRICT;
+CREATE INDEX ticket_links_ref ON ticket_links (ref);
+
+CREATE TABLE pull_requests (      -- pull requests that gh, the cards or the connections know
+  url          TEXT PRIMARY KEY,
+  repo         TEXT NOT NULL,
+  number       INTEGER NOT NULL,
+  title        TEXT NOT NULL,
+  state        TEXT NOT NULL CHECK (state IN ('merged', 'review', 'draft', 'open', 'closed')),
+  review       TEXT CHECK (review IN ('approved', 'changes requested', 'review requested', 'reviewed')),
+  head         TEXT,
+  author       TEXT,                              -- PersonId
+  milestone    TEXT,
+  updated_at   INTEGER NOT NULL,
+  merged_at    INTEGER
+) STRICT;
+
+CREATE TABLE ticket_people (      -- who works on a ticket, and how
+  key          TEXT NOT NULL REFERENCES project_tickets(key) ON DELETE CASCADE,
+  person_id    TEXT NOT NULL,                     -- PersonId
+  role         TEXT NOT NULL CHECK (role IN ('assignee', 'author', 'reviewer', 'committer', 'context')),
+  PRIMARY KEY (key, person_id, role)
+) STRICT;
+CREATE INDEX ticket_people_person ON ticket_people (person_id);
+```
+
+The members of a project, its pull requests and its branches come from these tables with a join. They are not
+stored twice. The pull requests of a `pr` project have no ticket, so `ticket_links` cannot hold them. A
+`project_prs (project_id, url)` table holds them.
 
 Full-text indexes: `fts_code_words` (word tokens: names and words) is the main code index, and `fts_code` (trigram)
 stays only for substring queries of 3 or more characters. `fts_docs`, `fts_files` and `fts_sessions` use word tokens.
