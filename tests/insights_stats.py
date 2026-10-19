@@ -190,6 +190,38 @@ def test_risk():
     assert ist.risk(dict(departed_share=0.5, age_days=None, bus_factor=1), 90) == 0.3
 
 
+def test_achievements():
+    a = {x["id"]: x for x in ist.achievements(closed=3, last_week=2, n_open=1, close_days=3)}
+    assert a["first"]["earned"] and not a["closer"]["earned"] and a["closer"]["progress"] == 3
+    assert a["beat"]["earned"] and a["beat"]["goal"] == 3
+    assert a["daily"]["earned"]
+    assert not a["clean"]["earned"] and a["clean"]["goal"] == 4, "one thread is still in progress"
+    a = {x["id"]: x for x in ist.achievements(closed=0, last_week=0, n_open=0, close_days=0)}
+    assert not a["clean"]["earned"], "a clean slate needs a close"
+    assert not a["beat"]["earned"] and a["beat"]["goal"] == 1
+
+
+def test_week():
+    """Closes since Monday count; threads in progress come fewest steps first, with no known step last."""
+    now = time.mktime((2026, 10, 21, 12, 0, 0, 0, 0, -1))  # a Wednesday
+    monday = time.mktime((2026, 10, 19, 9, 0, 0, 0, 0, -1))
+    step = lambda n: [dict(text=f"step {i}", how="agent") for i in range(n)]  # noqa: E731
+    cards = [
+        ("a", "etched", monday, dict(title="A")),
+        ("b", "etched", monday + 86400, dict(title="B")),
+        ("c", "etched", monday - 3 * 86400, dict(title="C")),  # last week
+        ("d", "conscious", now - 60, dict(title="D", left=step(3))),
+        ("e", "conscious", now - 60, dict(title="E", left=step(1))),
+        ("f", "conscious", now - 60, dict(title="F")),
+        ("g", "subconscious", now - 60, dict(title="G", left=step(1))),
+    ]
+    w = ist.week(cards, now)
+    assert w["closed"] == 2 and w["last_week"] == 1 and w["best_week"] == 2
+    assert [t["id"] for t in w["open"]] == ["e", "d", "f"] and w["n_open"] == 3
+    assert w["per_day"][:3] == [1, 1, 0]
+    assert {x["id"]: x["earned"] for x in w["achievements"]}["beat"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     for t in tests:

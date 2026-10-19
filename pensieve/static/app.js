@@ -788,7 +788,7 @@ async function applyScope(force = false) {
   if (!changed) return;
   if (S.view === 'map') { recolor(); refreshStates(); renderLabels(); }
   renderSidebar(); renderTimeline();
-  if (S.view === 'insights') { S.ins.key = null; loadInsights().then(renderInsights); }
+  if (S.view === 'insights') renderInsights();
 }
 const toggleSet = (set, v) => set.has(v) ? set.delete(v) : set.add(v);
 function toggleTopic(id) {
@@ -4132,14 +4132,14 @@ function bindPeopleCard() {
     const email = p.identities.find(i => i.kind === 'email')?.value;
     openItem('person:' + (email ? `${p.name} <${email}>` : p.name));
   });
-  $$('[data-pp-task]', box).forEach(b => b.onclick = async () => {
-    const id = b.dataset.ppTask; if (!id) return;
-    await setView('work');
-    if (!S.work.data) await loadWork();
-    const t = S.work.data?.tasks.find(x => x.id === id);
-    if (!t) return toast('That thread is not in the Threads tab now.');
-    S.work.q = ''; S.work.hits = null; S.work.flash = {id, state: t.state, until: Date.now() + 6000}; renderWork();
-  });
+  $$('[data-pp-task]', box).forEach(b => b.onclick = () => b.dataset.ppTask && goThread(b.dataset.ppTask));
+}
+async function goThread(id) {
+  await setView('work');
+  if (!S.work.data) await loadWork();
+  const t = S.work.data?.tasks.find(x => x.id === id);
+  if (!t) return toast('That thread is not in the Threads tab now.');
+  S.work.q = ''; S.work.hits = null; S.work.flash = {id, state: t.state, until: Date.now() + 6000}; renderWork();
 }
 async function ppShowTeam(tid) {
   const P = S.people;
@@ -4686,14 +4686,13 @@ async function regenInsights() {
 // The Insights tab: stats first (no AI needed), then the game, peers, momentum and knowledge gaps; the sessions
 // charts and the AI notes come last. The numbers come from /api/insights/stats and /api/insights/gaps.
 const IST = {stats: null, loading: false, err: null, at: 0, gaps: null, gapsLoading: false, gapsTimer: null, allGaps: false,
-  staleDays: 90, inactiveDays: 180, repos: new Set(), metric: 'score'};
+  staleDays: 90, inactiveDays: 180, repos: new Set()};
 try {
   const g = JSON.parse(localStorage.getItem('pensieve.gapDays') || 'null'); if (g) Object.assign(IST, {staleDays: g[0], inactiveDays: g[1]});
   IST.repos = new Set(JSON.parse(localStorage.getItem('pensieve.insRepos') || '[]'));
-  IST.metric = localStorage.getItem('pensieve.insMetric') === 'lines' ? 'lines' : 'score';
 } catch {}
 const istRepoParam = () => IST.repos.size ? '&repos=' + enc([...IST.repos].join(',')) : '';
-function saveIst() { try { localStorage.setItem('pensieve.insRepos', JSON.stringify([...IST.repos])); localStorage.setItem('pensieve.insMetric', IST.metric); } catch {} }
+function saveIst() { try { localStorage.setItem('pensieve.insRepos', JSON.stringify([...IST.repos])); } catch {} }
 const fmtTok = n => n == null ? '—' : n >= 1e9 ? (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n));
 const fmtUsd = n => n == null ? '—' : '$' + (n >= 1000 ? Math.round(n).toLocaleString() : n.toFixed(n >= 100 ? 0 : 2));
 const fmtStat = (v, f) => v == null ? '—' : f === 'tok' ? fmtTok(v) : f === 'usd' ? fmtUsd(v) : f === 'pct' ? (v * 100).toFixed(1) + '%' : (Math.round(v * 10) / 10).toLocaleString();
@@ -4778,38 +4777,59 @@ function drawCost(st) {
     tip(`<b>${fmtDY(new Date(d.day + 'T12:00'))}</b><div class="m">about ${fmtUsd(d.cost)}</div><table><tr><td>Cache reads</td><td>${fmtTok(d.cache_read)}</td></tr><tr><td>Cache writes</td><td>${fmtTok(d.cache_write)}</td></tr><tr><td>Output</td><td>${fmtTok(d.output)}</td></tr><tr><td>Input</td><td>${fmtTok(d.input)}</td></tr></table>`, e.clientX, e.clientY); };
   svg.onmouseleave = () => tip(null);
 }
-const POINT_LABEL = {pr_merged: 'merged PRs', thread_closed: 'closed threads', ticket_done: 'done tickets', review: 'reviews given', commit: 'commits', item_closed: 'thread items done'};
-function gameCard(st) {
-  const g = st.game, cur = g.windows[0], L = g.lines, isLines = IST.metric === 'lines';
-  const formula = `<b>How the score works</b><p>${esc(g.formula)}</p>`, lformula = `<b>Deployed lines per M tokens</b><p>${esc(L.formula)}</p>`;
-  const val = w => isLines ? w.lines_per_m : w.score;
-  const sc = g.windows.slice().reverse(), smax = Math.max(1, ...sc.map(w => (w.counts ? val(w) : 0) || 0));
-  const bestAt = isLines ? L.best_window : g.best_window;
-  const bars = sc.map((w, i) => { const k = sc.length - 1 - i, v = val(w), h = v ? Math.min(100, Math.max(3, v / smax * 100)) : 0;
-    const head = `<b>${k === 0 ? 'Last 7 days' : `${k * 7 + 7}–${k * 7} days ago`}</b>`;
-    const t = isLines ? `${head}<div class="m">${v == null ? '—' : Math.round(v).toLocaleString()} lines / M tokens${w.counts ? '' : v != null ? ' (few tokens: not a best)' : ''}</div><p>${(w.lines || 0).toLocaleString()} deployed lines · ${fmtTok(w.wtok)} weighted tokens</p>`
-      : `${head}<div class="m">Score ${w.score ?? '—'}${w.counts ? '' : w.score != null ? ' (few tokens: not a best)' : ''}</div><p>${w.points} points from ${Object.keys(POINT_LABEL).filter(x => w[x]).map(x => `${w[x]} ${POINT_LABEL[x]}`).join(', ') || 'nothing shipped'} · ${fmtTok(w.wtok)} weighted tokens</p>`;
-    return `<div class="is-sb ${k === 0 ? 'cur' : ''} ${k === bestAt ? 'best' : ''} ${w.counts ? '' : 'few'}" data-tip="${esc(t)}"><i style="height:${h}%"></i></div>`; }).join('');
-  const dPct = (v, base) => base && v != null ? Math.round((v - base) / base * 100) : null;
-  const dHtml = (d, base, fmt) => d == null ? '<span class="muted">no 4-week baseline yet</span>' : `<span class="${d >= 0 ? 'good-t' : 'warn-t'}">${d >= 0 ? '▲' : '▼'} ${Math.abs(d)}%</span> <span class="muted">vs your 4-wk median ${fmt(base)}</span>`;
-  const lv = L.value == null ? '—' : Math.round(L.value).toLocaleString();
-  const seg = `<div class="seg is-seg" role="radiogroup" aria-label="Metric"><button data-ismetric="score" role="radio" aria-checked="${!isLines}" class="${isLines ? '' : 'on'}">Value score</button><button data-ismetric="lines" role="radio" aria-checked="${isLines}" class="${isLines ? 'on' : ''}">Deployed lines / M tokens</button></div>`;
-  const badge = b => `<div class="is-badge ${b.earned ? 'on' : ''}" data-tip="${esc(`<b>${esc(b.name)}</b><p>${esc(b.rule)}</p>${b.detail ? `<div class="m">${esc(b.detail)}</div>` : ''}`)}">
-      <div class="is-bh"><span class="is-bi" aria-hidden="true">${b.earned ? '✓' : '○'}</span><b>${esc(b.name)}</b><span class="muted">${b.earned ? 'Earned' : `${b.progress}/${b.goal}`}</span></div>
-      <p>${esc(b.rule)}</p><span class="is-meter" aria-label="${b.progress} of ${b.goal}"><i style="width:${b.progress / b.goal * 100}%"></i></span></div>`;
-  const big = (on, label, v, tipText, d, unit) => `<div class="is-big ${on ? 'on' : ''}"><div class="l">${label}</div><div class="is-score" data-tip="${esc(tipText)}">${v}${unit ? `<span class="u">${unit}</span>` : ''}</div><div class="d">${d}</div></div>`;
-  return `<div class="card is-game">
-    <div class="is-gh"><div><h3>Value per token</h3><p class="cap">What shipped in the last 7 days, per million weighted tokens. <button class="linkbtn" data-tip="${esc(formula + lformula)}">How these work</button></p></div>${seg}</div>
-    <div class="is-grow">
-      <div class="is-hero"><div class="is-bigs">
-          ${big(!isLines, 'Value score', g.score ?? '—', formula, dHtml(dPct(g.score, g.prev_median), g.prev_median, x => Math.round(x)), '')}
-          ${big(isLines, 'Deployed lines', lv, lformula, dHtml(dPct(L.value, L.prev_median), L.prev_median, x => Math.round(x).toLocaleString()), 'lines / M tokens')}</div>
-        <div class="is-facts"><span><b>${cur.points}</b> points</span><span><b>${(L.lines || 0).toLocaleString()}</b> deployed lines</span><span><b>${fmtTok(cur.wtok)}</b> weighted tokens</span>
-          <span title="The best of the last 8 weeks">Best <b>${isLines ? (L.best == null ? '—' : Math.round(L.best).toLocaleString()) : g.best ?? '—'}</b></span>
-          <span title="Days in a row with a merged PR or a closed thread; weekends don't break a run">Streak <b>${plural(g.streak, 'day')}</b> <span class="muted">(best ${g.best_streak})</span></span></div></div>
-      <div class="is-scores"><div class="is-sbars" role="img" aria-label="${isLines ? 'Deployed lines per M tokens' : 'Score'} per week, last 8 weeks">${bars}</div><div class="is-sx"><span>8 weeks ago</span><span>${isLines ? 'Deployed lines / M tokens' : 'Value score'} · last 7 days</span></div></div>
+const istMedian = xs => { const v = xs.filter(x => x != null).sort((a, b) => a - b); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null; };
+// One output-per-token metric: the last 7 days, the change against the median of the 4 weeks before, 8 weeks of bars.
+function valueMetric({label, cap, tip, vals, fmt, better, unit, bar}) {
+  const cur = vals[0], base = istMedian(vals.slice(1, 5)), old = vals.slice().reverse();
+  const max = Math.max(1, ...old.filter(v => v != null));
+  const bars = old.map((v, i) => { const k = old.length - 1 - i, h = v ? Math.min(100, Math.max(3, v / max * 100)) : 0;
+    return `<div class="is-sb ${k === 0 ? 'cur' : ''}" data-tip="${esc(`<b>${k === 0 ? 'Last 7 days' : `${k * 7 + 7}–${k * 7} days ago`}</b>${bar(k)}`)}"><i style="height:${h}%"></i></div>`; }).join('');
+  let d = '<span class="muted">no 4-week baseline yet</span>';
+  if (cur != null && base) {
+    const pct = Math.round((cur - base) / base * 100), good = better === 'up' ? pct >= 0 : pct <= 0;
+    d = `<span class="${good ? 'good-t' : 'warn-t'}">${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct)}%</span> <span class="muted">vs your 4-wk median ${esc(fmt(base))}</span>`;
+  }
+  return `<div class="card is-val"><h3>${esc(label)}</h3><p class="cap">${esc(cap)} <button class="linkbtn" data-tip="${esc(tip)}">How it works</button></p>
+    <div class="is-vrow"><div><div class="is-score">${cur == null ? '—' : esc(fmt(cur))}${unit ? `<span class="u">${esc(unit)}</span>` : ''}</div><div class="d">${d}</div></div>
+      <div class="is-scores"><div class="is-sbars" role="img" aria-label="${esc(label)}, last 8 weeks">${bars}</div><div class="is-sx"><span>8 weeks ago</span><span>last 7 days</span></div></div></div></div>`;
+}
+function valueCards(st) {
+  const g = st.game, w = g.windows, perPr = x => x.pr_merged && x.wtok ? x.wtok / x.pr_merged : null;
+  return `<div class="grid2 is-vals">
+    ${valueMetric({label: 'Deployed lines per M tokens', cap: 'Lines that reached the default branch, per million weighted tokens.',
+      tip: `<b>Deployed lines per M tokens</b><p>${esc(g.lines.formula)}</p>`, vals: w.map(x => x.lines_per_m), better: 'up', unit: 'lines / M',
+      fmt: v => Math.round(v).toLocaleString(), bar: k => `<div class="m">${w[k].lines_per_m == null ? '—' : Math.round(w[k].lines_per_m).toLocaleString()} lines / M tokens</div><p>${(w[k].lines || 0).toLocaleString()} deployed lines · ${fmtTok(w[k].wtok)} weighted tokens</p>`})}
+    ${valueMetric({label: 'Tokens per merged PR', cap: 'Weighted tokens for each PR of yours that merged. Lower is better.',
+      tip: '<b>Tokens per merged PR</b><p>Weighted tokens of the last 7 days ÷ your PRs that merged in them. Weighted tokens = input + 1.25 × cache writes + 0.1 × cache reads + 5 × output (the ratios of Claude list prices).</p>',
+      vals: w.map(perPr), better: 'down', unit: '', fmt: fmtTok,
+      bar: k => `<div class="m">${perPr(w[k]) == null ? 'no merged PR' : fmtTok(perPr(w[k])) + ' per PR'}</div><p>${plural(w[k].pr_merged || 0, 'merged PR')} · ${fmtTok(w[k].wtok)} weighted tokens</p>`})}
+  </div>`;
+}
+const WEEKDAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+// Since Monday: the threads closed, the threads in progress (fewest steps left first) and the achievements.
+function weekCard(st) {
+  const w = st.week; if (!w) return '';
+  const total = w.closed + w.n_open, pct = total ? w.closed / total * 100 : 0;
+  const today = (new Date().getDay() + 6) % 7, dmax = Math.max(1, ...w.per_day);
+  const days = w.per_day.map((n, i) => `<div class="is-wd ${i === today ? 'cur' : ''} ${i > today ? 'later' : ''}" data-tip="${esc(`<b>${WEEKDAY[i]}</b><div class="m">${plural(n, 'thread')} closed</div>`)}"><i style="height:${n ? Math.max(12, n / dmax * 100) : 0}%"></i><span>${WEEKDAY[i][0]}</span></div>`).join('');
+  const who = x => x.how ? `<span class="wk-st who-${esc(x.how)}" title="${esc(WK_WHO[x.how]?.[1] || '')}">${esc(WK_WHO[x.how]?.[0] || x.how)}</span>` : '';
+  const open = w.open.map(t => `<div class="is-close">
+      <div class="is-ch"><button class="linkbtn is-ct" data-is-thread="${esc(t.id)}" title="Open this thread">${esc(t.title)}</button><span class="muted">${t.n_left ? plural(t.n_left, 'step') + ' left' : 'no known step'}</span></div>
+      ${t.left.slice(0, 1).map(x => `<div class="is-cl"><span>${esc(x.text)}</span>${who(x)}</div>`).join('')}</div>`).join('');
+  const ach = a => `<div class="is-badge ${a.earned ? 'on' : ''}">
+      <div class="is-bh"><span class="is-bi" aria-hidden="true">${a.earned ? '✓' : '○'}</span><b>${esc(a.name)}</b><span class="muted">${a.earned ? 'Earned' : `${a.progress}/${a.goal}`}</span></div>
+      <p>${esc(a.rule)}</p><span class="is-meter" aria-label="${a.progress} of ${a.goal}"><i style="width:${a.progress / a.goal * 100}%"></i></span></div>`;
+  return `<div class="card is-week">
+    <div class="is-gh"><div><h3>This week</h3><p class="cap">Since Monday. Close the threads you have in progress: the ones closest to done are first.</p></div>
+      <span class="muted">${w.n_open ? `${plural(w.n_open, 'thread')} in progress` : 'Nothing in progress'}</span></div>
+    <div class="is-wgrid">
+      <div><div class="is-score">${w.closed}<span class="u">${w.closed === 1 ? 'thread' : 'threads'} closed</span></div>
+        <div class="is-wbar" role="img" aria-label="${w.closed} of ${total} threads closed"><i style="width:${pct}%"></i></div>
+        <div class="is-facts"><span><b>${w.closed}</b> of ${total} closed</span><span>Last week <b>${w.last_week}</b></span><span title="The most threads closed in one week, of the last 4">Best <b>${w.best_week}</b></span></div>
+        <div class="is-wds" role="img" aria-label="Threads closed per day this week">${days}</div></div>
+      <div><div class="l is-wl">Closest to done</div>${open || '<div class="empty">No thread in progress. Each thread you start shows here until it closes.</div>'}</div>
     </div>
-    <div class="is-badges">${g.badges.map(badge).join('')}</div></div>`;
+    <div class="is-badges">${w.achievements.map(ach).join('')}</div></div>`;
 }
 function peersCard(st) {
   const p = st.peers;
@@ -4876,13 +4896,6 @@ function renderInsights() {
   if (!st) { el.innerHTML = `<div class="ins-wrap">${IST.err ? `<div class="empty">Could not load the stats: ${esc(IST.err)}</div>` : '<div class="empty"><div class="spinner" style="margin:auto"></div></div>'}</div>`; return; }
   if (IST.statsKey !== istRepoParam() && !IST.loading) loadStats();
   const ss = IST.repos.size ? filtered().filter(s => [...IST.repos].some(n => matchKey(s, n))) : filtered();
-  const ins = S.insights?.key === scopeKey() ? S.insights?.data : null;
-  const running = (S.insights?.running || S.status.insights_running) && (S.insights?.running_scope || S.status.insights_scope || '') === scopeKey();
-  const busyElsewhere = (S.insights?.running || S.status.insights_running) && !running;
-  const scopeName = S.f.projects.size ? [...S.f.projects].map(keyLabel).join(', ') : '';
-  const aiOn = insightsOn();
-  if (aiOn && S.insights?.key !== scopeKey()) loadInsights().then(() => S.view === 'insights' && renderInsights());
-  const openAI = el.querySelector('#is-ai')?.open;
   el.innerHTML = `<div class="ins-wrap">
     <div class="ins-head"><h1>Insights</h1>
       <button class="btn" id="is-refresh" title="Count again now">Refresh</button></div>
@@ -4890,27 +4903,20 @@ function renderInsights() {
       <button class="chip ${IST.repos.size ? '' : 'on'}" data-isrepo="" aria-pressed="${!IST.repos.size}">All</button>
       ${(st.repos || []).map(n => `<button class="chip ${IST.repos.has(n) ? 'on' : ''}" data-isrepo="${esc(n)}" aria-pressed="${IST.repos.has(n)}">${esc(n)}</button>`).join('')}
       ${IST.loading || IST.statsKey !== istRepoParam() ? '<span class="spinner" style="width:10px;height:10px;border-width:2px"></span>' : IST.repos.size ? `<span class="muted">Tokens of sessions in these repos; their output, threads and peers.</span>` : ''}</div>
+    ${valueCards(st)}
     ${statsKpis(st)}
+    ${weekCard(st)}
+    <div class="grid2">
+      <div class="card"><h3>Activity by repo</h3><p class="cap">Agent sessions per ${actBinLabel(ss)}, by the repo they ran in. Click a bar to filter the map to that period.</p><div class="legend-row" id="actleg"></div><svg id="actchart" class="chart" height="200"></svg></div>
+      <div class="card"><h3>When you work</h3><p class="cap">Sessions started by weekday and hour (local time).</p><svg id="heat" class="chart" height="200"></svg></div>
+    </div>
     ${tokenCard(st)}
-    ${gameCard(st)}
     ${peersCard(st)}
     <div class="ins-sec"><div><h2>Momentum and stalls</h2><p>Threads by their events per week (sessions, tickets, commits, merges).</p></div></div>
     ${momentumCard(st)}
     ${gapsCard()}
-    <div class="ins-sec"><div><h2>Sessions</h2><p>${plural(ss.length, 'session')}${scopeName ? ` in ${esc(scopeName)}` : ''}.</p></div></div>
-    <div class="grid2">
-      <div class="card"><h3>Activity by topic</h3><p class="cap">Sessions per ${actBinLabel(ss)}, stacked by ${S.scope ? 'this scope’s topics' : 'topic'}. Click a bar to filter the map to that period.</p><div class="legend-row" id="actleg"></div><svg id="actchart" class="chart" height="200"></svg></div>
-      <div class="card"><h3>When you work</h3><p class="cap">Sessions started by weekday and hour (local time).</p><svg id="heat" class="chart" height="200"></svg></div>
-    </div>
-    <details class="card is-ai" id="is-ai" ${openAI ? 'open' : ''}><summary><b>AI notes</b> <span class="muted">themes, open threads and unexplored directions, written by ${aiOn ? esc(S.status.llm || 'your AI engine') : 'an AI engine (off)'}</span></summary>
-      ${aiOn ? `<div style="margin-top:10px">${aiState.data && ['offline', 'error'].includes(aiState.data.status) ? `<div class="ai-setup" style="margin-bottom:12px">${aiStatusHtml(aiState.data)}</div>` : ''}
-        <button class="btn" id="regen" ${running || busyElsewhere ? 'disabled' : ''}>${running ? 'Thinking…' : busyElsewhere ? 'Busy with another scope…' : ins ? '✦ Regenerate' : '✦ Generate'}</button>
-        ${ins?.headline ? `<h3 style="margin:10px 0">${esc(ins.headline)}</h3>` : ''}${aiSection(ins, running, scopeName)}</div>` : aiOffPage()}
-    </details>
     <p class="muted" style="font-size:11.5px">Counted in ${st.ms} ms · ${esc(st.tokens.note)}</p></div>`;
   $('#is-refresh').onclick = () => { loadStats(true); loadGapsAll(); };
-  if ($('#regen')) $('#regen').onclick = regenInsights;
-  if (!aiOn) bindAIButtons(el);
   drawCost(st);
   if (ss.length) { drawActivity(ss); drawHeat(ss); }
   const setDays = () => { IST.staleDays = +$('#is-stale').value; IST.inactiveDays = +$('#is-inactive').value; IST.gaps = null;
@@ -4918,7 +4924,7 @@ function renderInsights() {
     loadGapsAll(); };
   $('#is-stale').onchange = setDays; $('#is-inactive').onchange = setDays;
   if ($('#is-allgaps')) $('#is-allgaps').onclick = () => { IST.allGaps = !IST.allGaps; renderInsights(); };
-  $$('[data-ismetric]', el).forEach(b => b.onclick = () => { IST.metric = b.dataset.ismetric; saveIst(); renderInsights(); });
+  $$('[data-is-thread]', el).forEach(b => b.onclick = () => goThread(b.dataset.isThread));
   $$('[data-isrepo]', el).forEach(b => b.onclick = () => {
     const n = b.dataset.isrepo;
     if (!n) IST.repos.clear(); else IST.repos[IST.repos.has(n) ? 'delete' : 'add'](n);
@@ -4933,21 +4939,6 @@ function renderInsights() {
 }
 const actBin = ss => { const span = ss.length ? Math.max(...ss.map(s => s.t1)) - Math.min(...ss.map(s => s.t0)) : 0; return span < 45 * DAY ? DAY : 7 * DAY; };
 const actBinLabel = ss => actBin(ss) === DAY ? 'day' : 'week';
-function aiSection(ins, running, scopeName) {
-  const where = scopeName ? `the sessions in ${esc(scopeName)}` : 'all sessions';
-  if (!ins) return `<div class="card" style="margin-bottom:12px"><h3>AI insights</h3><p class="cap">${running ? 'Generating with ' + esc(S.status.llm || 'the local model') + ` from ${where} — this takes about a minute.` : (S.status.summarized_sessions < S.status.sessions ? 'Writing insights in the background… they fill in as sessions are summarized.' : `Not generated for ${where} yet. Click “Generate insights”.`)}</p>${running ? '<div class="shimmer" style="height:80px"></div>' : ''}</div>`;
-  const links = it => `<div class="links">${(it.topics || []).filter(t => topicOf(t)).map(t => `<button class="chip" data-tid="${t}"><i class="sw" style="background:${slotColor(t)}"></i>${esc(topicOf(t).name)}</button>`).join('')}${(it.sessions || []).filter(id => S.byId.has(id)).slice(0, 4).map(id => `<button class="chip" data-sid="${esc(id)}">${esc(S.byId.get(id).title.slice(0, 40))}</button>`).join('')}</div>`;
-  const card = (ico, title, cap, items, extra) => `<div class="card ai-card"><h3><span class="ico">${ico}</span>${title}</h3><p class="cap">${cap}</p>${items.map(it => `<div class="ai-item"><b>${esc(it.title)}</b><p>${esc(it.insight)}</p>${extra ? extra(it) : ''}${links(it)}</div>`).join('')}</div>`;
-  const unexplored = it => (it.first_step ? `<p class="step">${esc(it.first_step)}</p>` : '') +
-    ((it.area || it.people?.length) ? `<div class="links" style="margin-bottom:4px">${it.area ? `<button class="chip" data-area="${esc(it.area)}" style="font:11px var(--mono)">⌗ ${esc(it.area)}</button>` : ''}${(it.people || []).map(n => { const a = teamAuthor(n); return a ? `<button class="chip" data-author="${esc(a)}">👤 ${esc(n)}</button>` : `<span class="chip">👤 ${esc(n)}</span>`; }).join('')}</div>` : '');
-  return `<div class="ai-grid">
-    ${card('◎', 'Recurring themes', 'Ideas you keep coming back to', ins.themes || [])}
-    ${card('⇄', 'Unexpected connections', 'Links between topics that could reinforce each other', ins.connections || [])}
-    ${card('◔', 'Open threads', 'Work that looks started but unfinished', ins.open_threads || [], it => `<button class="chip" style="margin-bottom:6px" data-findq="${esc(it.title)}" title="Search for everything related">⌕ Find related</button>`)}
-    ${card('✧', 'Unexplored directions', 'Suggestions grounded in your sessions, the code you haven’t touched, and what teammates are doing', ins.unexplored || [], unexplored)}
-  </div><p class="muted" style="font-size:11.5px;margin:-4px 0 14px">Insights cover ${ins.n_sessions ? plural(ins.n_sessions, 'session') + ' in ' : ''}${where}${ins.generated ? ` · generated ${rel(ins.generated * 1000)}` : ''} by ${esc(S.status.llm || 'local model')} — verify before acting.</p>`;
-}
-const teamAuthor = name => { const p = S.ins.team?.people.find(x => x.name === name); return p ? p.author : null; };
 const initials = n => n.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
 const kfmt = n => n >= 1e4 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
 function drawActivity(ss) {
@@ -4956,7 +4947,13 @@ function drawActivity(ss) {
   const bin = actBin(ss), t0 = Math.floor(Math.min(...ss.map(s => s.t0)) / bin) * bin, t1 = Math.max(...ss.map(s => s.t1));
   const nb = Math.max(1, Math.ceil((t1 - t0 + 1) / bin));
   const bins = Array.from({length: nb}, (_, i) => ({t: t0 + i * bin, by: new Map(), n: 0}));
-  ss.forEach(s => { const b = bins[Math.min(nb - 1, Math.floor((s.t0 - t0) / bin))]; b.by.set(cl(s), (b.by.get(cl(s)) || 0) + 1); b.n++; });
+  // the 7 repos with the most sessions keep a color each; the rest are one "Other" band
+  const counts = new Map(); ss.forEach(s => counts.set(s.project || '', (counts.get(s.project || '') || 0) + 1));
+  const top = [...counts.entries()].filter(([p]) => p).sort((a, c) => c[1] - a[1]).slice(0, 7).map(([p]) => p);
+  const OTHER = top.length, slot = s => { const i = top.indexOf(s.project); return i < 0 ? OTHER : i; };
+  const name = k => k === OTHER ? 'Other' : top[k];
+  const color = k => k === OTHER ? 'var(--text-3)' : slotColor(k);
+  ss.forEach(s => { const b = bins[Math.min(nb - 1, Math.floor((s.t0 - t0) / bin))], k = slot(s); b.by.set(k, (b.by.get(k) || 0) + 1); b.n++; });
   const max = Math.max(1, ...bins.map(b => b.n)), bw = (W - pl) / nb, ih = H - pb - pt;
   const out = [];
   const step = Math.max(1, Math.ceil(max / 3));
@@ -4965,18 +4962,19 @@ function drawActivity(ss) {
     let y = H - pb; const x = pl + i * bw + 1, w = Math.max(1, bw - 2);
     [...b.by.keys()].sort((a, c) => a - c).forEach(k => {
       const h = b.by.get(k) / max * ih;
-      out.push(`<rect x="${x}" y="${y - h}" width="${w}" height="${Math.max(0, h - 1.5)}" fill="${slotColor(k)}" rx="${w > 6 ? 2 : 0}" data-i="${i}" data-k="${k}"/>`); y -= h;
+      out.push(`<rect x="${x}" y="${y - h}" width="${w}" height="${Math.max(0, h - 1.5)}" fill="${color(k)}" rx="${w > 6 ? 2 : 0}" data-i="${i}" data-k="${k}"/>`); y -= h;
     });
     out.push(`<rect x="${x - 1}" y="${pt}" width="${bw}" height="${ih}" fill="transparent" data-i="${i}" style="cursor:pointer"/>`);
   });
   const nt = Math.min(6, nb);
   for (let j = 0; j < nt; j++) { const i = Math.round(j * (nb - 1) / Math.max(1, nt - 1)); out.push(`<text x="${pl + i * bw + bw / 2}" y="${H - 5}" text-anchor="middle">${fmtD(bins[i].t)}</text>`); }
   svg.innerHTML = out.join('');
-  $('#actleg').innerHTML = TOPICS().filter(t => ss.some(s => cl(s) === t.id)).map(t => `<span><i class="sw" style="background:${slotColor(t.id)}"></i>${esc(t.name)}</span>`).join('');
+  const keys = [...top.keys(), ...(ss.some(s => slot(s) === OTHER) ? [OTHER] : [])];
+  $('#actleg').innerHTML = keys.map(k => `<span><i class="sw" style="background:${color(k)}"></i>${esc(name(k))}</span>`).join('');
   svg.onmousemove = e => {
     const i = e.target.dataset?.i; if (i == null) return tip(null);
     const b = bins[+i];
-    tip(`<b>${bin === DAY ? fmtDY(b.t) : 'Week of ' + fmtD(b.t)}</b><div class="m">${plural(b.n, 'session')}</div><table>${[...b.by.entries()].sort((a, c) => c[1] - a[1]).map(([k, n]) => `<tr><td><i class="sw" style="background:${slotColor(k)}"></i> ${esc(topicOf(k)?.name || 'Other')}</td><td>${n}</td></tr>`).join('')}</table>`, e.clientX, e.clientY);
+    tip(`<b>${bin === DAY ? fmtDY(b.t) : 'Week of ' + fmtD(b.t)}</b><div class="m">${plural(b.n, 'session')}</div><table>${[...b.by.entries()].sort((a, c) => c[1] - a[1]).map(([k, n]) => `<tr><td><i class="sw" style="background:${color(k)}"></i> ${esc(name(k))}</td><td>${n}</td></tr>`).join('')}</table>`, e.clientX, e.clientY);
   };
   svg.onmouseleave = () => tip(null);
   svg.onclick = e => { const i = e.target.dataset?.i; if (i == null) return; const b = bins[+i]; S.f.range = [b.t, b.t + bin - 1]; refresh(); };

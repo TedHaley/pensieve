@@ -131,6 +131,60 @@ def badges(cur: dict, prev: list[dict], streak: int) -> list[dict]:
     return out
 
 
+ACHIEVEMENTS = [
+    dict(id="first", name="First close", rule="Close a thread this week."),
+    dict(id="closer", name="Closer", rule="Close 5 threads this week."),
+    dict(id="beat", name="Beat last week", rule="Close more threads than last week."),
+    dict(id="daily", name="Daily closer", rule="Close a thread on 3 different days this week."),
+    dict(id="clean", name="Clean slate", rule="Close a thread, and leave no thread in progress."),
+]
+
+
+def achievements(closed: int, last_week: int, n_open: int, close_days: int) -> list[dict]:
+    """The weekly achievements, each with whether it is earned and the progress to it. They count threads closed
+    since Monday: `close_days` is the number of days with a close, `n_open` the threads still in progress."""
+    goal = {"first": 1, "closer": 5, "beat": last_week + 1, "daily": 3, "clean": max(1, closed + n_open)}
+    have = {"first": closed, "closer": closed, "beat": closed, "daily": close_days, "clean": closed}
+    out = []
+    for a in ACHIEVEMENTS:
+        g, n = goal[a["id"]], have[a["id"]]
+        earned = n >= g and (a["id"] != "clean" or (n_open == 0 and closed > 0))
+        out.append(dict(a, goal=g, progress=min(n, g), earned=earned))
+    return out
+
+
+def week(cards: list, now: float) -> dict:
+    """This week (since Monday, local time): the threads closed, the threads in progress that are left to close
+    (fewest items left first), and the achievements. `cards` are (id, state, updated, view) rows."""
+    today = date.fromtimestamp(now)
+    start = datetime.combine(today - timedelta(days=today.weekday()), datetime.min.time()).timestamp()
+    weeks = Counter()  # weeks before this one -> threads closed
+    closed, days, open_ = [], set(), []
+    for cid, state, updated, v in cards:
+        title = (v.get("anchor") or {}).get("title") or v.get("title") or cid  # the Threads tab's title
+        if state == "etched":
+            if updated >= start:
+                closed.append(dict(id=cid, title=title, at=updated))
+                days.add(date.fromtimestamp(updated))
+            else:
+                weeks[int((start - updated) // WEEK) + 1] += 1
+        elif state == "conscious":
+            left = v.get("left") or []
+            open_.append(dict(id=cid, title=title, updated=updated, n_left=len(left),
+                              left=[dict(text=x.get("text", ""), how=x.get("how", "")) for x in left][:3],
+                              repos=[r.rsplit("/", 1)[-1] for r in v.get("repos", [])][:2]))
+    # the fewest steps to a close first; a thread with no known step last, as Pensieve can't tell what closes it
+    open_.sort(key=lambda t: (t["n_left"] == 0, t["n_left"], -t["updated"]))
+    closed.sort(key=lambda t: -t["at"])
+    per_day = [0] * 7
+    for c in closed:
+        per_day[date.fromtimestamp(c["at"]).weekday()] += 1
+    return dict(start=start, closed=len(closed), closed_threads=closed[:8], last_week=weeks[1],
+                best_week=max([weeks[k] for k in (1, 2, 3)] + [len(closed)]), per_day=per_day,
+                open=open_[:8], n_open=len(open_),
+                achievements=achievements(len(closed), weeks[1], len(open_), len(days)))
+
+
 def _short(n):
     if n is None:
         return "—"
@@ -340,11 +394,6 @@ def kpis(tok: dict, g: dict) -> list[dict]:
              "At Anthropic API list prices. A subscription bills differently."),
         tile("cache", "Cache-read share", w[0]["cache_share"], [x["cache_share"] for x in w[1:5]], "up", "pct",
              "Cache reads ÷ all input-side tokens. A cache read costs a tenth of a fresh input token."),
-        tile("lines_per_m", "Deployed lines per M tokens", rows[0]["lines_per_m"],
-             [r["lines_per_m"] for r in rows[1:5]], "up", "n",
-             "Lines you added that reached the default branch, per million weighted tokens."),
-        tile("per_pr", "Weighted tokens per merged PR", per("pr_merged", 0), [per("pr_merged", k) for k in range(1, 5)],
-             "down", "tok", "Lower is better: more output from each token."),
         tile("per_commit", "Weighted tokens per commit", per("commit", 0), [per("commit", k) for k in range(1, 5)],
              "down", "tok", ""),
         tile("per_thread", "Weighted tokens per closed thread", per("thread_closed", 0),
@@ -545,7 +594,7 @@ def stats(idx, store, graph, now: float | None = None, repos: list[str] | None =
     g = game(tok, ev, now)
     out = dict(now=now, tokens=tok, game=g, kpis=kpis(tok, g),
                peers=peers(idx, graph, prs, now, names_sel=sel_names, deployed=deployed),
-               momentum=momentum(ctx["cards"], idx, ev, now, roots),
+               momentum=momentum(ctx["cards"], idx, ev, now, roots), week=week(ctx["cards"], now),
                repos=sorted(names), selected=sorted(sel_names) if sel_names is not None else None,
                sources=dict(gh=ctx["gh"], me=bool(ctx["me"]), cards=len(ctx["cards"]), deployed=bool(deployed_fn)))
     out["ms"] = round((time.perf_counter() - t0) * 1000)
