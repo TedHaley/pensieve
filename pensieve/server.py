@@ -78,6 +78,17 @@ def _indexed():
     _layout_due.set()
 
 
+def _save_indexes():
+    """Write each vector index (.tv) that changed since its last save. Indexing saves at most every
+    vectors.SAVE_SECONDS; this runs when indexing is idle and at shutdown."""
+    for corpus in (store, files, repos):
+        try:
+            corpus.save(force=True)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+
 async def map_worker():
     """Map layouts (UMAP) of sessions, documents, code and the joint Data map, kept off the indexing path: they wait
     until nothing has been indexed for MAP_IDLE_SECONDS. A first index of a big repo is searchable as it goes and is
@@ -96,6 +107,7 @@ async def map_worker():
             except Exception:
                 import traceback
                 traceback.print_exc()
+        _save_indexes()  # nothing was indexed for MAP_IDLE_SECONDS: the .tv files catch up
         status.update(layout=False)
         broadcast({"type": "status", **status})
 
@@ -584,6 +596,7 @@ async def lifespan(app):
     for t in tasks:
         t.cancel()
     llm.stop_builtin()
+    _save_indexes()
 
 
 app = FastAPI(lifespan=lifespan)

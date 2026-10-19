@@ -14,9 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import config, places, settings
+from pensieve import config, embedcache, places, settings, vectors
 from pensieve.files import IMAGE_MAX_BYTES, READ_IMAGE_EXT, images_on, secret
-from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, embed_images, reconcile, yield_to_searches
+from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, embed_images, yield_to_searches
 from pensieve.layout import fit3d, place_new, unit
 from pensieve.projects import project_root
 
@@ -357,7 +357,6 @@ def blame_lines(root, path, me=None, shadow=None):
 
 class Repos:
     def __init__(self, store):
-        from turbovec import IdMapIndex
         self.store = store
         self.db = store.db
         self.lock = store.lock
@@ -376,16 +375,19 @@ class Repos:
             except Exception:
                 pass
         self.db.executescript("""
-        CREATE INDEX IF NOT EXISTS cc_wt ON code_chunks(wt);  -- the map's fingerprint counts main-checkout chunks
+        DROP INDEX IF EXISTS cc_wt;  -- cc_meta below starts with wt, so it serves the same reads
         CREATE TABLE IF NOT EXISTS checkout_files(repo TEXT, wt TEXT, path TEXT, blob TEXT, PRIMARY KEY(repo, wt, path));
         CREATE TABLE IF NOT EXISTS worktrees(path TEXT PRIMARY KEY, repo TEXT, branch TEXT);
         """)
+        # the folder index and the Data map read these columns of every main-checkout chunk. Without this covering
+        # index, SQLite reads each row's vector pages too (wt and authors come after vec): 10 s instead of 0.1 s.
+        # It also serves the map's fingerprint, which counts main-checkout chunks by wt.
+        self.db.execute("CREATE INDEX IF NOT EXISTS cc_meta ON code_chunks(wt, repo, path, authors)")
         if not self.db.execute("SELECT 1 FROM checkout_files LIMIT 1").fetchone():  # carry over the old per-repo table
             self.db.execute("INSERT OR IGNORE INTO checkout_files SELECT repo, '', path, blob FROM code_files")
         self.db.commit()
-        self.index = IdMapIndex.load(str(CODE_INDEX_PATH)) if CODE_INDEX_PATH.exists() else IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
-        if reconcile(self.index, self.db, "code_chunks"):
-            self.index.sync(str(CODE_INDEX_PATH))
+        self.index = vectors.Index(CODE_INDEX_PATH, config.EMBED_DIM)
+        self.index.load(self.db, "code_chunks")
         self._cache = {}
         self.pending = None   # callable -> set of repo roots with changes waiting (set by the server's file watcher)
         self.requeue = None   # callable(set) to put them back
@@ -401,6 +403,7 @@ class Repos:
         self.upstream = {}  # root -> {branch, behind, current}, from check_upstream
         self.reused = 0  # chunks whose vector was copied from an identical chunk, not embedded (since start)
         self._last = 0
+        self._layout_due = None  # repos whose code changed since the last reproject; None: all (the first one)
         self._scope = (None, None)
         self._team = {}
 
@@ -562,12 +565,13 @@ class Repos:
             self._refreshing = False
             self.sync_lock.release()
 
-    def save(self):
-        """After `refresh`: write the vector index to disk. The map catches up later (server.map_worker), so new code
-        is searchable without waiting for a layout."""
+    def save(self, force=False):
+        """After `refresh` or a sweep: write the vector index to disk, at most every vectors.SAVE_SECONDS unless
+        `force` (a sync after many removes rewrites the whole file). The map catches up later (server.map_worker), so
+        new code is searchable without waiting for a layout."""
         self.unsaved = False
         with self.lock:
-            self.index.sync(str(CODE_INDEX_PATH))
+            self.index.save(force)
 
     def _sync(self, log, force, only):
         if not force and only is None and time.time() - self._last < 30:
@@ -837,8 +841,8 @@ class Repos:
             chunks = chunk_code(raw.decode("utf8", "replace"))
             return (path, blob, chunks, blame_lines(checkout, path, me, shadow)) if chunks else None
 
-        # code.tv is written once, when the sweep ends (save): rewriting the whole file under the lock mid-sweep
-        # stalled searches for seconds on a big repo, and after a crash reconcile re-adds vectors from the database
+        # code.tv is not written during the sweep (save, at most every vectors.SAVE_SECONDS): a sync after many removes
+        # rewrites the whole file under the lock. After a crash, vectors.Index.load makes it match the database again
         n_new, group, writing = 0, [], None
 
         def write(group, vecs):  # on the writer thread, while the model embeds the next group
@@ -859,6 +863,7 @@ class Repos:
                                            "VALUES(?,?,?,?,?,?,?,?,?,?)", r).lastrowid for r in rows]
                     self.index.add_with_ids(vecs[k:k + len(ids)], np.array(ids, dtype=np.uint64))
                     self.db.execute("INSERT OR REPLACE INTO checkout_files VALUES(?,?,?,?)", (root, wt, path, blob))
+                    self._changed(root)
                 k += len(ids)
             with self.lock:
                 self.db.commit()
@@ -868,6 +873,8 @@ class Repos:
                     log(f"  {label}: {n_new} files")
 
         embedded, t0 = 0, time.time()
+        cache = embedcache.get()
+        hits0 = cache.hits if cache else 0  # texts that embed() found in the cache: not embedded, not in the rate
 
         def flush():
             nonlocal writing, embedded
@@ -925,6 +932,7 @@ class Repos:
                 flush()
                 if writing:
                     writing.result()
+                embedded -= (cache.hits - hits0) if cache else 0
                 if embedded >= RATE_MIN_CHUNKS:
                     self.store.meta(f"embed_rate:{config.EMBED_MODEL}", round(embedded / (time.time() - t0), 1))
             finally:
@@ -934,8 +942,14 @@ class Repos:
             log(f"repo {label}: {n_new} files updated")
         return n_new
 
+    def _changed(self, root):
+        """The code of `root` changed: its map layout is due (reproject). Called with the lock held."""
+        if self._layout_due is not None:
+            self._layout_due.add(root)
+
     def purge(self, root):
         with self.lock:
+            self._changed(root)
             for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=?", (root,)).fetchall():
                 try:
                     self.index.remove(cid)
@@ -951,6 +965,7 @@ class Repos:
 
     def _drop_file(self, root, path, wt=""):
         with self.lock:
+            self._changed(root)
             for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=? AND path=? AND wt=?", (root, path, wt)).fetchall():
                 try:
                     self.index.remove(cid)
@@ -991,10 +1006,20 @@ class Repos:
         with self.lock:
             roots = [r[0] for r in self.db.execute("SELECT root FROM repos").fetchall()]
             multi = self.db.execute("SELECT COUNT(DISTINCT repo) FROM code_chunks").fetchone()[0] > 1
-        for root in roots:
-            changed |= self._layout(root, "WHERE repo=?", (root,), ("x", "y", "z"), force)
-        if multi:
-            changed |= self._layout(ALL, "", (), ("gx", "gy", "gz"), force)
+            due, self._layout_due = self._layout_due, set()
+        if not force and due is not None:  # a layout reads every row of its repo: only the repos that changed
+            roots = [r for r in roots if r in due]
+            if not roots and not due:
+                return False
+        try:
+            for root in roots:
+                changed |= self._layout(root, "WHERE repo=?", (root,), ("x", "y", "z"), force)
+            if multi:
+                changed |= self._layout(ALL, "", (), ("gx", "gy", "gz"), force)
+        except Exception:  # the next pass tries these repos again
+            with self.lock:
+                self._layout_due = None if due is None else self._layout_due | due
+            raise
         return changed
 
     @locked
@@ -1012,12 +1037,14 @@ class Repos:
         cx, cy, cz = cols
         version = LAYOUT_VERSION + "+mainfit"
         with self.lock:
-            rows = self.db.execute(f"SELECT id, vec, {cx}, {cy}, {cz}, wt FROM code_chunks {where}", args).fetchall()
+            rows = self.db.execute(f"SELECT id, NULL, {cx}, {cy}, {cz}, wt FROM code_chunks {where}", args).fetchall()
             fit_n = int(self.store.meta(f"code_fit_n:{key}") or 0)
             ok = self.store.meta(f"code_layout:{key}") == version
+        found, V = self.index.take([r[0] for r in rows])
+        rows = [r for r, f in zip(rows, found) if f]
         if len(rows) < 4:
             return False
-        X = unit(np.stack([np.frombuffer(r[1], np.float16) for r in rows]).astype(np.float32))
+        X = unit(V.astype(np.float32))
         have = np.array([r[2] is not None for r in rows])
         main = np.array([not r[5] for r in rows])
         if main.sum() < 4:  # nothing on the main checkout yet: lay out what there is
@@ -1175,7 +1202,9 @@ class Repos:
         if key in self._cache:
             return self._cache[key]
         with self.lock:
-            rows = self.db.execute("SELECT path, vec, authors, last_ts FROM code_chunks WHERE repo=?", (root,)).fetchall()
+            rows = self.db.execute("SELECT path, id, authors, last_ts FROM code_chunks WHERE repo=?", (root,)).fetchall()
+        found, V = self.index.take([r[1] for r in rows])
+        rows = [(r[0], v, r[2], r[3]) for r, v in zip([r for r, f in zip(rows, found) if f], V)]
         dirs = [r[0].rsplit("/", 1)[0] if "/" in r[0] else "." for r in rows]
         limit = max(120, 0.06 * len(rows))
         areas = {"."}
@@ -1193,7 +1222,7 @@ class Repos:
         for (path, vec, au, ts), d in zip(rows, dirs):
             a = self._area_for(d, areas)
             e = acc.setdefault(a, [np.zeros(config.EMBED_DIM, np.float32), 0, Counter(), 0])
-            e[0] += np.frombuffer(vec, np.float16).astype(np.float32)
+            e[0] += vec.astype(np.float32)
             e[1] += 1
             e[3] = max(e[3], ts or 0)
             for k, n in json.loads(au or "{}").items():
@@ -1494,10 +1523,11 @@ class Repos:
             commits = [dict(sha=r[0][:8], ts=r[1], author=r[2], subject=r[3]) for r in self.db.execute(
                 "SELECT sha, ts, author, subject FROM commits WHERE repo=? AND ts BETWEEN ? AND ? AND lower(author)=? ORDER BY ts",
                 (root, lo, hi, me))]
-        rows = self.db.execute("SELECT vec FROM chunks WHERE session_id=?", (sid,)).fetchall()
+        rows = self.db.execute("SELECT id FROM chunks WHERE session_id=?", (sid,)).fetchall()
         near = dict(chunks=[], experts=[])
-        if rows and self.db.execute("SELECT 1 FROM code_chunks LIMIT 1").fetchone():
-            c = np.mean([np.frombuffer(r[0], np.float16).astype(np.float32) for r in rows], axis=0)
+        _, V = self.store.index.take([r[0] for r in rows])
+        if len(V) and self.db.execute("SELECT 1 FROM code_chunks LIMIT 1").fetchone():
+            c = V.astype(np.float32).mean(axis=0)
             c /= np.linalg.norm(c) + 1e-9
             near = self.experts(vec=c, repo=Path(root).name if root else None)
         return dict(repo=Path(root).name if root else None, files=files, commits=commits,
@@ -1506,21 +1536,20 @@ class Repos:
     def overlaps(self, name, top=15):
         """Conceptual overlap: directory pairs (2 levels deep) whose embedding centroids are closest."""
         cross = name == ALL  # across repos: only pairs from different repos are interesting
-        rows = self._sel(name, "path, vec, authors")
+        rows = self._sel(name, "path, id, authors")
         depth = 3 if cross else 2
         groups, owners = defaultdict(list), defaultdict(Counter)
-        for path, vec, au in rows:
+        for path, cid, au in rows:
             parts = path.split("/")
             key = "/".join(parts[:depth]) if len(parts) > depth else "/".join(parts[:-1]) or "."
-            groups[key].append(np.frombuffer(vec, np.float16).astype(np.float32))
+            groups[key].append(cid)
             for a, n in json.loads(au or "{}").items():
                 if not is_bot(a):
                     owners[key][a] += n
-        keys = [k for k, v in groups.items() if len(v) >= 3 and (not cross or "/" in k)]
+        keys, C = vectors.centroids({k: v for k, v in groups.items() if len(v) >= 3 and (not cross or "/" in k)},
+                                    self.index)
         if len(keys) < 2:
             return []
-        C = np.stack([np.mean(groups[k], axis=0) for k in keys])
-        C /= np.linalg.norm(C, axis=1, keepdims=True) + 1e-9
         S = C @ C.T
         pairs = []
         for i in range(len(keys)):

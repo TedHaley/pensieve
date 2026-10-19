@@ -712,24 +712,27 @@ class Searcher:
         home = str(Path.home())
         with self.lock:
             names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
-            code = self.db.execute("SELECT id, repo, path, vec, authors FROM code_chunks WHERE wt=''").fetchall()
-            docs = self.db.execute("SELECT c.id, f.path, c.vec, f.author, f.root FROM file_chunks c JOIN files f ON f.path=c.path "
+            code = self.db.execute("SELECT id, repo, path, NULL, authors FROM code_chunks WHERE wt=''").fetchall()
+            docs = self.db.execute("SELECT c.id, f.path, NULL, f.author, f.root FROM file_chunks c JOIN files f ON f.path=c.path "
                                    "WHERE f.kind!='folder'").fetchall()
-        dirs, ids, vecs = {}, [], []
+        dirs, ids = {}, []
         def add(key, **kw):
             d = dirs.get(key)
             if d is None:
                 d = dirs[key] = dict(kw, idx=[], files=Counter())
             return d
-        for i, (cid, repo, path, vec, _) in enumerate(code):
-            ids.append(("code", cid)); vecs.append(vec)
+        by_file = {}  # (repo, path) -> positions of its chunks: each file's folders are found once
+        for i, (cid, repo, path, _, _) in enumerate(code):
+            ids.append(("code", cid))
+            by_file.setdefault((repo, path), []).append(i)
+        for (repo, path), idx in by_file.items():
             parts = path.split("/")[:-1]
             for depth in range(len(parts) + 1):
                 rel = "/".join(parts[:depth])
                 d = add(f"{repo}/{rel}".rstrip("/"), repo=repo, name=names.get(repo, Path(repo).name), rel=rel, root=not rel)
-                d["idx"].append(i); d["files"][path.rsplit("/", 1)[-1]] += 1
-        for j, (cid, path, vec, _, root) in enumerate(docs):
-            ids.append(("file", cid)); vecs.append(vec)
+                d["idx"].extend(idx); d["files"][path.rsplit("/", 1)[-1]] += len(idx)
+        for j, (cid, path, _, _, root) in enumerate(docs):
+            ids.append(("file", cid))
             parent = str(Path(path).parent)
             base = str(Path(root).expanduser()) if root else home
             if not parent.startswith(base):
@@ -739,9 +742,8 @@ class Searcher:
                 rel = "/".join(parts[:depth])
                 d = add(f"{base}/{rel}", repo=None, name=Path(base).name, rel=rel, root=False, base=base)
                 d["idx"].append(len(code) + j); d["files"][Path(path).name] += 1
-        V = unit(np.stack([np.frombuffer(v, np.float16) for v in vecs]).astype(np.float32)) if vecs else np.zeros((0, 1))
         keys = [k for k, d in dirs.items() if len(d["files"]) >= 1]
-        C = unit(np.stack([V[dirs[k]["idx"]].mean(0) for k in keys])) if keys else np.zeros((0, 1))
+        C = self._folder_vectors(keys, dirs, code, docs) if keys else np.zeros((0, 1))
         by_word = defaultdict(set)  # path word -> folders (positions in keys) whose path has it
         for j, k in enumerate(keys):  # words of the path, by segment (repo name first)
             d = dirs[k]
@@ -758,6 +760,25 @@ class Searcher:
                           authors={("code", c[0]): (c[4] or "").lower() for c in code},
                           doc_author={("file", c[0]): (c[3] or "").lower() for c in docs})
         return self._fidx
+
+    def _folder_vectors(self, keys, dirs, code, docs):
+        """The unit mean vector of each folder's chunks, from the vectors in memory (vectors.Index): one sparse
+        product, a block of dimensions at a time, instead of a copy of every chunk's vector for each folder above it."""
+        from scipy.sparse import csr_matrix
+        dim = self.repos.index.dim
+        V = np.zeros((len(code) + len(docs), dim), np.float16)
+        found, X = self.repos.index.take([c[0] for c in code])
+        V[:len(code)][found] = X
+        found, X = self.files.index.take([c[0] for c in docs])
+        V[len(code):][found] = X
+        sizes = [len(dirs[k]["idx"]) for k in keys]
+        cols = np.fromiter((i for k in keys for i in dirs[k]["idx"]), np.int64, count=sum(sizes))
+        M = csr_matrix((np.ones(len(cols), np.float32), (np.repeat(np.arange(len(keys)), sizes), cols)),
+                       shape=(len(keys), len(V)))
+        C = np.empty((len(keys), dim), np.float32)
+        for a in range(0, dim, 128):
+            C[:, a:a + 128] = M @ V[:, a:a + 128].astype(np.float32)
+        return unit(C)
 
     @staticmethod
     def _path_match(words, segs):

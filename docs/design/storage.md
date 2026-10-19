@@ -610,6 +610,8 @@ On the first start of v2:
    - usage history.
 3. Fill `embed_cache` from the vectors of v1 (`code_chunks`, `file_chunks`, `chunks`), by the hash of each chunk's
    text. The new index then embeds only text that changed. Without this, the first index of a large repo takes hours.
+   `embedcache.fill_from_v1(path)` does this step. The hash is of the text that the model reads: the chunk text with
+   its title (the path) in the format of the model.
 4. Index again: sessions, files, repos. Collect the connections again and read the agent sessions again.
 5. Search works for each source as soon as its first index is done.
 6. When v2 finishes its first full index, delete the v1 data: `pensieve.db`, the `.tv` files, `connections/`,

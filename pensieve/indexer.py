@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import config, connections, parsers, settings
+from pensieve import config, connections, parsers, settings, vectors
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 from pensieve.projects import project_name
 
@@ -81,9 +81,11 @@ def model_texts(texts, query=False, titles=None, name=None, m=None):
     """The texts as model `name` (the index's model by default) reads them. A query gets the model's instruction:
     `query` is True (general search), an instruction string such as CODE_QUERY, or one of those per text. A document
     gets the model's document format, with its title (a path) when there is one."""
-    name, m = name or config.EMBED_MODEL, m or embedder()
-    general = (getattr(m, "prompts", None) or {}).get("query", "")
+    name = name or config.EMBED_MODEL
     gemma = name == config.GEMMA
+    general = ""
+    if (any(query) if isinstance(query, list) else query):  # only a query needs the loaded model, for its prompt
+        general = (getattr(m or embedder(), "prompts", None) or {}).get("query", "")
 
     def instruction(p):
         if p is True or (gemma and p == CODE_QUERY):  # EmbeddingGemma: its search query beat its code query
@@ -201,24 +203,47 @@ def embed(texts, query=False, titles=None, model=None) -> np.ndarray:
     during indexing waits for one slice (a quarter second at most), not for a whole batch of files."""
     searching = bool(query) if not isinstance(query, list) else any(query)
     name, m = model if model else (config.EMBED_MODEL, None)
-    m = m or embedder()
-    texts = model_texts(texts, query, titles, name, m)
     kw = dict(batch_size=16, normalize_embeddings=True, show_progress_bar=False)
     if searching:
+        m = m or embedder()
+        texts = model_texts(texts, query, titles, name, m)
         queries_waiting.add(1)
         try:
             with _embed_lock:
                 return np.asarray(m.encode(texts, **kw), dtype=np.float32)
         finally:
             queries_waiting.add(-1)
-    order = sorted(range(len(texts)), key=lambda i: -len(texts[i]))  # similar lengths in a slice: less padding
+    texts = model_texts(texts, query, titles, name, m)
     out = np.zeros((len(texts), config.EMBED_MODELS[name]["dim"] if name in config.EMBED_MODELS else config.EMBED_DIM),
                    np.float32)
+    # each distinct text is embedded once: a text in the cache, or twice in this call, is not embedded again
+    from pensieve import embedcache
+    cache = embedcache.get()
+    keys = [embedcache.key(t) for t in texts]
+    have = cache.get(name, keys) if cache else {}
+    first = {}  # key -> position of the first text with it that is not in the cache
+    for i, k in enumerate(keys):
+        if k in have:
+            out[i] = have[k]
+        else:
+            first.setdefault(k, i)
+    todo = list(first.values())
+    if cache:
+        cache.hits += len(texts) - len(todo)
+        cache.misses += len(todo)
+    if todo:
+        m = m or embedder()
+    order = sorted(todo, key=lambda i: -len(texts[i]))  # similar lengths in a slice: less padding
     for i in range(0, len(order), BULK_SLICE):
         _wait_while(queries_waiting)
         idx = order[i:i + BULK_SLICE]
         with _embed_lock:
             out[idx] = m.encode([texts[j] for j in idx], **kw)
+    if cache and todo:
+        cache.put(name, [(keys[i], out[i]) for i in todo])
+    for i, k in enumerate(keys):  # copies within this call
+        if k not in have and first[k] != i:
+            out[i] = out[first[k]]
     return out
 
 
@@ -290,18 +315,6 @@ def chunk_session(turns):
     return out
 
 
-def reconcile(index, db, table):
-    """Re-add vectors present in SQLite but missing from the ANN index (e.g. after an unclean shutdown)."""
-    ids, vecs = [], []
-    for cid, blob in db.execute(f"SELECT id, vec FROM {table}"):
-        if not index.contains(cid):
-            ids.append(cid)
-            vecs.append(np.frombuffer(blob, np.float16).astype(np.float32))
-    if ids:
-        index.add_with_ids(np.stack(vecs), np.array(ids, dtype=np.uint64))
-    return len(ids)
-
-
 
 _TEMP = re.compile(r"^(/private)?/(tmp|var/folders)/")
 
@@ -346,7 +359,6 @@ class _HeldLock:
 
 class Store:
     def __init__(self):
-        from turbovec import IdMapIndex
         self.lock = _HeldLock() if os.environ.get("PENSIEVE_LOCK_DEBUG") else threading.RLock()
         self._indexed_at = {}
         self.behind = False  # the last sync_files ran out of time with sessions left to index
@@ -386,12 +398,8 @@ class Store:
         for sid, proj in self.db.execute("SELECT id, project FROM sessions WHERE project_name IS NULL").fetchall():
             self.db.execute("UPDATE sessions SET project_name=? WHERE id=?", (project_name(proj or ""), sid))
         self.db.commit()
-        if config.INDEX_PATH.exists():
-            self.index = IdMapIndex.load(str(config.INDEX_PATH))
-        else:
-            self.index = IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
-        if reconcile(self.index, self.db, "chunks"):
-            self.index.sync(str(config.INDEX_PATH))
+        self.index = vectors.Index(config.INDEX_PATH, config.EMBED_DIM)
+        self.index.load(self.db, "chunks")
 
     # ---- ingestion -------------------------------------------------------
     def sync_files(self, log=lambda m: print(m, flush=True), on_progress=None, budget=None) -> int:
@@ -424,8 +432,7 @@ class Store:
                     on_progress(touched)
         self.progress = None
         if touched:  # the map catches up later (server.map_worker)
-            with self.lock:
-                self.index.sync(str(config.INDEX_PATH))
+            self.save()
         return touched
 
     def _index_one(self, source, path: Path, st, log) -> bool:
@@ -471,8 +478,7 @@ class Store:
                 continue
             touched += self._index_one(hit[0], path, st, log)
         if touched:
-            with self.lock:
-                self.index.sync(str(config.INDEX_PATH))
+            self.save()
         return touched
 
     def _purge_disabled(self, log):
@@ -591,6 +597,11 @@ class Store:
             fn(s.id)
         return True
 
+    def save(self, force=False):
+        """Write the session vector index to its file: at most every vectors.SAVE_SECONDS, unless `force`."""
+        with self.lock:
+            return self.index.save(force)
+
     # ---- projection + topics -------------------------------------------
     def read(self):
         """This thread's read-only connection. In WAL mode a reader sees the last commit and never waits for a writer,
@@ -618,14 +629,16 @@ class Store:
         """UMAP refit and new topics when the corpus grew or shrank meaningfully (or on first run); otherwise place
         new points by neighbours. Shrinking counts too: after a big removal the old topics describe what's gone."""
         with self.lock:
-            rows = self.db.execute("SELECT id, session_id, vec, x, y, z FROM chunks").fetchall()
+            rows = self.db.execute("SELECT id, session_id, x, y, z FROM chunks").fetchall()
             fit_n = int(self.meta("session_fit_n") or 0)
             version_ok = self.meta("layout") == LAYOUT_VERSION
+        found, V = self.index.take([r[0] for r in rows])
+        rows = [r[:2] + (None,) + r[2:] for r, ok in zip(rows, found) if ok]  # r[3:6]: x, y, z as before
         if len(rows) < 4:
             return False
         cid = np.array([r[0] for r in rows])
         sid = np.array([r[1] for r in rows])
-        X = unit(np.stack([np.frombuffer(r[2], np.float16) for r in rows]).astype(np.float32))
+        X = unit(V.astype(np.float32))
         have = np.array([r[3] is not None for r in rows])
         n = len(rows)
         full = force or not version_ok or have.sum() < 0.5 * n or abs(n - fit_n) > max(60, 0.15 * fit_n)
@@ -787,12 +800,11 @@ class Store:
 
     def centroids(self):
         with self.lock:
-            rows = self.db.execute("SELECT session_id, vec FROM chunks").fetchall()
+            rows = self.db.execute("SELECT id, session_id FROM chunks").fetchall()
         by = {}
-        for s, v in rows:
-            by.setdefault(s, []).append(np.frombuffer(v, np.float16).astype(np.float32))
-        ids = list(by)
-        return ids, unit(np.stack([np.mean(by[s], axis=0) for s in ids])) if ids else np.zeros((0, config.EMBED_DIM))
+        for cid, s in rows:
+            by.setdefault(s, []).append(cid)
+        return vectors.centroids(by, self.index)
 
     def similar(self, sid, k=6):
         ids, C = self.centroids()
