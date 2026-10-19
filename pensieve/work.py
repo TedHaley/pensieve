@@ -1217,7 +1217,15 @@ def _gh_pr(url: str) -> dict:
     if hit and (time.time() - hit[0] < 600 or _net["off"]):
         return hit[1]
     out = {}
-    if _net["off"]:
+    if _net["off"]:  # no network now (the first build after a start): the last answer kept on disk, so that a
+        try:          # restart does not drop the PR titles that name threads
+            from pensieve import store as v2
+            from pensieve.store import cache
+            out = cache.get_json(v2.index_db(), "ghpr:" + url) or {}
+        except Exception:
+            out = {}
+        if out:
+            _gh_cache[url] = (0.0, out)  # old: the next build with network asks gh again
         return out
     if shutil.which("gh"):
         try:
@@ -1239,6 +1247,13 @@ def _gh_pr(url: str) -> dict:
         except (OSError, subprocess.TimeoutExpired, ValueError, KeyError):
             pass
     _gh_cache[url] = (time.time(), out)
+    if out:
+        try:
+            from pensieve import store as v2
+            from pensieve.store import cache
+            cache.put_json(v2.index_db(), "ghpr:" + url, out, ttl=30 * 86400, wait=False)
+        except Exception:
+            pass
     return out
 
 

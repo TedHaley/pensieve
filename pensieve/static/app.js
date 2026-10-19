@@ -4244,11 +4244,10 @@ function wkRow(t, n) {
 }
 // The note's next step; before a note is written, the first item left to close the thread (see cardtext.pending)
 const wkNext = (n, t) => n?.question ? `Decide: ${n.question}` : n?.next || (t?.left?.[0]?.text || '');
-// A card is named by its thread's anchor: a ticket or a split goal as it is; a theme (PR, branch, session) by the
-// note's title, which reads the whole thread (the same rule as cardtext.card_title)
+// A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
+// thread goes on; only a thread with no anchor title takes the note's (the same rule as cardtext.card_title)
 const wkCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
-const wkTitle = (t, n) => ['ticket', 'goal'].includes(t.anchor?.kind) && t.anchor.title ? t.anchor.title
-  : wkCap((n?.title || '').trim()) || t.anchor?.title || t.title;
+const wkTitle = (t, n) => t.anchor?.title || wkCap((n?.title || '').trim()) || t.title;
 const WK_WHO = {agent: ['your agent', 'Your agent can do this in a session'], you: ['you', 'Only you can do this'],
   parent: ['tracker', 'A step in the system the item lives in: Pensieve only reads']};
 // What is left to close the thread, each with who can act

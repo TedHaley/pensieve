@@ -37,15 +37,32 @@ def test_the_branchs_ticket_wins():
 def test_a_mentioned_ticket_is_not_the_anchor():
     """A ticket that the sessions only mention (ref) does not name the card."""
     c = card(tickets=[dict(key="ABC-9", title="", ref=True)], branches=[dict(repo="/r", branch="fix/login-timeout")])
-    assert anchor(c) == Anchor("branch", "Login timeout", "fix/login-timeout", theme=True)
+    assert anchor(c) == Anchor("branch", "Login timeout", "fix/login-timeout")
 
 
-def test_pr_names_a_branch_without_ticket():
-    """Without a ticket, the card's own PR gives the theme: no 'fix(scope):' prefix or key suffix, a capital first
-    letter. It is a theme, not the exact title: the note writer can word it better."""
-    c = card(branches=[dict(repo="/r", branch="retry-cards")],
-             prs=[dict(url=PR + "4", title="fix(payments): stop on hard declines (OPS-1)", state="open", head="retry-cards")])
-    assert anchor(c) == Anchor("pr", "Stop on hard declines", PR + "4", theme=True)
+def test_pr_names_the_thread_first():
+    """The thread's own PR names it, before its ticket and its branch: no 'fix(scope):' prefix or key suffix, a capital
+    first letter."""
+    c = card(branches=[dict(repo="/r", branch="ops-1-retry-cards")],
+             tickets=[dict(key="OPS-1", title="Payments retry forever", status="In Progress")],
+             prs=[dict(url=PR + "4", title="fix(payments): stop on hard declines (OPS-1)", state="open", head="ops-1-retry-cards")])
+    assert anchor(c) == Anchor("pr", "Stop on hard declines", PR + "4")
+
+
+def test_first_pr_keeps_the_title():
+    """The first PR of the thread (the lowest number) keeps naming it when a later PR opens or it merges: a title
+    that follows PR states would change while the work goes on."""
+    c = card(branches=[dict(repo="/r", branch="retry")],
+             prs=[dict(url=PR + "9", title="Follow-up: log retries", state="open", head="retry"),
+                  dict(url=PR + "4", title="Stop retrying hard declines", state="merged", head="retry")])
+    assert anchor(c).title == "Stop retrying hard declines"
+
+
+def test_ticket_choice_does_not_follow_updates():
+    """With tickets that neither the branch nor a PR names, the lowest key names the thread, not the one edited last."""
+    c = card(tickets=[dict(key="ABC-30", title="Later ticket", status="To Do", updated=99),
+                      dict(key="ABC-12", title="First ticket", status="To Do", updated=1)])
+    assert anchor(c).ref == "ABC-12"
 
 
 def test_another_cards_pr_does_not_name_it():
@@ -221,14 +238,14 @@ def test_one_ticket_from_two_sources():
 
 
 def test_card_title():
-    """A ticket's thread shows the ticket's title, whatever the note says; a theme shows the note writer's title,
-    else the theme; a card with neither shows its own title."""
+    """A thread shows its anchor's title, whatever the note says, so that a new note does not rename it. Only a thread
+    with no anchor title takes the note's title."""
     t = dict(anchor=dict(kind="ticket", title="Stop retrying hard declines"), title="t")
     assert card_title(t, dict(title="Something the note made up")) == "Stop retrying hard declines"
     b = dict(anchor=dict(kind="branch", title="Retry cards"), title="b")
-    assert card_title(b, dict(title="limit card payment retries")) == "Limit card payment retries"
-    assert card_title(b, None) == "Retry cards"
-    assert card_title(dict(title="Plain"), None) == "Plain"
+    assert card_title(b, dict(title="limit card payment retries")) == "Retry cards"
+    s = dict(anchor=dict(kind="session", title=""), title="")
+    assert card_title(s, dict(title="explore caching")) == "Explore caching"
 
 
 def test_turns_from_chunks():

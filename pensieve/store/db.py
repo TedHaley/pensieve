@@ -57,10 +57,23 @@ class Db:
         return c
 
     def _init(self, schema: str, version: int, migrations: dict[int, list[str]]):
+        # Another process can still hold the file for a moment (a backend that is closing while a new one starts),
+        # and setting the journal mode does not wait for the busy timeout: retry within it instead of failing.
+        deadline = time.monotonic() + BUSY_MS / 1000
+        while True:
+            try:
+                return self._init_once(schema, version, migrations)
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e) or time.monotonic() > deadline:
+                    raise
+                time.sleep(0.2)
+
+    def _init_once(self, schema: str, version: int, migrations: dict[int, list[str]]):
         c = sqlite3.connect(self.path, isolation_level=None, timeout=BUSY_MS / 1000)
         try:
             c.execute(f"PRAGMA busy_timeout = {BUSY_MS}")
-            c.execute("PRAGMA journal_mode = WAL")
+            if c.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":  # the change needs the file alone
+                c.execute("PRAGMA journal_mode = WAL")
             c.execute("BEGIN IMMEDIATE")
             try:
                 for stmt in _statements(schema):

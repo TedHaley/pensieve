@@ -79,37 +79,44 @@ def _key_rank(card: dict, key: str) -> tuple:
     return (key.lower() not in branches, key.lower() not in prs)
 
 
+def _num(s: str) -> int:
+    m = re.search(r"(\d+)/?$", s or "")
+    return int(m.group(1)) if m else 1 << 30
+
+
 def anchor(card: dict) -> Anchor:
-    """The thread's anchor, which names the card:
+    """The thread's anchor, which names it. The title must stay the same while the thread goes on, so it comes from
+    the thread's own records, never from a note or the newest message, and each pick is one that does not change:
     1. a goal split from another card keeps its own goal title (its sessions are the parent's);
-    2. else the ticket the thread solves: the one its branch names, then its PR, then the newest;
-    3. else the card's own pull request (the open one first), as a theme that the note can word better;
+    2. else the thread's own pull request: the first one opened (the lowest number), whatever its state now;
+    3. else the ticket it solves: the one its branch names, then the one its PR names, then the lowest key;
     4. else the feature branch, as words;
-    5. else the session's own title, as a starting point."""
+    5. else the session's own title."""
     if card.get("goal_of"):
         return Anchor("goal", card.get("title", ""), card.get("id", ""))
+    own = [p for p in card.get("prs", []) if p.get("own") or p.get("head") in {b.get("branch") for b in card.get("branches", [])}]
+    named = [p for p in own if (p.get("title") or "").strip()]
+    if named:
+        p = min(named, key=lambda p: _num(p["url"]))
+        return Anchor("pr", _clean_title(p["title"]), p["url"])
     tickets = [k for k in card.get("tickets", []) if k.get("title") and not k.get("ref")]
     if tickets:
-        k = sorted(tickets, key=lambda k: (*_key_rank(card, k["key"]), -(k.get("updated") or 0)))[0]
+        k = min(tickets, key=lambda k: (*_key_rank(card, k["key"]), k["key"].split("-")[0], _num(k["key"])))
         return Anchor("ticket", _clean_title(k["title"]) or k["key"], k["key"])
-    own = [p for p in card.get("prs", []) if p.get("own") or p.get("head") in {b.get("branch") for b in card.get("branches", [])}]
-    if own:
-        p = sorted(own, key=lambda p: p.get("state") not in ("open", "draft"))[0]
-        return Anchor("pr", _clean_title(p.get("title", "")) or p["url"], p["url"], theme=True)
-    branches = [b["branch"] for b in card.get("branches", []) if b.get("branch")]
+    branches = sorted(b["branch"] for b in card.get("branches", []) if b.get("branch"))
     if branches:
-        return Anchor("branch", branch_theme(branches[0]), branches[0], theme=True)
+        return Anchor("branch", branch_theme(branches[0]), branches[0])
     s = pick_session(card)
     return Anchor("session", _cap((s or {}).get("title", "") or card.get("title", "")), (s or {}).get("id", ""), theme=True)
 
 
 def card_title(card: dict, note: dict | None = None) -> str:
-    """The title a card shows. A ticket or a split goal names its thread as it is; a theme (a PR, a branch, a session)
-    takes the note writer's title, which reads the whole thread, else the theme itself."""
+    """The title a card shows: its anchor's title, which stays the same while the thread goes on. Only a thread with
+    no PR, ticket or branch, whose session has no title, takes the note writer's title."""
     a = card.get("anchor") or {}
-    if a.get("kind") in ("ticket", "goal") and a.get("title"):
+    if a.get("title"):
         return a["title"]
-    return _cap(((note or {}).get("title") or "").strip()) or a.get("title") or card.get("title", "")
+    return _cap(((note or {}).get("title") or "").strip()) or card.get("title", "")
 
 
 def pick_session(card: dict) -> dict | None:
