@@ -356,34 +356,42 @@ def _link_row(r: dict, e) -> str:
             + (f"<p>{e(r['summary'])}</p>" if r.get("summary") else "") + f'</span><span class="reach">{e(REACH_LABEL[r["reach"]])}</span></li>')
 
 
-REVIVE_PROMPT = ("Pick up this work. Its context card is {path}: read it first. Then get what changed since the card "
-                 "was saved (its handoff.refresh commands) and review what has been done. Its 'left' list is what is "
-                 "still needed to close this thread, with who can do each step: 'agent' steps are yours, 'you' steps "
-                 "are mine, 'parent' steps happen in the system the item lives in (close a ticket in its tracker, for "
-                 "example). Tell me where the work stands and how you will close the remaining items with your own "
-                 "tools, and ask me before you change anything, here or in another system.")
+REVIVE_PROMPT = ("Pick up this thread: \"{title}\" (Pensieve thread {id}). Read it first with Pensieve's `task` tool "
+                 "(id {id}): it gives the thread as it is now, with what is left to close it. If you do not have "
+                 "Pensieve's tools, read {copy}. Then check the live state of its branch, pull requests and tickets, "
+                 "and review what has been done. What is left says who can do each step: the agent's steps are yours, "
+                 "the user's steps are mine, and the rest happen in the system the item lives in (close a ticket in "
+                 "its tracker, for example). Tell me where the work stands and how you will close the remaining "
+                 "items with your own tools, and ask me before you change anything, here or in another system.")
+REVIVE_KEEP_DAYS = 7  # copies for agents without Pensieve's tools are deleted after this
 
 
 def revive_prompt(card: dict) -> str:
     """REVIVE_PROMPT with the card in it, not in a file: for any agent, also one that can't read this Mac's files."""
-    return REVIVE_PROMPT.format(path="below") + "\n\n" + render_agent(card)
+    return REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy="its copy below") + "\n\n" + render_agent(card)
 
 
 def revive_command(card: dict, folder) -> str:
-    """The shell command that starts a new agent session with a card as its first context: the card goes into a file
-    for the agent, and the agent starts in the work's folder (this Mac's checkout, or the home folder when it is
+    """The shell command that starts a new agent session on a thread: the agent reads the live thread with Pensieve's
+    `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder (this Mac's checkout, or the home folder when it is
     gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
     import shlex
     from pathlib import Path
-    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:50] or "card"
-    path = Path(folder).expanduser() / f"{slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    import time
+    folder = Path(folder).expanduser()
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob("*.md"):  # the copies are for one start each: old ones only fill the folder
+        if time.time() - old.stat().st_mtime > REVIVE_KEEP_DAYS * 86400:
+            old.unlink(missing_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:50] or "thread"
+    path = folder / f"{slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
     path.write_text(render_agent(card))
     where = next((r["ref"]["path"] for r in card.get("resources", []) if r["kind"] == "folder"
                   and Path(r.get("ref", {}).get("path", "")).is_dir()), str(Path.home()))
     agents = [r.get("ref", {}).get("session", "").split(":", 1)[0] for r in card.get("resources", []) if r["kind"] == "session"]
     agent = next((a for a in agents if a in ("claude", "codex")), "claude")
-    return f"cd {shlex.quote(where)} && {agent} {shlex.quote(REVIVE_PROMPT.format(path=path))}"
+    prompt = REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=f"its copy in {path}")
+    return f"cd {shlex.quote(where)} && {agent} {shlex.quote(prompt)}"
 
 
 def save(card: dict, folder) -> str:

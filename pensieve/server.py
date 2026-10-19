@@ -1989,7 +1989,7 @@ def revive_card(req: ReviveReq):
         card = _local_card(req.id, req.days)
     if not req.run:
         return {"ok": True, "prompt": cards.revive_prompt(card)}
-    cmd = cards.revive_command(card, config.DATA_DIR / "threads" / "revive")
+    cmd = cards.revive_command(card, config.V2_DIR / "revive")
     _terminal(cmd)
     return {"ok": True, "command": cmd}
 

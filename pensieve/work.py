@@ -1101,6 +1101,10 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
     asked = asked_question(t)  # the session's own words, over the note's
     if asked or note.get("question"):
         out.append(f"Waiting on you: {asked or note['question']}")
+    who = {"agent": "you, the agent", "you": "the user", "parent": "in its tracker or on GitHub"}
+    if t.get("left"):
+        out += ["", "Left to close this thread (Pensieve only reads: these are steps, not changes it made):"] + \
+            [f"- {x['text']} ({who.get(x['how'], x['how'])})" for x in t["left"]]
     raw = notes().get(t["id"], {})
     if raw.get("also"):
         done = _done_items().get(t["id"], {}).get("done", {})
