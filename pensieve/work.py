@@ -8,6 +8,7 @@ A task joins agent sessions, git branches, commits and connection items (tickets
 `adjacent` finds what coworkers did near a task: their recent commits on remote branches in the same folders, and
 tickets and threads about the same subject."""
 import hashlib
+from dataclasses import asdict
 import json
 import re
 import subprocess
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import connections, repos as repos_mod, task_states
+from pensieve import cardtext, connections, repos as repos_mod, task_states
 
 KEY = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
 # a ticket's page: Jira (…/browse/KEY) and Linear (…/issue/KEY); group 1 is the site part that comes before the key
@@ -389,7 +390,8 @@ def _facts(texts: list[str]) -> dict:
     return dict(keys=Counter(KEY.findall(joined)), ticket_urls=TICKET_URL.findall(joined),
                 prs=Counter(PR_URL.findall(joined)), links=list(dict.fromkeys(ARTIFACT_URL.findall(joined))),
                 last=_tail(texts[-1]) if texts else "",  # where the session stopped
-                ending=_tail("\n".join(texts[-2:]), 2400) if texts else "")  # what the note reads
+                ending=_tail("\n".join(texts[-2:]), 2400) if texts else "",  # what the note reads
+                turns=cardtext.turns_from_chunks(texts[-8:]))  # the last turns: the user's words, the agent's reply
 
 
 def group(inp: Inputs) -> list[dict]:
@@ -460,19 +462,26 @@ def group(inp: Inputs) -> list[dict]:
             u.join(f"s:{s['id']}", f"b:{k[0]}@{k[1]}")
         for key in keys_in(k[1]):
             u.join(f"b:{k[0]}@{k[1]}", f"t:{key}")
-    # A pull request linked from a branch's sessions whose title or head branch names a ticket joins that ticket to
-    # the PR's own head branch, when its sessions worked on that branch. Only the PR's branch joins, not the session,
-    # so a session that talks about another ticket's PR does not merge the two cards.
+    # A pull request linked from a session, whose title or head branch names a ticket, ties the ticket to the PR and
+    # to the PR's head branch, when the session worked on that branch at some point. A long session moves on to other
+    # branches: the ticket's thread keeps its PR and branch, and the session is only shared with it. A session that
+    # talks about another ticket's PR, on a branch it never worked on, ties nothing.
     branch_nodes = {k for k in by_branch if k not in long_lived}
-    for (repo, _b), v in by_branch.items():
-        if (repo, _b) in long_lived:
+    for sid, s in S.items():
+        repo = s["repo"]
+        if not repo:
             continue
-        for url in list(dict.fromkeys(x for s in v for x in facts[s["id"]]["prs"]))[:6]:
+        for url in list(facts[sid]["prs"])[:8]:
             info = _gh_pr(url) if "github.com" in url else {}
             head = info.get("head") or ""
-            if (repo, head) in branch_nodes:
-                for key in keys_in(f"{info.get('title', '')} {head}"):
-                    u.join(f"b:{repo}@{head}", f"t:{key}")
+            if not head or head in DEFAULT_BRANCHES or (repo, head) in long_lived \
+                    or ((repo, head) not in worked_of[sid] and (repo, head) not in branch_nodes):
+                continue
+            ks = keys_in(f"{info.get('title', '')} {head}")
+            for key in ks:
+                u.join(f"b:{repo}@{head}", f"t:{key}")
+            if ks:
+                u.join(f"p:{url}", f"b:{repo}@{head}")
     # Ticket keys a session talks about. A key in the session's title or branch always links. A key only in its text
     # links when the session runs in the key's home repo (where a branch, commit or session title names it), so a
     # session that just quotes another repo's ticket does not join that ticket's task.
@@ -580,7 +589,9 @@ def group(inp: Inputs) -> list[dict]:
         ranked = sorted(urls, key=lambda u_: (u_.rsplit("/", 1)[-1] not in named, -urls[u_]))
         prs = [dict(url=i["url"], title=i["title"], state=i["status"], source=_server_label(i["server"]), head=i["branch"])
                for i in prs_seen]
-        prs += [dict(url=u_, title="", state="", source="session") for u_ in ranked[:4] if u_ not in {p["url"] for p in prs}]
+        tied = [n[2:] for n in nodes if n.startswith("p:")]  # PRs tied to the thread's ticket (see above)
+        prs += [dict(url=u_, title="", state="", source="session") for u_ in dict.fromkeys(tied + ranked[:4])
+                if u_ not in {p["url"] for p in prs}]
         out.append(dict(
             prs=prs[:4], _sessions=ss, _named=named,
             last_words=facts[ss[0]["id"]]["last"] if ss else "",  # where the last session stopped
@@ -647,12 +658,26 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
     out += _goal_tasks(out, have)
     for t in out:
         _attention(t)
+        _thread(t, inp, have.get(t["id"], {}))
         task_states.apply(t, have.get(t["id"], {}), manual.get(t["id"]))
         t.pop("_sessions")
         t.pop("_shared", None)
         t.pop("_named", None)
     out.sort(key=_order)
     return out
+
+
+def _thread(t: dict, inp: "Inputs", note: dict):
+    """What the card says about its thread (pensieve/cardtext.py): its anchor, the user's last words and the agent's
+    last reply in its newest own session, and what is left to close it. The note writer's `resolved` judgment, which
+    reads all of the card's sources, turns an open ticket into "close it"."""
+    s = cardtext.pick_session(t)
+    turns = (inp.facts.get(s["id"]) or {}).get("turns", []) if s else []
+    reply = cardtext.agent_reply(turns) if turns else None
+    t["anchor"] = asdict(cardtext.anchor(t))
+    t["mine"] = cardtext.my_messages(turns)
+    t["reply"] = asdict(reply) if reply and (reply.text or reply.waiting) else None
+    t["left"] = [asdict(x) for x in cardtext.pending(t, reply, resolved=bool(note.get("resolved")))]
 
 
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
@@ -1387,6 +1412,15 @@ Its data points, newest first (date, source, what happened):
 {last_summary}
 How it ended:
 {last_words}
+The thread is anchored on {anchor}.
+The developer's last words in that session, newest last:
+{mine}
+Where the agent left off: {reply}
+Left to close the thread, from git, GitHub and the tracker:
+{left}
+
+You are the arbiter of this thread: it is what its anchor is for, not the newest message of the session. A question
+asked on the way does not change the thread.
 
 Sessions, a long one most of all, can work on more than one goal. The main goal is the newest goal that a session
 did work toward (changed code, made a commit or PR, ran a job, made a decision). A session that only explained code
@@ -1396,13 +1430,17 @@ review round): that is part of the goal. Each PR, commit and ticket in the data 
 a PR made for another goal makes that goal one of the goals below, with the PR as its evidence. The first six fields are about the main goal only: what is done and left for
 another goal goes in that goal's fields, not in these.
 Answer with these fields:
-- title: at most 8 words that name the goal as an outcome, in sentence case, with no ticket key or branch name.
+- title: at most 8 words that name the thread's goal as an outcome, in sentence case, with no ticket key or branch
+  name. When the thread is anchored on a ticket, name what the ticket asks for.
 - problem: at most 25 words on what is wrong or missing, to bring it back to mind.
 - goal: at most 20 words on what "done" looks like, and why it matters.
 - state: at most 50 words on where it stands: what has been done, the key findings (a cause found, a number measured,
   an idea ruled out, with what it was), and what was decided and why (an approach chosen or dropped).
-- next: at most 25 words on what needs to be done, and whether someone is still working on it; "Nothing" if it is
-  done.
+- next: at most 25 words on the steps left to close the thread, from "Left to close" and where the agent left off,
+  and where each one happens (the tracker, the pull request, a session); "Nothing" if it is done. Pensieve only reads:
+  say what the developer or their agent should do.
+- resolved: true when the sessions show that the thread's problem is fixed (a fix made and checked, or the developer
+  says it is done), even if its ticket is still open; false otherwise.
 - question: at most 20 words on the question that the last session asked the developer and that is not answered;
   "None" if there is no such question.
 - evidence: the PR numbers (#12), ticket keys and commit hashes from the data above that the main goal's work is in.
@@ -1414,12 +1452,13 @@ in the data's own words; if the data doesn't say, leave it out."""
 CORE = ("problem", "goal", "state", "next", "question")
 _REFS = {"type": "array", "items": {"type": "string"}}
 NOTE_SCHEMA = {"type": "object", "properties": {
-    **{k: {"type": "string"} for k in ("title",) + CORE}, "evidence": _REFS,
+    **{k: {"type": "string"} for k in ("title",) + CORE}, "resolved": {"type": "boolean"}, "evidence": _REFS,
     "goals": {"type": "array", "items": {"type": "object", "properties": {
         "title": {"type": "string"}, "evidence": _REFS, **{k: {"type": "string"} for k in ("state", "next", "question")}},
         "required": ["title", "evidence", "state", "next", "question"], "additionalProperties": False}}},
-    "required": ["title", *CORE, "evidence", "goals"], "additionalProperties": False}
-NOTE_VERSION = 10  # a new version writes every note again; 9: a title that names the goal; 10: the sessions' other goals
+    "required": ["title", *CORE, "resolved", "evidence", "goals"], "additionalProperties": False}
+NOTE_VERSION = 11  # a new version writes every note again; 9: a title that names the goal; 10: the sessions' other
+# goals; 11: the arbiter: the thread's anchor, the user's last words, the agent's reply, what is left, `resolved`
 
 
 def core(note: dict) -> dict:
@@ -1584,7 +1623,24 @@ def note_fields(task: dict) -> dict:
                 status=f", ticket status {task['status']}" if task["status"] else "", prs=prs, places=places, events=events,
                 last_words=task.get("ending") or task.get("last_words") or "(none)",
                 last_title=(task["sessions"] or [{}])[0].get("title", "(none)"), last_summary=task.get("last_summary") or "",
+                anchor=_anchor_line(task), mine="\n".join(f"- {m}" for m in task.get("mine") or []) or "(none)",
+                reply=_reply_line(task), left="\n".join(f"- {x['text']} ({x['how']})" for x in task.get("left") or []) or "(nothing)",
                 earlier="".join(f'An earlier session: "{title}"\n{summary}\n' for title, summary in task.get("earlier", []) if summary))
+
+
+def _anchor_line(task: dict) -> str:
+    a = task.get("anchor") or {}
+    what = {"ticket": "the ticket", "pr": "the pull request", "branch": "the branch", "goal": "the goal",
+            "session": "the session"}.get(a.get("kind"), "the work")
+    return f'{what} "{a.get("title") or task["title"]}"' + (f" ({a['ref']})" if a.get("kind") in ("ticket", "branch") else "")
+
+
+def _reply_line(task: dict) -> str:
+    r = task.get("reply") or {}
+    if not r:
+        return "(no session)"
+    text = (r.get("text") or "")[-700:]
+    return ("the agent had not replied to the last message; its reply before that: " if r.get("waiting") else "") + (text or "(none)")
 
 
 def make_note(task: dict) -> dict:
@@ -1593,6 +1649,7 @@ def make_note(task: dict) -> dict:
     from pensieve import llm
     ans = llm.complete(NOTE_PROMPT.format(**note_fields(task)), max_tokens=700, schema=NOTE_SCHEMA, kind="task note")
     note = {k: str(ans.get(k, "")).strip() for k in ("title",) + CORE}
+    note["resolved"] = bool(ans.get("resolved"))
     note["evidence"] = [str(x) for x in ans.get("evidence") or []]
     note["goals"] = [{k: (g.get(k) if k == "evidence" else str(g.get(k, "")).strip()) for k in ("title", "evidence", "state", "next", "question")}
                      for g in (ans.get("goals") or [])[:2] if isinstance(g, dict) and g.get("title")]

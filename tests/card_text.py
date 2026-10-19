@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pensieve.cardtext import Anchor, Pending, Reply, agent_reply, anchor, branch_theme, my_messages, pending, \
-    pick_session  # noqa: E402
+    card_title, pick_session, turns_from_chunks  # noqa: E402
 
 PR = "https://github.com/example/app/pull/"
 
@@ -41,10 +41,11 @@ def test_a_mentioned_ticket_is_not_the_anchor():
 
 
 def test_pr_names_a_branch_without_ticket():
-    """Without a ticket, the card's own PR names the thread, without its 'fix(scope):' prefix or a key suffix."""
+    """Without a ticket, the card's own PR gives the theme: no 'fix(scope):' prefix or key suffix, a capital first
+    letter. It is a theme, not the exact title: the note writer can word it better."""
     c = card(branches=[dict(repo="/r", branch="retry-cards")],
              prs=[dict(url=PR + "4", title="fix(payments): stop on hard declines (OPS-1)", state="open", head="retry-cards")])
-    assert anchor(c) == Anchor("pr", "stop on hard declines", PR + "4")
+    assert anchor(c) == Anchor("pr", "Stop on hard declines", PR + "4", theme=True)
 
 
 def test_another_cards_pr_does_not_name_it():
@@ -162,17 +163,26 @@ def test_pending_pr_states():
     got = [(p.text, p.how) for p in pending(c)]
     assert ("Mark #1 ready for review", "you") in got
     assert ("Merge #2", "you") in got
-    assert ("Fix the failing checks on #3", "session") in got and ("Get #3 reviewed", "you") in got
+    assert ("Fix the failing checks on #3", "agent") in got and ("Get #3 reviewed", "you") in got
     assert ("Get #4 reviewed", "you") in got
-    assert ("Address the review on #5", "session") in got and not any("#5 reviewed" in t for t, _ in got)
+    assert ("Address the review on #5", "agent") in got and not any("#5 reviewed" in t for t, _ in got)
     assert not any("#6" in t for t, _ in got)
 
 
-def test_merged_pr_means_mark_the_ticket():
-    """A ticket that is not done although its PR merged is probably done: mark it, do not work on it."""
+def test_merged_pr_means_close_the_ticket():
+    """A ticket that is not done although its PR merged: the next step is to close it in its tracker. Pensieve only
+    reads, so this is a hint for the user or their agent ('parent'), not a change Pensieve makes."""
     c = card(tickets=[dict(key="ABC-12", title="Retries", status="Needs Triage")],
              prs=[dict(url=PR + "4", state="merged")])
-    assert pending(c) == [Pending("Move ABC-12 to done: its pull request merged", "mark", "ABC-12")]
+    assert pending(c) == [Pending("Close ABC-12: its pull request merged", "parent", "ABC-12")]
+
+
+def test_resolved_thread_means_close_the_ticket():
+    """No PR, but the note writer judged from all of the card's sources that the sessions fixed the problem: close the
+    ticket. Without that judgment, the ticket is still the work to do."""
+    c = card(tickets=[dict(key="OPS-3", title="Nightly job fails", status="In Progress")])
+    assert pending(c, resolved=True) == [Pending("Close OPS-3: the work in its sessions is done", "parent", "OPS-3")]
+    assert pending(c) == [Pending("Work on OPS-3", "agent", "OPS-3")]
 
 
 def test_done_ticket_has_nothing_left():
@@ -195,6 +205,40 @@ def test_agent_question_comes_first():
     c = card(prs=[dict(url=PR + "4", state="open")])
     got = pending(c, Reply("…", "Mock the clock or raise the timeout?"))
     assert got[0] == Pending("Answer the agent: Mock the clock or raise the timeout?", "you")
+
+
+def test_ticket_title_without_queue_tags():
+    """'[on-call] [Data] ' at the start of a ticket title names a queue, not the thread: it goes."""
+    c = card(tickets=[dict(key="OPS-9", title="[on-call] [Data] Nightly export fails", status="To Do")])
+    assert anchor(c).title == "Nightly export fails"
+
+
+def test_one_ticket_from_two_sources():
+    """The same ticket from its tracker and from a session that read it is one item left, not two."""
+    c = card(tickets=[dict(key="OPS-3", title="Job fails", status="Needs Triage"),
+                      dict(key="OPS-3", title="Job fails", status="Needs Triage")])
+    assert pending(c) == [Pending("Work on OPS-3", "agent", "OPS-3")]
+
+
+def test_card_title():
+    """A ticket's thread shows the ticket's title, whatever the note says; a theme shows the note writer's title,
+    else the theme; a card with neither shows its own title."""
+    t = dict(anchor=dict(kind="ticket", title="Stop retrying hard declines"), title="t")
+    assert card_title(t, dict(title="Something the note made up")) == "Stop retrying hard declines"
+    b = dict(anchor=dict(kind="branch", title="Retry cards"), title="b")
+    assert card_title(b, dict(title="limit card payment retries")) == "Limit card payment retries"
+    assert card_title(b, None) == "Retry cards"
+    assert card_title(dict(title="Plain"), None) == "Plain"
+
+
+def test_turns_from_chunks():
+    """A session's stored chunks give its turns back: each "User:"/"Assistant:" starts a turn, and a chunk that starts
+    inside a long turn (cut on a paragraph) continues it."""
+    chunks = ["User: Fix the timeout\n\nAssistant: Found it in the client.", "It retries without a limit.",
+              "User: ok\n\nAssistant: Added a limit of three."]
+    assert turns_from_chunks(chunks) == [("user", "Fix the timeout"),
+                                         ("assistant", "Found it in the client.\n\nIt retries without a limit."),
+                                         ("user", "ok"), ("assistant", "Added a limit of three.")]
 
 
 if __name__ == "__main__":

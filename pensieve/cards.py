@@ -15,7 +15,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from pensieve import resources as res
+from pensieve import cardtext, resources as res
 from pensieve import work
 
 SCHEMA = "context-card/1"
@@ -67,12 +67,13 @@ def build(t: dict, note: dict, hist: list[dict]) -> dict:
         core["as_of"] = _iso(last)
     root = next((p["path"] for p in t.get("places", []) if p.get("git")), "")
     card = dict(
-        schema=SCHEMA, id=t["id"], title=(note or {}).get("title") or t["title"], label=t["title"],
+        schema=SCHEMA, id=t["id"], title=cardtext.card_title(t, note), label=t["title"],
         kind=t.get("kind", "work"), locality="local",
         state=dict(value=t["state"], why=t.get("state_why", ""), set_by=t.get("state_by") or "auto"),
         made_at=_iso(datetime.now().timestamp()), last_activity=_iso(t["updated"]), last_session=_iso(last),
         origin=_clean(dict(by=work._git(root, "config", "user.name", ttl=3600) if root else "", generator=_version())),
         core=core, since_last_session=since, outdated=changed,
+        left=[dict(step=x["text"], who=x["how"], ref=x.get("ref") or None) for x in t.get("left") or []],
         resources=[r.to_dict() for r in res.collect(t)],
         last_words=work._clean_words(t.get("last_words") or ""),
         timeline=[_clean(dict(at=_iso(e["ts"]), source=e["source"], title=e["title"], private=e.get("private") or None))
@@ -108,7 +109,9 @@ def handoff(card: dict) -> dict:
     refresh += [f"{r['ref'].get('source') or 'Tracker'}: {r['ref']['url']}" for r in rs
                 if r["kind"] in ("ticket", "message", "page") and r.get("ref", {}).get("url")][:4]
     core = card.get("core", {})
-    return _clean(dict(next=core.get("question") or core.get("next"), start=start, refresh=refresh))
+    left = card.get("left") or []
+    return _clean(dict(next=core.get("question") or core.get("next") or (left[0]["step"] if left else None),
+                       start=start, refresh=refresh))
 
 
 def draft_share(card: dict, store, include: list[int] | None = None) -> dict:
@@ -354,8 +357,11 @@ def _link_row(r: dict, e) -> str:
 
 
 REVIVE_PROMPT = ("Pick up this work. Its context card is {path}: read it first. Then get what changed since the card "
-                 "was saved (its handoff.refresh commands), and tell me where the work stands and what you will do "
-                 "next, before you change anything.")
+                 "was saved (its handoff.refresh commands) and review what has been done. Its 'left' list is what is "
+                 "still needed to close this thread, with who can do each step: 'agent' steps are yours, 'you' steps "
+                 "are mine, 'parent' steps happen in the system the item lives in (close a ticket in its tracker, for "
+                 "example). Tell me where the work stands and how you will close the remaining items with your own "
+                 "tools, and ask me before you change anything, here or in another system.")
 
 
 def revive_prompt(card: dict) -> str:

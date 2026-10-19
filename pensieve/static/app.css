@@ -858,6 +858,10 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-where .l2{display:flex;align-items:center;gap:8px;min-width:0}
 .wk-where .l2 .wk-path{text-align:left}
 .wk-st{flex:none;font:600 10.5px var(--sans);padding:2px 7px;border-radius:999px;background:var(--card-2);color:var(--text-2);white-space:nowrap}
+/* who can take a step that is left on a thread */
+.wk-st.who-agent{background:var(--accent-soft);color:var(--text)}
+.wk-st.who-you{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--text)}
+.wk-left .ttl{flex:1;min-width:0}
 .wk-st.ok{color:#30a14e;background:color-mix(in srgb,#34c759 14%,transparent)}
 .wk-st.warn{color:#c77700;background:color-mix(in srgb,#ff9f0a 15%,transparent)}
 .wk-st.bad{color:#d70015;background:color-mix(in srgb,#ff3b30 14%,transparent)}

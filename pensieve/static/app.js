@@ -1544,14 +1544,14 @@ function openTopic(entry) {
      ${central.length ? `<div class="h4">Most typical</div><div class="list">${central.map(itemRow).join('')}</div>` : ''}
      ${recent.length ? `<div class="h4">Recently changed</div><div class="list">${recent.map(itemRow).join('')}</div>` : ''}
      <p class="muted" style="font-size:12px;margin:12px 0 0">The map now shows the finer topics inside this one; click a label to go deeper.</p>
-     <div class="actions"><button class="btn" data-zoomout>Zoom back out</button><button class="btn" data-asproject title="The project in the Projects tab that holds most of this topic's recent items">Open as project</button></div>`);
+     <div class="actions"><button class="btn" data-zoomout>Zoom back out</button></div>`);
   D.drawerTopic = entry;
   const body = $('#drawer-body');
   $$('[data-open]', body).forEach(b => b.onclick = () => openItem(b.dataset.open));
   $$('[data-place]', body).forEach(b => b.onclick = () => selectLabel('folder', b.dataset.place));
   $$('[data-twho]', body).forEach(b => b.onclick = () => openPersonPanel(b.dataset.twho));
   $('[data-zoomout]', body).onclick = () => deselectLabel();
-  $('[data-asproject]', body).onclick = () => openTopicAsProject(entry.members);
+  $('[data-asproject]', body)?.addEventListener('click', () => openTopicAsProject(entry.members));
 }
 // a card's note, in the order of the core: [field, label, what it says]
 const NOTE_ROWS = [['problem', 'Problem', 'What is wrong or missing'], ['goal', 'Goal', 'What done looks like, and why it matters'],
@@ -3146,7 +3146,7 @@ async function route() {
   if (h === 'settings') return setView('settings');
   if (['context', 'currents', 'tasks', 'work'].includes(h)) return setView('work');
   if (h === 'people') return setView('people');
-  if (h === 'projects') return setView('projects');
+  if (h === 'projects') return setView('work');  // the Projects tab is removed for now
   if (h === 'map' || h === 'mind') return setView(dataType());
   if (h === 'setup') return openSetup();
   if (['sources', 'scopes', 'agents', 'ai', 'general', 'usage', 'feedback', ...Object.keys(OLD_TABS)].includes(h)) {
@@ -4129,7 +4129,7 @@ function bindPeopleCard() {
     await setView('work');
     if (!S.work.data) await loadWork();
     const t = S.work.data?.tasks.find(x => x.id === id);
-    if (!t) return toast('That task is not in the Context tab now.');
+    if (!t) return toast('That thread is not in the Threads tab now.');
     S.work.q = ''; S.work.hits = null; S.work.flash = {id, state: t.state, until: Date.now() + 6000}; renderWork();
   });
 }
@@ -4211,7 +4211,7 @@ function wkRow(t, n) {
   const where = [p.repo || (p.path || '').split('/').pop(), p.branch].filter(Boolean).join(' · ');
   const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).slice(0, 2)
     .map(r => `<a class="wk-st pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener">#${esc(prNum(r.url) || '')} ${esc(r.state || '')}</a>`).join('');
-  const next = wkNext(n);
+  const next = wkNext(n, t);
   return `<article class="wk-task wk-row-c" data-id="${esc(t.id)}" data-wk-row="${esc(t.id)}" style="--acc:${wkModel(t.state).color}" title="Show this card in full">
     <div class="c-main"><div class="c-l1"><h4 title="${esc(t.title)}">${esc(wkTitle(t, n))}</h4>${wkThread(S.work.data?.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
       <div class="c-l2">${where ? `<span class="c-where">${esc(where)}</span>` : ''}${next ? `<span class="c-next">${esc(next)}</span>` : ''}</div></div>
@@ -4219,16 +4219,25 @@ function wkRow(t, n) {
     <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}<button class="wk-btn icon" data-wk-revive="${esc(t.id)}" title="Start a new agent session that reads this card first">${WK_IC.spark}</button>${wkCardBtns(t)}</div>
   </article>`;
 }
-const wkNext = n => !n ? '' : n.question ? `Decide: ${n.question}` : (n.next || '');
-// A card is named by its goal; the note's short title and then the task's own title stand in until there is one
-const wkTitle = (t, n) => (n?.goal || '').trim() || n?.title || t.title;
+// The note's next step; before a note is written, the first item left to close the thread (see cardtext.pending)
+const wkNext = (n, t) => n?.question ? `Decide: ${n.question}` : n?.next || (t?.left?.[0]?.text || '');
+// A card is named by its thread's anchor: a ticket or a split goal as it is; a theme (PR, branch, session) by the
+// note's title, which reads the whole thread (the same rule as cardtext.card_title)
+const wkCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+const wkTitle = (t, n) => ['ticket', 'goal'].includes(t.anchor?.kind) && t.anchor.title ? t.anchor.title
+  : wkCap((n?.title || '').trim()) || t.anchor?.title || t.title;
+const WK_WHO = {agent: ['your agent', 'Your agent can do this in a session'], you: ['you', 'Only you can do this'],
+  parent: ['tracker', 'A step in the system the item lives in: Pensieve only reads']};
+// What is left to close the thread, each with who can act
+const wkLeft = t => (t.left || []).map(x => `<div class="wk-row wk-left"><span class="ttl">${esc(x.text)}</span>
+    <span class="wk-st who-${esc(x.how)}" title="${esc(WK_WHO[x.how]?.[1] || '')}">${esc(WK_WHO[x.how]?.[0] || x.how)}</span></div>`).join('');
 const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
 function wkGlance(t, n, writing) {
   const p = (t.places || [])[0] || {};
   const where = [p.repo || (p.path || '').split('/').pop(), p.branch].filter(Boolean).join(' · ');
   const flags = [p.worktree && 'worktree', p.changed && plural(p.changed, 'uncommitted file'), p.ahead && `${p.ahead} not pushed`,
     p.behind && `${p.behind} behind`].filter(Boolean);
-  const next = wkNext(n);
+  const next = wkNext(n, t);
   const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).slice(0, 4)
     .map(r => `<a class="wk-chip pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener" title="${esc(r.title || r.url)}">${WK_IC.pr}#${esc(prNum(r.url) || '')} ${esc(r.state || 'state unknown')}${r.checks === 'failing' ? ' · checks failing' : ''}</a>`).join('');
   const tix = wkTickets(t).slice(0, 4).map(k => `<a class="wk-chip tk${k.ref ? ' ref' : ''}" ${k.url ? `href="${esc(k.url)}" target="_blank" rel="noopener"` : ''}
@@ -4249,7 +4258,7 @@ async function openThread(tid, title) {
   m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
   let saves;
   try { saves = await api(`/api/threads/${enc(tid)}`); }
-  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">No saved cards yet: ${esc(e.message)}</div>`; return; }
+  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">No saved threads yet: ${esc(e.message)}</div>`; return; }
   $('.sh-body', m).innerHTML = `<p class="cap">Thread <code>${esc(tid)}</code>. Pensieve saves this card when its PRs, commits, sessions, state or what’s next change.</p>`
     + saves.map((s, i) => ({s, i})).reverse().map(({s, i}) => `<div class="sh-r th-save">
       <label><b>${esc(new Date(s.at * 1000).toLocaleString())}</b><span class="muted">${esc(s.reasons.join(', '))} · ${esc(wkModel(s.card.state?.value || '').label || s.card.state?.value || '')}</span></label>
@@ -4377,7 +4386,9 @@ function wkSections(t) {
     + (sess.length > 3 ? `<button class="wk-more" data-wk-open="${esc(t.id)}:s">${openS ? 'Show less' : `Show ${sess.length - 3} more`}</button>` : '');
   const activity = other.length ? `<button class="wk-more" data-wk-open="${esc(t.id)}:a">${openA ? 'Hide activity' : `All activity (${other.length})`}</button>
       ${openA ? `<ol class="wk-tl">${other.map(wkEvent).join('')}</ol>` : ''}` : '';
-  return sec('Working in', places) + sec(t.prs.length > 1 ? 'Pull requests' : 'Pull request', prs) +
+  const waiting = t.reply?.waiting && t.active ? '<div class="wk-row muted">The agent is working on your last message</div>' : '';
+  return sec('To close this thread', waiting + wkLeft(t)) + sec('Working in', places) +
+    sec(t.prs.length > 1 ? 'Pull requests' : 'Pull request', prs) +
     sec(wkTickets(t).length > 1 ? 'Tickets' : 'Ticket', tickets) + sec('Messages and pages', seen) +
     sec(sess.length > 1 ? 'Sessions' : 'Session', sessions) + activity;
 }
@@ -4507,10 +4518,10 @@ function renderWork() {
   const was = new Map($$('.wk-task[data-id]', el).map(a => [a.dataset.id, a.getBoundingClientRect().top]));
   const box = document.activeElement?.id === 'wksearch' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const search = `<div class="wk-search"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      <input id="wksearch" type="search" value="${esc(S.work.q)}" placeholder="Search cards" aria-label="Search cards" autocomplete="off" spellcheck="false"
+      <input id="wksearch" type="search" value="${esc(S.work.q)}" placeholder="Search threads" aria-label="Search threads" autocomplete="off" spellcheck="false"
         title="Plain words search by meaning · &quot;exact words&quot; must appear · -word leaves cards out">
       <span class="syn">${S.work.hits ? `${S.work.hits.length} match${S.work.hits.length === 1 ? '' : 'es'}` : '"exact" · -exclude'}</span></div>`;
-  el.innerHTML = `<div class="wk-head"><h2>Context</h2>
+  el.innerHTML = `<div class="wk-head"><h2>Threads</h2>
       <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>
         `<button data-wk-view="${v}" class="${S.work.view === v ? 'on' : ''}" role="radio" aria-checked="${S.work.view === v}" title="${l} view">${ic}${l}</button>`).join('')}</div>${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
     ${search}
@@ -4518,7 +4529,7 @@ function renderWork() {
       const prev = i ? tasks[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== t.state) ? `<h3 class="wk-group" style="--acc:${wkModel(t.state).color}" title="${esc(def(wkModel(t.state)))}">${esc(wkModel(t.state).label)}<span>${count(t.state)}</span></h3>` : '';
       return head + wkCard(t, d);
-    }).join('') + pager : `<div class="empty">${S.work.hits ? `No cards of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.tasks.length ? 'No tasks in the states you chose for this period.' : 'No tasks in this period. Tasks come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
+    }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.tasks.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
     if (!fl.shown) { fl.shown = true; fl.t0 = performance.now(); flashed.scrollIntoView({block: 'center'}); }
@@ -4590,7 +4601,7 @@ function wkBind(el, d) {
   $$('[data-wk-preview]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
     const t = d.tasks.find(x => x.id === b.dataset.wkPreview);
-    openPreview(() => fetch(`/api/work/card?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Context card');
+    openPreview(() => fetch(`/api/work/card?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Thread');
   });
   $$('[data-wk-row]', el).forEach(r => r.onclick = e => {
     if (e.target.closest('button, a, select')) return;
@@ -4967,7 +4978,7 @@ function palRender() {
   } else {
     S.sessions.slice().sort((a, b) => b.t1 - a.t1).slice(0, 5).forEach(s => add('Recent sessions', sessItem(s)));
   }
-  const cmds = [['Go to Context', '1', () => setView('work')], ['Go to Projects', '2', () => setView('projects')], ['Go to People', '3', () => setView('people')], ['Show code', '4', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '5', () => setView('insights')], ['Open Settings', '6', () => setView('settings')],
+  const cmds = [['Go to Threads', '1', () => setView('work')], ['Go to People', '2', () => setView('people')], ['Show code', '3', () => setView('code')], ['Show files', '', () => setView('files')], ['Show agent sessions', '', () => setView('map')], ['Go to Insights', '4', () => setView('insights')], ['Open Settings', '5', () => setView('settings')],
     ['Toggle light / dark', 'T', toggleTheme], ['Clear all filters', '', clearFilters], ['Fit map to view', 'F', () => gl.fit(visibleIdx())], ['Keyboard shortcuts', '?', () => ($('#helpmodal').hidden = false)]];
   cmds.filter(([t]) => !q || t.toLowerCase().includes(q.replace(/^>/, '').trim())).slice(0, raw ? 3 : 7).forEach(([t, k, run]) => add('Commands', {ic: '›', title: t, rt: k, run}));
   pl.items = items; pl.sel = Math.min(pl.sel, items.length - 1);
@@ -5068,7 +5079,7 @@ document.addEventListener('keydown', e => {
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === '/') { e.preventDefault(); openPalette(); }
-  else if (k === '1') setView('work'); else if (k === '2') setView('projects'); else if (k === '3') setView('people'); else if (k === '4') setView(dataType()); else if (k === '5') setView('insights'); else if (k === '6') setView('settings');
+  else if (k === '1') setView('work'); else if (k === '2') setView('people'); else if (k === '3') setView(dataType()); else if (k === '4') setView('insights'); else if (k === '5') setView('settings');
   else if (k === 'f') gl.fit(visibleIdx());
   else if (k === 't') toggleTheme();
   else if (k === '?') $('#helpmodal').hidden = false;

@@ -22,6 +22,7 @@ SHORT_REPLY = 40          # characters: an agent reply shorter than this says li
 MSG_HEAD, MSG_TAIL = 400, 200  # a long message keeps its start and its end
 BRANCH_PREFIX = re.compile(r"^(feature|feat|fix|bugfix|hotfix|chore|refactor|docs|test|wip|[a-z][\w.-]{1,20})/", re.I)
 CONVENTIONAL = re.compile(r"^\s*(\w+)(\([^)]*\))?!?:\s*")  # "fix(scope): " at the start of a PR title
+TAGS = re.compile(r"^\s*(\[[^\]]{1,40}\]\s*)+")  # "[on-call] [Data] " at the start of a ticket title: a queue
 KEY_SUFFIX = re.compile(r"\s*[(\[]?\b[A-Z][A-Z0-9]+-\d+\b[)\]]?\s*$")  # "(ABC-12)" at the end of a title
 
 
@@ -46,16 +47,21 @@ class Reply:
 
 @dataclass(frozen=True)
 class Pending:
-    """One thing left to close the thread. how: 'session' (the agent can do it in a session), 'you' (only the user
-    can: a review, a merge, a reply), or 'mark' (it may already be done elsewhere: mark it resolved)."""
+    """One thing left to close the thread. Pensieve only reads, so each item is a hint of who can act and where:
+    'agent' (the user's agent can do it in a session), 'you' (only the user can: a review, a merge, an answer), or
+    'parent' (a step in the system the item lives in, such as closing a ticket in its tracker)."""
     text: str
     how: str
     ref: str = ""
     why: list = field(default_factory=list)
 
 
+def _cap(t: str) -> str:
+    return t[:1].upper() + t[1:] if t else t
+
+
 def _clean_title(t: str) -> str:
-    return KEY_SUFFIX.sub("", CONVENTIONAL.sub("", t or "")).strip(" -:")
+    return _cap(KEY_SUFFIX.sub("", CONVENTIONAL.sub("", TAGS.sub("", t or ""))).strip(" -:"))
 
 
 def branch_theme(branch: str) -> str:
@@ -63,8 +69,7 @@ def branch_theme(branch: str) -> str:
     b = branch or ""
     while BRANCH_PREFIX.match(b):
         b = BRANCH_PREFIX.sub("", b, count=1)
-    words = re.sub(r"[-_.]+", " ", b).strip()
-    return words[:1].upper() + words[1:] if words else ""
+    return _cap(re.sub(r"[-_.]+", " ", b).strip())
 
 
 def _key_rank(card: dict, key: str) -> tuple:
@@ -78,7 +83,7 @@ def anchor(card: dict) -> Anchor:
     """The thread's anchor, which names the card:
     1. a goal split from another card keeps its own goal title (its sessions are the parent's);
     2. else the ticket the thread solves: the one its branch names, then its PR, then the newest;
-    3. else the card's own pull request (the open one first);
+    3. else the card's own pull request (the open one first), as a theme that the note can word better;
     4. else the feature branch, as words;
     5. else the session's own title, as a starting point."""
     if card.get("goal_of"):
@@ -90,12 +95,21 @@ def anchor(card: dict) -> Anchor:
     own = [p for p in card.get("prs", []) if p.get("own") or p.get("head") in {b.get("branch") for b in card.get("branches", [])}]
     if own:
         p = sorted(own, key=lambda p: p.get("state") not in ("open", "draft"))[0]
-        return Anchor("pr", _clean_title(p.get("title", "")) or p["url"], p["url"])
+        return Anchor("pr", _clean_title(p.get("title", "")) or p["url"], p["url"], theme=True)
     branches = [b["branch"] for b in card.get("branches", []) if b.get("branch")]
     if branches:
         return Anchor("branch", branch_theme(branches[0]), branches[0], theme=True)
     s = pick_session(card)
-    return Anchor("session", (s or {}).get("title", "") or card.get("title", ""), (s or {}).get("id", ""), theme=True)
+    return Anchor("session", _cap((s or {}).get("title", "") or card.get("title", "")), (s or {}).get("id", ""), theme=True)
+
+
+def card_title(card: dict, note: dict | None = None) -> str:
+    """The title a card shows. A ticket or a split goal names its thread as it is; a theme (a PR, a branch, a session)
+    takes the note writer's title, which reads the whole thread, else the theme itself."""
+    a = card.get("anchor") or {}
+    if a.get("kind") in ("ticket", "goal") and a.get("title"):
+        return a["title"]
+    return _cap(((note or {}).get("title") or "").strip()) or a.get("title") or card.get("title", "")
 
 
 def pick_session(card: dict) -> dict | None:
@@ -153,13 +167,15 @@ def agent_reply(turns: list) -> Reply:
 DONE_WORDS = re.compile(r"\b(done|closed|resolved|complete|completed|won'?t do|cancel+ed)\b", re.I)
 
 
-def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
-    """What is left to close the thread, most urgent first, each with who can do it:
+def pending(card: dict, reply: Reply | None = None, resolved: bool = False) -> list[Pending]:
+    """What is left to close the thread, most urgent first, each with who can act:
     - a question the agent asked: only the user can answer it;
     - each open pull request, by where it stands (failing checks, changes requested, approved, in review, draft);
     - unpushed commits and uncommitted files on the card's own branch;
-    - a ticket that is not done although its pull request merged: probably done, so mark it;
-    - a ticket that is not done and has no pull request yet: the work itself."""
+    - a ticket that is not done although the thread's work is: close it in its tracker. The work is done when the
+      card's pull request merged, or when the note writer, which reads every source of the card, judged the thread
+      `resolved`;
+    - a ticket that is not done, with no pull request and not resolved: the work itself."""
     out = []
     if reply and reply.question:
         out.append(Pending(f"Answer the agent: {reply.question}", "you"))
@@ -169,9 +185,9 @@ def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
         if st not in ("open", "draft"):
             continue
         if checks == "failing":
-            out.append(Pending(f"Fix the failing checks on {n}", "session", p["url"]))
+            out.append(Pending(f"Fix the failing checks on {n}", "agent", p["url"]))
         if review == "changes requested":
-            out.append(Pending(f"Address the review on {n}", "session", p["url"]))
+            out.append(Pending(f"Address the review on {n}", "agent", p["url"]))
         if st == "draft":
             out.append(Pending(f"Mark {n} ready for review", "you", p["url"]))
         elif review == "approved" and checks != "failing":
@@ -183,15 +199,37 @@ def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
         if pl.get("branch") not in own or pl.get("head"):
             continue
         if pl.get("changed"):
-            out.append(Pending(f"Commit {pl['changed']} changed files on {pl['branch']}", "session", pl["branch"]))
+            out.append(Pending(f"Commit {pl['changed']} changed files on {pl['branch']}", "agent", pl["branch"]))
         if pl.get("ahead"):
-            out.append(Pending(f"Push {pl['ahead']} commits on {pl['branch']}", "session", pl["branch"]))
+            out.append(Pending(f"Push {pl['ahead']} commits on {pl['branch']}", "agent", pl["branch"]))
     merged = any(p.get("state") == "merged" for p in card.get("prs", []))
-    for k in card.get("tickets", []):
-        if k.get("ref") or DONE_WORDS.search(k.get("status") or ""):
+    seen = set()
+    for k in card.get("tickets", []):  # one ticket can come from two sources (its tracker, a session that read it)
+        if k.get("ref") or k["key"] in seen:
             continue
-        if merged:
-            out.append(Pending(f"Move {k['key']} to done: its pull request merged", "mark", k["key"]))
+        seen.add(k["key"])
+        if DONE_WORDS.search(k.get("status") or ""):
+            continue
+        if merged or resolved:
+            why = "its pull request merged" if merged else "the work in its sessions is done"
+            out.append(Pending(f"Close {k['key']}: {why}", "parent", k["key"]))
         elif not card.get("prs"):
-            out.append(Pending(f"Work on {k['key']}", "session", k["key"]))
+            out.append(Pending(f"Work on {k['key']}", "agent", k["key"]))
+    return out
+
+
+_ROLE = re.compile(r"^(User|Assistant|Memory): ", re.M)
+
+
+def turns_from_chunks(chunks: list[str]) -> list:
+    """Transcript turns [(role, text)] from a session's stored chunks ("User: …" / "Assistant: …" exchanges, cut on
+    paragraphs). A chunk that starts inside a turn continues the turn before it."""
+    out = []
+    for c in chunks:
+        parts = _ROLE.split(c)
+        if parts[0].strip() and out:
+            out[-1] = (out[-1][0], f"{out[-1][1]}\n\n{parts[0].strip()}")
+        for role, text in zip(parts[1::2], parts[2::2]):
+            if role != "Memory":
+                out.append((role.lower(), text.strip()))
     return out
