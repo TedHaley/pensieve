@@ -45,6 +45,9 @@ query (vectors, a word and a JSON filter) is SQLite for the filter and turbovec 
     vectors/             turbovec indexes: code.tv, files.tv, sessions.tv, docs.tv; derived from vectors in index.db
     git/                 shadow git repos for blame (derived)
     avatars/             pictures (derived, a cache)
+    projects/            the Projects build (JSON files, until the project tables are wired)
+    connections.json     the status of each connection (discovered tools, sign-in state)
+    embed_model          the embedding model of the vectors in index.db
 ```
 
 `settings.json` stays a file, because the Mac app and the configuration code read it before a database opens.
@@ -490,6 +493,10 @@ stays only for substring queries of 3 or more characters. `fts_docs`, `fts_files
 - Each thread has its own SQLite connection to each file. In WAL mode, a reader never waits for the writer.
 - One writer thread per file takes write jobs from a queue and commits them in batches of up to 50 ms.
 - The process-wide lock (`store.lock`) is removed. Search, cards and the MCP server read without a lock.
+- The code that indexes sessions, files and code writes several statements as one job: `Db.hold()` lends the
+  writer connection of index.db to the calling thread for a block (`store.writing`), and other writes to the file
+  wait for the block. `store/db.Conn` gives that code a connection look-alike: a read goes to the thread's read
+  connection, a write to the writer. `vectors.Index` takes its own lock for each turbovec call.
 - The MCP command-line process opens the same files. WAL allows a second process.
 
 The code: `pensieve/store/db.py` has the `Db` class of one file. `db.read(fn)`, `db.query(sql)` and `db.one(sql)` run
@@ -647,6 +654,10 @@ after a stop adds nothing twice.
 | `usage.db` `calls` | `usage` | `usage_calls` (phase 4) |
 | `connections/<sid>/<name>.md`, the `key` of each item | `doc_paths` | `v1_doc_paths` |
 | `pensieve.db` `chunks`, `code_chunks`, `file_chunks` | `embed_cache` | `embed_cache`, by `embedcache.fill_from_v1` (phase 6) |
+| `connections/<sid>/<name>.md` and `.raw/<name>.json` | `documents` | `documents`, `document_people`, `document_sessions` |
+
+The `embed_cache` step runs first. `indexer.embed` waits for it (at most 30 minutes), so the first v2 index embeds
+only the text that v1 did not have. The first start of v2 uses the embedding model of v1 (`embed_model` of v1).
 
 v2 does not import these v1 data: the manager-title and team counts of the org evidence, notes of older formats,
 card states set by an agent, the agent job queue, and the caches.
