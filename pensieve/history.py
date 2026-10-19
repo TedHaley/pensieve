@@ -67,9 +67,24 @@ def task_of(thread: str) -> str:
     return next((t for t, th in _of_task().items() if th == thread), "")
 
 
+_save_counts = {}  # path -> ((mtime_ns, size), number of saved cards)
+
+
 def saves(thread: str) -> int:
+    """The number of saved cards of a thread. The file is read again only when its size or mtime changes: /api/work
+    asks for each card."""
     f = _dir() / f"{Path(thread).name}.jsonl"
-    return sum(1 for x in f.read_text().splitlines() if x.strip()) if f.exists() else 0
+    try:
+        st = f.stat()
+    except OSError:
+        return 0
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _save_counts.get(f)
+    if hit and hit[0] == key:
+        return hit[1]
+    n = sum(1 for x in f.read_text().splitlines() if x.strip())
+    _save_counts[f] = (key, n)
+    return n
 
 
 class Keeper:

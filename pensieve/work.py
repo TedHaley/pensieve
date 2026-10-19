@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import connections, repos as repos_mod, task_states
+from pensieve import config, connections, repos as repos_mod, task_states
 
 KEY = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
 # a ticket's page: Jira (…/browse/KEY) and Linear (…/issue/KEY); group 1 is the site part that comes before the key
@@ -680,7 +680,7 @@ def _done_path():
 def _done_items() -> dict:
     """{task: {key, done: {sentence: why}}}: what check_done found, read again when the file changes."""
     try:
-        m = _done_path().stat().st_mtime
+        m = _file_key(_done_path())
         if _done_cache[0] != m:
             _done_cache[:] = [m, json.loads(_done_path().read_text())]
     except (OSError, ValueError):
@@ -689,6 +689,7 @@ def _done_items() -> dict:
 
 
 _done_cache = [None, {}]
+_done_lock = threading.Lock()
 
 
 def _left_items(note: dict) -> list[str]:
@@ -741,7 +742,11 @@ def check_done(ts: list[dict], limit: int = 15) -> int:
                 done[items[d["item"] - 1]] = f"done in {h} ({subj[h][:80]})"
         saved[t["id"]] = dict(key=key, done=done)
     if calls:
-        _done_path().write_text(json.dumps(saved))
+        new = {k: v for k, v in saved.items() if _done_items().get(k) != v}
+        with _done_lock:  # keep what another check_done wrote since this one read the file
+            cur = dict(_done_items())
+            cur.update(new)
+            config.write_atomic(_done_path(), json.dumps(cur))
     return calls
 
 
@@ -1185,11 +1190,25 @@ def _notes_path():
     return config.DATA_DIR / "work_notes.json"
 
 
+_notes_lock = threading.Lock()  # write_note runs in up to 10 threads: one read-change-write at a time
+_notes_cache = [None, {}]  # [(mtime_ns, size) of work_notes.json, its notes]
+
+
+def _file_key(path: Path):
+    st = path.stat()
+    return st.st_mtime_ns, st.st_size
+
+
 def notes() -> dict:
+    """{task id: note}, read again only when the file changes. Do not change the notes in place: they are shared."""
+    path = _notes_path()
     try:
-        return json.loads(_notes_path().read_text())
+        key = _file_key(path)
+        if _notes_cache[0] != key:
+            _notes_cache[:] = [key, json.loads(path.read_text())]
     except (OSError, ValueError):
         return {}
+    return dict(_notes_cache[1])
 
 
 def _signature(task: dict) -> str:
@@ -1230,17 +1249,22 @@ def resume_command(store, session_id: str) -> str | None:
 def write_note(task: dict, all_tasks: list[dict]) -> str:
     """Ask the insights engine for the task's note, and keep it with the signature of the data it saw."""
     note = _split_goals(task, make_note(task))
-    cur, sig, now = notes(), _signature(task), time.time()
-    for k in [k for k, n in cur.items() if n.get("goal_of") == task["id"]]:
-        del cur[k]
-    for s in note["split"]:
-        g = note["goals"][s["n"]]
-        cur[s["id"]] = dict(title=g["title"], goal=g["title"], **{k: g[k] for k in ("state", "next", "question")},
-                            goal_of=task["id"], sig=sig, at=now, v=NOTE_VERSION)
-    cur[task["id"]] = dict(note, sig=sig, at=now, v=NOTE_VERSION)
-    path = _notes_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cur))
+    sig, now = _signature(task), time.time()
+    with _notes_lock:  # read, change and write in one step, so that a note written at the same time is kept
+        cur = notes()
+        for k in [k for k, n in cur.items() if n.get("goal_of") == task["id"]]:
+            del cur[k]
+        for s in note["split"]:
+            g = note["goals"][s["n"]]
+            cur[s["id"]] = dict(title=g["title"], goal=g["title"], **{k: g[k] for k in ("state", "next", "question")},
+                                goal_of=task["id"], sig=sig, at=now, v=NOTE_VERSION)
+        cur[task["id"]] = dict(note, sig=sig, at=now, v=NOTE_VERSION)
+        path = _notes_path()
+        config.write_atomic(path, json.dumps(cur))
+        try:
+            _notes_cache[:] = [_file_key(path), cur]
+        except OSError:
+            pass
     return cur[task["id"]]
 
 

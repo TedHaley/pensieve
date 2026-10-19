@@ -139,10 +139,7 @@ def _load() -> dict:
 
 
 def _save(st: dict):
-    DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, indent=1))
-    tmp.replace(STATE)
+    config.write_atomic(STATE, json.dumps(st, indent=1))
 
 
 def _update(fn):
@@ -192,6 +189,7 @@ def servers() -> list[dict]:
 
 
 def _count(sid: str) -> int:
+    """The number of items of a server: a count on the (source_id, key) index, cheap enough for every status poll."""
     return store_documents.count(v2.store_db(), sid)
 
 
