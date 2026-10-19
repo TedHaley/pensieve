@@ -1018,12 +1018,16 @@ def _pickup(task: dict, wts: dict):
             p["branch"] = used or head  # the branch the task's sessions used here
             if used and head and head != used:
                 p["head"] = head  # the checkout is on another branch now
-            p["changed"] = len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
+            # uncommitted files belong to the branch that is open: none for the task when another branch is open
+            p["changed"] = 0 if p.get("head") else \
+                len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
             p["worktree"] = root in wts
-            ab = _git(root, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
+            # ahead and behind of the task's branch, not of the branch that is open in the checkout now
+            ref = p["branch"] if p.get("head") else "HEAD"
+            ab = _git(root, "rev-list", "--left-right", "--count", f"{ref}@{{upstream}}...{ref}").split()
             if len(ab) == 2 and ab[0].isdigit():  # commits behind and ahead of the branch's upstream
                 p["behind"], p["ahead"], p["upstream"] = int(ab[0]), int(ab[1]), True
-                p["pushed"] = _git(root, "rev-parse", "--short", "@{upstream}")  # moves on a push: history saves the card
+                p["pushed"] = _git(root, "rev-parse", "--short", f"{ref}@{{upstream}}")  # moves on a push: history saves the card
             p["repo"] = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600) or root).parent.name
             web = web_url(_git(root, "remote", "get-url", "origin", ttl=3600))
             if web and p["branch"] not in DEFAULT_BRANCHES and _git(root, "rev-parse", "--verify", "--quiet",
