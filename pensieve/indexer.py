@@ -321,6 +321,7 @@ class Store:
         # than every commit (still crash-safe; a power cut can lose only the last few commits, which re-index)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
+        self._readers = threading.local()  # a read-only connection per thread: reads that need no lock (see read)
         from pensieve.search import code_words, repo_token
         self.db.create_function("code_words", 1, code_words, deterministic=True)  # used by the code keyword index
         self.db.create_function("repo_token", 1, repo_token, deterministic=True)
@@ -502,11 +503,19 @@ class Store:
         return True
 
     # ---- projection + topics -------------------------------------------
+    def read(self):
+        """This thread's read-only connection. In WAL mode a reader sees the last commit and never waits for a writer,
+        so a read through it does not take `self.lock` (which indexing can hold for seconds)."""
+        c = getattr(self._readers, "db", None)
+        if c is None:
+            c = self._readers.db = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True, check_same_thread=False)
+        return c
+
     def meta(self, key, value=None):
+        if value is None:
+            r = self.read().execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return r[0] if r else None
         with self.lock:
-            if value is None:
-                r = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-                return r[0] if r else None
             # Commit at once: some callers never commit after it. A caller that wrote rows before this marker
             # commits them here too, which is safe because the marker comes after the rows it describes.
             self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(value)))
