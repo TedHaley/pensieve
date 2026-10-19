@@ -334,8 +334,11 @@ CREATE TABLE cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGE
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 ```
 
-Full-text indexes: `fts_code_words` (word tokens: names and words) is the main code index, and `fts_code` (trigram)
-stays only for substring queries of 3 or more characters. `fts_docs`, `fts_files` and `fts_sessions` use word tokens.
+Full-text indexes: all of them hold word tokens, and `search.ensure_fts` makes them. `fts_code_words` is the only code
+index: names split into words, one-letter parts and numbers. The trigram index `fts_code` is removed (phase 5). A
+search for a text gets candidates from the word index and then reads their text (`search.contains`). The result is
+the same as grep, except where the text starts inside a longer word. `fts_docs`, `fts_files` and `fts_sessions` use
+unicode61 words.
 
 ## Connections and locks
 
@@ -373,7 +376,7 @@ Each phase is one or more commits on the branch `storage-v2`, with its own measu
 | 2 | Documents: connections write `documents`; the indexer chunks documents from the table; search ids `doc:<id>` | 30-day scan and re-sync times at 10k and 100k documents |
 | 3 | Cards: tables, the incremental builder, notes, states, threads | time from a change to the card on the page |
 | 4 | People, org evidence, projects, caches, feedback, usage, agent jobs | People and Projects build times |
-| 5 | Search: word index for code, trigram for substrings only | `bench/`: no loss of accuracy; latency p50 and p95 |
+| 5 | Search: word indexes only; text lookups through the word index (trigram index removed) | `bench/`: no loss of accuracy; latency p50 and p95 |
 | 6 | Vectors: `embed_cache`; in-memory vector arrays that change with the rows (no full read every 30–120 s) | CPU while idle; search p95 while indexing |
 | 7 | Cutover to v2 and removal of v1 code and files | a first start on a copy of real data |
 
