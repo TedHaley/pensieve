@@ -626,6 +626,64 @@ fill in as indexing goes. Settings, logs and the Mac app stay as they are.
 What changes for agents: search hits for connection items have the id `doc:<id>` instead of a file path. `read` and
 `similar` accept both forms during v2's first release.
 
+### Cutover
+
+`pensieve/migrate.py` does the migration. The server starts it on its own thread, so the start does not wait.
+
+Detection. v1 is present when `~/.pensieve/pensieve.db` exists and `v2/v1-deleted.json` does not exist. The table
+`migration_steps` in store.db has one row for each import step: `done`, `failed` (with the number of tries) or
+`skipped` (its v2 table or function is not in this build). At each start, the steps that are not done run again. A
+step that failed 3 times is given up. Each step adds only the rows that are not there, so a step that runs again
+after a stop adds nothing twice.
+
+| v1 data | Step | v2 rows |
+|---|---|---|
+| `people/overrides.json` | `person_overrides` | `person_overrides` |
+| `pensieve.db` `task_states`, rows by the user | `card_states` | `card_states` |
+| `feedback.jsonl` | `feedback` | `feedback`; the agent name and version go into the text |
+| `work_notes.json`, notes of the last v1 format | `card_notes` | `card_notes`; other fields go into `extra` |
+| `work_done.json` | `card_done` | `card_done` |
+| `people/org_evidence.json` | `org_evidence` | `org_pull_requests`, `org_reviews`, `org_titles`, `org_first_commits` |
+| `usage.db` `calls` | `usage` | `usage_calls` (phase 4) |
+| `connections/<sid>/<name>.md`, the `key` of each item | `doc_paths` | `v1_doc_paths` |
+| `pensieve.db` `chunks`, `code_chunks`, `file_chunks` | `embed_cache` | `embed_cache`, by `embedcache.fill_from_v1` (phase 6) |
+
+v2 does not import these v1 data: the manager-title and team counts of the org evidence, notes of older formats,
+card states set by an agent, the agent job queue, and the caches.
+
+v2 does not import the thread history in `threads/`, by decision. The v1 threads, events and saved cards are lost
+when `delete_v1` removes `threads/`. The v2 thread tables start empty.
+
+Progress. `/api/status` has `migration`: the phase (`importing`, `indexing`, `cleanup`, `done`, `none`, `dry_run`
+or `error`), the step that runs, the steps done of the total, the result of each step, and `first_index`. During
+the import, `/api/syncing` has a job of kind `migrate`, which the sync strip shows. The status pill shows "Moving to
+new storage" during the import, and its tooltip names the parts whose first index is not done.
+
+First full index. Each part calls `migrate.mark_indexed(part)` after its first full pass. The time goes into
+index.db `meta` as `first_index:<part>`. The parts are:
+
+- `sessions`: a session sync that leaves no sessions behind;
+- `files`: a full file sweep;
+- `repos`: a full repo sync;
+- `documents`: a connections pass that collected each connection that is due.
+
+The first full index is done when all four parts have a time.
+
+Delete. When the first full index is done and every import step is done or given up, `delete_v1` runs once:
+
+- It removes only the names of step 6 (with their `-wal` and `-shm` files) and the `*.tv` files at the top of the
+  data folder. It never removes `settings.json`, logs, `v2/` or anything outside the data folder.
+- It keeps `connections/.oauth`, which holds the sign-in tokens of the user's own MCP connections.
+- It keeps the files of a step that is not done, and each path that v1 code in the process still uses. The next
+  call removes them.
+- When it keeps nothing, it writes `v2/v1-deleted.json` with the list of removed paths. Later starts do nothing.
+
+Old ids. `v1_doc_paths` maps `<sid>/<name>` to the source and key of the document. `read` and `similar` change an id
+`file:~/.pensieve/connections/<sid>/<name>.md` whose file is gone to `doc:<id>`.
+
+Dry run. With `PENSIEVE_MIGRATE_DRY_RUN=1`, the server or `python -m pensieve.migrate --dry-run` writes the counts
+of each import and the paths that the delete would remove and keep to the log. It makes no v2 files.
+
 ## Not in scope
 
 - One table for all chunk kinds. The kinds have different columns; this can come later.

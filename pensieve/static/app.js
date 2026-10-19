@@ -2440,8 +2440,8 @@ function syncingHtml() {
   const jobs = S.status?.syncing || [];
   if (S.status?.setup_done === false) return `<div class="sync-strip warn">${ENERGY_IC}<div><b>Nothing is indexed yet</b><span>Choose the sources to start.</span></div><button class="btn primary" data-open-setup>Choose sources</button></div>`;
   if (!jobs.length) return '';
-  const what = j => j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : j.kind === 'model' ? `Switching to ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
-  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} ${j.kind === 'model' ? 'pieces of text' : 'files'}${j.seconds_left >= 60 && j.done >= 50 ? ` · about ${Math.round(j.seconds_left / 60).toLocaleString()} min left` : ''}`
+  const what = j => j.kind === 'migrate' ? `Moving your data to the new storage: ${esc(j.name)}` : j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : j.kind === 'model' ? `Switching to ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
+  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} ${j.kind === 'model' ? 'pieces of text' : j.kind === 'migrate' ? 'steps' : 'files'}${j.seconds_left >= 60 && j.done >= 50 ? ` · about ${Math.round(j.seconds_left / 60).toLocaleString()} min left` : ''}`
     : `${j.done.toLocaleString()} ${j.kind === 'sessions' ? 'sessions' : 'files'} so far`;
   return `<div class="sync-strip">${ENERGY_IC}<div><b>Syncing now</b>${jobs.map(j => `<span class="job">${what(j)} · ${prog(j)}</span>`).join('')}
     <span class="muted">Indexing uses a lot of energy: plug in your Mac if you can. Search works meanwhile.</span></div></div>`;
@@ -5070,7 +5070,8 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 
 function renderStatus() {
   const st = S.status, pill = $('#statuspill'), label = $('span', pill);
-  const busy = st.layout || st.insights_running || st.indexing || st.summarized_sessions < st.sessions || st.topics_named < st.topics;
+  const mig = st.migration?.phase, moving = mig === 'importing' || mig === 'cleanup';
+  const busy = moving || st.layout || st.insights_running || st.indexing || st.summarized_sessions < st.sessions || st.topics_named < st.topics;
   const state = st.message?.startsWith('error') ? 'off' : st.llm_offline ? 'warn' : busy ? 'busy' : 'live';
   pill.className = 'menu-status ' + state; $('#gearbtn').dataset.state = state;
   if (st.llm_offline) {
@@ -5078,10 +5079,16 @@ function renderStatus() {
     pill.title = `No language model at ${st.llm_url || 'the LLM URL'}. Start that server, or pick another in Settings → Models, for summaries, topic names and insights. Search, maps, files and code views still work.`;
     return;
   }
-  label.textContent = st.layout ? 'Laying out map…' : st.summarized_sessions < st.sessions ? `Summarizing ${st.summarized_sessions}/${st.sessions}` :
+  label.textContent = mig === 'importing' ? `Moving to new storage ${st.migration.done || 0}/${st.migration.total || 0}…` : mig === 'cleanup' ? 'Removing old data…' : st.layout ? 'Laying out map…' : st.summarized_sessions < st.sessions ? `Summarizing ${st.summarized_sessions}/${st.sessions}` :
     st.topics_named < st.topics ? 'Naming topics…' : st.insights_running ? 'Generating insights…' : st.indexing && st.message && st.message !== 'idle' ? st.message[0].toUpperCase() + st.message.slice(1) + '…' : `Live · ${plural(st.files || 0, 'file')} · ${plural(st.sessions || 0, 'session')}`;
   $('#gearbtn').title = label.textContent;
-  pill.title = `${(st.files || 0).toLocaleString()} files · ${(st.repos || 0)} repos · ${(st.sessions || 0)} sessions · ${(st.chunks || 0).toLocaleString()} moments · ${(st.code_chunks || 0).toLocaleString()} code chunks\nSummaries: ${st.summarized_sessions}/${st.sessions} sessions, ${st.summarized_chunks?.toLocaleString()} moments\nModels: ${st.llm} + ${st.embed}`;
+  pill.title = `${(st.files || 0).toLocaleString()} files · ${(st.repos || 0)} repos · ${(st.sessions || 0)} sessions · ${(st.chunks || 0).toLocaleString()} moments · ${(st.code_chunks || 0).toLocaleString()} code chunks\nSummaries: ${st.summarized_sessions}/${st.sessions} sessions, ${st.summarized_chunks?.toLocaleString()} moments\nModels: ${st.llm} + ${st.embed}${migrationLine(st.migration)}`;
+}
+function migrationLine(m) {
+  if (!m || !['importing', 'indexing', 'cleanup'].includes(m.phase)) return '';
+  if (m.phase !== 'indexing') return `\nNew storage: ${m.phase === 'cleanup' ? 'removing the old data' : `importing ${m.about || ''} (${m.done || 0} of ${m.total || 0})`}`;
+  const left = Object.entries(m.first_index || {}).filter(([, at]) => !at).map(([k]) => k);
+  return left.length ? `\nNew storage: first index of ${left.join(', ')} still to finish; the old data stays until then` : '';
 }
 $('#statuspill').onclick = () => toast(S.status.llm_offline ? $('#statuspill').title : $('#statuspill').title.split('\n')[0]);
 

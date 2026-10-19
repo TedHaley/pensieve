@@ -114,12 +114,17 @@ def _v1_rows(db):
     sound, because their text only names the file."""
     from pensieve import content
     from pensieve.files import READ_IMAGE_EXT, type_of
-    for text, v in db.execute("SELECT text, vec FROM chunks WHERE vec IS NOT NULL"):
-        yield text or "", None, v
-    for text, path, v in db.execute("SELECT text, path, vec FROM code_chunks WHERE vec IS NOT NULL"):
-        if Path(path).suffix.lower() in READ_IMAGE_EXT:
-            continue
-        yield text or "", path, v
+    have = {n for (n,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "chunks" in have:
+        for text, v in db.execute("SELECT text, vec FROM chunks WHERE vec IS NOT NULL"):
+            yield text or "", None, v
+    if "code_chunks" in have:
+        for text, path, v in db.execute("SELECT text, path, vec FROM code_chunks WHERE vec IS NOT NULL"):
+            if Path(path).suffix.lower() in READ_IMAGE_EXT:
+                continue
+            yield text or "", path, v
+    if not {"file_chunks", "files"} <= have:
+        return
     for text, path, root, kind, v in db.execute(
             "SELECT c.text, c.path, f.root, f.kind, c.vec FROM file_chunks c LEFT JOIN files f ON f.path=c.path "
             "WHERE c.vec IS NOT NULL"):

@@ -180,6 +180,12 @@ class FeedbackStatus(StrEnum):
     DISMISSED = "dismissed"
 
 
+class StepStatus(StrEnum):
+    DONE = "done"
+    FAILED = "failed"
+    SKIPPED = "skipped"  # its v2 table or function is not in this build yet: tried again at the next start
+
+
 class EdgeKind(StrEnum):
     CODE = "code"
     PR = "pr"
@@ -496,6 +502,25 @@ class Feedback:
 
 
 @dataclass(frozen=True)
+class MigrationStep:
+    __table__ = "migration_steps"
+    step: str          # one import from v1 (pensieve/migrate.py), or "delete_v1"
+    status: StepStatus
+    count: int         # rows imported (or paths removed)
+    error: str | None
+    tries: int
+    at: int
+
+
+@dataclass(frozen=True)
+class V1DocPath:
+    __table__ = "v1_doc_paths"
+    path: str          # <source id>/<file name> of a v1 connection item (~/.pensieve/connections/<sid>/<name>.md)
+    source_id: str
+    key: str           # documents.key of the same item
+
+
+@dataclass(frozen=True)
 class DocChunk:
     __table__ = "doc_chunks"
     id: int | None
@@ -687,7 +712,8 @@ STORE_MODELS = (Source, Document, DocumentPerson, DocumentChange, DocumentSessio
                 PersonAlias, PersonOverride, OrgPullRequest, OrgReview, OrgTitle, OrgFirstCommit, Card, CardMember,
                 CardNote, CardStateSet, CardDone, CardDoneCheck, Thread, ThreadMember, ThreadRepo, ThreadCard, ThreadEventRow,
                 ThreadSnapshot, ThreadSnapshotReason, Feedback, SlackUser, DirectoryPerson, DirectoryEmail,
-                DirectorySource, OrgTeamPair, OrgManagerTitle, OrgState, UsageCall, AgentJob, AgentSession)
+                DirectorySource, OrgTeamPair, OrgManagerTitle, OrgState, UsageCall, AgentJob, AgentSession,
+                MigrationStep, V1DocPath)
 INDEX_MODELS = (DocChunk, DocIndexState, EmbedCache, PersonEdge, CacheEntry, Meta, Avatar)
 
 
