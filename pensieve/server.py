@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -136,7 +135,7 @@ async def watcher():
     asyncio.create_task(connections_worker())
     asyncio.create_task(doc_worker())
     asyncio.create_task(session_watcher())
-    work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
+    work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "threads"}))
     from pensieve import people
     people.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "people"}))
     people.blame_fn = repos.people  # each author's share of a repo's lines, for the org chart's ownership signal
@@ -231,15 +230,13 @@ def _start_cards(loop):
     b = cardbuild.Builder(store)
 
     def changed(ids, removed):
-        loop.call_soon_threadsafe(broadcast, {"type": "card", "ids": ids, "removed": removed})
+        loop.call_soon_threadsafe(broadcast, {"type": "thread", "ids": ids, "removed": removed})
 
     def note(t) -> bool:
-        if llm.provider() == "none" or llm.paused():
-            return False
         try:
             work.write_note(t, [])
             return True
-        except llm.Offline:  # Queued too: your agent answers it later, and agent_pass writes it then
+        except llm.Queued:  # your agent answers it later, and agent_pass writes it then
             return False
     b.listeners.append(changed)
     b.note_fn = note
@@ -395,9 +392,7 @@ async def run_insights(scope=None, sids=None):
     except llm.Queued:  # it waits for your agent
         pass
     except Exception as e:
-        msg = ("Choose an AI model in Settings → Models to generate insights." if isinstance(e, llm.Offline)
-               else f"Insight generation failed: {e!r}"[:200])
-        broadcast({"type": "toast", "message": msg})
+        broadcast({"type": "toast", "message": f"Insight generation failed: {e!r}"[:200]})
     finally:
         status.update(insights_running=False, insights_scope=None)
         broadcast({"type": "status", **status})
@@ -424,7 +419,7 @@ async def summarize_team(team, key):
     try:
         await asyncio.get_running_loop().run_in_executor(None, summarize.summarize_team, store, team, key)
         broadcast({"type": "team", "repo": team["repo"]})
-    except llm.Offline:  # no engine right now (server down, model loading): no summary, and no error toast
+    except llm.Queued:  # it waits for your agent
         pass
     except Exception as e:
         broadcast({"type": "toast", "message": f"Team summary failed: {e!r}"[:200]})
@@ -436,12 +431,12 @@ AGENT_BATCH = 10  # jobs of each kind that wait for the agent at a time
 
 
 async def agent_pass(loop, pool):
-    """With your agent as the generation model: ask for every kind of job at once. A job that the agent answered
-    is used now; the others wait in its queue. Moment summaries are left out: there are thousands."""
+    """Ask your agent for every kind of job at once. A job that the agent answered is used now; the others wait in
+    its queue."""
     def ok(res):
         return any(not isinstance(r, BaseException) for r in res)
     run = lambda fn, *a: loop.run_in_executor(pool, fn, *a)  # noqa: E731
-    sess, topics, _ = summarize.pending(store)
+    sess, topics = summarize.pending(store)
     data_topics = [t for t in await _run(datamap.pending_topics) if t["sig"] not in failed_topics]
     res = await asyncio.gather(*[run(summarize.name_data_topic, datamap, t) for t in data_topics[:AGENT_BATCH]],
                                return_exceptions=True)
@@ -455,61 +450,18 @@ async def agent_pass(loop, pool):
     if not status["insights_running"] and store.topics() and await _run(_insights_due):
         await run_insights()
     ts = await asyncio.to_thread(work.tasks, store, 30)
-    todo = [t for t in work.stale_notes(ts, limit=AGENT_BATCH * 3) if t["state"] in ("conscious", "subconscious")][:AGENT_BATCH]
+    todo = [t for t in work.stale_notes(ts, limit=AGENT_BATCH * 3) if t["state"] in ("open", "loose_ends")][:AGENT_BATCH]
     if ok(await asyncio.gather(*[asyncio.to_thread(work.write_note, t, ts) for t in todo], return_exceptions=True)):
-        broadcast({"type": "work"})
+        broadcast({"type": "threads"})
 
 
 async def enricher():
-    """Low-priority LLM work: session summaries -> topic names -> first insights -> chunk summaries."""
+    """Every 30 seconds, the jobs for your agent: session summaries, topic names, insights and task notes."""
     loop = asyncio.get_running_loop()
     pool = ThreadPoolExecutor(3)
     while True:
         try:
-            llm.sweep()  # unload the built-in model after 10 idle minutes
-            if llm.paused():  # e.g. on battery: background AI work waits
-                await asyncio.sleep(30)
-                continue
-            if llm.provider() == "agent":
-                await agent_pass(loop, pool)
-                await asyncio.sleep(30)
-                continue
-            if llm.provider() == "none":  # not chosen yet, or off: nothing to do (and nothing to report as broken)
-                if status.get("llm_offline"):
-                    status["llm_offline"] = False
-                    broadcast({"type": "status", **status})
-                await asyncio.sleep(10)
-                continue
-            sess, topics, chunks = summarize.pending(store)
-            if llm.provider() == "cli":
-                chunks = []  # one CLI call per conversation chunk would be thousands of calls
-            data_topics = [t for t in await _run(datamap.pending_topics) if t["sig"] not in failed_topics]
-            if data_topics:  # a handful of quick calls; first, so a session that keeps changing can't hold them up
-                res = await asyncio.gather(*[loop.run_in_executor(pool, summarize.name_data_topic, datamap, t) for t in data_topics[:3]],
-                                           return_exceptions=True)
-                if any(isinstance(r, (httpx.ConnectError, llm.Offline)) for r in res):
-                    raise next(r for r in res if isinstance(r, (httpx.ConnectError, llm.Offline)))
-                failed_topics.update(t["sig"] for t, r in zip(data_topics, res) if isinstance(r, Exception))  # keep keyword names
-                broadcast({"type": "data_topics"})
-            elif sess:
-                await asyncio.gather(*[loop.run_in_executor(pool, summarize.summarize_session, store, s) for s in sess[:3]])
-                broadcast({"type": "summaries"})
-            elif topics:
-                await asyncio.gather(*[loop.run_in_executor(pool, summarize.name_topic, store, t) for t in topics[:3]])
-                broadcast({"type": "topics"})
-            elif not status["insights_running"] and store.topics() and await _run(_insights_due):
-                await run_insights()
-            elif chunks:
-                await asyncio.gather(*[loop.run_in_executor(pool, summarize.summarize_chunk, store, c, t) for c, t in chunks[:3]])
-            else:
-                await asyncio.sleep(10)
-            if status.get("llm_offline"):
-                status["llm_offline"] = False
-                broadcast({"type": "status", **status})
-        except (httpx.ConnectError, llm.Offline):  # engine not running/available: everything but AI features still works
-            if not status.get("llm_offline"):
-                status["llm_offline"] = True
-                broadcast({"type": "status", **status})
+            await agent_pass(loop, pool)
             await asyncio.sleep(30)
         except Exception as e:
             status["message"] = f"enricher: {e!r}"[:200]
@@ -560,11 +512,6 @@ async def lifespan(app):
     loop = asyncio.get_running_loop()
 
     def changed(keys):  # settings edited from the UI or MCP: re-sweep promptly, tell the Mac app and the UI
-        if "ai" in keys:
-            if settings.get("ai") == "builtin":
-                llm.start_download()  # in the background; the app stays usable
-            else:
-                llm.stop_builtin()
         if "file_types" in keys or "embed_model" in keys:  # images, video or audio switched on: install their parts
             content.resume()
         repos._extra = None  # re-run the repo sweep with the new folders/roots
@@ -589,8 +536,6 @@ async def lifespan(app):
     repos.requeue = watch.requeue_repos
     files.pending = watch.take_files
     files.requeue = watch.requeue_files
-    if settings.get("ai") == "builtin":
-        llm.start_download()
     migrate.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "status", **status}))
     migrate.start()  # v1 data here: import what v2 keeps, in the background; delete v1 after the first full index
     loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
@@ -602,7 +547,6 @@ async def lifespan(app):
         yield
     for t in tasks:
         t.cancel()
-    llm.stop_builtin()
     _save_indexes()
 
 
@@ -659,8 +603,7 @@ def _status():
             "topics_named": db.execute("SELECT COUNT(*) FROM topics WHERE name IS NOT NULL").fetchone()[0],
             "topics": db.execute("SELECT COUNT(*) FROM topics").fetchone()[0],
             "code_chunks": db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0],
-            "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL,
-            "ai": settings.get("ai"), "setup_done": settings.get("setup_done"), "syncing": _syncing(),
+            "embed": config.EMBED_MODEL, "setup_done": settings.get("setup_done"), "syncing": _syncing(),
             "migration": migrate.view()}
 
 
@@ -979,7 +922,7 @@ async def team(name: str, days: int = 90):
         raise HTTPException(404)
     key = _team_key(t)
     raw = store.meta(key)
-    summarizing = raw is None and bool(t["people"]) and llm.provider() != "none"  # AI off: no summaries, no spinner
+    summarizing = raw is None and bool(t["people"])
     if summarizing:
         asyncio.create_task(summarize_team(t, key))
     return {**{k: v for k, v in t.items() if k != "area_activity"}, "summaries": json.loads(raw) if raw else None,
@@ -1163,17 +1106,15 @@ async def data_topics(folders: str = ""):
     `folders` ('|'-separated, relative to home), topics among just the items in those folders, plus which topic
     each item is in; their AI names are written in the background and announced with a 'data_topics' event."""
     loop = asyncio.get_running_loop()
-    ai = await loop.run_in_executor(None, llm.provider)
-    paused = await loop.run_in_executor(None, llm.paused)
     if not folders:
-        return {"topics": await loop.run_in_executor(None, datamap.topics), "ai": ai != "none", "ai_paused": paused}
+        return {"topics": await loop.run_in_executor(None, datamap.topics)}
     home = str(Path.home())
     abs_ = [f if f.startswith("/") else f"{home}/{f}" for f in folders.split("|") if f]
     r = await loop.run_in_executor(None, datamap.scoped_topics, abs_)
     todo = [t for t in r["topics"] if not t["named"]]
-    if todo and ai != "none" and not paused:
+    if todo:
         asyncio.create_task(name_data_scoped(todo))
-    return {**r, "ai": ai != "none", "ai_paused": paused}
+    return r
 
 
 class ViewTopicsReq(BaseModel):
@@ -1191,14 +1132,12 @@ async def view_topics(req: ViewTopicsReq):
         r = await loop.run_in_executor(None, datamap.view_topics, req.rev, req.idx)
     except ValueError:
         raise HTTPException(409, "points changed; reload them")
-    ai = await loop.run_in_executor(None, llm.provider)
-    paused = await loop.run_in_executor(None, llm.paused)
-    if req.name and ai != "none" and not paused:
+    if req.name:
         size = Counter(r["of"].values())
         todo = [t for t in r["topics"] if not t["named"] and size[t["id"]] >= 25]
         if todo:
             asyncio.create_task(name_data_scoped(todo))
-    return {**r, "ai": ai != "none", "ai_paused": paused}
+    return r
 
 
 async def name_data_scoped(topics):
@@ -1250,21 +1189,6 @@ def open_item(req: OpenReq):
         raise HTTPException(404)
     except ValueError as e:
         raise HTTPException(400, str(e))
-
-
-@app.get("/api/ai")
-async def ai_status():
-    return await asyncio.get_running_loop().run_in_executor(None, llm.status)
-
-
-class CliTestReq(BaseModel):
-    command: str
-
-
-@app.post("/api/ai/cli/test")
-async def ai_cli_test(req: CliTestReq):
-    """Send a one-word prompt through a command before it is saved as the engine."""
-    return await asyncio.to_thread(llm.test_command, req.command)
 
 
 def _repo_check(cwd: str) -> dict:
@@ -1337,6 +1261,10 @@ async def hook_repo_check(request: Request):
             loop = asyncio.get_running_loop()
             loop.run_in_executor(None, lambda: stale_mod.from_store(store, roots=[c["root"]]))
         notes.append(integrations.stale_note(c["name"], items or []))
+        try:  # the threads come from the cards table: no build here
+            notes.append(integrations.threads_note(c["name"], c["root"], await asyncio.to_thread(work.tasks, store, 30)))
+        except Exception:
+            pass
     note = "\n\n".join(n for n in notes if n)
     return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": note}} if note else {}
 
@@ -1457,7 +1385,6 @@ def get_setup(fresh: bool = False, categories: str | None = None, scan: bool = T
 class SetupReq(BaseModel):
     sources: list[str] | None = None  # ids to index; None with recommended=true takes the pre-checked ones
     recommended: bool = False
-    ai: str | None = None  # the insights engine
     embed_model: str | None = None  # the search model (config.EMBED_MODELS)
     content: list[str] | None = None  # images, video, audio: read by content (needs EmbeddingGemma 2)
 
@@ -1466,7 +1393,7 @@ class SetupReq(BaseModel):
 async def post_setup(req: SetupReq):
     """Index exactly the chosen sources: every other candidate is switched off, then indexing starts."""
     try:
-        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.ai, req.embed_model, req.content))
+        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.embed_model, req.content))
     except ValueError as e:
         raise HTTPException(400, str(e))
     wake_files.set()
@@ -1667,11 +1594,11 @@ def remove_mcp_server(path: str):
     return sources.catalog(store, repos, files)
 
 
-@app.get("/api/work")
-def get_work(days: int = 30, ids: str = ""):
-    """The Context tab: context cards (tasks) with their state, their data points from every source, each task's AI
-    note, and its thread (id and number of saved cards) once the card keeper has linked it. With `ids`
-    (comma-separated), only those cards: the page asks for them after a `card` event."""
+@app.get("/api/threads")
+def get_threads(days: int = 30, ids: str = ""):
+    """The Threads tab: the threads with their state, their data points from every source, each one's note, and its
+    saved history (id and number of saved versions) once the keeper has linked it. With `ids` (comma-separated),
+    only those threads: the page asks for them after a `thread` event."""
     from pensieve import history
     only = set(_csv(ids)) if ids else None
     ts = work.tasks(store, days, ids=only)
@@ -1681,30 +1608,37 @@ def get_work(days: int = 30, ids: str = ""):
     if only is None:
         work.warm_card_search(ts, have)
     # each note's core (problem, goal, state, next, question); notes in an older format show until written again
-    return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
-                                           "stale": t["id"] in stale}
-                                 for t in ts if work.core(have.get(t["id"], {}))},
-                threads={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
+    return dict(threads=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
+                                             "stale": t["id"] in stale}
+                                   for t in ts if work.core(have.get(t["id"], {}))},
+                history={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
                 states=task_states.models(), writing=status.get("work_notes") or [])
 
 
-@app.get("/api/work/search")
-def search_work(q: str, days: int = 30):
-    """The context cards of the last `days` days that match `q`, best first: {results: [{id, score}]}. Meaning words
-    rank the cards, "exact phrases" and -words filter them."""
+@app.get("/api/threads/search")
+def search_threads(q: str, days: int = 30):
+    """The threads of the last `days` days that match `q`, best first: {results: [{id, score}]}. Meaning words rank
+    the threads, "exact phrases" and -words filter them."""
     ts = work.tasks(store, days)
     return dict(results=work.search_cards(ts, work.notes(), q))
 
 
-@app.get("/api/work/card")
-def get_work_card(id: str, format: str = "html", share: bool = False, days: int = 30):
-    """One task as a context card (context-card/1). `format`: html (the page for people, which holds the JSON),
-    agent (compact JSON with a line on how to read it) or json. `share`: the card to send: no local part or path,
-    and a summary of each local or restricted resource, read whole now (this takes a few model calls)."""
+@app.get("/api/thread")
+def get_thread(id: str, format: str = "html", share: bool = False, days: int = 30, version: int | None = None):
+    """One thread (pensieve-thread/2): the id of a thread on the Threads tab, or a th_ id. `format`: html (the page
+    for people, which holds the JSON), agent (compact JSON with a line on how to read it) or json. `share`: the thread
+    to send: no local part or path, and a summary of each local or restricted resource, read whole now (this takes a
+    few model calls). `version`: a saved version instead of the thread now (-1 is the last)."""
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-    from pensieve import cards
-    card = _local_card(id, days)
-    card = cards.draft_share(card, store) if share else card
+    from pensieve import cards, history
+    if version is not None:
+        saves = history.history(id if id.startswith("th_") else history.thread_of(id) or "")
+        if not saves:
+            raise HTTPException(404, f"no saved versions of {id}")
+        card = saves[version]["card"]
+    else:
+        card = _local_card(history.task_of(id) or id if id.startswith("th_") else id, days)
+        card = cards.draft_share(card, store) if share else card
     if format == "html":
         return HTMLResponse(cards.render_html(card))
     return PlainTextResponse(cards.render_agent(card)) if format == "agent" else JSONResponse(card)
@@ -1714,24 +1648,24 @@ def _local_card(task_id: str, days: int) -> dict:
     from pensieve import cards
     t = next((x for x in work.tasks(store, days) if x["id"] == task_id), None)
     if not t:
-        raise HTTPException(404, f"no task {task_id}")
+        raise HTTPException(404, f"no thread {task_id}")
     return cards.build(t, work.notes().get(task_id, {}), task_states.history(store, task_id))
 
 
 class CardDraftReq(BaseModel):
     id: str
-    days: int = 30  # the Context tab's period, where the id comes from
-    include: list[int] | None = None  # the local card's resources to keep, by position; default all
+    days: int = 30  # the Threads tab's period, where the id comes from
+    include: list[int] | None = None  # the local thread's resources to keep, by position; default all
 
 
-@app.post("/api/work/card/draft")
-def draft_work_card(req: CardDraftReq):
-    """The Share button's preview: the local card's resources (what the person can untick) and the shared card
+@app.post("/api/thread/share/draft")
+def draft_share(req: CardDraftReq):
+    """The Share button's preview: the local thread's resources (what the person can untick) and the shared thread
     drafted from them, with a summary of each local or restricted one. Nothing is saved."""
     from pensieve import cards
     card = _local_card(req.id, req.days)
     return {"resources": [{k: r.get(k) for k in ("kind", "title", "reach")} for r in card.get("resources", [])],
-            "card": cards.draft_share(card, store, req.include)}
+            "thread": cards.draft_share(card, store, req.include)}
 
 
 def _repo_rows():
@@ -1770,8 +1704,8 @@ def find_person(who: str):
 async def search_people(q: str, remote: bool = True, deep: bool = False):
     """Find a person, as lines of JSON. The first line has the local matches: the graph, then the people that earlier
     searches found. Then one line for each remote source as it answers: GitHub through gh, and the switched-on
-    people connectors with their read-only user search tools. A Claude Code server costs a model run, so only a
-    messaging tool (Slack) is asked without `deep`. The last line is {"type": "done"}."""
+    people connectors with their read-only user search tools. `deep` is accepted for older clients and does nothing.
+    The last line is {"type": "done"}."""
     from pensieve import directory
     q = q.strip()[:100]
 
@@ -1783,15 +1717,10 @@ async def search_people(q: str, remote: bool = True, deep: bool = False):
         jobs = {}
         if await asyncio.to_thread(directory.gh_on):
             jobs["github"] = ({"label": "GitHub"}, lambda: directory.search_github(q))
-        skipped = []
         for r in await asyncio.to_thread(directory.user_servers):
-            # a Claude Code server costs a model run: only a messaging tool is asked on its own, for a query of 3+ letters
-            if r["origin"] == "engine" and not deep and (r["connector"] not in directory.CHAT or len(q) < 3):
-                skipped.append({"id": r["id"], "label": r["label"]})
-            else:
-                jobs[r["id"]] = (r, lambda r=r: directory.search_server(r, q))
+            jobs[r["id"]] = (r, lambda r=r: directory.search_server(r, q))
         yield json.dumps({"type": "sources", "asking": [{"id": k, "label": v[0]["label"]} for k, v in jobs.items()],
-                          "skipped": skipped}) + "\n"
+                          "skipped": []}) + "\n"
 
         async def one(sid, r, fn):
             t0 = time.time()
@@ -1799,8 +1728,7 @@ async def search_people(q: str, remote: bool = True, deep: bool = False):
                 out = {"hits": await asyncio.to_thread(lambda: directory.hits(fn()))}
             except Exception as e:
                 out = {"hits": [], "error": str(e)[:200]}
-            return {"type": "source", "id": sid, "label": r["label"], "seconds": round(time.time() - t0, 1),
-                    "cost_usd": (r.get("_cost") or {}).get("cost_usd"), **out}
+            return {"type": "source", "id": sid, "label": r["label"], "seconds": round(time.time() - t0, 1), **out}
         for f in asyncio.as_completed([one(k, *v) for k, v in jobs.items()]):
             yield json.dumps(await f) + "\n"
         yield json.dumps({"type": "done"}) + "\n"
@@ -1912,91 +1840,89 @@ async def fetch_people_profiles():
     return res
 
 
-@app.get("/api/threads")
-def get_threads():
-    """The threads with saved cards: id, title, number of saves, first and last save; and which thread each current
-    task belongs to."""
+@app.get("/api/threads/history")
+def get_thread_history_index():
+    """The threads with saved versions: id, title, number of saves, first and last save; and which saved thread each
+    current thread belongs to (`of`)."""
     from pensieve import history
-    return {"threads": history.listing(), "of_task": history.current.of_task if history.current else {}}
+    return {"threads": history.listing(), "of": history.current.of_task if history.current else {}}
 
 
 @app.post("/api/threads/save")
 async def save_threads():
-    """Save the cards that changed now, as the keeper does every history.CHECK seconds. Returns what was saved."""
+    """Save the threads that changed now, as the keeper does every history.CHECK seconds. Returns what was saved."""
     from pensieve import history
     if history.current is None:
-        raise HTTPException(503, "the card keeper starts a minute after Pensieve")
+        raise HTTPException(503, "the thread keeper starts a minute after Pensieve")
     return {"saved": await asyncio.to_thread(history.current.run_once)}
 
 
-@app.get("/api/threads/{thread}")
-def get_thread_history(thread: str, format: str = "json", n: int = -1):
-    """A thread's saved cards, oldest first ({at, reasons, snapshot, card}); with format=html, save n as its page
-    (the last by default)."""
-    from fastapi.responses import HTMLResponse
-    from pensieve import cards, history
-    saves = history.history(thread)
+@app.get("/api/thread/versions")
+def get_thread_versions(id: str):
+    """A thread's saved versions, oldest first: {at, reasons, snapshot, thread}. GET /api/thread?version=n gives one
+    as a page."""
+    from pensieve import history
+    saves = history.history(id if id.startswith("th_") else history.thread_of(id) or "")
     if not saves:
-        raise HTTPException(404, f"no saved cards for {thread}")
-    if format == "html":
-        return HTMLResponse(cards.render_html(saves[n]["card"]))
-    return saves
+        raise HTTPException(404, f"no saved versions of {id}")
+    return [{**{k: v for k, v in s.items() if k != "card"}, "thread": s["card"]} for s in saves]
 
 
 class CardRenderReq(BaseModel):
-    card: dict
+    thread: dict
     ask: str = ""
 
 
-@app.post("/api/work/card/render")
-def render_work_card(req: CardRenderReq):
-    """The Share dialog's preview: the edited card's page exactly as saving would write it (made fit to send)."""
+@app.post("/api/thread/share/render")
+def render_share(req: CardRenderReq):
+    """The Share dialog's preview: the edited thread's page exactly as saving would write it (made fit to send)."""
     from fastapi.responses import HTMLResponse
     from pensieve import cards
-    return HTMLResponse(cards.render_html(cards.share(req.card, req.ask)))
+    return HTMLResponse(cards.render_html(cards.share(req.thread, req.ask)))
 
 
 class CardSaveReq(BaseModel):
     id: str
     days: int = 30
-    card: dict | None = None  # the shared card as the person edited it; default: a draft of the whole card
+    thread: dict | None = None  # the shared thread as the person edited it; default: a draft of the whole thread
     ask: str = ""
 
 
-@app.post("/api/work/card/save")
-def save_work_card(req: CardSaveReq):
-    """The Share button's save: the shared card as an HTML page in ~/Downloads (the app's web view can't download).
-    An edited card is made fit to send again, and refused if it still holds anything local. Returns the file's path."""
+@app.post("/api/thread/share/save")
+def save_share(req: CardSaveReq):
+    """The Share button's save: the shared thread as an HTML page in ~/Downloads (the app's web view can't
+    download). An edited thread is made fit to send again, and refused if it still holds anything local. Returns the
+    file's path."""
     from pensieve import cards
-    card = cards.share(req.card if req.card else cards.draft_share(_local_card(req.id, req.days), store), req.ask)
+    card = cards.share(req.thread if req.thread else cards.draft_share(_local_card(req.id, req.days), store), req.ask)
     if cards.local_parts(card):
-        raise HTTPException(422, f"the card still holds something local: {', '.join(cards.local_parts(card)[:5])}")
+        raise HTTPException(422, f"the thread still holds something local: {', '.join(cards.local_parts(card)[:5])}")
     return {"path": cards.save(card, Path.home() / "Downloads")}
 
 
 class TaskStateReq(BaseModel):
     id: str
-    state: str  # latent | conscious | subconscious | etched | forgotten | auto
+    state: str  # todo | open | loose_ends | complete | forgotten | auto
     reason: str = ""
 
 
-@app.post("/api/work/state")
-def set_task_state(req: TaskStateReq):
-    """Set a task's state by hand, or back to automatic with "auto"."""
+@app.post("/api/thread/state")
+def set_thread_state(req: TaskStateReq):
+    """Set a thread's state by hand, or back to automatic with "auto"."""
     try:
         r = work.set_state(store, req.id, req.state, "user", req.reason)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    broadcast({"type": "card", "ids": [req.id], "removed": []})
+    broadcast({"type": "thread", "ids": [req.id], "removed": []})
     return r
 
 
 _notes_running = threading.Lock()
 
 
-@app.post("/api/work/notes")
-async def write_work_notes(days: int = 30, ids: str = ""):
-    """Write the AI notes that are missing or out of date, for the tasks in `ids` (comma-separated; default: the
+@app.post("/api/threads/notes")
+async def write_thread_notes(days: int = 30, ids: str = ""):
+    """Write the notes that are missing or out of date, for the threads in `ids` (comma-separated; default: the
     first 10), in the background."""
     if _notes_running.locked():
         return {"started": False}
@@ -2011,15 +1937,13 @@ async def write_work_notes(days: int = 30, ids: str = ""):
                     await asyncio.to_thread(work.write_note, t, ts)
                 except llm.Queued:  # it waits for your agent; the next one can too
                     pass
-                except llm.Offline:
-                    break
                 except Exception:
                     import traceback
                     traceback.print_exc()
                 status["work_notes"] = [x for x in status["work_notes"] if x != t["id"]]
-                broadcast({"type": "card", "ids": [t["id"]], "removed": []})
+                broadcast({"type": "thread", "ids": [t["id"]], "removed": []})
             status["work_notes"] = []
-            broadcast({"type": "card", "ids": [t["id"] for t in todo], "removed": []})
+            broadcast({"type": "thread", "ids": [t["id"] for t in todo], "removed": []})
     asyncio.create_task(run())
     return {"started": True}
 
@@ -2029,7 +1953,7 @@ class ResumeReq(BaseModel):
     run: bool = True  # false: only the command, to copy
 
 
-@app.post("/api/work/resume")
+@app.post("/api/thread/resume")
 def resume_session(req: ResumeReq):
     """Open Terminal in the session's folder and resume the agent session there. Only the agent that wrote a
     session can resume it."""
@@ -2050,11 +1974,11 @@ def _terminal(cmd: str):
 
 
 class ReviveReq(BaseModel):
-    id: str = ""  # a task on the Context tab: its card now
+    id: str = ""  # a thread on the Threads tab, as it is now
     days: int = 30
-    thread: str = ""  # or a thread's saved card (history), save n (default the last)
-    n: int = -1
-    run: bool = True  # false: only the prompt with the card in it, to paste into any agent
+    thread: str = ""  # or a saved version of a thread (th_ id), number `version` (default the last)
+    version: int = -1
+    run: bool = True  # false: only the prompt with the thread in it, to paste into any agent
     agent: str = ""  # the agent to start (agents.AGENTS); "" = the user's default agent
 
 
@@ -2065,16 +1989,16 @@ def list_agents():
     return {"agents": agents.listing(settings.get("default_agent")), "default": settings.get("default_agent") or ""}
 
 
-@app.post("/api/work/revive")
-def revive_card(req: ReviveReq):
-    """Start a new agent session in Terminal with a card as its first context: a task's card now, or a card that
-    the history saved, such as one from work that ended. With run=false, the prompt with the card in it."""
+@app.post("/api/thread/revive")
+def revive_thread(req: ReviveReq):
+    """Start a new agent session in Terminal with a thread as its first context: the thread now, or a version that
+    the history saved, such as one from work that ended. With run=false, the prompt with the thread in it."""
     from pensieve import cards, history
     if req.thread:
         saves = history.history(req.thread)
         if not saves:
-            raise HTTPException(404, f"no saved cards for {req.thread}")
-        card = saves[req.n]["card"]
+            raise HTTPException(404, f"no saved versions of {req.thread}")
+        card = saves[req.version]["card"]
     else:
         card = _local_card(req.id, req.days)
     if not req.run:
@@ -2084,12 +2008,12 @@ def revive_card(req: ReviveReq):
     return {"ok": True, "command": cmd}
 
 
-@app.get("/api/work/adjacent")
-async def work_adjacent(id: str, days: int = 30):
-    """For one task: coworkers' recent commits in the same folders, and tickets and threads on the same subject."""
+@app.get("/api/thread/adjacent")
+async def thread_adjacent(id: str, days: int = 30):
+    """For one thread: coworkers' recent commits in the same folders, and tickets and pages on the same subject."""
     t = next((t for t in work.tasks(store, days) if t["id"] == id), None)
     if not t:
-        raise HTTPException(404, f"unknown task {id!r}")
+        raise HTTPException(404, f"unknown thread {id!r}")
     people, rel = await asyncio.gather(asyncio.to_thread(work.coworkers, t), asyncio.to_thread(work.related, t, searcher))
     return dict(coworkers=people, related=rel)
 
@@ -2112,16 +2036,15 @@ async def connections_worker():
                 if await asyncio.to_thread(connections.backfill_sessions):
                     wake_files.set()
                     broadcast({"type": "repos"})
-            if (connections.claude_code() or settings.get("mcp_servers") or connections.agent_configs()) and \
+            if (settings.get("mcp_servers") or connections.agent_configs()) and \
                     time.time() - (st.get("discovered") or 0) > DISCOVER_SECONDS:
                 await asyncio.to_thread(connections.discover)
                 broadcast({"type": "repos"})  # the Sources list changed
-            if not llm.on_battery() or settings.get("ai_on_battery"):
-                for sid in connections.due():
-                    await asyncio.to_thread(connections.collect, sid)
-                    wake_files.set()
-                    broadcast({"type": "repos"})
-                await asyncio.to_thread(migrate.mark_indexed, "documents")  # each connection that is due was collected
+            for sid in connections.due():
+                await asyncio.to_thread(connections.collect, sid)
+                wake_files.set()
+                broadcast({"type": "repos"})
+            await asyncio.to_thread(migrate.mark_indexed, "documents")  # each connection that is due was collected
         except Exception:
             import traceback
             traceback.print_exc()
@@ -2275,50 +2198,6 @@ def put_settings(changes: dict):
     return out
 
 
-@app.get("/api/ai/models")
-def ai_models(url: str, key: str = "", name: str = ""):
-    """Test an OpenAI-compatible server and list its models. A saved key is only used for the URL it was saved with."""
-    if not key:
-        saved = next((c for c in settings.get("llm_connections") if c["name"] == name), None)
-        if saved and saved["url"].rstrip("/") == url.rstrip("/"):
-            key = saved["key"]
-        elif url.rstrip("/") == settings.get("llm_url").rstrip("/"):
-            key = settings.get("llm_key")
-    return llm.server_models(url, key)
-
-
-class ConnectionReq(BaseModel):
-    name: str
-    url: str
-    model: str
-    key: str | None = None  # None keeps the saved key
-    use: bool = True
-
-
-@app.post("/api/ai/connections")
-def save_connection(req: ConnectionReq):
-    """Save a model server under a name and, with `use`, make it the AI engine."""
-    name, url, model = req.name.strip(), req.url.strip().rstrip("/"), req.model.strip()
-    if not name or not url or not model:
-        raise HTTPException(400, "Enter a name, the server URL and a model.")
-    conns = settings.get("llm_connections")
-    old = next((c for c in conns if c["name"] == name), None)
-    key = req.key if req.key else (old["key"] if old else "")
-    conns = [c for c in conns if c["name"] != name] + [{"name": name, "url": url, "model": model, "key": key}]
-    changes = {"llm_connections": conns}
-    if req.use:
-        changes.update(ai="server", llm_url=url, llm_model=model, llm_key=key)
-    try:
-        settings.update(changes)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return llm.status()
-
-
-@app.delete("/api/ai/connections")
-def delete_connection(name: str):
-    settings.update({"llm_connections": [c for c in settings.get("llm_connections") if c["name"] != name]})
-    return llm.status()
 
 
 def main():

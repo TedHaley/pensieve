@@ -1,5 +1,5 @@
-"""First run (and after a reset): what Pensieve is, who it is for, which sources to scan, what to index and which AI
-engine writes insights. The app's setup sheet and the MCP setup tools both run these steps, so an agent that installs
+"""First run (and after a reset): what Pensieve is, who it is for, which sources to scan, what to index and which
+model embeds them for search. The app's setup sheet and the MCP setup tools both run these steps, so an agent that installs
 Pensieve can ask the user the same questions in its conversation.
 
 Nothing reads the user's folders before `scan`: the categories it is given are the only ones it looks in, so macOS
@@ -7,7 +7,7 @@ asks for folder access when the user has chosen to look, not when the app starts
 import time
 from pathlib import Path
 
-from pensieve import actions, apps, config, content, llm, settings, sources
+from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
     "Pensieve searches everything on this Mac by meaning: documents, git repos and your AI agent sessions.",
@@ -68,8 +68,6 @@ def guide() -> dict:
     cats = {c: (label, desc) for c, label, desc in sources.CATEGORIES}
     return {"done": settings.get("setup_done"), "about": ABOUT, "profiles": PROFILES,
             "categories": [dict(id=c, label=label, description=desc, reads=reads(c)) for c, (label, desc) in cats.items()],
-            "ai": [{k: o[k] for k in ("id", "label", "privacy", "available", "description", "note") if k in o}
-                   for o in llm.options()],
             "energy": ENERGY_NOTE, "files_per_minute": REPO_FILES_PER_MINUTE,
             "embed_model": config.EMBED_MODEL,
             "embed_models": [dict(id=k, label=m["label"], about=m["about"]) for k, m in config.EMBED_MODELS.items()],
@@ -245,10 +243,10 @@ def index(path: str, cwd=None) -> dict:
             else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
 
 
-def start(chosen=None, recommended=False, ai=None, embed_model=None, kinds=None) -> dict:
+def start(chosen=None, recommended=False, embed_model=None, kinds=None) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
-    switched off, then indexing starts. Categories that were never scanned are switched off whole. `ai` picks the
-    generation model (an id from guide()["ai"]; "none" is taken as "agent"); `embed_model` the search model (guide()["embed_models"]).
+    switched off, then indexing starts. Categories that were never scanned are switched off whole. `embed_model` picks
+    the search model (guide()["embed_models"]).
     On an empty index the search model changes at once; otherwise the switch runs in the background (reembed).
     `kinds`: which of images, video and audio to read by content (content.KINDS); the others are found by name. None
     leaves them as they are. They need the EmbeddingGemma 2 search model: with kinds and no `embed_model`, that
@@ -272,8 +270,6 @@ def start(chosen=None, recommended=False, ai=None, embed_model=None, kinds=None)
         settings.update({"embed_model": embed_model})
         c = actions.ctx
         reembed.switch_empty(c["store"], [c["store"], c["repos"], c["files"]])
-    if ai is not None and ai not in {o["id"] for o in llm.options()} | {"none", "auto"}:
-        raise ValueError(f"unknown AI engine {ai!r}")
     if _scanned:
         cats = scan(sorted(_scanned))
     elif chosen is None or chosen:  # `pensieve setup <ids>` chooses without a scan first
@@ -295,12 +291,6 @@ def start(chosen=None, recommended=False, ai=None, embed_model=None, kinds=None)
     # added to the repos setting: big repos, which discovery skips, and repos found only in agent transcripts
     big = [i["id"][6:] for i in items if (i.get("big") or i.get("agents")) and i["id"] in chosen]
     changes = {"disabled": off, "repos": list(dict.fromkeys(settings.get("repos") + big)), "setup_done": True}
-    if ai is not None:
-        changes["ai"] = ai
-        if ai == "cli" and not settings.get("cli_command").strip():  # the first template whose CLI is installed
-            t = next((t for t in settings.CLI_TEMPLATES if llm._exe(t["command"])), None)
-            if t:
-                changes.update(cli_command=t["command"], cli_privacy=t["privacy"])
     settings.update(changes)
     _cache.clear()
     _scanned.clear()

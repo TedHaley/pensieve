@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pensieve MCP server for Claude Code: install and setup</title>
-<meta name="description" content="Connect Pensieve to Claude Code as an MCP server with one command or the Claude Code plugin. Search code, past sessions and context cards before you grep.">
+<meta name="description" content="Connect Pensieve to Claude Code as an MCP server with one command or the Claude Code plugin. Search code, past sessions and threads before you grep.">
 <link rel="canonical" href="https://pensieve.tools/docs/agents/claude-code/">
 <meta name="robots" content="index,follow">
 <meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
@@ -12,7 +12,7 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Pensieve">
 <meta property="og:title" content="Pensieve MCP server for Claude Code: install and setup">
-<meta property="og:description" content="Connect Pensieve to Claude Code as an MCP server with one command or the Claude Code plugin. Search code, past sessions and context cards before you grep.">
+<meta property="og:description" content="Connect Pensieve to Claude Code as an MCP server with one command or the Claude Code plugin. Search code, past sessions and threads before you grep.">
 <meta property="og:url" content="https://pensieve.tools/docs/agents/claude-code/">
 <meta property="og:image" content="https://pensieve.tools/og.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -21,7 +21,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/docs/docs.css">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Pensieve for Claude Code","description":"Connect Pensieve to Claude Code as an MCP server with one command or the Claude Code plugin. Search code, past sessions and context cards before you grep.","url":"https://pensieve.tools/docs/agents/claude-code/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Pensieve for Claude Code","description":"Connect Pensieve to Claude Code as an MCP server with one command or the Claude Code plugin. Search code, past sessions and threads before you grep.","url":"https://pensieve.tools/docs/agents/claude-code/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -36,7 +36,7 @@
   </nav>
 </header>
 <div class="layout">
-<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/" aria-current="page">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/" aria-current="page">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/threads/">Threads</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/">Privacy and data</a></li></ul></nav></details>
 <main>
 <p class="crumb">Connect your agent</p>
 <h1>Pensieve for Claude Code</h1>
@@ -57,7 +57,7 @@ pensieve integrate claude-mcp claude pensieve-search   <span class="c"># only Cl
 
 
 <h2 id="plugin">Or install the Claude Code plugin</h2>
-<p>The plugin gives Claude Code the MCP server, the three skills, the instructions block and the three recommended
+<p>The plugin gives Claude Code the MCP server, the four skills, the instructions block and the three recommended
 hooks. It does not change your settings files. Install Pensieve first, because the plugin starts
 <code>~/.local/bin/pensieve</code>. Then type these commands in Claude Code:</p>
 <pre><code>/plugin marketplace add TedHaley/pensieve
@@ -70,7 +70,7 @@ hooks. It does not change your settings files. Install Pensieve first, because t
 
 <h2 id="hooks">Hooks for Claude Code</h2>
 <p><code>pensieve integrate recommended</code> adds three hooks to <code>~/.claude/settings.json</code>:</p>
-<div class="tbl"><table><thead><tr><th>Hook</th><th>Event</th><th>What it does</th></tr></thead><tbody><tr><td><code>claude-hook</code></td><td>PostToolUse</td><td>After each Edit or Write, it sends the changed path to Pensieve. The next search finds the new code. It adds about 50 ms to each edit.</td></tr><tr><td><code>claude-repo-check</code></td><td>SessionStart</td><td>In a repo that Pensieve does not index, Claude asks you once whether to index it. Pensieve keeps your answer.</td></tr><tr><td><code>claude-prompt-search</code></td><td>UserPromptSubmit</td><td>Pensieve adds what the prompt needs: a context card, your task list, who knows the code, past sessions, or the 5 best code matches. It adds about 300 ms and 400 to 1,500 tokens.</td></tr></tbody></table></div>
+<div class="tbl"><table><thead><tr><th>Hook</th><th>Event</th><th>What it does</th></tr></thead><tbody><tr><td><code>claude-hook</code></td><td>PostToolUse</td><td>After each Edit or Write, it sends the changed path to Pensieve. The next search finds the new code. It adds about 50 ms to each edit.</td></tr><tr><td><code>claude-repo-check</code></td><td>SessionStart</td><td>In a repo that Pensieve does not index, Claude asks you once whether to index it. Pensieve keeps your answer. In a repo that Pensieve indexes, it adds one line: the number of loose ends and the thread closest to done. Claude then offers to close it at a natural pause.</td></tr><tr><td><code>claude-prompt-search</code></td><td>UserPromptSubmit</td><td>Pensieve adds what the prompt needs: a thread, your list of threads, who knows the code, past sessions, or the 5 best code matches. It adds about 300 ms and 400 to 1,500 tokens.</td></tr></tbody></table></div>
 <p>Slash commands, prompts of 1 or 2 words, and repos that Pensieve does not index get nothing from the prompt hook.</p>
 
 <h2 id="manual">Connect by hand</h2>

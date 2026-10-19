@@ -153,6 +153,12 @@ def achievements(closed: int, last_week: int, n_open: int, close_days: int) -> l
     return out
 
 
+def closest_first(n_left: int, updated: float) -> tuple:
+    """The order of "Closest to done" (Insights, and the closest_to_done MCP tool): the fewest steps to a close first,
+    then the newest. A thread with no known step is last, because Pensieve cannot tell what closes it."""
+    return n_left == 0, n_left, -updated
+
+
 def week(cards: list, now: float) -> dict:
     """This week (since Monday, local time): the threads closed, the threads in progress that are left to close
     (fewest items left first), and the achievements. `cards` are (id, state, updated, view) rows."""
@@ -162,19 +168,18 @@ def week(cards: list, now: float) -> dict:
     closed, days, open_ = [], set(), []
     for cid, state, updated, v in cards:
         title = (v.get("anchor") or {}).get("title") or v.get("title") or cid  # the Threads tab's title
-        if state == "etched":
+        if state == "complete":
             if updated >= start:
                 closed.append(dict(id=cid, title=title, at=updated))
                 days.add(date.fromtimestamp(updated))
             else:
                 weeks[int((start - updated) // WEEK) + 1] += 1
-        elif state == "conscious":
+        elif state in ("open", "loose_ends"):
             left = v.get("left") or []
             open_.append(dict(id=cid, title=title, updated=updated, n_left=len(left),
                               left=[dict(text=x.get("text", ""), how=x.get("how", "")) for x in left][:3],
                               repos=[r.rsplit("/", 1)[-1] for r in v.get("repos", [])][:2]))
-    # the fewest steps to a close first; a thread with no known step last, as Pensieve can't tell what closes it
-    open_.sort(key=lambda t: (t["n_left"] == 0, t["n_left"], -t["updated"]))
+    open_.sort(key=lambda t: closest_first(t["n_left"], t["updated"]))
     closed.sort(key=lambda t: -t["at"])
     per_day = [0] * 7
     for c in closed:
@@ -320,7 +325,7 @@ def output_events(idx, store, graph, now: float, prs: list[dict], roots: set | N
         if roots is not None and not roots & set(v.get("repos") or []):
             continue
         cards.append((cid, state, updated, v))
-        if state == "etched" and updated >= since:
+        if state == "complete" and updated >= since:
             ev.append(("thread_closed", updated, cid))
     card_ids = {c[0] for c in cards}
     card_tickets = {k.get("key") for c in cards for k in c[3].get("tickets", [])}
@@ -514,7 +519,7 @@ def momentum(cards: list, idx, ev: list, now: float, sel: set | None = None) -> 
         return "quiet"
     threads, left_by_repo = [], Counter()
     for cid, state, updated, v in cards:
-        if state in ("etched", "forgotten"):
+        if state in ("complete", "forgotten"):
             continue
         ts = [e.get("ts") for e in v.get("events", []) if e.get("ts")]
         ts += [c.get("ts") for c in v.get("commits", []) if c.get("ts")]

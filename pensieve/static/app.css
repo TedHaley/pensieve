@@ -1108,11 +1108,7 @@ body[data-view=insights] #gl .labels,body[data-view=settings] #gl .labels{displa
 .row .sub,.trow .tsub{overflow-wrap:anywhere}
 .frow{grid-template-columns:minmax(0,260px) 1fr 74px}
 
-/* ---- AI engine chooser ---- */
-.ai-status{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12.5px;margin:6px 0 10px}
-.ai-status .muted{overflow-wrap:anywhere}
-.ai-status .dot{width:8px;height:8px;border-radius:50%;background:var(--text-3);flex:none}
-.ai-status .dot.live{background:var(--good)}.ai-status .dot.busy{background:var(--accent);animation:bl 1.4s infinite}.ai-status .dot.warn{background:var(--warn)}.ai-status .dot.off{background:var(--critical)}
+/* option cards: the profiles in setup */
 .ai-opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin:4px 0 10px}
 .ai-opt{position:relative;text-align:left;border:0;border-radius:14px;padding:12px 14px 14px;background:var(--card-2);color:var(--text);box-shadow:inset 0 0 0 1px var(--line);display:flex;flex-direction:column;gap:4px;transition:box-shadow .18s var(--ease),background .18s var(--ease)}
 .ai-opt:hover:not(:disabled){box-shadow:inset 0 0 0 1px var(--accent)}
@@ -1133,7 +1129,6 @@ body[data-view=insights] #gl .labels,body[data-view=settings] #gl .labels{displa
 .fb-acts{display:flex;gap:6px;flex:none}
 .fb-details summary{cursor:pointer;color:var(--text-3);font-size:12px;margin-top:4px}
 .fb-details pre{white-space:pre-wrap;font:12px/1.45 var(--mono);color:var(--text-2);margin:6px 0 0;max-height:220px;overflow:auto}
-.ai-check{font-size:11.5px;font-weight:600;color:var(--accent);margin-top:2px}
 .priv{flex:none;font-size:10.5px;font-weight:600;border-radius:999px;padding:1px 8px}
 .priv.local{background:color-mix(in srgb,var(--good) 18%,transparent);color:var(--good)}
 .priv.cloud{background:color-mix(in srgb,var(--warn) 22%,transparent);color:color-mix(in srgb,var(--warn) 70%,var(--text))}
@@ -1148,10 +1143,6 @@ body[data-view=insights] #gl .labels,body[data-view=settings] #gl .labels{displa
 .mdl-t p{margin:0;font-size:12.5px;color:var(--text-2);line-height:1.45}
 .mdl .set-row{grid-template-columns:minmax(0,1fr) minmax(0,260px)}
 .mdl .set-row select.set-in{width:100%}
-.mdl-seg.seg{display:flex;width:100%;background:var(--card-2);box-shadow:inset 0 0 0 1px var(--line);border-radius:999px;padding:3px;margin:4px 0 12px}
-.mdl-seg.seg button{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px}
-.mdl-dot{width:6px;height:6px;border-radius:50%;background:var(--good);display:inline-block}
-.mdl-seg button.on .mdl-dot{background:#fff}
 .mdl-panel p{margin:0 0 6px;font-size:12.5px;color:var(--text-2);line-height:1.45}
 .mdl-panel .set-row:first-of-type{border-top:0}
 .mdl-act{display:flex;justify-content:flex-end;align-items:center;padding:4px 0 2px}
@@ -1218,38 +1209,6 @@ body:has(.modal:not([hidden])) #gl .labels,body:has(.menu:not([hidden])) #gl .la
 #tabs button.off{opacity:.45}
 #tabs button.off.on{opacity:.8}
 .tab-off{font-size:10px;font-weight:600;margin-left:6px;padding:0 6px;border-radius:999px;background:var(--surface-3);vertical-align:1px}
-.tab-ring{display:inline-block;width:11px;height:11px;margin-left:7px;vertical-align:-1px;border-radius:50%;
-  background:conic-gradient(var(--accent) calc(var(--p) * 1%),var(--surface-3) 0);-webkit-mask:radial-gradient(circle,transparent 3px,#000 3.5px);mask:radial-gradient(circle,transparent 3px,#000 3.5px)}
-.tab-ring[data-spin]{animation:spin 1.2s linear infinite}
-.ai-off{max-width:680px;margin:24px auto 40px;display:flex;flex-direction:column;gap:14px}
-.ai-off-h{display:flex;gap:16px;align-items:flex-start}
-.ai-off-h .brand{width:auto;height:auto;flex:none;margin-top:2px}
-.ai-off-h h1{font-size:22px;font-weight:700;letter-spacing:-.015em;margin:0 0 4px}
-.ai-off-h p{margin:0 0 6px;color:var(--text-2)}
-.ai-off-h ul{margin:0;padding-left:18px;color:var(--text-2);line-height:1.6}
-.ai-rec{padding:18px 20px}
-.ai-rec-h{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:6px}
-.ai-rec-h h3{font-size:15px;margin:6px 0 0}
-.ai-rec p{margin:0 0 4px;font-size:13px;line-height:1.5;color:var(--text)}
-.ai-rec p.muted{color:var(--text-2);font-size:12.5px}
-.ai-rec .btn.primary{padding:8px 18px;font-size:13px;flex:none}
-.badge.rec{background:var(--accent-soft);color:var(--accent)}
-.ai-alt{display:flex;flex-direction:column}
-.ai-alt-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-top:1px solid var(--line)}
-.ai-alt-row:first-of-type{border-top:0}
-.ai-alt-row .tx{flex:1;min-width:0}
-.ai-alt-row .tx b{font-weight:600}
-.ai-alt-row .muted{font-size:12px;margin-top:2px;overflow-wrap:anywhere}
-.ai-alt-row.na{opacity:.5}
-.ai-prog{margin:4px 0 2px}
-.ai-prog-t{display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:8px}
-.ai-prog-t span{overflow-wrap:anywhere}
-.ai-bar{height:4px;border-radius:999px;background:var(--surface-3);overflow:hidden}
-.ai-bar i{display:block;height:100%;border-radius:999px;background:var(--accent);transition:width .4s var(--ease)}
-.ai-bar.indet i{animation:indet 1.4s var(--ease) infinite}
-@keyframes indet{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
-.ai-paused{font-size:12px;margin:8px 0 0;color:var(--warn)}
-.ai-paused.muted{color:var(--text-3)}
 
 /* ---- unified data view ---- */
 .type-chips .chip{font-size:12.5px}
@@ -1287,16 +1246,6 @@ body:has(.modal:not([hidden])) #gl .labels,body:has(.menu:not([hidden])) #gl .la
 /* map buttons beside the ••• menu: only where there's a map */
 body[data-view=insights] .mapbtn,body[data-view=settings] .mapbtn{display:none}
 .iconbtn.mapbtn.on{color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
-/* Settings → AI: the local-or-hosted server form */
-.ai-srv,.ai-cli{cursor:default;text-align:left;grid-column:1/-1}
-:is(.ai-srv,.ai-cli) .ai-f{display:block;margin-top:10px}
-:is(.ai-srv,.ai-cli) .ai-f>span{display:block;font-size:12px;font-weight:500;color:var(--text-2);margin-bottom:4px}
-:is(.ai-srv,.ai-cli) .ai-f .set-in{width:100%;box-sizing:border-box}
-.ai-cli .set-in.mono{font-family:var(--mono);font-size:12px}
-.ai-srv-st{font-size:12px;margin-top:10px;color:var(--text-3)}
-.ai-srv-st.ok{color:var(--good)}
-.ai-srv-st.bad{color:var(--critical)}
-.ai-srv-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
 
 .lg-h{font-weight:600;color:var(--text-2);margin-right:2px}
 .lg-ramp{flex-basis:100%;display:flex;flex-direction:column;gap:4px;min-width:0}

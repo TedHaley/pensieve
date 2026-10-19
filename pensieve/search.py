@@ -358,9 +358,9 @@ class Searcher:
             indexer.searches_running.add(1)
 
     def _find(self, q, limit, kinds, scope, retry):
-        from pensieve import llm, scopes
+        from pensieve import scopes
         lap = _Laps(q, [k for k, o in (("repos", self.repos), ("files", self.files), ("sessions", self.store))
-                        if getattr(o, "progress", None)] + (["llm"] if llm.busy() else []))
+                        if getattr(o, "progress", None)])
         if retry:
             self._catch_up()
             lap("catch-up")

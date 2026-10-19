@@ -7,16 +7,16 @@
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS%20%28Apple%20Silicon%29-lightgrey.svg)](https://pensieve.tools)
 [![MCP server](https://img.shields.io/badge/MCP-server-blue.svg)](#mcp-server)
 
-One place for all your information, for context engineering: your files, repositories, agent sessions, tickets and messages, so that you and your agents get the right context for each task. Your context is your own: Pensieve reads only what you can access, it only reads, and it keeps everything on your Mac.
+One place for all your information, for context engineering: your files, repositories, agent sessions, tickets and messages, so that you and your agents get the right context for each goal. Your context is your own: Pensieve reads only what you can access, it only reads, and it keeps everything on your Mac.
 
 - **Find anything:** press **Control+Shift** anywhere on your Mac and search your documents, folders, code and past agent sessions by meaning or by exact words.
 - **Superpowers for your agents:** agents connect over MCP and get the few most relevant files and passages instead of grepping your disk, which saves time and tokens. Each agent is scoped to what it's working on (by default, the repo it runs in).
 - **Bring in your other tools:** connections collect your tickets, threads and pages from MCP servers (Jira, Slack, Linear and others) with read-only tools, and keep each change over time.
-- **Pick work back up:** the Context tab has a context card for each piece of your work, in five states from latent to etched. Each card has its sessions, PRs, tickets, folder and a button that resumes the last session. Your agents get the same tasks over MCP.
+- **Pick work back up, and close it out:** the Threads tab has a thread for each goal of your work, in five states: To do, Open, Loose ends, Complete and Forgotten. Each thread has its sessions, PRs, tickets, folder, the steps left to close it, and a button that resumes the last session. Your agents get the same threads over MCP, and offer to close the one closest to done.
 - **Know who to ask:** git blame shows who owns what and who has the most domain knowledge, plus what each teammate has been working on.
 - **Find knowledge gaps:** areas where most of the code was written by people no longer active in the repo, how many active people still know it, and who to ask now.
 
-Everything runs on your Mac. Text is embedded with `Qwen3-Embedding-0.6B` and stored in SQLite (with a trigram full-text index for exact matches) plus [turbovec](https://pypi.org/project/turbovec/) vector indexes. AI-written summaries and insights are optional (built-in Qwen 3.5 9B, LM Studio, Claude Code or Codex).
+Everything runs on your Mac. Text is embedded with `Qwen3-Embedding-0.6B` and stored in SQLite (with a trigram full-text index for exact matches) plus [turbovec](https://pypi.org/project/turbovec/) vector indexes. Pensieve has no text model of its own. Your agent writes the summaries, notes and insights, with its own model, through Pensieve's MCP tools.
 
 ## Install
 
@@ -41,7 +41,7 @@ Then set up Pensieve. Pensieve indexes nothing until you finish setup, also afte
 3. Let Pensieve look for sources in the folders that those choices need. macOS can ask you to allow access to some folders. Pensieve reads no folder before this step.
 4. Choose what to index from what it found. Add folders or repos that it did not find.
 5. Choose whether Pensieve reads images, video and audio by what they show or say. These are off by default. Then Pensieve finds those files by name.
-6. Choose the generation model, which writes task notes and insights.
+6. Choose the search model.
 7. Start indexing.
 
 An agent can do the same setup in its chat. Until setup is done, every MCP connection also gets the `setup_guide`, `setup_scan`, `setup_add_source` and `setup_start` tools. `setup_guide` tells the agent which questions to ask, in order. From a terminal:
@@ -108,18 +108,18 @@ The app opens on Context. The tabs are Context, People, Map, Insights and Settin
 
 | | |
 |---|---|
-| **Context** | A context card for each piece of your work of the last 7, 30 or 90 days, filtered by state. Each card has the folders where the work is (repo, branch, worktree, uncommitted files, ahead or behind), its PRs (state, CI checks and review), its tickets (status and assignee) and its sessions. A short AI note says what is done and what is left. Click a session, or Resume last session, to resume it in Terminal. On request, a card shows coworkers' recent commits in the same folders, and related tickets and threads. Sessions join one card by ticket keys, feature branches, the files they edited, and titles that mostly match within 3 days, so work without a ticket gets a card too. Sessions in temp folders or under `~/Library` are left out: apps and scripts start those. |
-| **People** | The people you work with, as a network around you. The nearest people are closest to you and largest. Each person is one record from their git emails, GitHub login and Slack user. Pensieve joins these on the same email, then the GitHub login, then the same full name. Closeness comes from files you both edited, pull request reviews, your tasks, and the Slack threads and direct messages that you can see. A click opens a card: their role (the Slack title, or inferred from their commits), their repos and pull requests, and how you work together. Merge or split people on the card. These changes stay in `~/.pensieve/people`. Pictures come from Slack, then GitHub, and Pensieve keeps a copy in the same folder. |
-| **Map** | Documents, code and agent sessions on one 3D map, laid out by meaning. The sidebar groups the sources as Settings → Sources does (agent sessions, repositories, files and folders, apps, connections): show or hide a group or one item, or click an item to see only it. Color by context card, type, folder, author, recency or topic. Colored by context, each point takes its card's state color, each card's name sits where its points are, and clicking a name opens the card with Resume. Inside a repo: git blame per line, owners, *who knows about X*, overlaps, and knowledge gaps. |
+| **Threads** | A thread for each goal of your work of the last 7, 30 or 90 days, filtered by state. Each thread has the folders where the work is (repo, branch, worktree, uncommitted files, ahead or behind), its PRs (state, CI checks and review), its tickets (status and assignee) and its sessions. A short note from your agent says what is done and what is left. The steps left say who can do each one: you, your agent or the tracker. Click a session, or Resume last session, to resume it in Terminal. On request, a thread shows coworkers' recent commits in the same folders, and related tickets and threads. Sessions join one thread by ticket keys, feature branches, the files they edited, and titles that mostly match within 3 days, so work without a ticket gets a thread too. Sessions in temp folders or under `~/Library` are left out: apps and scripts start those. |
+| **People** | The people you work with, as a network around you. The nearest people are closest to you and largest. Each person is one record from their git emails, GitHub login and Slack user. Pensieve joins these on the same email, then the GitHub login, then the same full name. Closeness comes from files you both edited, pull request reviews, your threads, and the Slack threads and direct messages that you can see. A click opens the person: their role (the Slack title, or inferred from their commits), their repos and pull requests, and how you work together. Merge or split people there. These changes stay in `~/.pensieve/people`. Pictures come from Slack, then GitHub, and Pensieve keeps a copy in the same folder. |
+| **Map** | Documents, code and agent sessions on one 3D map, laid out by meaning. The sidebar groups the sources as Settings → Sources does (agent sessions, repositories, files and folders, apps, connections): show or hide a group or one item, or click an item to see only it. Color by thread, type, folder, author, recency or topic. Colored by thread, each point takes its thread's state color, each thread's name sits where its points are, and clicking a name opens the thread with Resume. Inside a repo: git blame per line, owners, *who knows about X*, overlaps, and knowledge gaps. |
 
-Each task has one of five states. Pensieve sets the state from the task's evidence. You can set a state yourself on the card, and an agent can set one over MCP. A state set by hand holds until the task has new activity.
+Each thread has one of five states. Pensieve sets the state from the thread's evidence. You can set a state yourself on the thread. An agent closes a thread in git, GitHub or the tracker, and does not set the state. A state set by hand holds until the thread has new activity.
 
 | State | Meaning | Set automatically when |
 |---|---|---|
-| **Conscious** | You are working on it now. | A session is running, or the task has material work and activity in the last 3 days, and it is not done. Material work is edits, commits, a branch or a PR. |
-| **Subconscious** | It is not done and has gone quiet. Revisit it. | It has material work that is not done, with no activity in the last 3 days. |
-| **Latent** | A ticket you have not started. | It has a ticket that is not done (or whose status is not known), with no edits, commits, branch or PR yet. |
-| **Etched** | Done. | A PR is merged, nothing happened after the merge, and no PR is open. Or its own PR (the PR from its branch) is merged and no PR is open. Or its PRs are merged or closed, or its ticket is done, and nothing is left uncommitted. |
+| **To do** | A ticket you have not started. | It has a ticket that is not done (or whose status is not known), with no edits, commits, branch or PR yet. |
+| **Open** | You are working on it now. | A session is running, or the thread has material work and activity in the last 3 days, and it is not done. Material work is edits, commits, a branch or a PR. |
+| **Loose ends** | It is not done and has gone quiet. Close it out or let it go. | It has material work that is not done, with no activity in the last 3 days. |
+| **Complete** | Done. | A PR is merged, nothing happened after the merge, and no PR is open. Or its own PR (the PR from its branch) is merged and no PR is open. Or its PRs are merged or closed, or its ticket is done, or its work is in the default branch, and nothing is left uncommitted. |
 | **Forgotten** | Not finished, and it will likely stay that way. | It has material work that is not done, quiet for 21 days, with no open PR and no uncommitted work. Or it is a conversation with no ticket and no edits, and its session has ended. |
 | **Insights** | Activity and topics, AI themes and open threads per repo or folder; your footprint in each repo, unexplored areas next to your work and who owns them, what each teammate shipped in the last 90 days, and knowledge gaps. |
 | **Settings** | Everything below, plus copy-paste commands for connecting agents. |
@@ -138,7 +138,7 @@ claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=paymen
 
 - **auto** (the default for `pensieve mcp`) uses the agent's working directory: the first named scope that includes that repo, otherwise just that repo with its worktrees and the agent sessions run in it. Outside any repo it means everything. In a repo that Pensieve does not index, search tells the agent to use grep. It does not return code from your other repos. HTTP connections can't see the agent's folder, so name a scope there (no `?scope` = everything).
 - **Named scopes** are lists of sources, e.g. `payments = repos/~/code/billing + repos/~/code/ledger + files/~/Documents/specs`. Create them in Settings → Scopes or with the `save_scope` tool. Everything stays in one index; a scope only filters, so nothing is embedded twice.
-- Every tool respects the scope: search, read, similar, who_knows, list_repos, team, unexplored. An item outside it is refused.
+- Every tool respects the scope: search, read, similar, people, repo, list_repos, threads. An item outside it is refused.
 - The search panel and the Map use `default_scope` (empty = everything).
 
 ### MCP server
@@ -158,7 +158,15 @@ Install Pensieve first (see [Install](#install)). The install puts the `pensieve
 
 The server uses stdio. `pensieve mcp` starts the backend if it is not running. To use HTTP, connect to `http://127.0.0.1:8765/mcp` while the backend runs. `pensieve integrate recommended` writes this entry for you, with the full path, in each agent that it finds.
 
-Tools: `search`, `read`, `similar`, `overview`, `who_knows`, `knowledge_gaps`, `list_repos`, `team`, `person`, `unexplored`, `open`, `current_scope`, `index_path`, `report_feedback`, `stale`, `tasks`, `task`, `set_task_state`. Tool descriptions are sent to the agent on every turn, so these eighteen are all an agent sees by default. `person` gives one person's card from the People tab: their role, repos, recent pull requests, and how you work with them. `tasks` lists your tasks by state, within the agent's scope. `task` gives one task's card: its folder and branch, PRs, tickets, what is left, the command that resumes its last session, and where that session stopped. When an agent finishes a task, it marks it etched with `set_task_state`, and you see the change on the Context tab. `stale` lists what looks abandoned, so that your agent can offer to clean it up. It finds three kinds. Git worktrees with no commit and no agent session in 14 days: "remove" (clean, and its commits are merged or pushed, with the command) or "review" (it has work that exists nowhere else). Local branches that are merged into the default branch, idle for 14 days and not checked out: the command is `git branch -d`, which refuses unmerged work. Squash-merged branches get "review" and no command: their whole change is one commit in the default branch, but `git branch -d` refuses them, because their own commits are not there. Indexed repos with no agent session and no git activity in 3 months: the command is `pensieve repo remove`, which removes the repo from Pensieve's index only. The repo stays on disk. Pensieve only reports: the agent asks you before it removes anything, and the index drops a removed worktree on its next sweep. With the session-start hook, a session in a repo with stale worktrees or merged branches gets a one-line hint to offer this at a natural pause. `overview` shows where things are in a repo: its size, languages, folders two levels deep, the README's start, its dependencies and its largest files, then its topics (files grouped by meaning) with their files and authors. It reads the index, not the files. `index_path` indexes a folder when you ask the agent to: a git repo, a folder of repos, a folder of agent sessions, or documents. Pensieve finds out which kind it is. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`. Until setup is done, every connection also gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source`, `setup_start`. While the generation model is your agent, every connection also gets `pending_work` and `submit_work`.
+Tools: `search`, `read`, `similar`, `people`, `repo`, `projects`, `list_repos`, `current_scope`, `open`, `index_path`, `report_feedback`, `stale`, `threads`, `thread`, `share_thread`. Tool descriptions are sent to the agent on every turn, so these fifteen are all an agent sees by default.
+
+- `people` answers three questions. With `name`, it gives one person from the People tab: their role, repos, recent pull requests, and how you work with them. With `topic`, it gives who knows the topic, ranked by the code they wrote. With only `repo`, it gives the people of the repo and their areas.
+- `repo` gives where things are in a repo (`part="overview"`, the default). That is its size, languages, folders two levels deep, the README's start, its dependencies, its largest files, and its topics with their files and authors. It reads the index, not the files. `part="gaps"` gives the areas whose authors left and who still knows them. `part="unexplored"` gives the areas next to your work that you have not touched.
+- `threads` lists your threads that are not done, within the agent's scope, the closest to done first. Each thread shows its steps left: who can do each one, and the PR, branch or ticket that it acts on.
+- `thread` gives one thread: its folder and branch, PRs, tickets, the steps left, the command that resumes its last session, and where that session stopped. `version` gives a saved version, and `version="list"` lists them.
+- `share_thread` saves a thread that is fit to send as one HTML page in Downloads.
+
+Pensieve only reads: it sets each state from the evidence. An agent closes a thread when it merges the PR, closes the ticket or deletes the branch. It does not set the state. `set_thread_state` is only in `?tools=all`. `stale` lists what looks abandoned, so that your agent can offer to clean it up. It finds three kinds. Git worktrees with no commit and no agent session in 14 days: "remove" (clean, and its commits are merged or pushed, with the command) or "review" (it has work that exists nowhere else). Local branches that are merged into the default branch, idle for 14 days and not checked out: the command is `git branch -d`, which refuses unmerged work. Squash-merged branches get "review" and no command: their whole change is one commit in the default branch, but `git branch -d` refuses them, because their own commits are not there. Indexed repos with no agent session and no git activity in 3 months: the command is `pensieve repo remove`, which removes the repo from Pensieve's index only. The repo stays on disk. Pensieve only reports: the agent asks you before it removes anything, and the index drops a removed worktree on its next sweep. With the session-start hook, a session in a repo with stale worktrees or merged branches gets a one-line hint to offer this at a natural pause. `index_path` indexes a folder when you ask the agent to: a git repo, a folder of repos, a folder of agent sessions, or documents. Pensieve finds out which kind it is. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`, `set_thread_state`. Until setup is done, every connection also gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source`, `setup_start`. Every connection also gets `pending_work` and `submit_work`, with which your agent writes Pensieve's notes, summaries and insights.
 
 ### Get the most out of it: agent add-ons
 
@@ -174,17 +182,18 @@ pensieve integrate claude --remove    # removes exactly what was added
 ```
 
 - **MCP server** (`claude-mcp`, `codex-mcp`, `cursor-mcp`, `gemini-mcp`, `qwen-mcp`, `windsurf-mcp`, `claude-desktop-mcp`, `vscode-mcp`): adds Pensieve to the agent's MCP config for every project. For Claude Code, it runs `claude mcp add --scope user`. In other config files, Pensieve changes only its own entry. Restart an open agent to load the server.
-- **Instructions block** ([`instructions.md`](pensieve/integrations/instructions.md)): a short "search before you grep" section in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md` or `~/.qwen/QWEN.md`, kept between `<!-- pensieve:start -->` markers. For other agents (Cursor, Windsurf, …), paste it into the agent's rules.
+- **Instructions block** ([`instructions.md`](pensieve/integrations/instructions.md)): a short section that tells the agent two things. For each code lookup, call Pensieve `search` before Grep or Glob. At the start of a session and at natural pauses, call `threads` and offer to close the thread closest to done (the `pensieve-wrap-up` skill). The block goes in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md` or `~/.qwen/QWEN.md`, kept between `<!-- pensieve:start -->` markers. For other agents (Cursor, Windsurf, …), paste it into the agent's rules.
 - **Skills** go once into `~/.agents/skills`, the user-level skills folder that Codex, Gemini CLI, opencode, Qwen Code (0.25 and later), Cursor, VS Code, Windsurf and other agents read. Claude Code reads only its own folder, so it gets a link to that copy in `~/.claude/skills`. Older versions of Qwen Code also read only their own folder, so they get a link in `~/.qwen/skills`. Pensieve makes no folder for an agent that is not installed. If an agent's skills folder is a link to a folder that does not exist, Pensieve leaves it and tells you.
 - **`pensieve-search` skill** (recommended): query styles, when to fall back to grep, finding similar code before writing new code, recalling past sessions.
 - **`pensieve-teammates`**: suggests who knows an area from git blame and drafts the question for you. It never messages anyone.
 - **`pensieve-plan`**: plans for new code list prior art to reuse, earlier attempts, people to loop in and knowledge risks.
+- **`pensieve-wrap-up`**: gets the threads closest to done and does the steps that close them in git, GitHub and the tracker. It asks before a merge or a close, and it never sets a thread state by hand.
 - **`claude-hook`** (recommended): a `PostToolUse` hook in `~/.claude/settings.json`. After each Edit or Write, it sends the changed path to Pensieve. The agent's next search then always finds the new code, even when the file system event comes late. The hook adds about 50 ms to each edit.
-- **`claude-repo-check`** (recommended): a `SessionStart` hook. When a session starts in a repo that Pensieve does not index, Claude asks you once whether to index it. If you say yes, Claude runs `pensieve repo index`. If you say no, Claude runs `pensieve repo skip` and uses grep in that repo. Pensieve keeps the answer as the repo's switch in Settings → Sources, so Claude does not ask again. To change it, use that switch or `pensieve repo index`.
+- **`claude-repo-check`** (recommended): a `SessionStart` hook. When a session starts in a repo that Pensieve does not index, Claude asks you once whether to index it. If you say yes, Claude runs `pensieve repo index`. If you say no, Claude runs `pensieve repo skip` and uses grep in that repo. Pensieve keeps the answer as the repo's switch in Settings → Sources, so Claude does not ask again. To change it, use that switch or `pensieve repo index`. In a repo that Pensieve indexes, the hook adds one line: the number of loose ends and the thread closest to done. Claude then offers to close it at a natural pause.
 - **`claude-prompt-search`** (recommended): a `UserPromptSubmit` hook. When you send a prompt in a repo that Pensieve indexes, Pensieve adds what the prompt needs:
-  - a prompt about one piece of work ("where did I leave off on ABC-12", a branch, a PR number): its context card;
-  - a standup or "what's still open": the list of your tasks;
-  - "who knows this code" or "who should review": the people from `who_knows`;
+  - a prompt about one piece of work ("where did I leave off on ABC-12", a branch, a PR number): its thread;
+  - a standup or "what's still open": the list of your threads;
+  - "who knows this code" or "who should review": the people from `people`;
   - "why did we …": the past agent sessions that match;
   - any other prompt: the 5 best code matches, as the `search` tool shows them.
 
@@ -192,7 +201,7 @@ pensieve integrate claude --remove    # removes exactly what was added
 
 ### Claude Code plugin
 
-The plugin gives Claude Code the MCP server, the three skills, the instructions block and the three recommended hooks. It does not change your config files. Install Pensieve first, because the plugin starts `~/.local/bin/pensieve`.
+The plugin gives Claude Code the MCP server, the four skills, the instructions block and the three recommended hooks. It does not change your config files. Install Pensieve first, because the plugin starts `~/.local/bin/pensieve`.
 
 ```
 /plugin marketplace add TedHaley/pensieve
@@ -240,10 +249,9 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 
 **Connections** collect data from MCP servers with read-only tools. Pensieve keeps each item over time, with a list of its changes.
 
-Pensieve finds your MCP servers by itself, whatever the generation model is:
+Pensieve finds your MCP servers by itself. It never starts an agent of its own:
 
-- **Claude Code's servers:** when Claude Code is on this Mac, Sources lists its MCP servers, including the claude.ai connectors of your account. To collect, Pensieve runs Claude Code headless (Haiku) with only the read tools of one server. Every other tool is blocked.
-- **Your other agents' servers:** Pensieve reads the MCP config of Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code, and connects to those servers itself, with the credentials in that config. A server that Claude Code also has is left to Claude Code.
+- **Your agents' servers:** Pensieve reads the MCP config of Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code, and connects to those servers itself, with the credentials in that config.
 - **Your own servers:** add a server in Sources. Give a URL with headers (for example `Authorization: Bearer …`), or a command with environment variables. Pensieve connects to it itself. Pensieve never shows the header or environment values again. They stay in `~/.pensieve/settings.json`, which only you can read.
 
 - **GitHub through `gh`:** when the `gh` command line is signed in, Pensieve reads the issues and pull requests that involve you, with their comments and reviews. It uses only `gh search` and GET calls of `gh api`.
@@ -261,7 +269,7 @@ Pensieve finds your MCP servers by itself, whatever the generation model is:
 | HubSpot | A private app token for a local server. HubSpot's MCP server needs an app registered in HubSpot. |
 | Google Drive | Add your Drive for desktop folder in Files & folders. Google has no MCP server for Drive to sign in to. |
 
-OAuth tokens are in `~/.pensieve/connections/.oauth/`, which only you can read. For each connector, Pensieve knows the read tools, the calls to make, the follow-up call for each item (a Slack thread, a GitHub discussion), and the fields of an item. The generation model plans the calls only for other servers. Each item keeps its people (author, assignee, owner, attendees, commenters) in the front matter of its Markdown file, with the service and the id of each person there.
+OAuth tokens are in `~/.pensieve/connections/.oauth/`, which only you can read. For each connector, Pensieve knows the read tools, the calls to make, the follow-up call for each item (a Slack thread, a GitHub discussion), and the fields of an item. For other servers, your agent plans the calls: the plan is a job in `pending_work`. Each item keeps its people (author, assignee, owner, attendees, commenters) in the front matter of its Markdown file, with the service and the id of each person there.
 
 A tool is read-only if its name has a read verb (get, list, search, read, fetch and others) and no write verb (create, update, send, delete and others). A connector can also name read tools whose names do not pass this rule (Notion's `API-post-search`). A server's `readOnlyHint: false` or `destructiveHint: true` makes a tool a write tool. Pensieve never calls a write tool. Each connection that is on is collected every 6 hours (`connections_every_hours`); **Collect now** collects at once. The first collection goes back 30 days (`connections_days`). Items are Markdown files in `~/.pensieve/connections`.
 
@@ -318,15 +326,12 @@ Change them in the Map window (Settings), from an agent connected with `--all-to
 | `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the panel's scope |
 | `appearance` | `system` (or `light`, `dark`) |
 | `embed_model` | the search model for the index (manage in Settings → Models); empty: the index's own |
-| `ai`, `builtin_model` | `auto` (not chosen yet), `mlx-community/Qwen3.5-9B-MLX-4bit` |
-| `cli_command`, `cli_privacy` | the command for `ai: cli`, and `cloud` or `local` |
 | `hotkey` | `ctrl+shift` (or a combo like `cmd+shift+space`) |
 | `editor` | `default`, `vscode`, `cursor` or `zed` |
-| `llm_url`, `llm_model` | `http://localhost:1234/v1`, `qwen/qwen3.5-9b` |
 
 ## Models
 
-Pensieve uses two models. You choose both at setup, and change them in Settings → Models.
+Pensieve runs one model: the search model. You choose it at setup, and change it in Settings → Models. Your agent writes all text.
 
 ### Search model
 
@@ -339,18 +344,13 @@ The search model turns text into vectors, so that search finds things by meaning
 
 An index keeps the model it was built with: an update does not change it. If you choose another model, Pensieve warns you first. Then it embeds the text it already holds with the new model, in the background. It does not read your files or run git blame again, and search keeps working with the old model. When the new vectors are ready, the backend restarts and uses them.
 
-### Generation model
+### Your agent writes the text
 
-Search, maps, activity, keyword topics, your footprint in each repo and teammates' commits all work without a generation model. Task notes, summaries, topic names and the written insights need one. Pensieve asks on first run. Change it in Settings → Models, or with `update_settings {"ai": ...}`:
+Pensieve has no text model of its own. Your agent writes thread notes, session summaries, topic names, insights, team summaries and the collection plans for MCP servers. It uses its own model.
 
-| Engine | Where it runs | Notes |
-|---|---|---|
-| **Built-in: Qwen 3.5 9B** (`builtin`) | This Mac (MLX) | Apple Silicon, 16 GB memory. Downloads ~5 GB on first use, or reuses LM Studio's MLX copy if you have one. |
-| **LM Studio / local server** (`server`) | This Mac | Any OpenAI-compatible server at `llm_url` running `llm_model`. |
-| **Command line** (`cli`) | Where the tool runs | An AI command-line tool you already use, set in `cli_command`. Templates: Claude Code, Codex, Qwen Code, Gemini CLI and Ollama. Pensieve runs the command once per job, in an empty folder. The prompt goes on stdin, or in place of `{prompt}`; `{out}` is a file for the answer. The command must answer without using tools. No per-chunk summaries, to keep calls low. |
-| **Your agent** (`agent`) | Where your agent runs | The agents connected over MCP write the jobs with their own model. Pensieve keeps the jobs in a queue, and nothing runs in the background. Ask an agent to "do Pensieve's pending work": it reads the jobs with `pending_work` and answers each one with `submit_work`. Several sessions can work at the same time: each one gets different jobs. Settings shows each session that answered a job in the last 24 hours. Summaries of each conversation chunk are not queued. |
+Pensieve keeps these jobs in a queue, and nothing runs in the background. Ask your agent to "do Pensieve's pending work". The agent reads the jobs with `pending_work` and answers each one with `submit_work`. Several sessions can work at the same time, and each one gets different jobs.
 
-A saved `none` (the old Off) loads as `agent`.
+Search, maps, activity, keyword topics, your footprint in each repo and teammates' commits do not need the agent.
 
 ## Command line
 
@@ -361,23 +361,23 @@ pensieve mcp             # MCP over stdio (--all-tools to include the settings t
 pensieve integrate       # agent add-ons: instructions block, skills and the edit hook
 pensieve search "retry failed webhook delivery" --kind code   # what an agent's search returns, scoped to this repo
 pensieve repo status     # whether Pensieve indexes this repo; also index, skip (stop syncing it) or remove (drop it from the index)
-pensieve card <task id> -o card.html   # a context card as one HTML page; --json or --agent for the data, --share to send it
+pensieve thread <thread id> -o thread.html   # a thread as one HTML page; --json or --agent for the data, --share to send it
 ```
 
-A context card follows [`context-card.schema.json`](pensieve/context-card.schema.json) (`context-card/1`). Every card has the same core: the **problem**, the **goal**, the **state** and what is **next**, plus the question that waits on you. Its resources are the supporting context, and each one has a reach ([`resources.py`](pensieve/resources.py)):
+A thread follows [`thread.schema.json`](pensieve/thread.schema.json) (`pensieve-thread/2`). Pensieve also reads files in the older `context-card/1` format. Every thread has the same core: the **problem**, the **goal**, the **state** and what is **next**, plus the question that waits on you. Its resources are the supporting context, and each one has a reach ([`resources.py`](pensieve/resources.py)):
 
-| Reach | Resources | In a shared card |
+| Reach | Resources | In a shared thread |
 |---|---|---|
 | local | session transcripts, agent memory files, uncommitted or unpushed changes, files outside git, folders | a summary, written from the whole document when you share; no path |
 | git | the branch on the remote, files at a pushed commit, PRs | a link (a permalink at the commit) |
 | mcp | tickets, messages, pages from your connections | a link and its service, with a summary. A message goes as a link only, without its text. |
 | restricted | Claude artifacts | a link marked "may need access", with a summary |
 | public | public web pages | a link |
-| private | direct messages, group messages, private channels | nothing: no link, no text, no summary. Your local cards and agents use them, and the note's problem, goal, state and next are written without them. |
+| private | direct messages, group messages, private channels | nothing: no link, no text, no summary. Your local threads and agents use them, and the note's problem, goal, state and next are written without them. |
 
-On the Context tab, the eye button shows a card's page, and the Compact view lists one card a line (a click opens it in full). Each card belongs to a thread: one goal followed over time ([`docs/threads.md`](docs/threads.md)). Pensieve saves a thread's card when it changes. The thread chip on a card opens its saved cards, and "New session from card" starts an agent that reads a card first. Agents get the same with `thread_history`. The Share button at the bottom right of each card opens a preview. Pensieve reads the local and restricted resources whole and writes a summary of each one. You write what you need from the reader, edit the core and the summaries, untick what doesn't belong, and save one page to Downloads. The page holds the card's JSON in a `<script type="application/json" id="context-card">` element, so the reader's agent reads the same file. A shared card has no local paths, session ids, resume command or secrets, and leaves out sentences about your own machine. Agents share a card with the `share_card` MCP tool.
+On the Threads tab, the eye button shows a thread's page, and the Compact view lists one thread a line (a click opens it in full). A thread follows one goal over time ([`docs/threads.md`](docs/threads.md)). Pensieve saves a version of a thread when it changes. The version chip on a thread opens its saved versions, and "New session from thread" starts an agent that reads the thread first. Agents get the same with `thread` and its `version` argument. The Share button at the bottom right of each thread opens a preview. Pensieve reads the local and restricted resources whole and writes a summary of each one. You write what you need from the reader, edit the core and the summaries, untick what doesn't belong, and save one page to Downloads. The page holds the thread's JSON in a `<script type="application/json" id="pensieve-thread">` element, so the reader's agent reads the same file. A shared thread has no local paths, session ids, resume command or secrets, and leaves out sentences about your own machine. Agents share a thread with the `share_thread` MCP tool.
 
-Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run), `--llm-url`, `--llm-model`.
+Flags: `--port`, `--data` (index location), `--repos PATH…` (extra repos for this run).
 
 On Apple Silicon, the embedding model runs on MLX. On other machines, it runs on sentence-transformers and PyTorch (CUDA or CPU), which makes the install about 650 MB larger. The backend and the Map work on Linux too; the search panel app is macOS only.
 
@@ -389,9 +389,9 @@ Pensieve connects to other hosts only for these jobs:
 
 - **Models:** on first run, it downloads the models from Hugging Face.
 - **Updates:** the app and the Map ask GitHub for the latest release.
-- **Pull requests:** for a context card, the `gh` command gets the PRs of your branches from GitHub, with your own `gh` login.
+- **Pull requests:** for a thread, the `gh` command gets the PRs of your branches from GitHub, with your own `gh` login.
 - **Connections:** if you turn on a connection, Pensieve reads that MCP server with read-only tools.
-- **Generation model:** if you choose Claude Code or Codex, the text to summarize goes to that agent and its model provider. The built-in model and LM Studio stay on your Mac.
+- **Your agent:** when your agent does Pensieve's pending work, the text of each job goes to that agent and its model provider.
 
 The backend, its MCP endpoint and the hooks use only `127.0.0.1`. An agent that you connect gets search results, and it sends them to its own model provider. Pensieve does not control that agent.
 

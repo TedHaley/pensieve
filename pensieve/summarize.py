@@ -1,4 +1,5 @@
-"""Background LLM enrichment: session + chunk summaries, topic names, and corpus-level insights."""
+"""The text that the user's agent writes for Pensieve (llm.complete): session summaries, topic names, and
+corpus-level insights."""
 import hashlib
 import json
 import re
@@ -12,7 +13,6 @@ SESSION_SCHEMA = {"type": "object", "properties": {
     "summary": {"type": "string"},
     "tags": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 6}},
     "required": ["summary", "tags"]}
-CHUNK_SYS = "Summarize this excerpt of a developer/AI-agent conversation in one sentence of at most 20 words. Output the sentence only."
 
 TOPIC_SYS = ("You name clusters of a developer's AI-agent sessions. Give a specific 2-4 word Title Case name "
              "(no generic words like 'Development' or 'Projects' on their own) and one sentence describing what unites them.")
@@ -69,13 +69,6 @@ def summarize_session(store, sid):
     with store.writing:
         store.db.execute("UPDATE sessions SET summary=?, tags=? WHERE id=?",
                          (d["summary"].strip(), ",".join(t.strip().lower() for t in d["tags"][:6]), sid))
-        store.db.commit()
-
-
-def summarize_chunk(store, cid, text):
-    out = llm.complete(text[:3000], CHUNK_SYS, max_tokens=60, kind="moment summary").split("\n")[0].strip()
-    with store.writing:
-        store.db.execute("UPDATE chunks SET summary=? WHERE id=?", (out, cid))
         store.db.commit()
 
 
@@ -236,7 +229,5 @@ def summarize_team(store, team, key, top=10):
 def pending(store):
     sess = [r[0] for r in store.db.execute(
         "SELECT id FROM sessions WHERE summary IS NULL AND n_chunks>0 ORDER BY updated DESC")]
-    chunks = store.db.execute(
-        "SELECT id, text FROM chunks WHERE summary IS NULL ORDER BY id DESC LIMIT 64").fetchall()
     topics = [t for t in store.topics() if not t["named"]] if not sess else []
-    return sess, topics, chunks
+    return sess, topics

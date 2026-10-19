@@ -30,9 +30,9 @@ def page(slug, nav, title, desc, h1, lede, body, crumb="Docs"):
 
 
 page("", "Overview",
-     "Pensieve docs: context cards and an MCP server for AI coding agents",
+     "Pensieve docs: threads and an MCP server for AI coding agents",
      "Pensieve documentation. A free, local Mac app and MCP server that gives you and your AI coding agents the right "
-     "context: context cards, code search, who knows what, and knowledge gaps.",
+     "context: threads, code search, who knows what, and knowledge gaps.",
      "Pensieve documentation",
      "This page tells you what Pensieve is, what its parts do, and where to start.",
      f"""
@@ -50,13 +50,16 @@ context is different, so Pensieve builds it from your own work and keeps it on y
 
 <h2 id="parts">The main parts</h2>
 
-<h3 id="context-cards">Context cards</h3>
-<p>Pensieve makes one context card for each piece of your work. A card joins the agent sessions, the branch, the
-PRs, the tickets and the messages of one task. It says the problem, the goal, the state and what is next. It also
-gives the command that resumes the last agent session. Each card has one of five states, from
-<span class="state" style="--sc:var(--s-conscious)">Conscious</span> to
-<span class="state" style="--sc:var(--s-forgotten)">Forgotten</span>. You can share a card as one HTML file.
-<a href="/docs/context-cards/">Read about context cards</a>.</p>
+<h3 id="threads">Threads</h3>
+<p>Pensieve makes one thread for each goal of your work. A thread joins the agent sessions, the branch, the PRs,
+the tickets and the messages of that goal. It says the problem, the goal, the state and what is next. It also
+gives the steps left to close it, and the command that resumes the last agent session. Each thread has one of five
+states: <span class="state" style="--sc:var(--s-todo)">To do</span>,
+<span class="state" style="--sc:var(--s-open)">Open</span>,
+<span class="state" style="--sc:var(--s-loose-ends)">Loose ends</span>,
+<span class="state" style="--sc:var(--s-complete)">Complete</span> or
+<span class="state" style="--sc:var(--s-forgotten)">Forgotten</span>. You can share a thread as one HTML file.
+<a href="/docs/threads/">Read about threads</a>.</p>
 
 <h3 id="mcp-server">MCP server</h3>
 <p>Pensieve is an MCP server. Your coding agent asks it one question and gets the few files and lines that match.
@@ -80,7 +83,7 @@ press <kbd>Control</kbd>+<kbd>Shift</kbd> to open the search panel.</p>
 
 <h3 id="who-knows">Who knows what</h3>
 <p>Pensieve reads git blame for each indexed repo. Ask about a subject, not a file, and it names the people who
-wrote the most related code. Agents get the same data from the <code>who_knows</code> and <code>team</code> tools.</p>
+wrote the most related code. Agents get the same data from the <code>people</code> tool.</p>
 
 <h3 id="knowledge-gaps">Knowledge gaps</h3>
 <p>A knowledge gap is an area of a repo that people who are no longer active wrote most of. For each area, Pensieve
@@ -104,11 +107,10 @@ calls only read-only tools. Each connection is off until you switch it on.
 <p>Pensieve never indexes files that look like secrets, such as <code>.env</code> files, keys and credentials.</p>
 
 <h2 id="models">Models</h2>
-<p>Pensieve uses two models. The search model turns text into vectors. It always runs on your computer. The default
-for a new index is EmbeddingGemma 2.</p>
-<p>The generation model writes task notes, summaries and insights. It is optional. Search, agent context, ownership
-and knowledge gaps work without it. You can use a built-in model (Qwen 3.5 9B on Apple Silicon), a local server such
-as LM Studio, a command-line tool, or your own agent.</p>
+<p>Pensieve runs one model: the search model. It turns text into vectors, and it always runs on your computer. The
+default for a new index is EmbeddingGemma 2.</p>
+<p>Pensieve has no text model of its own. Your agent writes thread notes, summaries and insights with its own model,
+through Pensieve's MCP tools. Search, agent context, ownership and knowledge gaps do not need the agent.</p>
 """)
 
 page("install", "Install",
@@ -120,13 +122,12 @@ page("install", "Install",
      f"""
 <h2 id="requirements">Requirements</h2>
 {table(["Computer", "What you get"], [
-    ["Mac with Apple Silicon, macOS 14 or later", "The app (search panel, menu bar, Context tab, Map) and the <code>pensieve</code> backend. This is the main platform."],
+    ["Mac with Apple Silicon, macOS 14 or later", "The app (search panel, menu bar, Threads tab, Map) and the <code>pensieve</code> backend. This is the main platform."],
     ["Intel Mac", "The backend and the Map in your browser. If the Xcode command-line tools are installed, the script also builds the app from source. The release download is for Apple Silicon only."],
     ["Linux", "The backend, the MCP server and the Map in your browser. The search panel app is macOS only."],
 ])}
 <p>On Apple Silicon, the search model runs on MLX. On other computers, it runs on sentence-transformers and
-PyTorch (CUDA or CPU). This makes the install about 650 MB larger. The built-in generation model needs Apple Silicon
-with 16 GB of memory.</p>
+PyTorch (CUDA or CPU). This makes the install about 650 MB larger.</p>
 
 <h2 id="install">Install</h2>
 <ol>
@@ -163,7 +164,7 @@ these steps:</p>
   <li>Let Pensieve look for sources in the folders that those choices need. macOS can ask you to allow access to some folders.</li>
   <li>Choose what to index. Add folders or repos that Pensieve did not find.</li>
   <li>Choose whether Pensieve reads images, video and audio by what they show or say. These are off by default.</li>
-  <li>Choose the generation model.</li>
+  <li>Choose the search model.</li>
   <li>Start indexing.</li>
 </ol>
 <p>To do setup from a terminal, use these commands:</p>

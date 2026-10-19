@@ -171,17 +171,15 @@ final class Backend: ObservableObject {
         }
     }
 
-    /// Busy: layout, insights, indexing, session summaries or topic names are in progress. An error or an offline
-    /// language model stops this work, so it is not busy.
+    /// Busy: layout, insights or indexing are in progress. An error stops this work, so it is not busy. Session
+    /// summaries and topic names wait for the user's agent, so they do not count.
     private func statusBusy() async -> Bool {
         guard let (d, r) = try? await URLSession.shared.data(from: url("api/status")),
               (r as? HTTPURLResponse)?.statusCode == 200,
               let st = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return false }
         let on = { (k: String) in st[k] as? Bool ?? false }
-        let n = { (k: String) in st[k] as? Int ?? 0 }
-        if (st["message"] as? String ?? "").hasPrefix("error") || on("llm_offline") { return false }
+        if (st["message"] as? String ?? "").hasPrefix("error") { return false }
         return on("layout") || on("insights_running") || on("indexing")
-            || n("summarized_sessions") < n("sessions") || n("topics_named") < n("topics")
     }
 
     private func isUp() async -> Bool {

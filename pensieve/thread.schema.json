@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pensieve.tools/schema/context-card.v1.json",
-  "title": "Context card",
-  "description": "One piece of work joined across agent sessions, git, pull requests, tickets and messages. A local card and a shared card have the same core: the problem, the goal, the state and what is next. They differ in their resources, the supporting context. A local card points to everything, local paths included. A shared card keeps what its reader can open (git, mcp, public, restricted resources, by link) and summarizes what they can't (local resources, without a path). The core is written by a model from the sessions and dated; everything else is data.",
+  "$id": "https://pensieve.tools/schema/thread.v2.json",
+  "title": "Pensieve thread",
+  "description": "One thread of work joined across agent sessions, git, pull requests, tickets and messages. A local thread and a shared thread have the same core: the problem, the goal, the state and what is next. They differ in their resources, the supporting context. A local thread points to everything, local paths included. A shared thread keeps what its reader can open (git, mcp, public, restricted resources, by link) and summarizes what they can't (local resources, without a path). The core is written by a model from the sessions and dated; everything else is data. Version 2 renamed the states; readers also accept context-card/1 files.",
   "type": "object",
   "required": ["schema", "id", "title", "state", "made_at", "locality"],
   "$defs": {
@@ -11,29 +11,29 @@
       "required": ["kind", "title", "reach"],
       "properties": {
         "kind": {"enum": ["session", "memory", "change", "file", "folder", "branch", "code", "pr", "ticket", "message", "page", "artifact", "link"],
-                 "description": "session: an agent session transcript; memory: an agent memory file; change: uncommitted or unpushed changes; file: a file outside any git remote, or one that differs from it; folder: a checkout or worktree; branch: a branch on the remote; code: a file at a pushed commit; pr: a pull request; ticket: a ticket; message: a message or thread; page: a page or document in a service; artifact: a Claude artifact; link: a public web page"},
+                 "description": "session: an agent session transcript; memory: an agent memory file; change: uncommitted or unpushed changes; file: a file outside any git remote, or one that differs from it; folder: a checkout or worktree; branch: a branch on the remote; code: a file at a pushed commit; pr: a pull request; ticket: a ticket; message: a message or chat thread; page: a page or document in a service; artifact: a Claude artifact; link: a public web page"},
         "title": {"type": "string"},
         "reach": {"enum": ["local", "git", "mcp", "restricted", "public", "private"],
-                  "description": "local: only on the machine that made the card; git: on the repo's remote; mcp: in a service that agents reach through an MCP server; restricted: online but likely private to its owner; public: anyone can open it; private: a direct message, a group message or a private channel, on local cards only and never in a shared card"},
+                  "description": "local: only on the machine that made the thread file; git: on the repo's remote; mcp: in a service that agents reach through an MCP server; restricted: online but likely private to its owner; public: anyone can open it; private: a direct message, a group message or a private channel, on local threads only and never in a shared thread"},
         "ref": {"type": "object", "description": "How to open it: path (local only), url, git and branch and commit, repo and path, source (the service), key, state"},
-        "summary": {"type": "string", "description": "What it tells someone who continues the work, written from the whole document when the card was shared. A shared card has it for every local resource, which has no ref there."},
+        "summary": {"type": "string", "description": "What it tells someone who continues the work, written from the whole document when the thread was shared. A shared thread has it for every local resource, which has no ref there."},
         "relevance": {"type": "number"}
       }
     }
   },
   "properties": {
-    "schema": {"const": "context-card/1"},
-    "id": {"type": "string", "description": "Stable id of the work: t:ABC-12 (ticket), b:<repo>@<branch> (branch; org/repo in a shared card) or s:<agent>:<session>"},
+    "schema": {"const": "pensieve-thread/2"},
+    "id": {"type": "string", "description": "Stable id of the work: t:ABC-12 (ticket), b:<repo>@<branch> (branch; org/repo in a shared thread) or s:<agent>:<session>"},
     "title": {"type": "string", "description": "The goal in at most 8 words, from the note; the label when there is no note"},
     "label": {"type": "string", "description": "The work's own name: its ticket's title, its branch or its first session's title"},
-    "kind": {"enum": ["ticket", "branch", "work"]},
+    "kind": {"enum": ["ticket", "branch", "work", "goal"]},
     "locality": {"enum": ["local", "shared"]},
     "state": {
       "type": "object",
       "required": ["value"],
       "properties": {
-        "value": {"enum": ["latent", "conscious", "subconscious", "etched", "forgotten"],
-                  "description": "latent: defined, no material work; conscious: worked on now; subconscious: not done and quiet; etched: done; forgotten: unfinished and left"},
+        "value": {"enum": ["todo", "open", "loose_ends", "complete", "forgotten"],
+                  "description": "todo: a ticket with no work yet; open: worked on now; loose_ends: not done and quiet; complete: done; forgotten: unfinished and left. In context-card/1 these were latent, conscious, subconscious, etched and forgotten."},
         "why": {"type": "string"},
         "set_by": {"type": "string", "description": "auto, user or agent"}
       }
@@ -44,9 +44,9 @@
     "origin": {
       "type": "object",
       "properties": {"by": {"type": "string", "description": "the git user name of the person whose work it is"},
-                     "generator": {"type": "string", "description": "e.g. pensieve 0.10.0"}}
+                     "generator": {"type": "string", "description": "e.g. pensieve 0.13.0"}}
     },
-    "ask": {"type": "string", "description": "Shared cards: what the sender needs from the reader, in the sender's words"},
+    "ask": {"type": "string", "description": "Shared threads: what the sender needs from the reader, in the sender's words"},
     "core": {
       "type": "object",
       "description": "Written by a model from the sessions, as of 'as_of', with no local paths. A sentence that the live state contradicts ends with [outdated: what is true now].",
@@ -71,12 +71,12 @@
         "refresh": {"type": "array", "items": {"type": "string"}, "description": "commands and links that get the live state again"}
       }
     },
-    "last_words": {"type": "string", "description": "Local cards: the end of the last session's last message"},
+    "last_words": {"type": "string", "description": "Local threads: the end of the last session's last message"},
     "timeline": {
       "type": "array",
       "items": {"type": "object", "properties": {"at": {"type": "string", "format": "date-time"},
                                                  "source": {"type": "string"}, "title": {"type": "string"},
-                                                 "private": {"type": "boolean", "description": "from a private resource: local cards only"}}}
+                                                 "private": {"type": "boolean", "description": "from a private resource: local threads only"}}}
     },
     "history": {
       "type": "array",
@@ -85,12 +85,12 @@
     },
     "thread": {
       "type": "object",
-      "description": "Set when the card is published to a shared space: the thread it updates",
+      "description": "Set when the thread is published to a shared space: the published copy it updates",
       "properties": {"id": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "revision": {"type": "integer"}}
     },
     "local": {
       "type": "object",
-      "description": "Local cards only: what works only on the machine that made the card",
+      "description": "Local threads only: what works only on the machine that made the thread file",
       "properties": {"resume": {"type": "string", "description": "the shell command that resumes the last session"}}
     }
   }

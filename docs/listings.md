@@ -9,8 +9,8 @@ Use the same text in each directory.
 - **Name:** Pensieve
 - **Repository:** https://github.com/TedHaley/pensieve
 - **Website:** https://pensieve.tools
-- **Short description (93 characters, the registry limit is 100):** Local search over your files, git repos and agent sessions, with context cards for your work.
-- **Long description:** Pensieve is a free, local Mac app with an MCP server. It indexes your documents, git repositories and past AI agent sessions. Agents get the few most relevant files and passages, scoped to the repo that they run in. Pensieve also shows who knows an area of code, and it keeps a context card for each piece of work. MIT license.
+- **Short description (100 characters, the registry limit is 100):** Local search over your files, git repos and agent sessions, with a thread for each goal you work on.
+- **Long description:** Pensieve is a free, local Mac app with an MCP server. It indexes your documents, git repositories and past AI agent sessions. Agents get the few most relevant files and passages, scoped to the repo that they run in. Pensieve also shows who knows an area of code, and it keeps a thread for each goal of your work. MIT license.
 - **Categories:** search, developer tools, knowledge and memory
 - **Install:** `curl -fsSL https://pensieve.tools/install.sh | sh`, then `pensieve integrate recommended`
 - **Client configuration:** the JSON block in the "MCP server" section of the README
@@ -55,7 +55,7 @@ The PyPI names `pensieve` and `pensieve-mcp` belong to other projects. `pensieve
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.TedHaley/pensieve",
   "title": "Pensieve",
-  "description": "Local search over your files, git repos and agent sessions, with context cards for your work.",
+  "description": "Local search over your files, git repos and agent sessions, with a thread for each goal you work on.",
   "repository": { "url": "https://github.com/TedHaley/pensieve", "source": "github" },
   "websiteUrl": "https://pensieve.tools",
   "version": "0.11.0",

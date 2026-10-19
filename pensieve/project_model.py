@@ -612,13 +612,13 @@ def build(store, fetch: bool = True, stale_days: int = STALE_DAYS, now: float | 
                 tie(k, TieKind.BRANCH_NAME, ref, f"{k} is in the branch name")
         for k in c.get("keys", []):
             if k.split("-")[0] in prefixes:
-                tie(k, TieKind.CARD, c["id"], "your context card holds it")
+                tie(k, TieKind.CARD, c["id"], "one of your threads holds it")
                 card_of.setdefault(k, []).append(c)
         for u in [p["url"] for p in c.get("prs", [])]:
             for k in c.get("keys", []):
                 if u in prs:
                     tie(k, TieKind.PR_TITLE if k in prs[u].title else TieKind.CARD, u,
-                        f"{k} is in the pull request's title" if k in prs[u].title else "your context card holds both")
+                        f"{k} is in the pull request's title" if k in prs[u].title else "one of your threads holds both")
 
     lap("git")
     # commits that name a ticket: their authors work on it

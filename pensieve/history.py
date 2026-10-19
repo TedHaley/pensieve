@@ -33,7 +33,7 @@ GAP = 1800
 DRIFT = 0.05
 KEEP_DAYS = 30
 EVENTS = {"start", "fork", "split", "merge", "revive"}
-ENDED = {"etched", "forgotten"}
+ENDED = {"complete", "forgotten"}
 
 
 current = None  # the server's Keeper, once it runs: its of_task maps each current task to its thread

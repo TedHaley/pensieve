@@ -144,11 +144,24 @@ if "HF_HUB_OFFLINE" not in os.environ:
     except Exception:
         pass
 
-# Folders, repos, LLM endpoint and the other user-facing options live in settings.py (~/.pensieve/settings.json).
+# Options that the user can change are in settings.py (~/.pensieve/settings.json).
 
 CHUNK_CHARS = 1800
 POLL_SECONDS = 5
 SETTLE_SECONDS = 1  # don't index a file modified more recently than this (it can be half written)
+
+
+def find_exe(name: str) -> str | None:
+    """A program on this Mac by name, also in the folders that the app's PATH misses (~/.local/bin and the like)."""
+    import shutil
+    if not name:
+        return None
+    if shutil.which(name):
+        return shutil.which(name)
+    for d in (HOME / ".local/bin", Path("/opt/homebrew/bin"), Path("/usr/local/bin"), HOME / ".npm-global/bin"):
+        if os.access(d / name, os.X_OK):
+            return str(d / name)
+    return None
 
 
 def device():

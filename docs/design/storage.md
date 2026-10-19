@@ -229,7 +229,7 @@ CREATE TABLE cards (              -- one piece of the user's work
   kind        TEXT NOT NULL CHECK (kind IN ('ticket', 'branch', 'work', 'goal')),
   goal_of     TEXT REFERENCES cards(id) ON DELETE CASCADE,  -- for a goal split from another card
   title       TEXT NOT NULL,
-  state       TEXT NOT NULL CHECK (state IN ('latent', 'conscious', 'subconscious', 'etched', 'forgotten')),
+  state       TEXT NOT NULL CHECK (state IN ('todo', 'open', 'loose_ends', 'complete', 'forgotten')),
   first_at    INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,                   -- the newest member's time
   built_at    INTEGER NOT NULL,                   -- when the builder last wrote this row
@@ -266,7 +266,7 @@ CREATE TABLE card_notes (         -- the AI note of a card
 CREATE TABLE card_states (        -- states set by the user or an agent; the newest row wins
   id       INTEGER PRIMARY KEY,
   card_id  TEXT NOT NULL,
-  state    TEXT NOT NULL CHECK (state IN ('latent', 'conscious', 'subconscious', 'etched', 'forgotten', 'auto')),
+  state    TEXT NOT NULL CHECK (state IN ('todo', 'open', 'loose_ends', 'complete', 'forgotten', 'auto')),
   by       TEXT NOT NULL CHECK (by IN ('user', 'agent', 'auto')),
   reason   TEXT,
   at       INTEGER NOT NULL
@@ -327,7 +327,7 @@ CREATE TABLE thread_snapshots (   -- a saved card, at one time
   thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   at         INTEGER NOT NULL,
   snapshot   TEXT NOT NULL,                       -- the snapshot id (a hash of the members)
-  state      TEXT NOT NULL CHECK (state IN ('latent', 'conscious', 'subconscious', 'etched', 'forgotten')),
+  state      TEXT NOT NULL CHECK (state IN ('todo', 'open', 'loose_ends', 'complete', 'forgotten')),
   structure  TEXT NOT NULL,                       -- a hash of the members other than files
   pushed     TEXT NOT NULL,                       -- the remote commits of the card's folders, space-separated
   goal_vec   BLOB,
@@ -561,7 +561,7 @@ incremental:
    `card` event with the ids. The page asks for those cards only (`/api/work?ids=`), and draws again only those
    cards when the others stay in their places.
 6. A card whose signature changed gets a new AI note after 20 seconds without more changes, so that a running
-   session does not start a note for each turn. Only cards in the states conscious and subconscious get one.
+   session does not start a note for each turn. Only cards in the states open and loose_ends get one.
 7. Pull request states come from `gh` in a full build every 5 minutes, and in a build of its own right after a
    card with an open PR changed. The full build also moves the window.
 

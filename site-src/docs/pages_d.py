@@ -100,23 +100,23 @@ median, on an Apple M4 Max. Grep is level with Pensieve on exact strings.
 checked each claim against the code. Only confirmed errors count.</p>
 {table(["Setup", "Wrong claims (15 answers)", "Tool calls", "Cost", "Time (median)"], [
     ["grep, repo with no CLAUDE.md", "10", "4.1", "$0.056", "13.0 s"],
-    ["<code>overview</code> tool, repo with no CLAUDE.md", "<strong>4</strong>", "1.4", "$0.034", "12.0 s"],
+    ["Repo overview tool, repo with no CLAUDE.md", "<strong>4</strong>", "1.4", "$0.034", "12.0 s"],
     ["grep, repo with its CLAUDE.md", "3", "1.5", "$0.035", "10.0 s"],
-    ["<code>overview</code> tool, repo with its CLAUDE.md", "2", "1.2", "$0.044", "11.9 s"],
+    ["Repo overview tool, repo with its CLAUDE.md", "2", "1.2", "$0.044", "11.9 s"],
 ], num=(1, 2, 3, 4))}
-<p>If a repo has good notes for the agent, grep needs no help. The <code>overview</code> tool helps most when a repo
-has no notes.</p>
+<p>If a repo has good notes for the agent, grep needs no help. The overview tool helps most when a repo has no
+notes. The test used the <code>overview</code> tool. Today, <code>repo</code> gives the same overview.</p>
 
-<h2 id="shared-cards">Shared context cards</h2>
-<p>This test asks whether a shared card helps a teammate's agent. The agent worked in a fresh clone, with no access
-to the owner's computer. It answered questions about 4 real tasks, 3 times each. A judge counted the facts from a
-list that the answer got right, and the wrong claims.</p>
+<h2 id="shared-threads">Shared threads</h2>
+<p>This test asks whether a shared thread helps a teammate's agent. The agent worked in a fresh clone, with no
+access to the owner's computer. It answered questions about 4 real pieces of work, 3 times each. A judge counted
+the facts from a list that the answer got right, and the wrong claims.</p>
 {table(["Setup", "Facts right", "Wrong claims"], [
-    ["No card", "6 / 60 (11%)", "10"],
-    ["With the shared card", "52 / 60 (85%)", "0"],
+    ["No shared thread", "6 / 60 (11%)", "10"],
+    ["With the shared thread", "52 / 60 (85%)", "0"],
 ], num=(1, 2))}
-<p>The script is <a href="{BENCH}/workflows.py"><code>bench/workflows.py</code></a>. This test is small: 4 tasks
-and 12 runs in each setup.</p>
+<p>The script is <a href="{BENCH}/workflows.py"><code>bench/workflows.py</code></a>. This test is small: 4 pieces
+of work and 12 runs in each setup.</p>
 
 <h2 id="limits">What we did not measure</h2>
 <ul>
@@ -158,12 +158,12 @@ page("privacy", "Privacy and data",
 <h2 id="network">When Pensieve uses the network</h2>
 {table(["When", "What goes over the network", "To"], [
     ["Install", "The app download and the Python packages", "GitHub Releases, the Python package index"],
-    ["First run, and when you switch models", "Model downloads: the search model (550 MB), the media parts if you switch them on, and the built-in generation model (about 5 GB) if you choose it", "Hugging Face"],
+    ["First run, and when you switch models", "Model downloads: the search model (550 MB), and the media parts if you switch them on", "Hugging Face"],
     ["Update checks", "A request for the latest release", "GitHub"],
     ["Every 30 minutes", "<code>git fetch</code> of the default branch of each indexed repo, to show how far your branch is behind. It does not change your working tree.", "Each repo's own remote"],
-    ["When a card shows PRs", "<code>gh pr list</code> and <code>gh pr view</code>, if the GitHub CLI is installed, with your own login", "GitHub"],
-    ["Connections that you switch on", "Read calls to those MCP servers. For Claude Code's servers, Claude Code runs with the Haiku model, so the results go through Anthropic.", "Each server, and Anthropic for Claude Code's servers"],
-    ["The generation model", "The text of each job (a task note, a summary, an insight). Built-in and LM Studio stay local. A cloud command-line tool sends the text to its provider.", "Your computer, or the provider that you chose"],
+    ["When a thread shows PRs", "<code>gh pr list</code> and <code>gh pr view</code>, if the GitHub CLI is installed, with your own login", "GitHub"],
+    ["Connections that you switch on", "Read calls to those MCP servers.", "Each server"],
+    ["When your agent does Pensieve's pending work", "The text of each job (a thread note, a summary, an insight) goes to your agent.", "Your agent's model provider"],
 ])}
 
 <h2 id="agents">Your agent</h2>
@@ -172,15 +172,15 @@ reads from Pensieve goes to its provider, the same as a file that it reads with 
 agent until the agent calls a tool. The Claude Code prompt hook is the exception: it adds context to each prompt in
 an indexed repo.</p>
 
-<h2 id="sharing">Shared cards and feedback</h2>
+<h2 id="sharing">Shared threads and feedback</h2>
 <ul>
-  <li><strong>Shared cards:</strong> Pensieve saves a shared card as a file in Downloads. It does not send it. Before you save, you see the card and can edit it. A shared card has no local paths, session ids, resume command, secrets or private messages (see <a href="/docs/context-cards/#reach">What a shared card keeps</a>).</li>
+  <li><strong>Shared threads:</strong> Pensieve saves a shared thread as a file in Downloads. It does not send it. Before you save, you see the thread and can edit it. A shared thread has no local paths, session ids, resume command, secrets or private messages (see <a href="/docs/threads/#reach">What a shared thread keeps</a>).</li>
   <li><strong>Feedback:</strong> reports from you and from agents stay in <code>~/.pensieve/feedback.jsonl</code>. Settings → Feedback lists them. Send to GitHub opens an issue with the text filled in, and you read it before you post it.</li>
 </ul>
 
 <h2 id="private-messages">Private messages</h2>
-<p>Items from direct messages, group messages and private channels are context for your own cards and agents only.
-A shared card leaves them out whole. See <a href="/docs/connections/#private">Connections</a>.</p>
+<p>Items from direct messages, group messages and private channels are context for your own threads and agents only.
+A shared thread leaves them out whole. See <a href="/docs/connections/#private">Connections</a>.</p>
 
 <h2 id="site">This website</h2>
 <p>pensieve.tools counts page views with <a href="https://www.goatcounter.com/">GoatCounter</a>, which sets no
@@ -193,12 +193,12 @@ FAQ = [
     ("Does it work on Linux?", "Yes, without the Mac app. The backend indexes, searches and serves MCP to your agents. The Map opens in your browser. The search model runs on PyTorch (CUDA or CPU). <code>pensieve integrate</code> connects the agents whose settings are in your home folder: Claude Code, Codex, Cursor, Gemini CLI, Qwen Code and Windsurf."),
     ("Which agents can use it?", "Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop and VS Code, with one command. Any other MCP client can connect over stdio or HTTP. See <a href=\"/docs/agents/\">Connect your agent</a>."),
     ("Does anything leave my computer?", "Your files, code and sessions do not leave because of Pensieve. Indexing and search run locally. Pensieve downloads models, finds updates, fetches your repos' default branches, and collects from connections that you switch on. If your agent is a cloud agent, what it reads goes to its provider. See <a href=\"/docs/privacy/\">Privacy and data</a>."),
-    ("Do I need an AI model?", "No. Search, agent context, ownership and knowledge gaps work without a generation model. The AI notes on context cards and the written insights need one. You can use a local model or your own agent."),
+    ("Do I need an AI model?", "No. Pensieve has no text model of its own. Your agent writes the notes on threads and the written insights, with its own model. Search, agent context, ownership and knowledge gaps do not need it."),
     ("How do I make my agent use Pensieve and not grep?", "Run <code>pensieve integrate recommended</code>. It adds the MCP server, a short “search before you grep” instructions block, and the <code>pensieve-search</code> skill. Without instructions, agents did not call Pensieve in our first test. With them, the agent used Pensieve in all 144 runs of the last benchmark batch."),
     ("Is it better than grep?", "It finds the right file with fewer tool calls, at lower cost. In our benchmark with Claude Sonnet, the cost per lookup was 18 to 25% lower. Accuracy was 6 points higher in the first batch and level in the later batches. See the <a href=\"/docs/benchmark/\">benchmark</a> for the method and the limits."),
     ("How long does the first index take?", "About 500 code files a minute on Apple Silicon. A repo with 35,000 files takes a little more than one hour. Search works while Pensieve indexes. After the first index, a change shows in search about half a second after you save."),
     ("Can I limit an agent to one project?", "Yes. By default, an agent's scope is the repo that it started in. You can make named scopes in Settings → Scopes, and connect an agent with <code>pensieve mcp --scope &lt;name&gt;</code>. See <a href=\"/docs/agents/#scope\">Scopes</a>."),
-    ("Does Pensieve read my private messages?", "Only if you switch on a connection that can read them. Pensieve marks those items private. They help your own cards and agents. A shared card leaves them out whole."),
+    ("Does Pensieve read my private messages?", "Only if you switch on a connection that can read them. Pensieve marks those items private. They help your own threads and agents. A shared thread leaves them out whole."),
     ("For Claude Code, which do I use: the plugin or pensieve integrate?", "Use one of them, not both. The plugin does not change your settings files. <code>pensieve integrate</code> also connects your other agents. See <a href=\"/docs/agents/claude-code/\">Pensieve for Claude Code</a>."),
     ("How do I uninstall it?", "See <a href=\"/docs/install/#uninstall\">Uninstall</a>."),
     ("How do I report a bug?", "Use Settings → Feedback in the app, or open an issue on <a href=\"https://github.com/TedHaley/pensieve/issues/new/choose\">GitHub</a>. Agents can call the <code>report_feedback</code> tool. Reports stay on your computer until you send them."),
@@ -206,8 +206,8 @@ FAQ = [
 
 page("faq", "FAQ",
      "Pensieve FAQ: Mac and Linux, privacy, agents, MCP and grep",
-     "Answers about Pensieve: price, Apple Silicon and Linux, which AI agents work with it, privacy, the generation "
-     "model, scopes, and how it compares with grep.",
+     "Answers about Pensieve: price, Apple Silicon and Linux, which AI agents work with it, privacy, the "
+     "models, scopes, and how it compares with grep.",
      "Frequently asked questions",
      "This page answers the questions that people ask most about Pensieve.",
      "".join(f'<h2 id="q{i}">{q}</h2><p>{a}</p>' for i, (q, a) in enumerate(FAQ, 1)),

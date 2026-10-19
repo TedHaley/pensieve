@@ -1,4 +1,4 @@
-"""The generation model when it is your agent (`ai: agent`).
+"""The queue of text jobs for the user's agent, which writes all of Pensieve's text (llm.complete).
 
 Pensieve queues each completion that it needs. Agents that are connected over MCP read the queue with `pending_work`
 and answer each job with `submit_work`. The next time Pensieve asks for the same completion, it gets that answer.
@@ -21,7 +21,6 @@ from pensieve.store import misc
 KEEP = 2 * 86400
 CLAIM = 10 * 60
 ACTIVE = 24 * 3600  # a session that answered in this long counts as active
-TEST = ("Reply with the single word: ready", "This is Pensieve's test job. It shows that you can answer its jobs.")
 
 
 def job_id(prompt: str, system: str, schema: dict | None) -> str:
@@ -33,12 +32,6 @@ def take(prompt: str, system: str, schema: dict | None, kind: str, max_tokens: i
     job = AgentJob(job_id(prompt, system, schema), kind, system, prompt, json.dumps(schema) if schema else None,
                    max_tokens, now(), None, None, None, None)
     return misc.take_job(store.store_db(), job, KEEP)
-
-
-def queue_test():
-    """Queue the test job until a session has answered any job."""
-    if not sessions(KEEP):
-        take(TEST[0], TEST[1], None, "test", 5)
 
 
 def pending(limit: int = 5, kind: str = "", conn: str = "") -> list[dict]:
