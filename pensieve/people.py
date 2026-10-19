@@ -1164,9 +1164,20 @@ def _via_for(pid: str, via: dict, me: dict, raw: dict) -> list[dict]:
     return sorted(out, key=lambda x: -sum(y["n"] for y in x["kinds"]))
 
 
+_avatar_index: tuple[float, dict[str, Path]] = (-1.0, {})
+
+
 def _avatar_file(url: str) -> Path | None:
-    return next(iter(f for f in AVATARS.glob(_hash(url, 16) + ".*") if f.suffix != ".none"), None) \
-        if AVATARS.is_dir() else None
+    """The downloaded picture of a URL, or None. The folder is listed once and again only when it changes: a glob
+    for each person made a Projects build spend 15 s here."""
+    global _avatar_index
+    try:
+        m = AVATARS.stat().st_mtime
+    except OSError:
+        return None
+    if _avatar_index[0] != m:
+        _avatar_index = (m, {f.stem: f for f in AVATARS.iterdir() if f.suffix != ".none"})
+    return _avatar_index[1].get(_hash(url, 16))
 
 
 def _fetch_avatar(url: str) -> Path | None:

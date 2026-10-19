@@ -375,6 +375,7 @@ class Repos:
             except Exception:
                 pass
         self.db.executescript("""
+        CREATE INDEX IF NOT EXISTS cc_wt ON code_chunks(wt);  -- the map's fingerprint counts main-checkout chunks
         CREATE TABLE IF NOT EXISTS checkout_files(repo TEXT, wt TEXT, path TEXT, blob TEXT, PRIMARY KEY(repo, wt, path));
         CREATE TABLE IF NOT EXISTS worktrees(path TEXT PRIMARY KEY, repo TEXT, branch TEXT);
         """)

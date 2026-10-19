@@ -337,11 +337,16 @@ class DataMap:
             head = ""
         if not head:
             return {}
-        if self._ctimes.get(root, (None,))[0] == head:
-            return self._ctimes[root][1]
+        old_head, old = self._ctimes.get(root, (None, None))
+        if old_head == head:
+            return old
+        # HEAD moved on from the cached one (a new commit, a pull): read only the new commits, not the whole history
+        newer = bool(old_head) and subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor", old_head, head],
+                                                  capture_output=True, timeout=10).returncode == 0
         out = {}
         try:
-            log = subprocess.run(["git", "-C", root, "log", "--format=%x1e%ct", "--name-only", "--no-renames"],
+            log = subprocess.run(["git", "-C", root, "log", "--format=%x1e%ct", "--name-only", "--no-renames",
+                                  *([f"{old_head}..{head}"] if newer else [])],
                                  capture_output=True, text=True, timeout=120, errors="replace").stdout
         except (OSError, subprocess.SubprocessError):
             log = ""
@@ -353,6 +358,8 @@ class DataMap:
             for f in lines[1:]:
                 if f and f not in out:
                     out[f] = t
+        if newer:
+            out = {**old, **out}  # the new commits' times win
         self._ctimes[root] = (head, out)
         return out
 
