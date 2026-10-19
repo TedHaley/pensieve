@@ -10,6 +10,25 @@ INDEX_PATH = DATA_DIR / "index.tv"
 PORT = int(os.environ.get("PENSIEVE_PORT", 8765))
 URL = f"http://127.0.0.1:{PORT}"
 
+
+def write_atomic(path: Path, text: str):
+    """Write text to a file in one step: a reader sees the old file or the new one, never a part of it. The temporary
+    file starts with a dot, so that the file indexer skips it."""
+    import tempfile
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
 # Where each agent keeps its transcripts, and their file pattern below that folder. Add more agents here.
 SESSION_GLOB = {"claude": "*/*.jsonl", "qwen": "*/chats/*.jsonl", "codex": "**/rollout-*.jsonl"}
 SOURCES = [

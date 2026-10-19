@@ -105,8 +105,13 @@ def derive(task: dict, note: dict, now: float | None = None) -> tuple[State, str
 
 
 def _table(store):
+    """Make the table once for each database connection (a reset opens a new one)."""
+    if getattr(store, "_task_states_db", None) is store.db:
+        return
     store.db.execute("CREATE TABLE IF NOT EXISTS task_states(task_id TEXT, state TEXT, by TEXT, reason TEXT, at REAL)")
     store.db.execute("CREATE INDEX IF NOT EXISTS task_states_id ON task_states(task_id, at)")
+    store.db.commit()
+    store._task_states_db = store.db
 
 
 def latest(store) -> dict[str, StateChange]:
