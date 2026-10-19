@@ -1,5 +1,5 @@
-"""The org chart's rules: the role from depth and breadth, the reviewer pattern and the edges it gives, and the user's
-manager override. Run: .venv/bin/python tests/org_infer.py"""
+"""The org chart's role rules: contributor, domain expert and lead from the depth and breadth of a person's work.
+Run: .venv/bin/python tests/org_infer.py"""
 import sys
 import time
 from collections import Counter
@@ -47,42 +47,6 @@ def test_no_work_has_no_role():
     r = org._role(dict(first=0, n_prs=0, n_reviews=0, approved=0), dict(repos={}, blame={}, owns=Counter()),
                   NOW, 0, set(), 0)
     assert r["level"] is None
-
-
-def test_reviewer_who_writes_none_stamps():
-    assert org._role(signals(n_reviews=5, approved=2), work(), NOW, 0, {"team-a"}, 0)["stamps"]
-    assert not org._role(signals(n_prs=30, n_reviews=10, approved=2), work(), NOW, 0, {"team-a"}, 0)["stamps"]
-    assert not org._role(signals(n_reviews=5, approved=1), work(), NOW, 0, set(), 0)["stamps"], \
-        "no team to maintain and one person approved: a narrow view"
-
-
-def _people(*names):
-    return {n: dict(name=n.title(), rank=i) for i, n in enumerate(names)}
-
-
-def _op(stamps=False):
-    return dict(level="contributor", level_from="signals", level_confidence=0.4, level_evidence=[], stamps=stamps)
-
-
-def test_reviewer_who_approves_is_the_manager():
-    people = _people("me", "boss", "peer")
-    out = {"me": _op(), "boss": _op(stamps=True), "peer": _op()}
-    approvals = {"me": Counter(peer=13.6, boss=3.9)}
-    edges = org._reporting(people, out, [], {}, {}, {}, approvals, {}, dict(titles={}))
-    assert [(e["manager"], e["report"]) for e in edges] == [("boss", "me")], "the peer who approves most is no manager"
-    assert 0.3 < edges[0]["confidence"] <= 0.6
-
-
-def test_user_set_manager_wins():
-    people = _people("me", "boss", "other")
-    inferred = [dict(manager="other", report="me", confidence=0.5, evidence=["x"])]
-    edges = org._user_set(inferred, [("boss", "me")], people)
-    assert [(e["manager"], e["report"], e["confidence"]) for e in edges] == [("boss", "me", 1.0)]
-    assert edges[0]["set_by_user"]
-
-
-def test_user_set_ignores_unknown_people():
-    assert org._user_set([], [("gone", "me"), ("me", "me")], _people("me")) == []
 
 
 def main():

@@ -27,8 +27,7 @@ def fresh():
 
 def test_overrides():
     s, _ = fresh()
-    o = {"merge": [["email:a@example.com", "gh:a"]], "split": ["name:sam lee"], "me": ["email:me@example.com"],
-         "manager": [["gh:boss", "email:me@example.com"]]}
+    o = {"merge": [["email:a@example.com", "gh:a"]], "split": ["name:sam lee"], "me": ["email:me@example.com"]}
     people.set_overrides(s, o, at=100)
     assert people.overrides(s) == o
     o2 = {**o, "split": ["name:sam lee", "gh:b"]}
@@ -41,9 +40,8 @@ def test_overrides():
     assert people.overrides(s)["split"] == ["name:sam lee", "gh:b"], "an import adds no duplicate"
 
 
-def test_manager_override_migration():
-    """A store.db of version 1 (no 'manager' in the CHECK) keeps its overrides and takes a manager row after the
-    migration."""
+def test_manager_overrides_go_in_the_migration():
+    """A store.db of version 2 keeps its other overrides; its 'manager' rows go, and the CHECK refuses them."""
     store.close_all()
     for p in store.root().glob("*.db*"):
         p.unlink()
@@ -52,23 +50,26 @@ def test_manager_override_migration():
     path = store.root() / "store.db"
     c = sqlite3.connect(path)
     c.executescript("""CREATE TABLE schema_version (version INTEGER NOT NULL) STRICT;
-INSERT INTO schema_version VALUES (1);
+INSERT INTO schema_version VALUES (2);
 CREATE TABLE person_overrides (
   id      INTEGER PRIMARY KEY,
-  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me')),
+  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me', 'manager')),
   a       TEXT NOT NULL,
   b       TEXT,
   at      INTEGER NOT NULL
 ) STRICT;
-INSERT INTO person_overrides VALUES (1, 'me', 'email:me@example.com', NULL, 100);""")
+INSERT INTO person_overrides VALUES (1, 'me', 'email:me@example.com', NULL, 100);
+INSERT INTO person_overrides VALUES (2, 'manager', 'gh:boss', 'email:me@example.com', 100);""")
     c.commit()
     c.close()
     s = store.store_db()
     assert s.one("SELECT version FROM schema_version")[0] == schema.STORE_VERSION
-    o = people.overrides(s)
-    assert o["me"] == ["email:me@example.com"]
-    people.set_overrides(s, {**o, "manager": [["gh:boss", "email:me@example.com"]]})
-    assert people.overrides(s)["manager"] == [["gh:boss", "email:me@example.com"]]
+    assert people.overrides(s) == {"merge": [], "split": [], "me": ["email:me@example.com"]}
+    try:
+        s.write(lambda c: c.execute("INSERT INTO person_overrides VALUES (3, 'manager', 'a', 'b', 1)"))
+        assert False, "the CHECK takes a manager row"
+    except sqlite3.IntegrityError:
+        pass
 
 
 def test_persons():

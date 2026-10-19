@@ -7,10 +7,7 @@
   the top committer, a large git blame share, CODEOWNERS entries, many commits in one area, and tenure. Breadth: the
   number of repos and areas, the people whose pull requests they approve, and GitHub teams they maintain. Deep and
   broad: lead. Deep: domain expert. Otherwise: contributor.
-- Reporting lines only with evidence: a manager's title that names a team ('Engineering Manager, Payments'), one
-  person who gives most of the approvals to a group of people, or a person who reviews and writes almost none and
-  approves someone's pull requests. Otherwise the chart shows teams, not a tree.
-- The user can say who manages whom (people.set_manager). That edge wins: the report's inferred managers drop out.
+- No reporting lines: the chart shows teams, not a tree. Slack titles only name the Leadership group.
 
 The evidence builds up over time (orgstore.py): pull requests, titles, first commits and team co-membership from all
 builds so far, not only from the last one. More evidence gives more confidence."""
@@ -22,7 +19,7 @@ from collections import Counter, defaultdict
 from pensieve import orgstore
 
 ROLES = ["contributor", "domain expert", "lead"]
-# Slack title words: only for reporting lines (a manager's title) and the Leadership group, not for the role
+# Slack title words: only for the Leadership group and orgstore's manager-title sightings, not for the role
 _TITLE = [
     (re.compile(r"\b(chief|c[etfpo]o|vp|svp|evp|vice president|head of|director|founder|president|partner)\b", re.I),
      "director+"),
@@ -96,9 +93,7 @@ def _cos(a: Counter, b: Counter) -> float:
     return dot / (math.sqrt(sum(v * v for v in a.values())) * math.sqrt(sum(v * v for v in b.values())) or 1)
 
 
-def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict, store: dict | None = None,
-          managers=()) -> dict:
-    """`managers`: the (manager, report) pairs that the user set."""
+def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict, store: dict | None = None) -> dict:
     now = time.time()
     store = store or orgstore.empty()  # the evidence of all builds (orgstore.py)
     teams_gh = raw.get("teams") or {}
@@ -208,16 +203,10 @@ def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict, s
                   team_evidence=ev + [f"work most like {len(t['members']) - 1} others in this group "
                                       f"(similarity {avg:.2f})"])
 
-    reports = _reporting(people, out_people, teams, team_of, groups, top_approver, approvals, title_of, acc)
-    reports = _user_set(reports, managers, people)
-    for t in teams:
-        t["managers"] = sorted({e["manager"] for e in reports if e["report"] in t["members"]
-                                and sum(1 for x in reports if x["manager"] == e["manager"] and x["report"] in t["members"]) >= 2},
-                               key=lambda q: people[q].get("rank", 1e9))
     leaders = sorted((pid for pid in out_people if _title_level(title_of[pid])[0] == "director+"),
                      key=lambda q: people[q].get("rank", 1e9))
     review_map = {r: dict(c) for r, c in acc["reviews"].items()}  # reviewer -> author -> pull requests
-    return dict(built=now, teams=teams, people=out_people, edges=reports, leaders=leaders, reviews=review_map,
+    return dict(built=now, teams=teams, people=out_people, leaders=leaders, reviews=review_map,
                 note="Inferred from repos, pull requests, CODEOWNERS, GitHub teams and Slack. Not an HR record.")
 
 
@@ -227,10 +216,7 @@ DEEP = BROAD = 1.2  # the depth and breadth scores at which a person counts as d
 def _role(s, w, now, owned_areas, maintains, approver_for) -> dict:
     """The role from the depth and breadth of a person's contributions: a lead is deep and broad, a domain expert is
     deep, anyone else is a contributor. `s`: this build's work and the accumulated evidence together (first commit,
-    pull requests, reviews, the number of people approved).
-
-    `stamps` marks the pattern of a person who reviews other people's pull requests and writes almost none, and
-    maintains a GitHub team or approves for several people: it is no role, but _reporting uses it."""
+    pull requests, reviews, the number of people approved)."""
     depth, breadth, dev, bev = 0.0, 0.0, [], []
     if owned_areas:
         depth += 1.0 if owned_areas >= 3 else 0.6
@@ -270,21 +256,16 @@ def _role(s, w, now, owned_areas, maintains, approver_for) -> dict:
         breadth += 0.4
         bev.append(f"maintainer of {len(maintains)} GitHub team{'s' if len(maintains) > 1 else ''}")
     n_rev, n_prs = s["n_reviews"], s["n_prs"]
-    stamps = n_rev >= 3 and n_prs <= 0.2 * n_rev and bool(maintains or s["approved"] >= 2)
-    if stamps:
-        bev.append(f"reviews other people's pull requests and writes almost none ({n_rev} reviews, {n_prs} pull "
-                   f"requests)")
     if not (w["repos"] or n_prs or n_rev or first):
         return dict(level=None, level_confidence=0, level_evidence=["not enough work seen to tell"], level_from="",
-                    depth=0, breadth=0, stamps=False)
+                    depth=0, breadth=0)
     deep, broad = depth >= DEEP, breadth >= BROAD
     level = "lead" if deep and broad else "domain expert" if deep else "contributor"
     ev = [f"Depth {depth:.1f}" + (f": {'; '.join(dev)}" if dev else ": no area of their own seen"),
           f"Breadth {breadth:.1f}" + (f": {'; '.join(bev)}" if bev else ": works in few repos and areas")]
     more = min(0.08, 0.02 * math.log2(1 + (n_prs + n_rev) / 10))  # more pull requests seen: a surer guess
     return dict(level=level, level_confidence=round(min(0.7, 0.3 + 0.04 * (len(dev) + len(bev)) + more), 2),
-                level_evidence=ev, level_from="signals", depth=round(depth, 1), breadth=round(breadth, 1),
-                stamps=stamps)
+                level_evidence=ev, level_from="signals", depth=round(depth, 1), breadth=round(breadth, 1))
 
 
 def _sim(a, b) -> float:
@@ -356,83 +337,11 @@ def _name_team(tid, members, vec, teams_gh, people, df) -> dict:
         ev.append("talk in " + ", ".join(f"{c} ({n})" for c, n in ch))
     name = teams_gh[gt]["name"] if gt else (shared[0][0] if shared else ch[0][0] if ch else "Group")
     members = sorted(members, key=lambda q: people[q].get("rank", 1e9))
-    return dict(id=tid, name=name, inferred=True, github_team=gt, members=members, size=len(members), evidence=ev,
-                managers=[])
-
-
-def _reporting(people, out_people, teams, team_of, groups, top_approver, approvals, title_of, acc) -> list[dict]:
-    """Manager -> report edges, only with evidence: a manager's title, or one person who approves most of the pull
-    requests of three or more people."""
-    found = {}
-
-    def add(m, r, conf, ev):
-        if m == r:
-            return
-        cur = found.get((m, r))
-        if cur:
-            cur["confidence"] = round(min(0.85, 1 - (1 - cur["confidence"]) * (1 - conf)), 2)
-            cur["evidence"] += ev
-        else:
-            found[(m, r)] = dict(manager=m, report=r, confidence=round(conf, 2), evidence=list(ev))
-
-    for pid in out_people:
-        title = title_of.get(pid) or ""
-        if not is_manager_title(title):
-            continue
-        seen = acc["titles"].get(pid)
-        steady = 0.05 if seen and seen[0] == title and seen[1]["n"] >= 3 else 0  # the same title in several builds
-        m = re.search(r"(?:,|\s-\s|\bof\b|\bfor\b)\s*(.+)$", title)
-        phrase = {w for w in re.findall(r"[a-z]{3,}", (m.group(1) if m else "").lower())
-                  if w not in {"the", "team", "and", "engineering"}}
-        target = None
-        if phrase:
-            target = next((t for t in teams if phrase & set(re.findall(r"[a-z]{3,}", t["name"].lower()))), None)
-        if target:
-            for r in target["members"]:
-                add(pid, r, 0.65 + steady, [f"title '{title}' names the team {target['name']}"])
-        elif team_of.get(pid):
-            for r in team_of[pid]["members"]:
-                add(pid, r, 0.45 + steady, [f"title '{title}'; in the same inferred team"])
-    for a, authors in groups.items():
-        if len(authors) < 3:
-            continue
-        given = sum(top_approver[r][1] for r in authors)
-        for r in authors:
-            _, n, tot = top_approver[r]
-            # more approvals seen over the builds: more confidence, up to 0.7
-            add(a, r, min(0.7, 0.3 + 0.05 * len(authors) + 0.03 * math.log2(1 + given / 5)),
-                [f"approved {n:.0f} of {tot:.0f} approvals of {people[r]['name']}'s pull requests (weighted by age)",
-                 f"top approver for {len(authors)} people"])
-    # A person who reviews and writes almost none (`stamps`) and approves someone's pull requests: a manager stamps
-    # their reports' work, so one approver is enough. More approvals: more confidence, up to 0.6.
-    for m, op in out_people.items():
-        if not op.get("stamps"):
-            continue
-        for r, c in approvals.items():
-            n, tot = c.get(m, 0), sum(c.values())
-            if n >= 1 and not out_people.get(r, {}).get("stamps"):
-                add(m, r, min(0.6, 0.3 + 0.1 * math.log2(1 + n)),
-                    [f"approved {n:.0f} of {tot:.0f} approvals of {people[r]['name']}'s pull requests (weighted by age)",
-                     "reviews other people's pull requests and writes almost none"])
-    return sorted(found.values(), key=lambda e: -e["confidence"])
-
-
-def _user_set(reports: list[dict], managers, people: dict) -> list[dict]:
-    """The inferred edges with the user's (manager, report) pairs on top: each pair is an edge of confidence 1, and
-    the report's other inferred managers drop out."""
-    managers = [(m, r) for m, r in managers if m in people and r in people and m != r]
-    if not managers:
-        return reports
-    told = {r for _, r in managers}
-    out = [e for e in reports if e["report"] not in told]
-    for m, r in managers:
-        out.append(dict(manager=m, report=r, confidence=1.0, evidence=[f"set by you: {people[m]['name']} manages "
-                                                                         f"{people[r]['name']}"], set_by_user=True))
-    return sorted(out, key=lambda e: -e["confidence"])
+    return dict(id=tid, name=name, inferred=True, github_team=gt, members=members, size=len(members), evidence=ev)
 
 
 def card(chart: dict, pid: str) -> dict:
-    """The org part of one person's card: seniority, team, and inferred manager and reports."""
+    """The org part of one person's card: their role and their team."""
     op = (chart or {}).get("people", {}).get(pid)
     if not op:
         return {}
@@ -444,10 +353,4 @@ def card(chart: dict, pid: str) -> dict:
                        source=op["level_from"], inferred=True, depth=op.get("depth", 0), breadth=op.get("breadth", 0)),
         team=dict(id=t["id"], name=t["name"], size=t["size"], confidence=op["team_confidence"],
                   evidence=op["team_evidence"], inferred=True,
-                  members=[dict(id=m, name=names.get(m, "")) for m in t["members"] if m != pid][:8]) if t else None,
-        managers=[dict(id=e["manager"], name=names.get(e["manager"], ""), confidence=e["confidence"],
-                       evidence=e["evidence"], set_by_user=bool(e.get("set_by_user")))
-                  for e in chart["edges"] if e["report"] == pid][:3],
-        reports=[dict(id=e["report"], name=names.get(e["report"], ""), confidence=e["confidence"],
-                      set_by_user=bool(e.get("set_by_user")))
-                 for e in chart["edges"] if e["manager"] == pid][:20])
+                  members=[dict(id=m, name=names.get(m, "")) for m in t["members"] if m != pid][:8]) if t else None)

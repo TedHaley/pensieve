@@ -1749,8 +1749,8 @@ def get_people(limit: int = 200, refresh: bool = False):
 
 @app.get("/api/people/org")
 def get_people_org():
-    """The People tab's Org view, all inferred: teams, each person's function, role and team with confidence and
-    evidence, and manager -> report edges where there is evidence for them."""
+    """The People tab's Org view, all inferred: teams, and each person's function, role and team with confidence
+    and evidence."""
     from pensieve import people
     people.rebuild(store, _repo_rows)
     return people.org_chart()
@@ -1832,9 +1832,9 @@ def get_person(pid: str):
 
 @app.get("/api/people/{pid}/relations")
 def get_person_relations(pid: str):
-    """The person's nearest org, for the panel under the graph: inferred managers above, peers (the same inferred
-    team) beside, inferred reports below, and the strongest collaborators outside the team. Each link has a label,
-    a confidence (0..1) and its evidence. `evidence` says how much org evidence the builds have gathered."""
+    """The people closest to the person, for the panel under the graph: peers (the same inferred team) and the
+    strongest collaborators outside the team. Each link has a label, a confidence (0..1), its evidence and how the two
+    work together (`about`). `evidence` says how much org evidence the builds have gathered."""
     from pensieve import people
     r = people.relations(pid)
     if r is None:
@@ -1893,26 +1893,9 @@ def set_me_person(req: PeopleMeReq):
     return {"ok": True}
 
 
-class PeopleManagerReq(BaseModel):
-    manager: str
-    report: str
-    on: bool = True
-
-
-@app.post("/api/people/manager")
-def set_person_manager(req: PeopleManagerReq):
-    """The user says who manages whom (or, with on=false, takes that back). It wins over the inferred org chart."""
-    from pensieve import people
-    try:
-        people.set_manager(req.manager, req.report, req.on)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True}
-
-
 @app.delete("/api/people/overrides")
 def reset_people_overrides():
-    """Forget every merge, split, 'this is me' and manager that the user set."""
+    """Forget every merge, split and 'this is me' that the user made."""
     from pensieve import people
     people.reset_overrides()
     return {"ok": True}

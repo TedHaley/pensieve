@@ -994,7 +994,7 @@ def resolve(raw: dict, ovr: dict, prev: dict | None = None) -> dict:
         p["function"] = profiles[pid]["function"]
     ev = orgstore.load()
     new_build = orgstore.merge(ev, raw, now, org.is_manager_title)
-    chart = org.infer(people, profiles, work_of, edges, raw, ev, managers=_managers_set(people))
+    chart = org.infer(people, profiles, work_of, edges, raw, ev)
     orgstore.add_teams(ev, chart["teams"], lambda q: people[q]["keys"][0] if people[q]["keys"] else "", now, new_build)
     orgstore.save(ev)
     chart["evidence"] = orgstore.summary(ev)
@@ -1395,8 +1395,8 @@ REL_COLLABS = 6
 
 def relations(pid: str) -> dict | None:
     """GET /api/people/<id>/relations: the person's nearest org around them, each link with its inferred relation,
-    confidence and evidence. Managers and reports come from the org chart's reporting lines, peers from the same
-    inferred team, and collaborators are the strongest graph edges outside those."""
+    confidence and evidence. Peers come from the same inferred team, and collaborators are the strongest graph edges
+    outside it."""
     g = graph()
     if g and pid not in g["people"]:
         pid = current_id(pid) or pid
@@ -1417,7 +1417,17 @@ def relations(pid: str) -> dict | None:
                     avatar=bool(p["avatar_url"] and _avatar_file(p["avatar_url"])), level=o.get("level"),
                     level_confidence=o.get("level_confidence", 0), relation=relation, label=label,
                     confidence=round(conf or 0, 2), evidence=evidence, about=about(q), last=e.get("last"),
-                    weight=e.get("w", 0), **extra)
+                    weight=e.get("w", 0), tie=tie(q), **extra)
+
+    def tie(q):
+        """The strongest kind of tie, for the line's color: review, code, task (shared threads) or slack."""
+        if rv.get(q, {}).get(pid) or rv.get(pid, {}).get(q):
+            return "review"
+        k = (edges.get(q) or {}).get("kinds") or {}
+        if not k:
+            return ""
+        best = max(k, key=lambda x: KIND_WEIGHT.get(x, 1) * math.log1p(k[x]))
+        return {"pr": "review", "dm": "slack", "thread": "slack", "channel": "slack"}.get(best, best)
 
     def about(q):
         """How the selected person and q work together, strongest first, in a few short phrases."""
@@ -1474,12 +1484,7 @@ def relations(pid: str) -> dict | None:
         return {"code": "works on the same files", "pr": "pull request reviews", "task": "shares tasks",
                 "thread": "talks in Slack threads", "dm": "direct messages", "channel": "same Slack channels"}.get(k, k), 0
 
-    up = [x for x in ch.get("edges", []) if x["report"] == pid and x["manager"] in ppl][:3]
-    down = [x for x in ch.get("edges", []) if x["manager"] == pid and x["report"] in ppl][:12]
-    how = lambda x: "set by you" if x.get("set_by_user") else f"inferred {x['confidence']:.0%}"
-    managers = [node(x["manager"], "manager", f"manager · {how(x)}", x["confidence"], x["evidence"]) for x in up]
-    reports = [node(x["report"], "report", f"report · {how(x)}", x["confidence"], x["evidence"]) for x in down]
-    taken = {pid} | {x["manager"] for x in up} | {x["report"] for x in down}
+    taken = {pid}
     peers = []
     if team:
         mates = [q for q in team["members"] if q not in taken and q in ppl]
@@ -1500,18 +1505,18 @@ def relations(pid: str) -> dict | None:
     center = dict(id=pid, name=p["name"], me=p["me"], function=p.get("function", ""), title=p["title"],
                   avatar=bool(p["avatar_url"] and _avatar_file(p["avatar_url"])), level=op.get("level"),
                   level_confidence=op.get("level_confidence", 0), level_evidence=op.get("level_evidence", []))
-    return dict(id=pid, center=center, managers=managers, peers=peers, reports=reports, collaborators=collabs,
+    return dict(id=pid, center=center, peers=peers, collaborators=collabs,
                 team=dict(id=team["id"], name=team["name"], size=team["size"], confidence=op.get("team_confidence", 0),
                           evidence=op.get("team_evidence", [])) if team else None,
                 evidence=ch.get("evidence") or {}, note="Inferred from the work Pensieve can see. Not an HR record.")
 
 
 def org_chart() -> dict:
-    """GET /api/people/org: inferred teams, each person's function, role and team with confidence and
-    evidence, and inferred manager -> report edges. Each node has what the UI needs to draw it."""
+    """GET /api/people/org: inferred teams, and each person's function, role and team with confidence and
+    evidence. Each node has what the UI needs to draw it."""
     g = graph()
     if not g or not g.get("org"):
-        return dict(teams=[], people={}, edges=[], leaders=[], building=_state["building"], me=g and g.get("me"))
+        return dict(teams=[], people={}, leaders=[], building=_state["building"], me=g and g.get("me"))
     ch = g["org"]
     ppl = {}
     for pid, op in ch["people"].items():
@@ -1521,7 +1526,7 @@ def org_chart() -> dict:
         ppl[pid] = {**op, "me": p["me"], "rank": p.get("rank"), "closeness": p.get("closeness", 0), "title": p["title"],
                     "avatar": bool(p["avatar_url"] and _avatar_file(p["avatar_url"]))}
     return dict(me=g["me"], built=g["built"], note=ch.get("note", ""), teams=ch["teams"], people=ppl,
-                edges=ch["edges"], leaders=ch.get("leaders", []), evidence=ch.get("evidence") or {},
+                leaders=ch.get("leaders", []), evidence=ch.get("evidence") or {},
                 building=_state["building"])
 
 
@@ -1596,29 +1601,8 @@ def set_me(pid: str):
     re_resolve()
 
 
-def set_manager(manager: str, report: str, on: bool = True):
-    """The user says `manager` is (or, with on=False, is not) the manager of `report`. It wins over the inferred
-    edges of the org chart."""
-    g = graph()
-    if not g or manager not in g["people"] or report not in g["people"] or manager == report:
-        raise ValueError("unknown person")
-    m, r = g["people"][manager]["keys"][0], g["people"][report]["keys"][0]
-
-    def apply(o):
-        o["manager"] = [p for p in o["manager"] if p[1] != r] + ([[m, r]] if on else [])
-    _set_overrides(apply)
-    re_resolve()
-
-
-def _managers_set(people: dict) -> list[tuple[str, str]]:
-    """The user's manager overrides as (manager id, report id), for the people that are in this graph."""
-    pid_of = {k: pid for pid, p in people.items() for k in p["keys"]}
-    return [(pid_of[m], pid_of[r]) for m, r in overrides().get("manager", []) if m in pid_of and r in pid_of
-            and pid_of[m] != pid_of[r]]
-
-
 def reset_overrides():
-    people_db.set_overrides(v2.store_db(), {"merge": [], "split": [], "me": [], "manager": []})
+    people_db.set_overrides(v2.store_db(), {"merge": [], "split": [], "me": []})
     re_resolve()
 
 
