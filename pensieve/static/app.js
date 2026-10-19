@@ -4076,7 +4076,7 @@ function ppCardHtml(p) {
   const org = sen?.level || team || p.managers?.length || p.reports?.length ? `<div class="h4">Org <span class="muted">· inferred</span></div><div class="pp-orgrows">
       ${sen?.level ? `<div class="pp-orgrow"><span class="k">Seniority (inferred)</span><span class="v">${esc(sen.level)} ${pct(sen.confidence)}</span></div>${why(sen.evidence)}` : ''}
       ${team ? `<div class="pp-orgrow"><span class="k">Team (inferred)</span><span class="v"><button class="linkbtn" data-pp-orgteam="${esc(team.id)}" title="Show this team in the Org view">${esc(team.name)}</button> <span class="muted">· ${ppPeople(team.size)}</span> ${pct(team.confidence)}</span></div>${why(team.evidence)}` : ''}
-      ${(p.managers || []).map(m => `<div class="pp-orgrow"><span class="k">Reports to (inferred)</span><span class="v"><button class="linkbtn" data-pp-open="${esc(m.id)}">${esc(m.name)}</button> ${pct(m.confidence)}</span></div>${why(m.evidence)}`).join('')}
+      ${(p.managers || []).map(m => `<div class="pp-orgrow"><span class="k">Reports to ${m.set_by_user ? '(set by you)' : '(inferred)'}</span><span class="v"><button class="linkbtn" data-pp-open="${esc(m.id)}">${esc(m.name)}</button> ${m.set_by_user ? '' : pct(m.confidence)}</span></div>${m.set_by_user ? '' : why(m.evidence)}`).join('')}
       ${p.reports?.length ? `<div class="pp-orgrow"><span class="k">Manages (inferred)</span><span class="v">${p.reports.map(x => `<button class="chip" data-pp-open="${esc(x.id)}">${esc(x.name)}</button>`).join(' ')}</span></div>` : ''}
     </div>` : '';
   const chan = c => `${esc(c.label)}: ${c.n.toLocaleString()} with ${ppPeople(c.people)}${c.top?.length ? ` (${c.top.map(o => esc(o.name)).join(', ')}${c.people > c.top.length ? '…' : ''})` : ''}`;
@@ -4100,7 +4100,11 @@ function ppCardHtml(p) {
     ${p.peers.length ? `<div class="h4">Works alongside</div><div class="chips">${p.peers.map(o => `<button class="chip" data-pp-open="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>` : ''}
     <div class="h4">Identities</div><div>${p.identities.map(i => `<div class="pp-idrow"><span class="k">${esc(PP_KIND[i.kind] || i.kind)}</span><span class="v" title="${esc(i.value)}">${esc(i.value)}</span>${ids ? `<button class="linkbtn" data-pp-split="${esc(i.key)}" title="This ${esc((PP_KIND[i.kind] || i.kind).toLowerCase())} is someone else: make it a person of its own">Not them</button>` : ''}</div>`).join('')}</div>
     ${joins}${maybe}
-    <div class="actions">${p.repos.length ? '<button class="btn" data-pp-map>Show their work on the map</button>' : ''}<button class="btn" data-pp-merge title="Join this person with another one: the same person under another name or email">Merge with…</button>${p.me ? '' : '<button class="btn" data-pp-me title="Mark this person as you">This is me</button>'}</div>`;
+    <div class="actions">${p.repos.length ? '<button class="btn" data-pp-map>Show their work on the map</button>' : ''}<button class="btn" data-pp-merge title="Join this person with another one: the same person under another name or email">Merge with…</button>${p.me ? '' : '<button class="btn" data-pp-me title="Mark this person as you">This is me</button>'}${p.me ? '' : ppIsMyManager(p) ? '<button class="btn" data-pp-mgr="off" title="Take back that this person is your manager">Not my manager</button>' : '<button class="btn" data-pp-mgr="on" title="This person is your manager: it wins over the inferred org chart">My manager</button>'}</div>`;
+}
+function ppIsMyManager(p) {
+  const me = S.people.data?.nodes.find(n => n.me)?.id;
+  return !!(p.reports || []).find(x => x.id === me && x.set_by_user);
 }
 function bindPeopleCard() {
   const box = $('#ppcardin'), P = S.people, p = P.card; if (!box || !p || p.directory) return;
@@ -4118,6 +4122,12 @@ function bindPeopleCard() {
   });
   $('[data-pp-orgteam]', box)?.addEventListener('click', e => ppShowTeam(e.currentTarget.dataset.ppOrgteam));
   $('[data-pp-me]', box)?.addEventListener('click', async () => { try { await post('/api/people/me', {id: p.id}); toast(`Marked ${p.name} as you.`); } catch (e) { return toast(e.message); } loadPeople(); });
+  $('[data-pp-mgr]', box)?.addEventListener('click', async e => {
+    const on = e.currentTarget.dataset.ppMgr === 'on', me = P.data?.nodes.find(n => n.me)?.id;
+    try { await post('/api/people/manager', {manager: p.id, report: me, on}); toast(on ? `${p.name} is your manager.` : `${p.name} is no longer set as your manager.`); }
+    catch (err) { return toast(err.message); }
+    loadPeople();
+  });
   $('[data-pp-map]', box)?.addEventListener('click', () => {
     const email = p.identities.find(i => i.kind === 'email')?.value;
     openItem('person:' + (email ? `${p.name} <${email}>` : p.name));

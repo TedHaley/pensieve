@@ -980,7 +980,7 @@ def resolve(raw: dict, ovr: dict, prev: dict | None = None) -> dict:
         p["function"] = profiles[pid]["function"]
     ev = orgstore.load()
     new_build = orgstore.merge(ev, raw, now, org.is_manager_title)
-    chart = org.infer(people, profiles, work_of, edges, raw, ev)
+    chart = org.infer(people, profiles, work_of, edges, raw, ev, managers=_managers_set(people))
     orgstore.add_teams(ev, chart["teams"], lambda q: people[q]["keys"][0] if people[q]["keys"] else "", now, new_build)
     orgstore.save(ev)
     chart["evidence"] = orgstore.summary(ev)
@@ -1437,10 +1437,9 @@ def relations(pid: str) -> dict | None:
 
     up = [x for x in ch.get("edges", []) if x["report"] == pid and x["manager"] in ppl][:3]
     down = [x for x in ch.get("edges", []) if x["manager"] == pid and x["report"] in ppl][:12]
-    managers = [node(x["manager"], "manager", f"manager · inferred {x['confidence']:.0%}", x["confidence"],
-                     x["evidence"]) for x in up]
-    reports = [node(x["report"], "report", f"report · inferred {x['confidence']:.0%}", x["confidence"],
-                    x["evidence"]) for x in down]
+    how = lambda x: "set by you" if x.get("set_by_user") else f"inferred {x['confidence']:.0%}"
+    managers = [node(x["manager"], "manager", f"manager · {how(x)}", x["confidence"], x["evidence"]) for x in up]
+    reports = [node(x["report"], "report", f"report · {how(x)}", x["confidence"], x["evidence"]) for x in down]
     taken = {pid} | {x["manager"] for x in up} | {x["report"] for x in down}
     peers = []
     if team:
@@ -1558,8 +1557,29 @@ def set_me(pid: str):
     re_resolve()
 
 
+def set_manager(manager: str, report: str, on: bool = True):
+    """The user says `manager` is (or, with on=False, is not) the manager of `report`. It wins over the inferred
+    edges of the org chart."""
+    g = graph()
+    if not g or manager not in g["people"] or report not in g["people"] or manager == report:
+        raise ValueError("unknown person")
+    m, r = g["people"][manager]["keys"][0], g["people"][report]["keys"][0]
+
+    def apply(o):
+        o["manager"] = [p for p in o["manager"] if p[1] != r] + ([[m, r]] if on else [])
+    _set_overrides(apply)
+    re_resolve()
+
+
+def _managers_set(people: dict) -> list[tuple[str, str]]:
+    """The user's manager overrides as (manager id, report id), for the people that are in this graph."""
+    pid_of = {k: pid for pid, p in people.items() for k in p["keys"]}
+    return [(pid_of[m], pid_of[r]) for m, r in overrides().get("manager", []) if m in pid_of and r in pid_of
+            and pid_of[m] != pid_of[r]]
+
+
 def reset_overrides():
-    people_db.set_overrides(v2.store_db(), {"merge": [], "split": [], "me": []})
+    people_db.set_overrides(v2.store_db(), {"merge": [], "split": [], "me": [], "manager": []})
     re_resolve()
 
 

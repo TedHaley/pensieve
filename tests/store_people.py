@@ -27,7 +27,8 @@ def fresh():
 
 def test_overrides():
     s, _ = fresh()
-    o = {"merge": [["email:a@example.com", "gh:a"]], "split": ["name:sam lee"], "me": ["email:me@example.com"]}
+    o = {"merge": [["email:a@example.com", "gh:a"]], "split": ["name:sam lee"], "me": ["email:me@example.com"],
+         "manager": [["gh:boss", "email:me@example.com"]]}
     people.set_overrides(s, o, at=100)
     assert people.overrides(s) == o
     o2 = {**o, "split": ["name:sam lee", "gh:b"]}
@@ -38,6 +39,36 @@ def test_overrides():
     people.import_overrides(s, {"merge": [["gh:x", "gh:y"]], "split": ["gh:b"]})
     assert people.overrides(s)["merge"] == [["email:a@example.com", "gh:a"], ["gh:x", "gh:y"]]
     assert people.overrides(s)["split"] == ["name:sam lee", "gh:b"], "an import adds no duplicate"
+
+
+def test_manager_override_migration():
+    """A store.db of version 1 (no 'manager' in the CHECK) keeps its overrides and takes a manager row after the
+    migration."""
+    store.close_all()
+    for p in store.root().glob("*.db*"):
+        p.unlink()
+    import sqlite3
+    from pensieve.store import schema
+    path = store.root() / "store.db"
+    c = sqlite3.connect(path)
+    c.executescript("""CREATE TABLE schema_version (version INTEGER NOT NULL) STRICT;
+INSERT INTO schema_version VALUES (1);
+CREATE TABLE person_overrides (
+  id      INTEGER PRIMARY KEY,
+  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me')),
+  a       TEXT NOT NULL,
+  b       TEXT,
+  at      INTEGER NOT NULL
+) STRICT;
+INSERT INTO person_overrides VALUES (1, 'me', 'email:me@example.com', NULL, 100);""")
+    c.commit()
+    c.close()
+    s = store.store_db()
+    assert s.one("SELECT version FROM schema_version")[0] == schema.STORE_VERSION
+    o = people.overrides(s)
+    assert o["me"] == ["email:me@example.com"]
+    people.set_overrides(s, {**o, "manager": [["gh:boss", "email:me@example.com"]]})
+    assert people.overrides(s)["manager"] == [["gh:boss", "email:me@example.com"]]
 
 
 def test_persons():

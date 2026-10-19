@@ -4,7 +4,7 @@ Each file's schema is a dict of parts, one per aggregate, so that each phase add
 `IF NOT EXISTS`: a new table needs no migration. A change to a table that exists (a new column) is a step in
 MIGRATIONS, and VERSION goes up by one; `schema_version` holds the version of the file."""
 
-STORE_VERSION = 1
+STORE_VERSION = 2
 INDEX_VERSION = 1
 
 STORE = {
@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS person_aliases (
 
 CREATE TABLE IF NOT EXISTS person_overrides (
   id      INTEGER PRIMARY KEY,
-  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me')),
+  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me', 'manager')),
   a       TEXT NOT NULL,
   b       TEXT,
   at      INTEGER NOT NULL
@@ -445,8 +445,20 @@ CREATE TABLE IF NOT EXISTS avatars (
 """,
 }
 
-# version -> the statements that take a file from version - 1 to version. Empty while v2 is new.
-STORE_MIGRATIONS: dict[int, list[str]] = {}
+# version -> the statements that take a file from version - 1 to version.
+STORE_MIGRATIONS: dict[int, list[str]] = {
+    # 2: the 'manager' override. SQLite can't change a CHECK in place, so the rows move to a new table.
+    2: ["""CREATE TABLE person_overrides_v2 (
+  id      INTEGER PRIMARY KEY,
+  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me', 'manager')),
+  a       TEXT NOT NULL,
+  b       TEXT,
+  at      INTEGER NOT NULL
+) STRICT""",
+        "INSERT INTO person_overrides_v2 SELECT id, action, a, b, at FROM person_overrides",
+        "DROP TABLE person_overrides",
+        "ALTER TABLE person_overrides_v2 RENAME TO person_overrides"],
+}
 INDEX_MIGRATIONS: dict[int, list[str]] = {}
 
 

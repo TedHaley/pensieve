@@ -90,6 +90,7 @@ class OverrideAction(StrEnum):
     MERGE = "merge"
     SPLIT = "split"
     ME = "me"
+    MANAGER = "manager"  # a: the manager's key, b: the report's key
 
 
 class ReviewState(StrEnum):

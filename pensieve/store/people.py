@@ -24,12 +24,13 @@ def key_kind(key: str) -> IdentityKind | None:
     return IdentityKind(k) if k in KINDS and ":" in key else None
 
 
-# The user's overrides. The v1 shape {merge: [[a, b]], split: [k], me: [k]} is the API; each item is one row.
+# The user's overrides. The shape {merge: [[a, b]], split: [k], me: [k], manager: [[manager, report]]} is the API;
+# each item is one row.
 def overrides(db: Db) -> dict:
-    out = {"merge": [], "split": [], "me": []}
+    out = {"merge": [], "split": [], "me": [], "manager": []}
     for o in rows.select(db.conn, PersonOverride, order="id"):
-        if o.action == OverrideAction.MERGE:
-            out["merge"].append([o.a, o.b])
+        if o.action in (OverrideAction.MERGE, OverrideAction.MANAGER):
+            out[o.action.value].append([o.a, o.b])
         else:
             out[o.action.value].append(o.a)
     return out
@@ -38,7 +39,8 @@ def overrides(db: Db) -> dict:
 def _override_rows(o: dict) -> list[tuple[OverrideAction, str, str | None]]:
     return [(OverrideAction.MERGE, a, b) for a, b in o.get("merge", [])] + \
         [(OverrideAction.SPLIT, k, None) for k in o.get("split", [])] + \
-        [(OverrideAction.ME, k, None) for k in o.get("me", [])]
+        [(OverrideAction.ME, k, None) for k in o.get("me", [])] + \
+        [(OverrideAction.MANAGER, a, b) for a, b in o.get("manager", [])]
 
 
 def set_overrides(db: Db, o: dict, at: int | None = None):

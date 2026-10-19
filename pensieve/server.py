@@ -1811,9 +1811,26 @@ def set_me_person(req: PeopleMeReq):
     return {"ok": True}
 
 
+class PeopleManagerReq(BaseModel):
+    manager: str
+    report: str
+    on: bool = True
+
+
+@app.post("/api/people/manager")
+def set_person_manager(req: PeopleManagerReq):
+    """The user says who manages whom (or, with on=false, takes that back). It wins over the inferred org chart."""
+    from pensieve import people
+    try:
+        people.set_manager(req.manager, req.report, req.on)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
 @app.delete("/api/people/overrides")
 def reset_people_overrides():
-    """Forget every merge, split and 'this is me' that the user made."""
+    """Forget every merge, split, 'this is me' and manager that the user set."""
     from pensieve import people
     people.reset_overrides()
     return {"ok": True}

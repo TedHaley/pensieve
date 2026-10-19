@@ -6,9 +6,13 @@
 - Seniority: a Slack title's words (Senior, Staff, Lead, Manager, Director, VP, Head, CTO…) when there is a title.
   Otherwise signals: tenure (the first commit in the repos), breadth (repos and areas), review load (reviews given and
   approvals to other people), ownership (the top committer of areas, the git blame share, CODEOWNERS entries and
-  GitHub team maintainers). Without a title the level is never above 'lead', and the confidence stays low.
-- Reporting lines only with evidence: a manager's title that names a team ('Engineering Manager, Payments'), or one
-  person who gives most of the approvals to a group of people. Otherwise the chart shows teams, not a tree.
+  GitHub team maintainers). Without a title the level is never above 'lead', and the confidence stays low, except for
+  one pattern: a person who reviews other people's pull requests and writes almost none, and maintains a GitHub team
+  or approves for several people, is likely a manager.
+- Reporting lines only with evidence: a manager's title that names a team ('Engineering Manager, Payments'), one
+  person who gives most of the approvals to a group of people, or a person of the manager pattern who approves
+  someone's pull requests. Otherwise the chart shows teams, not a tree.
+- The user can say who manages whom (people.set_manager). That edge wins: the report's inferred managers drop out.
 
 The evidence builds up over time (orgstore.py): pull requests, titles, first commits and team co-membership from all
 builds so far, not only from the last one. More evidence gives more confidence."""
@@ -93,7 +97,9 @@ def _cos(a: Counter, b: Counter) -> float:
     return dot / (math.sqrt(sum(v * v for v in a.values())) * math.sqrt(sum(v * v for v in b.values())) or 1)
 
 
-def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict, store: dict | None = None) -> dict:
+def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict, store: dict | None = None,
+          managers=()) -> dict:
+    """`managers`: the (manager, report) pairs that the user set."""
     now = time.time()
     store = store or orgstore.empty()  # the evidence of all builds (orgstore.py)
     teams_gh = raw.get("teams") or {}
@@ -208,6 +214,7 @@ def infer(people: dict, profiles: dict, work_of: dict, edges: dict, raw: dict, s
                                       f"(similarity {avg:.2f})"])
 
     reports = _reporting(people, out_people, teams, team_of, groups, top_approver, approvals, title_of, acc)
+    reports = _user_set(reports, managers, people, out_people)
     for t in teams:
         t["managers"] = sorted({e["manager"] for e in reports if e["report"] in t["members"]
                                 and sum(1 for x in reports if x["manager"] == e["manager"] and x["report"] in t["members"]) >= 2},
@@ -258,6 +265,13 @@ def _seniority(s, w, now, owned_areas, maintains, approver_for) -> dict:
         score += 0.8
         ev.append(f"gives most of the approvals to {approver_for} people")
     signals = sum(1 for _ in ev)
+    # Reviews other people's work and writes almost none, and maintains a team or approves for several people: the
+    # pattern of a manager. Few reviews can come from a narrow view of the repos, so the confidence stays low.
+    if not s["title"] and n_rev >= 3 and n_prs <= 0.2 * n_rev and (maintains or s["approved"] >= 2):
+        ev.insert(0, f"reviews other people's pull requests and writes almost none ({n_rev} reviews, {n_prs} pull "
+                     f"requests)" + (", and maintains a GitHub team" if maintains else ""))
+        return dict(level="manager", level_confidence=round(min(0.55, 0.3 + 0.03 * signals + 0.02 * math.log2(1 + n_rev)), 2),
+                    level_evidence=ev, level_from="signals")
     title, seen = s["title"], s["sightings"]
     if title:
         level, word = _title_level(title)
@@ -397,7 +411,37 @@ def _reporting(people, out_people, teams, team_of, groups, top_approver, approva
             add(a, r, min(0.7, 0.3 + 0.05 * len(authors) + 0.03 * math.log2(1 + given / 5)),
                 [f"approved {n:.0f} of {tot:.0f} approvals of {people[r]['name']}'s pull requests (weighted by age)",
                  f"top approver for {len(authors)} people"])
+    # A person of the manager pattern (reviews, writes almost none) who approves someone's pull requests: a manager
+    # stamps their reports' work, so one approver is enough. More approvals: more confidence, up to 0.6.
+    for m, op in out_people.items():
+        if op["level"] != "manager" or op["level_from"] != "signals":
+            continue
+        for r, c in approvals.items():
+            n, tot = c.get(m, 0), sum(c.values())
+            if n >= 1 and out_people.get(r, {}).get("level") not in ("manager", "director+"):
+                add(m, r, min(0.6, 0.3 + 0.1 * math.log2(1 + n)),
+                    [f"approved {n:.0f} of {tot:.0f} approvals of {people[r]['name']}'s pull requests (weighted by age)",
+                     "reviews other people's pull requests and writes almost none"])
     return sorted(found.values(), key=lambda e: -e["confidence"])
+
+
+def _user_set(reports: list[dict], managers, people: dict, out_people: dict) -> list[dict]:
+    """The inferred edges with the user's (manager, report) pairs on top: each pair is an edge of confidence 1, and
+    the report's other inferred managers drop out. A manager that the user set gets the 'manager' level when the
+    inference gave a lower one."""
+    managers = [(m, r) for m, r in managers if m in people and r in people and m != r]
+    if not managers:
+        return reports
+    told = {r for _, r in managers}
+    out = [e for e in reports if e["report"] not in told]
+    for m, r in managers:
+        out.append(dict(manager=m, report=r, confidence=1.0, evidence=[f"set by you: {people[m]['name']} manages "
+                                                                         f"{people[r]['name']}"], set_by_user=True))
+        op = out_people.get(m)
+        if op and op["level"] not in ("manager", "director+"):
+            op.update(level="manager", level_confidence=1.0, level_from="you",
+                      level_evidence=[f"set by you as the manager of {people[r]['name']}"] + op["level_evidence"])
+    return sorted(out, key=lambda e: -e["confidence"])
 
 
 def card(chart: dict, pid: str) -> dict:
@@ -415,6 +459,8 @@ def card(chart: dict, pid: str) -> dict:
                   evidence=op["team_evidence"], inferred=True,
                   members=[dict(id=m, name=names.get(m, "")) for m in t["members"] if m != pid][:8]) if t else None,
         managers=[dict(id=e["manager"], name=names.get(e["manager"], ""), confidence=e["confidence"],
-                       evidence=e["evidence"]) for e in chart["edges"] if e["report"] == pid][:3],
-        reports=[dict(id=e["report"], name=names.get(e["report"], ""), confidence=e["confidence"])
+                       evidence=e["evidence"], set_by_user=bool(e.get("set_by_user")))
+                  for e in chart["edges"] if e["report"] == pid][:3],
+        reports=[dict(id=e["report"], name=names.get(e["report"], ""), confidence=e["confidence"],
+                      set_by_user=bool(e.get("set_by_user")))
                  for e in chart["edges"] if e["manager"] == pid][:20])
