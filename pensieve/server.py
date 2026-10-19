@@ -29,6 +29,7 @@ subscribers: set[asyncio.Queue] = set()
 status = {"indexing": False, "message": "starting", "layout": False, "insights_running": False, "insights_scope": None}
 wake_files = asyncio.Event()  # set (thread-safely) by the file watcher
 wake_repos = asyncio.Event()
+wake_sessions = asyncio.Event()
 watch: "Watch | None" = None
 inflight: set[str] = set()
 failed_topics: set[str] = set()  # Data-map topics the AI couldn't name this run (by membership signature)  # background LLM jobs (scoped topic names, team summaries) already running
@@ -40,6 +41,7 @@ def broadcast(event: dict):
 
 FULL_SWEEP_SECONDS = 300  # safety net behind the file watcher; also discovers new repos and folders
 SESSION_BATCH_SECONDS = 30  # a session backlog is indexed in turns this long, with folders swept between them
+SESSION_SWEEP_SECONDS = 60  # every session folder is swept this often; between sweeps, the watcher's transcripts only
 
 
 async def _run(fn, *a):
@@ -121,13 +123,14 @@ async def watcher():
     asyncio.create_task(model_switcher())
     asyncio.create_task(connections_worker())
     asyncio.create_task(doc_worker())
+    asyncio.create_task(session_watcher())
     work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
     from pensieve import people
     people.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "people"}))
     people.blame_fn = repos.people  # each author's share of a repo's lines, for the org chart's ownership signal
     from pensieve import team_projects
     team_projects.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "projects"}))
-    threading.Thread(target=work.tasks, args=(store, 30), daemon=True).start()  # built now, so the first view of the tab does not wait for git and gh
+    _start_cards(loop)
     last_full = 0
     while True:
         if not settings.get("setup_done"):  # nothing is indexed before the user picks the sources
@@ -138,10 +141,7 @@ async def watcher():
             d = watch.take()
             if sorted(str(p) for p in files.roots()) != sorted(watch.folders):  # a folder appeared or went away
                 d["full_files"] = True
-            n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
-                on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
-            if n:
-                broadcast({"type": "updated", "sessions": n})
+            n = 0  # sessions: session_watcher
             if d["full_files"] or time.time() - last_full > FULL_SWEEP_SECONDS:
                 last_full = time.time()
                 status.update(indexing=True, message="indexing files")
@@ -170,10 +170,68 @@ async def watcher():
             import traceback
             traceback.print_exc()
             status.update(indexing=False, layout=False, message=f"error: {e!r}")
-        if store.behind:  # sessions left over: go on after the folders, without the pause
-            continue
         await _wait(wake_files, config.POLL_SECONDS)
         await _quiet(wake_files)
+
+
+async def session_watcher():
+    """Agent transcripts, in a loop of their own: a sweep of the folders can take minutes, and a session's new turns
+    should reach its card within seconds (cardbuild.py). A transcript that grows again within ACTIVE_SECONDS is
+    indexed again after that time."""
+    from pensieve import indexer
+    loop = asyncio.get_running_loop()
+    last_sweep = 0.0
+    while True:
+        if not settings.get("setup_done"):
+            await _wait(wake_sessions, config.POLL_SECONDS)
+            continue
+        try:
+            paths = watch.take_sessions() if watch else set()
+            if not last_sweep or store.behind or time.time() - last_sweep > SESSION_SWEEP_SECONDS:
+                last_sweep = time.time()  # every folder: new folders, and what the watcher missed
+                n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
+                    on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
+            elif paths or store.waiting:  # the transcripts that changed, at once
+                n = await _run(lambda: store.sync_paths(paths))
+            else:
+                n = 0
+            if n:
+                broadcast({"type": "updated", "sessions": n})
+                _indexed()
+            if store.deferred:  # a transcript that grew again too soon: index its new turns in a moment
+                loop.call_later(indexer.ACTIVE_SECONDS, wake_sessions.set)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        if store.behind:  # sessions left over: go on at once
+            continue
+        await _wait(wake_sessions, config.POLL_SECONDS)
+        await _quiet(wake_sessions, quiet=0.1, cap=0.5)
+
+
+def _start_cards(loop):
+    """The card builder (cardbuild.py): fed by session indexing, document upserts and commit loads; it sends a
+    `card` event with the ids of the cards that changed, and writes a card's note once the card is quiet."""
+    from pensieve import cardbuild, indexer, repos as repos_mod
+    b = cardbuild.Builder(store)
+
+    def changed(ids, removed):
+        loop.call_soon_threadsafe(broadcast, {"type": "card", "ids": ids, "removed": removed})
+
+    def note(t) -> bool:
+        if llm.provider() == "none" or llm.paused():
+            return False
+        try:
+            work.write_note(t, [])
+            return True
+        except llm.Offline:  # Queued too: your agent answers it later, and agent_pass writes it then
+            return False
+    b.listeners.append(changed)
+    b.note_fn = note
+    indexer.session_listeners.append(lambda sid: cardbuild.emit(cardbuild.SESSION, [sid]))
+    connections.listeners.append(lambda r: cardbuild.emit(cardbuild.DOCUMENT, [r.id]))
+    repos_mod.commit_listeners.append(lambda root: cardbuild.emit(cardbuild.COMMIT, [root]))
+    b.start()
 
 
 wake_docs = asyncio.Event()
@@ -501,6 +559,7 @@ async def lifespan(app):
     def wake():
         loop.call_soon_threadsafe(wake_files.set)
         loop.call_soon_threadsafe(wake_repos.set)
+        loop.call_soon_threadsafe(wake_sessions.set)
     global watch
     watch = Watch(wake)
 
@@ -1528,15 +1587,18 @@ def remove_mcp_server(path: str):
 
 
 @app.get("/api/work")
-def get_work(days: int = 30):
+def get_work(days: int = 30, ids: str = ""):
     """The Context tab: context cards (tasks) with their state, their data points from every source, each task's AI
-    note, and its thread (id and number of saved cards) once the card keeper has linked it."""
+    note, and its thread (id and number of saved cards) once the card keeper has linked it. With `ids`
+    (comma-separated), only those cards: the page asks for them after a `card` event."""
     from pensieve import history
-    ts = work.tasks(store, days)
+    only = set(_csv(ids)) if ids else None
+    ts = work.tasks(store, days, ids=only)
     have = work.notes()
     stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
     of = {t["id"]: history.thread_of(t["id"]) for t in ts}
-    work.warm_card_search(ts, have)
+    if only is None:
+        work.warm_card_search(ts, have)
     # each note's core (problem, goal, state, next, question); notes in an older format show until written again
     return dict(tasks=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
                                            "stale": t["id"] in stale}
@@ -1845,7 +1907,7 @@ def set_task_state(req: TaskStateReq):
         r = work.set_state(store, req.id, req.state, "user", req.reason)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    broadcast({"type": "work"})
+    broadcast({"type": "card", "ids": [req.id], "removed": []})
     return r
 
 
@@ -1875,9 +1937,9 @@ async def write_work_notes(days: int = 30, ids: str = ""):
                     import traceback
                     traceback.print_exc()
                 status["work_notes"] = [x for x in status["work_notes"] if x != t["id"]]
-                broadcast({"type": "work"})
+                broadcast({"type": "card", "ids": [t["id"]], "removed": []})
             status["work_notes"] = []
-            broadcast({"type": "work"})
+            broadcast({"type": "card", "ids": [t["id"] for t in todo], "removed": []})
     asyncio.create_task(run())
     return {"started": True}
 

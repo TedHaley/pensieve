@@ -403,6 +403,16 @@ class CardDone:
 
 
 @dataclass(frozen=True)
+class CardDoneCheck:
+    """The last done check of a card (work.check_done): the note's time, its items and the commits it saw. The same
+    key asks the model nothing again."""
+    __table__ = "card_done_checks"
+    card_id: str
+    key: str
+    at: int
+
+
+@dataclass(frozen=True)
 class Thread:
     __table__ = "threads"
     id: str
@@ -413,6 +423,7 @@ class Thread:
     updated_at: int
     parent: str | None = None
     merged_into: str | None = None
+    snapshot: str | None = None  # the last snapshot that the linker linked to it
 
 
 @dataclass(frozen=True)
@@ -535,7 +546,7 @@ class Meta:
 
 STORE_MODELS = (Source, Document, DocumentPerson, DocumentChange, DocumentSession, Identity, Person, PersonKey,
                 PersonAlias, PersonOverride, OrgPullRequest, OrgReview, OrgTitle, OrgFirstCommit, Card, CardMember,
-                CardNote, CardStateSet, CardDone, Thread, ThreadMember, ThreadRepo, ThreadCard, ThreadEventRow,
+                CardNote, CardStateSet, CardDone, CardDoneCheck, Thread, ThreadMember, ThreadRepo, ThreadCard, ThreadEventRow,
                 ThreadSnapshot, ThreadSnapshotReason, Feedback)
 INDEX_MODELS = (DocChunk, DocIndexState, EmbedCache, PersonEdge, CacheEntry, Meta)
 

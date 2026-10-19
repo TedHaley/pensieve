@@ -10,7 +10,6 @@ member is only a suggestion.
   goal_text(t, note)  the text whose embedding stands for the goal
   Linker.step(snaps)  link one build of snapshots; returns {snapshot: thread} and records the events"""
 import hashlib
-import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -93,6 +92,7 @@ class Linker:
         self.rules = rules or Rules()
         self.threads: dict[str, Thread] = {}
         self.events: list[dict] = []
+        self.saved_events = 0  # the events up to here are in store.db
 
     def _new(self, s: dict, at: float, parent: str = "") -> str:
         tid, n = f"th_{s['snapshot']}", 1  # named after its first snapshot, so the id holds across restarts
@@ -152,26 +152,36 @@ class Linker:
         return out
 
 
-def save(linker: Linker, path) -> None:
-    """The linker's threads and its last 2,000 events, as JSON."""
-    from pathlib import Path
-    data = dict(threads={t.id: dict(t.__dict__, vec=[round(float(x), 5) for x in t.vec]) for t in linker.threads.values()},
-                events=linker.events[-2000:])
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    tmp = Path(str(path) + ".tmp")
-    tmp.write_text(json.dumps(data))
-    tmp.replace(path)
+def save(linker: Linker, of_card: dict[str, str] | None = None) -> None:
+    """The linker's threads and its new events, in the thread tables of store.db; and which card is in which thread
+    now (`of_card`)."""
+    from pensieve import models, store
+    from pensieve.store import threads as rows
+    out = [(models.Thread(t.id, t.goal, np.asarray(t.vec, dtype=np.float32).tobytes(), int(t.created),
+                          None, int(t.updated), t.parent or None, t.merged_into or None,
+                          t.snapshots[-1] if t.snapshots else None), t.members, tuple(t.repos))
+           for t in linker.threads.values()]
+    new = [models.ThreadEventRow(None, int(e["at"]), models.ThreadEvent(e["event"]), e["thread"],
+                                 e.get("other") or e.get("parent"), e.get("sim"))
+           for e in linker.events[linker.saved_events:]]
+    rows.save(store.store_db(), out, new, of_card)
+    linker.saved_events = len(linker.events)
 
 
-def load(path, rules: Rules | None = None) -> Linker:
+def load(rules: Rules | None = None) -> Linker:
+    """The linker of the thread tables (an empty one before the first save)."""
+    from pensieve import store
+    from pensieve.store import threads as rows
     linker = Linker(rules)
-    try:
-        data = json.loads(open(path).read())
-    except (OSError, ValueError):
-        return linker
-    for tid, t in data.get("threads", {}).items():
-        linker.threads[tid] = Thread(**dict(t, vec=np.asarray(t["vec"], dtype=np.float32), repos=tuple(t.get("repos", ()))))
-    linker.events = data.get("events", [])
+    db = store.store_db()
+    for t, members, repos in rows.load(db):
+        vec = np.frombuffer(t.goal_vec, dtype=np.float32).copy() if t.goal_vec else np.zeros(1, np.float32)
+        linker.threads[t.id] = Thread(t.id, members, vec, t.goal, float(t.created_at), float(t.updated_at),
+                                      [t.snapshot] if t.snapshot else [], t.parent or "", t.merged_into or "", repos)
+    linker.events = [dict(at=e.at, event=e.event.value, thread=e.thread_id,
+                          **({"other": e.other} if e.other else {}), **({"sim": e.sim} if e.sim is not None else {}))
+                     for e in rows.events(db)]
+    linker.saved_events = len(linker.events)
     return linker
 
 

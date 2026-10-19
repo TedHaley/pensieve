@@ -2,7 +2,7 @@
 
 A task gets a state automatically from its evidence (`derive`). The user, or an agent over MCP, can set a state by
 hand. A state set by hand holds until the task has new activity after it; then the automatic state applies again.
-Every change by hand is a row in `task_states` (in the main database), so a task keeps its history."""
+Every change by hand is a row in `card_states` (in store.db), so a task keeps its history."""
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -104,49 +104,36 @@ def derive(task: dict, note: dict, now: float | None = None) -> tuple[State, str
     return State.SUBCONSCIOUS, f"not done, quiet for {quiet} days"
 
 
-def _table(store):
-    """Make the table once for each database connection (a reset opens a new one)."""
-    if getattr(store, "_task_states_db", None) is store.db:
-        return
-    store.db.execute("CREATE TABLE IF NOT EXISTS task_states(task_id TEXT, state TEXT, by TEXT, reason TEXT, at REAL)")
-    store.db.execute("CREATE INDEX IF NOT EXISTS task_states_id ON task_states(task_id, at)")
-    store.db.commit()
-    store._task_states_db = store.db
-
-
-def latest(store) -> dict[str, StateChange]:
-    """The last change by hand of each task."""
-    with store.lock:
-        _table(store)
-        rows = store.db.execute("SELECT task_id, state, by, reason, at FROM task_states ORDER BY at").fetchall()
-    out = {}
-    for tid, st, by, reason, at in rows:
-        st = RENAMED.get(st, st)
-        if st == "auto" or st in State._value2member_map_:
-            out[tid] = StateChange(tid, st, by, reason, at)
-    return out
+def latest(store=None) -> dict[str, StateChange]:
+    """The last change by hand of each task (the card_states table of store.db; `store` is not used any more)."""
+    from pensieve import store as v2
+    from pensieve.store import cards
+    return {k: StateChange(k, s.state.value, s.by.value, s.reason or "", float(s.at))
+            for k, s in cards.latest_states(v2.store_db()).items()}
 
 
 def history(store, task_id: str) -> list[dict]:
-    with store.lock:
-        _table(store)
-        rows = store.db.execute("SELECT state, by, reason, at FROM task_states WHERE task_id=? ORDER BY at",
-                                (task_id,)).fetchall()
-    return [dict(state=RENAMED.get(s, s), by=b, reason=r, at=a) for s, b, r, a in rows]
+    from pensieve import store as v2
+    from pensieve.store import cards
+    return [dict(state=s.state.value, by=s.by.value, reason=s.reason or "", at=float(s.at))
+            for s in cards.state_history(v2.store_db(), task_id)]
 
 
 def set_state(store, task_id: str, state: str, by: str = "user", reason: str = "") -> StateChange:
     """Set a task's state by hand. "auto" clears it: the automatic state applies again."""
+    import math
+
+    from pensieve import store as v2
+    from pensieve.models import CardStateSet, SetBy, StateSet
+    from pensieve.store import cards
     state = RENAMED.get(state, state)
     if state != "auto" and state not in State._value2member_map_:
         raise ValueError(f"state must be one of: {', '.join(s.value for s in ORDER)}, or auto")
     if by not in ("user", "agent"):
         raise ValueError("by must be user or agent")
-    ch = StateChange(task_id, state, by, reason[:500], time.time())
-    with store.lock:
-        _table(store)
-        store.db.execute("INSERT INTO task_states VALUES(?,?,?,?,?)", (task_id, state, by, ch.reason, ch.at))
-        store.db.commit()
+    at = math.ceil(time.time())  # whole seconds, rounded up: a change holds over activity of the same second
+    ch = StateChange(task_id, state, by, reason[:500], float(at))
+    cards.add_state(v2.store_db(), CardStateSet(None, task_id, StateSet(state), SetBy(by), ch.reason, at))
     return ch
 
 

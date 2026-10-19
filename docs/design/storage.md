@@ -278,6 +278,12 @@ CREATE TABLE card_done (          -- items of a note that a later commit did
   PRIMARY KEY (card_id, item)
 ) STRICT;
 
+CREATE TABLE card_done_checks (   -- the last done check of a card: the same key asks the model nothing again
+  card_id  TEXT PRIMARY KEY,
+  key      TEXT NOT NULL,                         -- the note's time, its items and the commits that the check saw
+  at       INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE threads (            -- one goal followed over time (docs/threads.md)
   id           TEXT PRIMARY KEY,
   goal         TEXT NOT NULL,
@@ -286,7 +292,8 @@ CREATE TABLE threads (            -- one goal followed over time (docs/threads.m
   ended_at     INTEGER,
   updated_at   INTEGER NOT NULL,
   parent       TEXT,                              -- the thread it forked or split from
-  merged_into  TEXT
+  merged_into  TEXT,
+  snapshot     TEXT                               -- the last snapshot that the linker linked to it
 ) STRICT;
 CREATE TABLE thread_members (     -- the linker's members of a thread and their weights (threads.members)
   thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
@@ -457,16 +464,46 @@ incremental:
 
 1. A write that can change a card adds an event to an in-memory queue: a session indexed, a document upserted, a
    commit loaded, a pull request state changed, a card state set.
-2. The card builder reads the event's refs, finds the cards that have them (`card_members_ref`), and builds only those
-   cards again: their members, title, state and signature. A ref that no card has starts a new card.
-3. The builder writes the changed rows of `cards` and `card_members` and sends a `card` event with the card ids to
-   the web page, which updates only those cards.
-4. A card whose signature changed gets a new AI note after 20 seconds without more changes, so that a running
-   session does not start a note for each turn.
-5. Pull request states of open PRs come from `gh` every 5 minutes, and at once for a card that changed.
+2. The card builder (`pensieve/cardbuild.py`) loads again only what the events name: those sessions, those
+   documents, or the commits and worktrees. It keeps the facts of each session's text in memory (the ticket keys, PR
+   links and Artifact links that the text names, and how the session ended), so it reads a session's text once.
+3. It groups every session, document and commit of the window again, in memory (`work.group`). The links between
+   them depend on counts over the whole window (how many sessions edited a file, which branches are long-lived), so a
+   local regroup would not give the same cards. The regroup takes about 40 ms for 160 cards.
+4. It runs git and gh (`work._pickup`) only for the cards whose members changed, and for the cards that the event
+   names through `card_members_ref` (a PR, a card whose state was set). The other cards keep their folders and PRs.
+5. It writes the rows of `cards` and `card_members` whose view changed, deletes the cards that went, and sends a
+   `card` event with the ids. The page asks for those cards only (`/api/work?ids=`), and draws again only those
+   cards when the others stay in their places.
+6. A card whose signature changed gets a new AI note after 20 seconds without more changes, so that a running
+   session does not start a note for each turn. Only cards in the states conscious and subconscious get one.
+7. Pull request states come from `gh` in a full build every 5 minutes, and in a build of its own right after a
+   card with an open PR changed. The full build also moves the window.
 
-Target: a new session turn, document or commit shows on its card within 2 seconds. The note follows within about 30
-seconds.
+A full build gives the same cards as a build of v1 on the same data (checked on a copy of real data: 156 of 156
+cards the same).
+
+The path of a session turn to its card:
+
+- The file watcher records which transcripts changed. The session loop of the server (no longer the loop of the
+  folder sweep, which can take minutes) indexes those transcripts at once (`Store.sync_paths`). It sweeps every
+  session folder once a minute.
+- The parser reads a transcript from where it stopped (a byte offset), so a new turn of a 60 MB transcript takes 2 ms
+  to parse, not 3 s. A transcript that grows again within 1.5 s waits for that time, so that tiny appends are
+  embedded together.
+- Only the chunks whose text changed are embedded again.
+
+Measured (a scratch transcript, append one turn, time to the `card` event):
+
+| | Median | Slowest |
+|---|---|---|
+| In one process, without the server's other work: a document upsert | 0.27 s | 0.28 s |
+| In one process: a session turn | 0.31 s | 0.67 s (after the first, which loads the model) |
+| The dev server on a copy of real data, through the file watcher and SSE (17 turns) | 0.60 s | 7.4 s |
+
+The slow turns wait for the store lock of v1, which the map layouts (`repos.reproject`, `datamap.reproject`) and
+the folder index of search hold for 10 to 35 seconds while they read every code vector. They go away when those
+reads leave the lock (phases 6 and 7). `PENSIEVE_LOCK_DEBUG=1` prints each hold of more than a second.
 
 ## Phases
 

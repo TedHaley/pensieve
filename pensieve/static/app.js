@@ -4378,6 +4378,68 @@ function wkAdjacent(t) {
   return `<div class="wk-adj"><div><div class="h">Coworkers in the same folders</div>${people || '<div class="muted">No commits by others there in the last 3 weeks.</div>'}</div>
     <div><div class="h">Related tickets and threads</div>${rel || '<div class="muted">Nothing related among your connections.</div>'}</div></div>`;
 }
+const wkWriting = (t, d) => (Array.isArray(d.writing) ? d.writing : []).includes(t.id);
+function wkStateSel(t, d) {
+  return `<select class="wk-state" data-wk-state="${esc(t.id)}" style="--c:${wkModel(t.state).color}" title="${esc(wkModel(t.state).meaning + ' ' + (t.state_by === 'auto' ? 'Set automatically: ' : 'Set by ' + t.state_by + ': ') + t.state_why)}">
+      ${d.states.map(m => `<option value="${m.state}" ${t.state === m.state ? 'selected' : ''}>${m.label}${t.state === m.state && t.state_by === 'auto' ? ' · auto' : ''}</option>`).join('')}
+      ${t.state_by !== 'auto' ? '<option value="auto">Back to automatic</option>' : ''}</select>`;
+}
+function wkNote(t, d) {
+  const n = d.notes[t.id];
+  const done = n && /^(nothing|none|n\/a)\.?$/i.test((n.next || '').trim());
+  if (n) return `<div class="wk-note">${NOTE_ROWS.filter(([k]) => n[k] && (['problem', 'state'].includes(k) || (k === 'next' && n.question))).map(([k, l, tip]) => `<div class="nrow ${k === 'problem' ? 'recap' : k === 'next' ? (done ? 'done' : 'left') : ''}" title="${tip}"><span class="nlbl">${l}</span><p>${k === 'next' && done ? 'Nothing left' : esc(n[k])}</p></div>`).join('')}
+    ${wkWriting(t, d) ? '<div class="foot">Updating…</div>' : ''}</div>`;
+  if (!insightsOn()) return '<div class="wk-note empty-note">Choose a generation model in Settings → Models to get a note on each task.</div>';
+  return `<div class="wk-note empty-note">${wkWriting(t, d) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
+}
+// One card of the Context tab: a compact row, or the whole card
+function wkCard(t, d) {
+  if (S.work.view === 'compact' && !S.work.full.has(t.id)) return wkRow(t, d.notes[t.id]);
+  return `<article class="wk-task${S.work.view === 'compact' ? ' opened' : ''}" data-id="${esc(t.id)}" ${S.work.view === 'compact' ? `data-wk-row="${esc(t.id)}"` : ''} style="--acc:${wkModel(t.state).color}">
+      <div class="wk-main">
+        <header><h4 title="${esc(t.title)}">${esc(wkTitle(t, d.notes[t.id]))}</h4>${wkThread(d.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${wkStateSel(t, d)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
+        ${wkGlance(t, d.notes[t.id], wkWriting(t, d))}
+        ${S.work.details.has(t.id) ? `<div class="wk-detail">${wkNote(t, d)}${wkSections(t)}</div>` : ''}
+      </div>
+      ${wkActions(t)}
+      ${wkAdjacent(t)}
+    </article>`;
+}
+// The order of the server (work._order): by state, a running session first, then the newest
+function wkOrder(d) {
+  const at = new Map(d.states.map((m, i) => [m.state, i]));
+  return (a, b) => (at.get(a.state) - at.get(b.state)) || (!!b.active - !!a.active) || (b.updated - a.updated);
+}
+// A `card` event: the server built these cards again (or removed them). Ask for those cards only; when the page shows
+// the same cards in the same places, draw only the changed ones, else draw the tab again.
+async function patchWork(ids = [], removed = []) {
+  const d = S.work.data;
+  if (!d || S.work.hits) return loadWork();
+  const page = () => wkPageTasks().map(t => `${t.id}:${t.state}`).join('\n');
+  const before = page();
+  let got = {tasks: [], notes: {}, threads: {}};
+  if (ids.length) {
+    try { got = await api(`/api/work?days=${S.work.days}&ids=${enc(ids.join(','))}`); } catch { return loadWork(); }
+  }
+  if (S.work.data !== d) return;  // a full load came in meanwhile
+  const drop = new Set([...ids, ...removed]);
+  d.tasks = d.tasks.filter(t => !drop.has(t.id)).concat(got.tasks).sort(wkOrder(d));
+  for (const i of drop) { delete d.notes[i]; if (d.threads) delete d.threads[i]; }
+  Object.assign(d.notes, got.notes || {});
+  d.threads = Object.assign(d.threads || {}, got.threads || {});
+  S.work.patched = (S.work.patched || 0) + 1;
+  const el = $('#work');
+  if (S.view !== 'work' || !el) return;
+  if (page() !== before) return renderWork();
+  for (const t of got.tasks) {
+    const old = $(`.wk-task[data-id="${CSS.escape(t.id)}"]`, el);
+    if (!old) continue;
+    const box = document.createElement('div');
+    box.innerHTML = wkCard(t, d);
+    wkBind(box, d);
+    old.replaceWith(...box.childNodes);
+  }
+}
 function renderWork() {
   const el = $('#work'); if (!el) return;
   const d = S.work.data;
@@ -4401,20 +4463,8 @@ function renderWork() {
           <input type="checkbox" data-wk-st="${m.state}" ${S.work.states.has(m.state) ? 'checked' : ''}><i style="background:${m.color}"></i>${esc(m.label)}<span>${count(m.state)}</span></label>`).join('')}
         <div class="wk-menu-foot"><button class="linkbtn" data-wk-st-all>All</button><button class="linkbtn" data-wk-st-none>Clear</button></div></div>` : ''}
     </div>`;
-  const stateSel = t => `<select class="wk-state" data-wk-state="${esc(t.id)}" style="--c:${wkModel(t.state).color}" title="${esc(wkModel(t.state).meaning + ' ' + (t.state_by === 'auto' ? 'Set automatically: ' : 'Set by ' + t.state_by + ': ') + t.state_why)}">
-      ${d.states.map(m => `<option value="${m.state}" ${t.state === m.state ? 'selected' : ''}>${m.label}${t.state === m.state && t.state_by === 'auto' ? ' · auto' : ''}</option>`).join('')}
-      ${t.state_by !== 'auto' ? '<option value="auto">Back to automatic</option>' : ''}</select>`;
   const pager = pages > 1 ? `<div class="wk-pager"><button class="btn" data-wk-page="-1" ${S.work.page ? '' : 'disabled'}>‹ Newer</button>
       <span class="muted">Page ${S.work.page + 1} of ${pages}</span><button class="btn" data-wk-page="1" ${S.work.page < pages - 1 ? '' : 'disabled'}>Older ›</button></div>` : '';
-  const writing = t => (Array.isArray(d.writing) ? d.writing : []).includes(t.id);
-  const note = t => {
-    const n = d.notes[t.id];
-    const done = n && /^(nothing|none|n\/a)\.?$/i.test((n.next || '').trim());
-    if (n) return `<div class="wk-note">${NOTE_ROWS.filter(([k]) => n[k] && (['problem', 'state'].includes(k) || (k === 'next' && n.question))).map(([k, l, tip]) => `<div class="nrow ${k === 'problem' ? 'recap' : k === 'next' ? (done ? 'done' : 'left') : ''}" title="${tip}"><span class="nlbl">${l}</span><p>${k === 'next' && done ? 'Nothing left' : esc(n[k])}</p></div>`).join('')}
-      ${writing(t) ? '<div class="foot">Updating…</div>' : ''}</div>`;
-    if (!insightsOn()) return '<div class="wk-note empty-note">Choose a generation model in Settings → Models to get a note on each task.</div>';
-    return `<div class="wk-note empty-note">${writing(t) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
-  };
   const many = !S.work.hits && picked.length !== 1;  // search results are in score order: no state groups
   const was = new Map($$('.wk-task[data-id]', el).map(a => [a.dataset.id, a.getBoundingClientRect().top]));
   const box = document.activeElement?.id === 'wksearch' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
@@ -4429,16 +4479,7 @@ function renderWork() {
     ${tasks.length ? tasks.map((t, i) => {
       const prev = i ? tasks[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== t.state) ? `<h3 class="wk-group" style="--acc:${wkModel(t.state).color}" title="${esc(def(wkModel(t.state)))}">${esc(wkModel(t.state).label)}<span>${count(t.state)}</span></h3>` : '';
-      if (S.work.view === 'compact' && !S.work.full.has(t.id)) return head + wkRow(t, d.notes[t.id]);
-      return `${head}<article class="wk-task${S.work.view === 'compact' ? ' opened' : ''}" data-id="${esc(t.id)}" ${S.work.view === 'compact' ? `data-wk-row="${esc(t.id)}"` : ''} style="--acc:${wkModel(t.state).color}">
-          <div class="wk-main">
-            <header><h4 title="${esc(t.title)}">${esc(wkTitle(t, d.notes[t.id]))}</h4>${wkThread(d.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${stateSel(t)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
-            ${wkGlance(t, d.notes[t.id], writing(t))}
-            ${S.work.details.has(t.id) ? `<div class="wk-detail">${note(t)}${wkSections(t)}</div>` : ''}
-          </div>
-          ${wkActions(t)}
-          ${wkAdjacent(t)}
-        </article>`;
+      return head + wkCard(t, d);
     }).join('') + pager : `<div class="empty">${S.work.hits ? `No cards of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.tasks.length ? 'No tasks in the states you chose for this period.' : 'No tasks in this period. Tasks come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
@@ -4454,6 +4495,7 @@ function renderWork() {
     if (Math.abs(dy) > 2) a.animate([{transform: `translateY(${dy}px)`}, {transform: 'none'}], {duration: 450, easing: 'cubic-bezier(.2,.8,.2,1)'});
   });
   $$('[data-wk-page]', el).forEach(b => b.onclick = () => { S.work.page += +b.dataset.wkPage; renderWork(); el.scrollTop = 0; askNotes(); });
+  wkBind(el, d);
   const sb = $('#wksearch', el);
   if (box) { sb.focus(); sb.setSelectionRange(...box); }  // the page was drawn again while you typed
   sb.oninput = () => { S.work.q = sb.value; wkSearch(); };
@@ -4464,14 +4506,20 @@ function renderWork() {
   $$('[data-wk-st-all]', el).forEach(b => b.onclick = () => pick(d.states.map(m => m.state)));
   $$('[data-wk-st-none]', el).forEach(b => b.onclick = () => pick([]));
   $$('.wk-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
+  $$('[data-wk-days]', el).forEach(s => s.onchange = () => { S.work.days = +s.value; S.work.page = 0; store.set('workDays', S.work.days); loadWork(true); });
+  $$('[data-wk-view]', el).forEach(b => b.onclick = () => {
+    S.work.view = b.dataset.wkView; S.work.page = 0; S.work.full.clear(); store.set('workView', S.work.view); renderWork(); askNotes();
+  });
+}
+// The handlers of the cards in `el`: the whole tab, or one card that patchWork drew again
+function wkBind(el, d) {
   $$('[data-wk-state]', el).forEach(s => s.onchange = async () => {
     try {
       await api('/api/work/state', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: s.dataset.wkState, state: s.value})});
       toast(s.value === 'auto' ? 'Back to automatic' : `Moved to ${wkModel(s.value).label}`);
-      loadWork();
+      patchWork([s.dataset.wkState]);
     } catch (e) { toast('Could not change it: ' + e.message); }
   });
-  $$('[data-wk-days]', el).forEach(s => s.onchange = () => { S.work.days = +s.value; S.work.page = 0; store.set('workDays', S.work.days); loadWork(true); });
   $$('[data-wk-resume]', el).forEach(b => b.onclick = async () => {
     try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
     catch (e) { toast('Could not resume it: ' + e.message); }
@@ -4505,9 +4553,6 @@ function renderWork() {
     e.stopPropagation();
     const t = d.tasks.find(x => x.id === b.dataset.wkPreview);
     openPreview(() => fetch(`/api/work/card?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Context card');
-  });
-  $$('[data-wk-view]', el).forEach(b => b.onclick = () => {
-    S.work.view = b.dataset.wkView; S.work.page = 0; S.work.full.clear(); store.set('workView', S.work.view); renderWork(); askNotes();
   });
   $$('[data-wk-row]', el).forEach(r => r.onclick = e => {
     if (e.target.closest('button, a, select')) return;
@@ -5059,6 +5104,7 @@ async function handleEvent(m) {
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'upstream') loadUpstream();
     else if (m.type === 'work') { if (S.view === 'work') loadWork(); }
+    else if (m.type === 'card') { if (S.work.data) patchWork(m.ids || [], m.removed || []); }
     else if (m.type === 'people') { if (S.view === 'people') loadPeople(); else S.people.stale = true; }
     else if (m.type === 'projects') { if (S.view === 'projects') loadProjects(); else S.proj.stale = true; }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }

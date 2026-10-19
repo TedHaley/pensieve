@@ -21,6 +21,7 @@ from pensieve.layout import fit3d, place_new, unit
 from pensieve.projects import project_root
 
 CODE_INDEX_PATH = config.DATA_DIR / "code.tv"
+commit_listeners = []  # fn(repo root) after a repo's commits or worktrees changed (the card builder)
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip", ".gz", ".lock", ".woff", ".woff2",
             ".ttf", ".mp4", ".mov", ".parquet", ".pkl", ".csv", ".ipynb", ".map", ".snap"}
 SKIP_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock", "Cargo.lock"}
@@ -739,6 +740,8 @@ class Repos:
         if n:
             self._cache.clear()
             self._team.clear()
+            for fn in commit_listeners:  # a worktree came or went: cards read the worktrees with the commits
+                fn(root)
         return n
 
     def embed_rate(self, model=None) -> float:
@@ -955,13 +958,15 @@ class Repos:
             self.db.execute("DELETE FROM code_chunks WHERE repo=? AND path=? AND wt=?", (root, path, wt))
             self.db.execute("DELETE FROM checkout_files WHERE repo=? AND wt=? AND path=?", (root, wt, path))
 
-    @locked
     def _load_commits(self, root):
-        out = git(root, "log", "--format=%H%x1f%at%x1f%ae%x1f%s", "-n", "5000")
+        out = git(root, "log", "--format=%H%x1f%at%x1f%ae%x1f%s", "-n", "5000")  # outside the lock: git is slow
         rows = [l.split("\x1f") for l in out.strip().split("\n") if l]
-        self.db.executemany("INSERT OR REPLACE INTO commits VALUES(?,?,?,?,?)",
-                            [(root, r[0], int(r[1]), r[2], r[3]) for r in rows if len(r) == 4])
-        self.db.commit()
+        with self.lock:
+            self.db.executemany("INSERT OR REPLACE INTO commits VALUES(?,?,?,?,?)",
+                                [(root, r[0], int(r[1]), r[2], r[3]) for r in rows if len(r) == 4])
+            self.db.commit()
+        for fn in commit_listeners:
+            fn(root)
 
     @locked
     def backfill_session_files(self):

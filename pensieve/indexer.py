@@ -1,6 +1,7 @@
 """SQLite metadata + turbovec ANN index + embedding + 3D projection."""
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -15,7 +16,9 @@ from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 from pensieve.projects import project_name
 
 LAYOUT_VERSION = "umap-v1"
-ACTIVE_SECONDS = 30  # re-index a transcript that's still growing at most this often
+ACTIVE_SECONDS = 1.5  # re-index a transcript that's still growing at most this often (its card follows within 2 s)
+session_listeners = []  # fn(session id) after a session is indexed (the card builder)
+PARSED_KEEP = 16  # transcripts whose last parse stays in memory: the ones that grow now
 
 _embedder = None
 _embed_lock = threading.Lock()
@@ -308,12 +311,48 @@ def in_temp(path: str) -> bool:
     calls through the Claude Code CLI, scripts, tests), not the user's work."""
     return bool(path) and bool(_TEMP.match(path)) and settings.get("skip_temp_sessions")
 
+class _HeldLock:
+    """With PENSIEVE_LOCK_DEBUG=1: the v1 store lock, and the place of each hold longer than a second, printed. For
+    finding what makes the indexers wait for each other."""
+
+    def __init__(self):
+        self._lock, self._local = threading.RLock(), threading.local()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+    def acquire(self, blocking=True, timeout=-1):
+        import time
+        got = self._lock.acquire(blocking, timeout)
+        if got:
+            depth = getattr(self._local, "depth", 0)
+            if not depth:
+                self._local.at = time.monotonic()
+            self._local.depth = depth + 1
+        return got
+
+    def release(self):
+        import time
+        import traceback
+        self._local.depth -= 1
+        if not self._local.depth and (held := time.monotonic() - self._local.at) > 1:
+            print(f"store lock held {held:.1f} s by:\n" + "".join(traceback.format_stack(limit=8)[:-2]), flush=True)
+        self._lock.release()
+
+
 class Store:
     def __init__(self):
         from turbovec import IdMapIndex
-        self.lock = threading.RLock()
+        self.lock = _HeldLock() if os.environ.get("PENSIEVE_LOCK_DEBUG") else threading.RLock()
         self._indexed_at = {}
         self.behind = False  # the last sync_files ran out of time with sessions left to index
+        self.deferred = False  # ... or left a growing transcript for ACTIVE_SECONDS
+        self._parsed: dict[str, parsers.Session] = {}  # path -> its last parse, to read only what was added
+        self.waiting: set[str] = set()  # transcripts that sync_paths left for ACTIVE_SECONDS
         self.progress = None  # sessions being indexed now: {name: agent, root, done, total=None}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
@@ -359,7 +398,7 @@ class Store:
         after that long and sets `behind`: the caller sweeps folders and calls again for the rest."""
         import time
         end = time.monotonic() + budget if budget else None
-        self.behind = False
+        self.behind = self.deferred = False
         touched = self._purge_disabled(log) + self._purge_own(log) + self._purge_memories(log)
         with self.lock:
             known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
@@ -373,24 +412,64 @@ class Store:
             # transcripts are append-only JSONL (a half-written last line is skipped), so no need to wait for quiet;
             # a session that's still being written re-indexes at most every ACTIVE_SECONDS (new turns only)
             if str(path) in known and time.time() - self._indexed_at.get(str(path), 0) < ACTIVE_SECONDS:
+                self.deferred = True  # the caller looks again in ACTIVE_SECONDS (sync_paths)
+                self.waiting.add(str(path))
                 continue
-            self._indexed_at[str(path)] = time.time()
-            if self._ignored.get(str(path)) == (st.st_mtime, st.st_size):
-                continue
-            try:
-                if not self._index_session(source, path, st):
-                    self._ignored[str(path)] = (st.st_mtime, st.st_size)
-                    continue
+            if self._index_one(source, path, st, log):
                 touched += 1
-                log(f"indexed {source}:{path.stem[:8]}")
                 if touched >= 5:  # a first index or a batch of new sessions, not one live session's new turns
                     self.progress = dict(name=source, root=str(path.parent), done=touched, total=None)
                 if on_progress and touched % 8 == 0:
                     on_progress(touched)
-            except Exception as e:  # one bad file shouldn't stop the sweep
-                log(f"skip {path}: {e!r}")
         self.progress = None
         if touched:  # the map catches up later (server.map_worker)
+            with self.lock:
+                self.index.sync(str(config.INDEX_PATH))
+        return touched
+
+    def _index_one(self, source, path: Path, st, log) -> bool:
+        """Index one changed transcript; False when it is not the user's work or it failed."""
+        import time
+        self._indexed_at[str(path)] = time.time()
+        if self._ignored.get(str(path)) == (st.st_mtime, st.st_size):
+            return False
+        t0 = time.perf_counter()
+        try:
+            if not self._index_session(source, path, st):
+                self._ignored[str(path)] = (st.st_mtime, st.st_size)
+                return False
+        except Exception as e:  # one bad file shouldn't stop the sweep
+            log(f"skip {path}: {e!r}")
+            return False
+        log(f"indexed {source}:{path.stem[:8]} in {(time.perf_counter() - t0) * 1000:.0f} ms")
+        return True
+
+    def sync_paths(self, paths, log=lambda m: print(m, flush=True)) -> int:
+        """Index these transcripts now (the ones the file watcher saw change), without the sweep of every session
+        folder. A transcript indexed less than ACTIVE_SECONDS ago waits in `waiting`, and sets `deferred`."""
+        import time
+        self.deferred = False
+        roots = [(name, root, pattern) for sid, name, root, pattern in config.session_sources()
+                 if settings.enabled(sid) and settings.enabled(f"agents/{name}")]
+        touched = 0
+        for p in sorted(set(paths) | self.waiting):
+            self.waiting.discard(p)
+            path = Path(p)
+            hit = next(((n, r) for n, r, pat in roots if p.startswith(str(r) + "/")
+                        and path.relative_to(r).full_match(pat)), None)
+            if not hit or "subagents" in path.parts or not path.is_file():
+                continue
+            st = path.stat()
+            with self.lock:
+                row = self.db.execute("SELECT mtime, size FROM sessions WHERE path=?", (p,)).fetchone()
+            if row is not None and tuple(row) == (st.st_mtime, st.st_size):
+                continue
+            if row is not None and time.time() - self._indexed_at.get(p, 0) < ACTIVE_SECONDS:
+                self.waiting.add(p)
+                self.deferred = True
+                continue
+            touched += self._index_one(hit[0], path, st, log)
+        if touched:
             with self.lock:
                 self.index.sync(str(config.INDEX_PATH))
         return touched
@@ -461,13 +540,21 @@ class Store:
             self.db.commit()
 
     def _index_session(self, source, path: Path, st):
-        """Index one transcript; returns False for one that ran in a temp folder (not the user's work)."""
-        s = parsers.parse(source, path)
+        """Index one transcript; returns False for one that ran in a temp folder (not the user's work). A transcript
+        parsed before in this process is read from where it stopped (parsers.parse with `resume`)."""
+        old_s = self._parsed.pop(str(path), None)
+        mcp_done = len(old_s.mcp) if old_s else 0
+        s = parsers.parse(source, path, resume=old_s)
+        if s is not old_s:
+            mcp_done = 0
+        self._parsed[str(path)] = s  # the newest last: the oldest goes when there are too many
+        while len(self._parsed) > PARSED_KEEP:
+            self._parsed.pop(next(iter(self._parsed)))
         if in_temp(s.project):
             return False
         self.save_session_files(s.id, s.touched)
-        if s.mcp and settings.enabled(f"connections/{connections.SESSIONS}"):
-            connections.from_session(s.id, s.mcp, s.updated or s.started)
+        if len(s.mcp) > mcp_done and settings.enabled(f"connections/{connections.SESSIONS}"):
+            connections.from_session(s.id, s.mcp[mcp_done:], s.updated or s.started)
         chunks = chunk_session(s.turns)
         hashes = [hashlib.sha1(c.encode()).hexdigest() for c in chunks]
         with self.lock:
@@ -499,6 +586,8 @@ class Store:
             if new or stale:
                 self.db.execute("UPDATE sessions SET summary=NULL, tags=NULL WHERE id=?", (s.id,))
             self.db.commit()
+        for fn in session_listeners:
+            fn(s.id)
         return True
 
     # ---- projection + topics -------------------------------------------

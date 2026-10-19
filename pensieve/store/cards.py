@@ -1,6 +1,6 @@
 """The card tables: `cards` and `card_members` (written by the card builder), `card_notes` (the AI notes),
 `card_states` (states set by the user or an agent) and `card_done` (note items that a later commit did)."""
-from pensieve.models import Card, CardDone, CardMember, CardNote, CardStateSet, MemberKind
+from pensieve.models import Card, CardDone, CardDoneCheck, CardMember, CardNote, CardStateSet, MemberKind
 from pensieve.store import rows
 from pensieve.store.db import Db
 
@@ -81,6 +81,16 @@ def put_notes(db: Db, put: list[CardNote], delete=()) -> None:
     db.write(run)
 
 
+def put_note_tree(db: Db, main: CardNote, goals: list[CardNote]) -> None:
+    """Write a card's note and the notes of the goals split from it, in one job. The goal notes that the card's
+    earlier note split off go first."""
+    def run(c):
+        c.execute("DELETE FROM card_notes WHERE json_extract(extra, '$.goal_of') = ?", (main.card_id,))
+        for n in [main, *goals]:
+            rows.upsert(c, n, ("card_id",))
+    db.write(run)
+
+
 def add_state(db: Db, s: CardStateSet) -> int:
     return db.write(lambda c: rows.insert(c, s))
 
@@ -103,9 +113,16 @@ def done(db: Db) -> dict[str, dict[str, str]]:
     return out
 
 
-def put_done(db: Db, card_id: str, items: list[CardDone]) -> None:
-    """Replace a card's done items."""
+def put_done(db: Db, card_id: str, items: list[CardDone], check: CardDoneCheck | None = None) -> None:
+    """Replace a card's done items, and record the check that found them."""
     def run(c):
         c.execute("DELETE FROM card_done WHERE card_id = ?", (card_id,))
         rows.insert_many(c, items, or_="REPLACE")
+        if check is not None:
+            rows.insert(c, check, or_="REPLACE")
     db.write(run)
+
+
+def done_checks(db: Db) -> dict[str, str]:
+    """{card id: key of its last done check}."""
+    return dict(db.query("SELECT card_id, key FROM card_done_checks"))

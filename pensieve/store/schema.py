@@ -198,6 +198,12 @@ CREATE TABLE IF NOT EXISTS card_done (
   why      TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (card_id, item)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS card_done_checks (
+  card_id  TEXT PRIMARY KEY,
+  key      TEXT NOT NULL,
+  at       INTEGER NOT NULL
+) STRICT;
 """,
     "threads": """
 CREATE TABLE IF NOT EXISTS threads (
@@ -208,7 +214,8 @@ CREATE TABLE IF NOT EXISTS threads (
   ended_at     INTEGER,
   updated_at   INTEGER NOT NULL,
   parent       TEXT,
-  merged_into  TEXT
+  merged_into  TEXT,
+  snapshot     TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS thread_members (
   thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,

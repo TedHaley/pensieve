@@ -138,7 +138,7 @@ if "HF_HUB_OFFLINE" not in os.environ:
 
 CHUNK_CHARS = 1800
 POLL_SECONDS = 5
-SETTLE_SECONDS = 3  # don't index a file modified more recently than this
+SETTLE_SECONDS = 1  # don't index a file modified more recently than this (it can be half written)
 
 
 def device():
