@@ -313,6 +313,19 @@ def _tasks(store, days, until: float | None = None):
             u.join(f"s:{s['id']}", f"b:{k[0]}@{k[1]}")
         for key in keys_in(k[1]):
             u.join(f"b:{k[0]}@{k[1]}", f"t:{key}")
+    # A pull request linked from a branch's sessions whose title or head branch names a ticket joins that ticket to
+    # the PR's own head branch, when its sessions worked on that branch. Only the PR's branch joins, not the session,
+    # so a session that talks about another ticket's PR does not merge the two cards.
+    branch_nodes = {k for k in by_branch if k not in long_lived}
+    for (repo, _b), v in by_branch.items():
+        if (repo, _b) in long_lived:
+            continue
+        for url in list(dict.fromkeys(x for s in v for t in texts.get(s["id"], []) for x in PR_URL.findall(t)))[:6]:
+            info = _gh_pr(url) if "github.com" in url else {}
+            head = info.get("head") or ""
+            if (repo, head) in branch_nodes:
+                for key in keys_in(f"{info.get('title', '')} {head}"):
+                    u.join(f"b:{repo}@{head}", f"t:{key}")
     # Ticket keys a session talks about. A key in the session's title or branch always links. A key only in its text
     # links when the session runs in the key's home repo (where a branch, commit or session title names it), so a
     # session that just quotes another repo's ticket does not join that ticket's task.
