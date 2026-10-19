@@ -514,7 +514,6 @@ body.native #top{left:86px}  /* traffic lights live over the page in the native 
 .top-r{display:flex;align-items:center;gap:8px;justify-self:end;position:relative}
 .brand{min-width:0;width:34px;height:34px;display:grid;place-items:center;color:var(--accent);font-size:0}
 .brand svg{color:var(--accent)}
-body.native .brand{display:none}
 .iconbtn{border:0;background:none;border-radius:12px;min-width:34px;height:34px;display:inline-grid;place-items:center;color:var(--text);font-weight:600;position:relative;transition:background .18s var(--ease),transform .18s var(--ease)}
 .iconbtn:hover{background:var(--surface-3)}
 .iconbtn.round{border-radius:999px;width:36px;height:36px}
