@@ -10,8 +10,9 @@ There are three kinds of server. Pensieve finds the first two by itself, whateve
 For agent and own servers, Pensieve connects itself, asks the generation model which read calls to make, and makes
 them.
 
-Collected items are written as Markdown to ~/.pensieve/connections/<server>/, and the file indexer indexes them. The
-raw JSON of each item is in .raw/ and its field changes over time are in .history/ (hidden folders: not indexed).
+Collected items are rows of the `documents` table of store.db (storage v2), with their people, their field changes
+over time and the agent sessions that saw them. The document indexer (pensieve/docindex.py) indexes them, and
+`store.documents.markdown` shows one as Markdown.
 Pensieve calls only tools that `is_read` accepts. A source is on once the user switches it on, or once Pensieve holds
 data from it (for example from agent sessions), unless the user switched it off."""
 import asyncio
@@ -28,6 +29,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pensieve import config, connectors, llm, mcp_oauth, settings
+from pensieve import store as v2
+from pensieve.models import DocKind, PersonRole, SourceKind, SourceOrigin, SourceStatus
+from pensieve.store import documents as store_documents, sources as store_sources
 
 DIR = config.DATA_DIR / "connections"
 STATE = DIR / "state.json"
@@ -188,8 +192,7 @@ def servers() -> list[dict]:
 
 
 def _count(sid: str) -> int:
-    d = DIR / sid
-    return sum(1 for _ in d.glob("*.md")) if d.is_dir() else 0
+    return store_documents.count(v2.store_db(), sid)
 
 
 # Headless Claude Code starts before slow MCP servers connect, and lists them as pending with no tools; this makes it
@@ -416,7 +419,12 @@ def discover() -> list[dict]:
         except Exception as e:
             errors.append(_err(e))
     _update(lambda st: st.update(discovered=time.time(), discover_error="; ".join(errors) or None))
-    return servers()
+    found = servers()
+    try:
+        sync_sources(found)
+    except Exception as e:
+        errors.append(_err(e))
+    return found
 
 
 PROMPT = """You collect data for the user's personal search index, with the {name} tools only.
@@ -614,6 +622,8 @@ def collect(sid: str, calls: int = 8) -> dict:
     except Exception as e:
         run = dict(collected=_load().get("runs", {}).get(sid, {}).get("collected"), error=_err(e), failed=t0)
     _update(lambda st: st.setdefault("runs", {}).__setitem__(sid, run))
+    _source(sid, r["name"])
+    store_sources.set_run(v2.store_db(), sid, run.get("error") is None, run.get("error"), int(t0))
     return run
 
 
@@ -791,12 +801,125 @@ def _fname(key_name: str, key: str) -> str:
     return s if s and s == raw[:100] else f"{s[:80]}-{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
 
 
+_ORIGIN_KINDS = {"engine": (SourceKind.MCP, SourceOrigin.ENGINE), "agents": (SourceKind.MCP, SourceOrigin.AGENT),
+                 "own": (SourceKind.MCP, SourceOrigin.OWN)}
+_STATUS = {"connected": SourceStatus.CONNECTED, "needs-auth": SourceStatus.NEEDS_AUTH, "failed": SourceStatus.FAILED}
+_sources_seen: set[str] = set()
+
+
+def _source(sid: str, label: str):
+    """Make sure that store.db has a row for the source `sid`, with its kind and origin."""
+    if sid in _sources_seen:
+        return
+    if sid == SESSIONS:
+        kind, origin = SourceKind.AGENT_SESSIONS, SourceOrigin.BUILTIN
+    elif sid == GH:
+        kind, origin = SourceKind.GH_CLI, SourceOrigin.CLI
+    else:
+        st = _load()
+        kind, origin = next((v for k, v in _ORIGIN_KINDS.items() if sid in st.get(k, {})),
+                            (SourceKind.MCP, SourceOrigin.OWN if sid in {slug(c["name"]) for c in
+                                                                         settings.get("mcp_servers")} else
+                             SourceOrigin.ENGINE))
+    store_sources.ensure(v2.store_db(), sid, kind, label, origin, connectors.match(label, sid))
+    _sources_seen.add(sid)
+
+
+def sync_sources(found: list[dict] | None = None):
+    """Write each known server's name and status to the `sources` table."""
+    db = v2.store_db()
+    for r in found if found is not None else servers():
+        _source(r["id"], r["name"])
+        status = _STATUS.get(r.get("status"), SourceStatus.UNKNOWN)
+        db.write(lambda c, r=r, status=status: c.execute(
+            "UPDATE sources SET name = ?, status = ?, connector = coalesce(connector, ?) WHERE id = ?",
+            (r["name"], status.value, connectors.match(r["name"], r["id"]), r["id"])))
+
+
+def _when(v) -> int | None:
+    """A time from an item (ISO text, Unix seconds or milliseconds, a Slack ts) as int Unix seconds."""
+    iso = connectors._iso(v) if v not in (None, "") else ""
+    return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()) if iso else None
+
+
+def _url(d: dict) -> str:
+    return next((d[k] for k in ("html_url", "webUrl", "url", "permalink", "link") if isinstance(d.get(k), str)
+                 and d[k].startswith("http") and "://api." not in d[k]), "")
+
+
+_TICKET = re.compile(r"[A-Z][A-Z0-9]{1,9}-\d{1,6}")
+_PR = re.compile(r"/pull/\d+|/merge_requests/\d+|/pull-requests/\d+|/pullrequest/\d+")
+
+
+def _kind(pid, sid: str, tool: str, key_name: str, key: str, d: dict, chat: bool) -> DocKind:
+    url = _url(d)
+    if _PR.search(url) or d.get("headRefName") or isinstance(d.get("head"), dict) or d.get("source_branch"):
+        return DocKind.PULL_REQUEST
+    if key_name in ("key", "identifier", "_key") and _TICKET.fullmatch(key):
+        return DocKind.TICKET
+    if "/issues/" in url:
+        return DocKind.ISSUE
+    if chat:
+        return DocKind.THREAD if isinstance(d.get("messages"), list) or d.get("reply_count") else DocKind.MESSAGE
+    return {"notion": DocKind.PAGE, "drive": DocKind.FILE, "granola": DocKind.MEETING,
+            "hubspot": DocKind.RECORD}.get(pid or "", DocKind.OTHER)
+
+
+def _branch(d: dict) -> str | None:
+    head = d.get("head") if isinstance(d.get("head"), dict) else {}
+    b = d.get("headRefName") or head.get("ref") or d.get("source_branch")
+    return b if isinstance(b, str) and b else None
+
+
+def identity_key(p: dict) -> str | None:
+    """A person of an item as an identity key: their email, else their GitHub login or Slack id, else their name."""
+    if p.get("email"):
+        return "email:" + str(p["email"]).lower()
+    svc, pid = str(p.get("service") or ""), p.get("id")
+    if pid and ("slack" in svc.lower() or re.fullmatch(r"[UW][A-Z0-9]{8,}", str(pid))):
+        return "slack:" + str(pid)
+    if pid and "github" in svc.lower():
+        return "gh:" + str(pid).lower()
+    if p.get("name"):
+        return "name:" + re.sub(r"\s+", " ", str(p["name"])).strip().lower()
+    return None
+
+
+_ROLE_OF = {r.value: r for r in PersonRole}
+
+
+def _write(pid, sid: str, label: str, tool: str, kn: str, key: str, item: dict, old, chat: bool):
+    """The new copy of one document: the item merged into its stored copy, or None when nothing changed."""
+    old_raw = json.loads(old.raw) if old else {}
+    merged = {**old_raw, **item, "_tool": tool, "_key_name": kn}
+    if old is not None and merged == old_raw:
+        return None
+    changes = tuple((k, _render(old_raw[k]), _render(v)) for k, v in item.items() if k in old_raw
+                    and not _NOISE.search(k) and not k.startswith("_") and k not in _VOLATILE and _simple(v)
+                    and _simple(old_raw[k]) and _render(old_raw[k]) != _render(v) and len(_render(v)) < 300)
+    people = tuple((k, _ROLE_OF.get(p.get("role"), PersonRole.MENTIONED), p.get("name") or p.get("email"))
+                   for p in merged.get("_people") or [] if isinstance(p, dict) and (k := identity_key(p)))
+    if merged.get("assignee") and not any(r == PersonRole.ASSIGNEE for _, r, _ in people):  # not a person record
+        name = _render(merged["assignee"]).strip()
+        if name and "\n" not in name:
+            people += (("name:" + re.sub(r"\s+", " ", name).lower(), PersonRole.ASSIGNEE, name),)
+    st = merged.get("status") or merged.get("state")
+    return store_documents.Write(
+        kind=_kind(pid, sid, tool, kn, key, merged, chat), title=(merged.get("_title") or _title(merged, key)).strip(),
+        url=_url(merged) or None, status=_render(st) if st else None, branch=_branch(merged),
+        created_at=_when(merged.get("_created")),
+        updated_at=_when(merged.get("_updated") or merged.get("updated") or merged.get("updated_at")),
+        private=bool(merged.get("_private")), text=_body(label, tool, kn, key, merged)[:60000], raw=merged,
+        people=people, changes=changes)
+
+
 def store(sid: str, label: str, tool: str, args: dict, text: str, session: str | None = None,
           seen_at: str = "") -> int:
-    """Write the items of one tool result to ~/.pensieve/connections/<sid>/. An item seen before is merged with its
-    earlier copy, and each changed field goes into its history. An item from a direct message, a group message or a
-    private channel (private_tool, private_item) is marked `_private`: it is context on this Mac, and never part of a
-    shared card. Returns the number of items written."""
+    """Write the items of one tool result to the `documents` table of store.db. An item seen before is merged with
+    its stored copy, and each changed field becomes a row of `document_changes`; a copy that changes nothing writes
+    nothing. An item from a direct message, a group message or a private channel (private_tool, private_item) is
+    marked private: it is context on this Mac, and never part of a shared card. Returns the number of items that
+    changed, or that the session saw for the first time."""
     try:
         data = json.loads(text)
     except ValueError:
@@ -816,51 +939,59 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
         i.update(connectors.normalize(pid, i))
         if all_private or private_item(i, chat):
             i["_private"] = True
-    root = DIR / sid
-    for sub in ("", ".raw", ".history"):
-        (root / sub).mkdir(parents=True, exist_ok=True)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
-    n = 0
+    _source(sid, label)
+    db = v2.store_db()
+    seen = store_documents.Seen(session, _when(seen_at) or int(time.time())) if session else None
+    n, futs = 0, []
     for item in items:
         kn = "_key" if item.get("_key") else _id_key(item)
         key = str(item[kn])
-        name = _fname(kn, key)
-        raw_p, hist_p = root / ".raw" / f"{name}.json", root / ".history" / f"{name}.jsonl"
-        try:
-            old = json.loads(raw_p.read_text())
-        except (OSError, ValueError):
-            old = {}
-        merged = {**old, **item}
-        if session:
-            merged["_seen_in"] = sorted(set(old.get("_seen_in", [])) | {session})
-            if seen_at:  # when an agent saw it: the item's time when it has none of its own
-                merged["_seen_at"] = max(old.get("_seen_at", ""), seen_at)
-        if merged == old:
-            continue
-        changes = {k: [_render(old[k]), _render(v)] for k, v in item.items() if k in old and not _NOISE.search(k)
-                   and not k.startswith("_")
-                   and k not in _VOLATILE and _simple(v) and _simple(old[k]) and _render(old[k]) != _render(v)
-                   and len(_render(v)) < 300}
-        if changes:
-            with hist_p.open("a") as f:
-                f.write(json.dumps({"at": now, "changes": changes}) + "\n")
-        raw_p.write_text(json.dumps(merged))
-        (root / f"{name}.md").write_text(markdown(label, tool, kn, key, merged, hist_p))
-        n += 1
+        futs.append(store_documents.upsert(
+            db, sid, key, lambda old, item=item, kn=kn, key=key: _write(pid, sid, label, tool, kn, key, item, old, chat),
+            seen=seen, wait=False))
+    for f in futs:  # sent together, so that the writer commits them in one batch
+        r = f.result()
+        if r and (r.changed or r.seen):
+            n += 1
+            for fn in listeners:
+                fn(r)
     return n
 
 
-def markdown(label: str, tool: str, key_name: str, key: str, d: dict, hist_p: Path) -> str:
-    url = next((d[k] for k in ("html_url", "webUrl", "url", "permalink", "link") if isinstance(d.get(k), str)
-                and d[k].startswith("http") and "://api." not in d[k]), "")
-    title = d.get("_title") or _title(d, key)
-    front = {"source": label, "tool": tool, "connector": d.get("_connector"), "key": key, "title": title, "url": url,
-             "created": d.get("_created"), "updated": d.get("_updated"), "private": bool(d.get("_private")) or None}
+listeners = []  # fn(documents.Result) for each document that changed, or that a session saw for the first time
+
+
+def _body(label: str, tool: str, key_name: str, key: str, d: dict) -> str:
+    """The readable text of a document, which search indexes: its title, source, people and fields."""
+    return "\n".join(_head(label, tool, key_name, key, d)[0])
+
+
+def document_markdown(doc, label: str, people, changes, sessions) -> str:
+    """A document as Markdown, made from its row (store.documents.markdown): front matter, its fields, its changes
+    and the agent sessions that saw it."""
+    d = json.loads(doc.raw)
+    title, url = doc.title, doc.url or ""
+    front = {"source": label, "tool": d.get("_tool"), "connector": d.get("_connector"), "key": doc.key,
+             "title": title, "url": url, "created": d.get("_created"), "updated": d.get("_updated"),
+             "private": doc.private or None}
     lines = ["---"] + [f"{k}: {json.dumps(v)}" for k, v in front.items() if v]
-    if d.get("_people"):  # each person with the service and id, for a people graph to join identities later
+    if people:  # each person with the identity key, for a people graph to join identities later
         lines.append("people:")
-        lines += [f"  - {json.dumps(p)}" for p in d["_people"]]
-    head = lines + ["---", "", f"# {title}", "", f"- Source: {label} ({tool})", f"- {key_name.lstrip('_')}: {key}"]
+        lines += [f"  - {json.dumps(dict(role=p.role.value, key=p.key, name=p.name))}" for p in people]
+    head, _ = _head(label, d.get("_tool") or "", d.get("_key_name") or "key", doc.key, d)
+    if sessions:
+        head.insert(len(head) - 2, f"- Seen in agent sessions: {', '.join(s.session_id for s in sessions[-5:])}")
+    hist = [f"- {datetime.fromtimestamp(c.at, timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}: {c.field} changed from "
+            f"{c.old or '(empty)'} to {c.new or '(empty)'}" for c in changes[-30:]]
+    text = "\n".join(lines + ["---", ""] + head) + ("\n\n## Changes\n\n" + "\n".join(hist) if hist else "")
+    return text[:60000] + "\n"
+
+
+def _head(label: str, tool: str, key_name: str, key: str, d: dict) -> tuple[list[str], str]:
+    """The lines of a document's Markdown below its front matter, without its changes; and its URL."""
+    url = _url(d)
+    title = d.get("_title") or _title(d, key)
+    head = [f"# {title}", "", f"- Source: {label} ({tool})", f"- {key_name.lstrip('_')}: {key}"]
     if url:
         head.append(f"- URL: {url}")
     roles = {}
@@ -879,20 +1010,9 @@ def markdown(label: str, tool: str, key_name: str, key: str, d: dict, hist_p: Pa
         if k not in shown and d.get(k) not in (None, "", [], {}):
             head.append(f"- {k}: {_render(d[k])}")
             shown.add(k)
-    if d.get("_seen_in"):
-        head.append(f"- Seen in agent sessions: {', '.join(d['_seen_in'][-5:])}")
     body = [f"{k}: {_render(v)}" for k, v in d.items() if k not in shown and not _NOISE.search(k)
             and not k.startswith("_") and v not in (None, "", [], {}) and _render(v).strip()]
-    hist = []
-    try:
-        for line in hist_p.read_text().splitlines()[-30:]:
-            h = json.loads(line)
-            hist += [f"- {h['at']}: {k} changed from {a or '(empty)'} to {b or '(empty)'}"
-                     for k, (a, b) in h["changes"].items()]
-    except (OSError, ValueError):
-        pass
-    text = "\n".join(head) + "\n\n" + "\n\n".join(body) + ("\n\n## Changes\n\n" + "\n".join(hist) if hist else "")
-    return text[:60000] + "\n"
+    return head + [""] + ["\n\n".join(body)], url
 
 
 def from_session(session_id: str, results: list[tuple], seen_at: str = "") -> int:
@@ -929,19 +1049,22 @@ def backfill_sessions() -> int:
     return n
 
 
-def roots(enabled) -> list[Path]:
-    """The folders of switched-on connections, for the file indexer. The folder of a covered server is left out once
-    its keeper has collected, so that the index holds each item once."""
-    if not DIR.is_dir():
-        return []
+def indexed(enabled=None) -> list[str]:
+    """The ids of the switched-on sources whose documents search and cards use. A covered server is left out once its
+    keeper has collected, so that each item counts once."""
+    enabled = enabled or settings.enabled
     runs = _load().get("runs", {})
     skip = {sid for sid, keeper in covered().items() if runs.get(keeper, {}).get("collected")}
-    return [p for p in DIR.iterdir() if p.is_dir() and not p.name.startswith(".") and enabled(f"connections/{p.name}")
-            and p.name not in skip]
+    return [s.id for s in store_sources.all(v2.store_db()) if enabled(f"connections/{s.id}") and s.id not in skip]
+
+
+def roots(enabled) -> list[Path]:
+    """No folders: connection items are rows of store.db now, not files (see `indexed`)."""
+    return []
 
 
 def remove(sid: str):
-    import shutil
-    shutil.rmtree(DIR / sid, ignore_errors=True)
+    store_sources.delete(v2.store_db(), sid)
+    _sources_seen.discard(sid)
     mcp_oauth.forget(sid)
     _update(lambda st: st.get("runs", {}).pop(sid, None))

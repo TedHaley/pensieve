@@ -529,20 +529,18 @@ def _json_messages(x, depth=0):
 
 
 def _slack_items():
-    """(path of the .md, raw item, is private) for each collected item from a chat server that is switched on."""
-    for d in connections.roots(settings.enabled):
-        for md in d.glob("*.md"):
-            try:
-                text = md.read_text()
-                raw = json.loads((d / ".raw" / f"{md.stem}.json").read_text())
-            except (OSError, ValueError):
-                continue
-            tool = re.search(r"^- Source: .*\(([^()\n]+)\)$", text, re.M)
-            tool = tool.group(1) if tool else ""
-            if not connections.CHAT.search(f"{d.name} {tool}"):
-                continue
-            private = bool(raw.get("_private")) or connections.private_tool(tool) or connections.private_item(raw, True)
-            yield str(md), raw, private
+    """(doc:<id>, raw item, is private) for each collected message or thread of a source that is switched on. The
+    `documents` table gives them by kind; no file is read."""
+    from pensieve import store as v2
+    from pensieve.store import documents
+    for d in documents.of_kinds(v2.store_db(), ("message", "thread"), connections.indexed(settings.enabled)):
+        try:
+            raw = json.loads(d.raw)
+        except ValueError:
+            continue
+        if not connections.CHAT.search(f"{d.source_id} {raw.get('_tool', '')}"):
+            continue
+        yield f"doc:{d.id}", raw, d.private
 
 
 def _collect_slack(raw: _Raw) -> dict:

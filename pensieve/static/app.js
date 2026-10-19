@@ -1908,7 +1908,17 @@ async function openOnMac(id, action) {
 }
 const PROSE = new Set(['doc', 'pdf', 'slides', 'other']);
 const AUTHOR_FROM = {pdf: 'from the PDF', office: 'from the document properties', spotlight: 'from Spotlight metadata', owner: 'file owner on this Mac', git: 'from git'};
+async function openDoc(id) {  // a collected ticket, PR, message or page (doc:<id>): its text, made from its row
+  openDrawer(`<div class="meta"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Loading…</div>`, '');
+  const d = await api('/api/item?id=' + enc(id)).catch(() => null);
+  if (!d) { openDrawer('<h2>Not found</h2>', '<p class="muted">This item is no longer collected.</p>'); return; }
+  openDrawer(`<div class="meta"><span class="badge">${esc(d.doc_kind.replace('_', ' '))}</span>${esc(d.source)}${d.status ? ` · ${esc(d.status)}` : ''}${d.private ? ' · private' : ''}</div>
+      <h2 style="word-break:break-word">${esc(d.title)}</h2>${d.updated ? `<div class="fmeta"><span>updated ${rel(d.updated * 1000)}</span></div>` : ''}`,
+    `${d.url ? `<div class="actions" style="margin-top:0"><a class="btn" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a></div>` : ''}
+     <pre class="fprev">${esc(d.text)}</pre>`);
+}
 async function openFile(path) {
+  if (path.startsWith('doc:')) return openDoc(path);
   if (S.view !== 'data') await setView('data');
   if (!S.data.types.has('doc')) { S.data.types.add('doc'); dataChanged(false); }
   const id = 'file:' + path;
@@ -3074,6 +3084,7 @@ const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', f
 async function openItem(id) {
   const i = id.indexOf(':'), kind = id.slice(0, i), ref = id.slice(i + 1);
   if (kind === 'file') return openFile(ref);
+  if (kind === 'doc') return openDoc(id);
   if (kind === 'session') return openSession(ref);
   if (kind === 'folder') {  // filter the map to it (a repo is its top folder)
     if (S.view !== 'data') await setView('data');
@@ -4791,8 +4802,8 @@ function hlSnip(t, hl) {
   for (const [a, b] of (hl || []).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])) { if (a < at) continue; out += esc(t.slice(at, a)) + '<mark>' + esc(t.slice(a, b)) + '</mark>'; at = b; }
   return out + esc(t.slice(at));
 }
-const FIND_GROUP = {file: 'Files', code: 'Code', session: 'Agent sessions'};
-const FIND_IC = {file: '▤', code: '⌗', session: '◌'};
+const FIND_GROUP = {file: 'Files', doc: 'Tickets, PRs and messages', code: 'Code', session: 'Agent sessions'};
+const FIND_IC = {file: '▤', doc: '✉', code: '⌗', session: '◌'};
 const FOLDER_IC = '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="currentColor" opacity=".85"/></svg>';
 function findItem(r) {
   const ex = r.match === 'exact' || r.match === 'both';
@@ -4861,7 +4872,7 @@ function palRender() {
       if (sc && sc.name !== 'all') add('Scope', {ic: '◎', title: `Searching in ${sc.name}`, sub: sc.description || '', rt: 'change ▸', run: () => { $('#palscope').focus(); $('#palscope').showPicker?.(); }});
       rs.filter(r => r.kind === 'person').slice(0, 4).forEach(r => add('People', findItem(r)));
       rs.filter(r => r.is_dir).slice(0, 4).forEach(r => add('Folders', findItem(r)));
-      for (const k of ['file', 'code', 'session']) rs.filter(r => r.kind === k && !r.is_dir).slice(0, 6).forEach(r => add(FIND_GROUP[k], findItem(r)));
+      for (const k of ['file', 'doc', 'code', 'session']) rs.filter(r => r.kind === k && !r.is_dir).slice(0, 6).forEach(r => add(FIND_GROUP[k], findItem(r)));
       if (!rs.length) add('Search', {ic: '∅', title: 'No matching files, code or sessions', sub: pl.found.query?.exact?.length ? 'Exact phrases must appear word for word; try fewer quotes.' : 'Try other words, or "quotes" for exact text.', run: () => {}});
     } else {
       const local = S.sessions.filter(s => (s.title + ' ' + (s.summary || '') + ' ' + s.project + ' ' + (s.tags || '')).toLowerCase().includes(q)).slice(0, 4);

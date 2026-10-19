@@ -419,6 +419,37 @@ changes to tables that exist. `pensieve/store/rows.py` turns models into rows an
 module for each aggregate (`sources.py`, `documents.py`, `cards.py`, ...). The tables `usage_calls`, `agent_jobs`
 and `projects` come in phase 4, with their modules.
 
+## Documents
+
+- `connections.store` sends the items of one tool result to the writer together, as one batch. Each item is one
+  `documents.upsert` job.
+- The connection files of v1 (`connections/<source>/*.md`, `.raw/`, `.history/`) are not written any more. The file
+  indexer does not index the `connections/` folder.
+- `pensieve/docindex.py` chunks each document whose hash changed. It writes `doc_chunks`, `fts_docs` and
+  `vectors/docs.tv`. A document of a source that is off, or that another source covers, leaves the index. The
+  server runs it at once after a document changes, and else every 60 seconds.
+- Search adds the hits of the documents to the other hits, with the id `doc:<id>`. `kind:doc` and a scope with
+  `connections/<source>` select them. `read`, `similar`, `/api/item` and the cards accept `doc:<id>`. They also
+  accept the path of a v1 connection file, for one release.
+- The Context tab reads the documents of its 30 days with one range query on `documents_time`. It also reads the
+  older tickets that the 30 days name by key, and the older pull requests of the branches of the 30 days. v1 read
+  every item of every age. So in v2, a ticket that no work of the 30 days names, and that did not change in the 30
+  days, is not a card.
+- The user's switch of a source is in `sources.switched`, and also in `settings.json` for the Mac app. A source is on
+  once it has documents, unless the user switched it off.
+
+Measured with `bench/storage_docs.py` (synthetic Jira-like items, times over 180 days, M-series Mac). v1 is the code
+before phase 2 on the same items:
+
+| | v1, 10k | v2, 10k | v1, 100k | v2, 100k |
+|---|---|---|---|---|
+| First load through `connections.store` | 13.1 s | 1.7 s | 90.8 s | 28.0 s |
+| Re-sync, no change | 3.96 s | 0.59 s | 41.2 s | 6.3 s |
+| Items of the last 30 days (`work._items`) | 4.15 s | 0.045 s | 101 s | 0.52 s |
+
+The re-sync time of v2 is mostly the JSON parse and the merge of each item, not SQL. The 30-day scan of v2 reads
+the rows in 0.12 s at 100k; the rest is the people of each item.
+
 ## Cards within 2 seconds
 
 Today a card build reads every session, document and commit of 30 days, every 60 seconds. In v2 the build is

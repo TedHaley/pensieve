@@ -120,6 +120,7 @@ async def watcher():
     asyncio.create_task(upstream_watcher())
     asyncio.create_task(model_switcher())
     asyncio.create_task(connections_worker())
+    asyncio.create_task(doc_worker())
     work.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "work"}))
     from pensieve import people
     people.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "people"}))
@@ -173,6 +174,28 @@ async def watcher():
             continue
         await _wait(wake_files, config.POLL_SECONDS)
         await _quiet(wake_files)
+
+
+wake_docs = asyncio.Event()
+DOC_POLL_SECONDS = 60
+
+
+async def doc_worker():
+    """Chunk and embed the collected documents that changed (docindex.py): at once when a connection or an agent
+    session stores one, else every DOC_POLL_SECONDS (a source switched on or off)."""
+    from pensieve import docindex
+    loop = asyncio.get_running_loop()
+    connections.listeners.append(lambda r: loop.call_soon_threadsafe(wake_docs.set))
+    while True:
+        try:
+            if await _run(lambda: docindex.get().sync(budget=60)):
+                broadcast({"type": "docs"})
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        await _wait(wake_docs, DOC_POLL_SECONDS)
+        wake_docs.clear()
+        await _quiet(wake_docs)
 
 
 UPSTREAM_SECONDS = 1800

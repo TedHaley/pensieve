@@ -77,46 +77,49 @@ def _ts(s) -> float:
         return 0.0
 
 
-def _items() -> list[dict]:
-    """Connection items: {path, server, key, title, status, assignee, updated, url, text, private}. `private`: a
-    direct message, a group message or a private channel (marked when stored, or found now in an item stored before
-    the mark), which local cards use and shared cards and notes leave out."""
-    out = []
-    if not connections.DIR.is_dir():
-        return out
-    for d in connections.DIR.iterdir():
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        for md in d.glob("*.md"):
-            try:
-                raw = json.loads((d / ".raw" / f"{md.stem}.json").read_text())
-                text = md.read_text()
-            except (OSError, ValueError):
-                continue
-            tool = re.search(r"^- Source: .*\(([^()\n]+)\)$", text, re.M)
-            tool = tool.group(1) if tool else ""
-            private = bool(raw.get("_private")) or connections.private_tool(tool) or \
-                connections.private_item(raw, bool(connections.CHAT.search(f"{d.name} {tool}")))
-            kn = connections._id_key(raw)
-            key = str(raw.get(kn, "")) if kn in ("key", "identifier") else ""
-            url = next((raw[k] for k in ("webUrl", "url", "permalink", "html_url") if isinstance(raw.get(k), str)
-                        and raw[k].startswith("http")), "")
-            head = raw.get("head") if isinstance(raw.get("head"), dict) else {}
-            branch = raw.get("headRefName") or head.get("ref") or raw.get("source_branch") or ""  # a PR or MR
-            title = re.search(r"^# (.+)$", text, re.M)  # after the front matter, when there is one
-            assignees = [p.get("name") or p.get("email") or p.get("id") for p in raw.get("_people") or []
-                         if p.get("role") == "assignee"]
-            out.append(dict(path=str(md), server=d.name, key=key if KEY.fullmatch(key) else "",
-                            title=raw.get("_title") or (title.group(1).strip() if title else md.stem), url=url,
-                            branch=branch if isinstance(branch, str) else "",
-                            pr=bool(PR_URL.fullmatch(url)) if url else False,
-                            status=connections._render(raw.get("status") or raw.get("state")) if raw.get("status") or raw.get("state") else "",
-                            assignee=", ".join(assignees) if assignees else
-                            connections._render(raw.get("assignee")) if raw.get("assignee") else "",
-                            updated=_ts(raw.get("_updated") or raw.get("updated") or raw.get("updated_at") or raw.get("_seen_at")
-                                        or md.stat().st_mtime), text=text,
-                            private=private))
-    return out
+def _items(since: float = 0, until: float | None = None) -> list[dict]:
+    """Connection items of switched-on sources whose time is in (since, until]: {path, doc, server, key, title,
+    status, assignee, updated, url, branch, pr, text, private}, from the `documents` table (an SQL range on its time
+    index). `path` is the item's id, doc:<id>. `private`: a direct message, a group message or a private channel,
+    which local cards use and shared cards and notes leave out."""
+    from pensieve import store as v2
+    from pensieve.store import documents
+    db = v2.store_db()
+    docs = documents.window(db, int(since), int(until) if until else None, sources=connections.indexed())
+    return [_item(d, ppl) for d, ppl in zip(docs, _assignees(db, [d.id for d in docs]))]
+
+
+def _older_items(items: list[dict], prefixes: set, S: dict, texts: dict, commits, until) -> list[dict]:
+    """Items from before the window that the window's work names: tickets by their keys (in session titles, branches
+    and text, and commit subjects) and pull requests by their head branches. A ticket that last changed 40 days ago
+    still gives its title and status to this week's session about it."""
+    from pensieve import store as v2
+    from pensieve.store import documents
+    db, srcs = v2.store_db(), connections.indexed()
+    prefixes = prefixes | documents.ticket_prefixes(db, srcs)
+    have = {i["doc"] for i in items}
+    keys = {f"{a}-{b}" for s in S.values() for t in [s["title"], s["branch"], *texts.get(s["id"], [])]
+            for a, b in KEY.findall(t) if a in prefixes}
+    keys |= {f"{a}-{b}" for c in commits for a, b in KEY.findall(c[4]) if a in prefixes}
+    branches = {s["branch"] for s in S.values() if s["branch"] not in DEFAULT_BRANCHES}
+    docs = [d for d in documents.by_keys(db, keys, srcs) + documents.by_branches(db, branches, srcs)
+            if d.id not in have and (not until or (d.time or 0) <= until)]
+    docs = list({d.id: d for d in docs}.values())
+    return [_item(d, ppl) for d, ppl in zip(docs, _assignees(db, [d.id for d in docs]))]
+
+
+def _assignees(db, ids) -> list[list[str]]:
+    from pensieve.store import documents
+    by = documents.people_of(db, ids)
+    return [[p.name or p.key.split(":", 1)[1] for p in by.get(i, []) if p.role == "assignee"] for i in ids]
+
+
+def _item(d, assignees: list[str]) -> dict:
+    url = d.url or ""
+    return dict(path=f"doc:{d.id}", doc=d.id, server=d.source_id, key=d.key if d.kind == "ticket" else "",
+                title=d.title, url=url, branch=d.branch or "", pr=bool(PR_URL.fullmatch(url)) if url else False,
+                status=d.status or "", assignee=", ".join(dict.fromkeys(assignees)),
+                updated=float(d.time or 0), text=d.text, private=d.private)
 
 
 class _Union:
@@ -201,7 +204,7 @@ def _tasks(store, days, until: float | None = None):
         wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
         commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
                              (_ts(since + "+00:00"), end.timestamp())).fetchall()
-    items = [i for i in _items() if not until or i["updated"] <= until]
+    items = _items(_ts(since + "+00:00"), until)
 
     def repo_of(cwd):
         for w, (r, b) in wts.items():
@@ -231,6 +234,8 @@ def _tasks(store, days, until: float | None = None):
         if i["key"] and i["url"]:
             sites.setdefault(KEY.fullmatch(i["key"]).group(1), i["url"].rsplit("/" + i["key"], 1)[0])
     prefixes |= set(sites)
+    items += _older_items(items, prefixes, S, texts, commits, until)
+    prefixes |= {KEY.fullmatch(i["key"]).group(1) for i in items if i["key"]}
 
     def keys_in(text):
         return [f"{a}-{b}" for a, b in KEY.findall(text) if a in prefixes]
@@ -1029,17 +1034,16 @@ def _events(ss, its, cs) -> list[dict]:
         ev.append(dict(ts=i["updated"], source=src, title=(f"{i['key']} " if i["key"] else "") + i["title"],
                        detail=" · ".join(x for x in (i["status"], i["assignee"], _server_label(i["server"])) if x),
                        url=i["url"], ref=i["path"], private=i.get("private", False)))
-        hist = Path(i["path"]).parent / ".history" / f"{Path(i['path']).stem}.jsonl"
-        try:
-            for line in hist.read_text().splitlines():
-                h = json.loads(line)
-                for k, (a, b) in h["changes"].items():
-                    ev.append(dict(ts=_ts(h["at"].replace("Z", ":00+00:00")), source="change",
-                                   title=f"{i['key'] or i['title'][:40]}: {k} {a or '(empty)'} → {b or '(empty)'}",
-                                   detail=_server_label(i["server"]), url=i["url"], ref=i["path"],
-                                   private=i.get("private", False)))
-        except (OSError, ValueError, KeyError):
-            pass
+    if its:
+        from pensieve import store as v2
+        from pensieve.store import documents
+        by_doc = {i["doc"]: i for i in its if i.get("doc")}
+        for doc_id, chs in documents.changes_of(v2.store_db(), by_doc).items():
+            i = by_doc[doc_id]
+            ev += [dict(ts=float(c.at), source="change",
+                        title=f"{i['key'] or i['title'][:40]}: {c.field} {c.old or '(empty)'} → {c.new or '(empty)'}",
+                        detail=_server_label(i["server"]), url=i["url"], ref=i["path"], private=i.get("private", False))
+                   for c in chs]
     return sorted(ev, key=lambda e: -e["ts"])[:80]
 
 
@@ -1446,19 +1450,23 @@ def related(task: dict, searcher, limit: int = 8) -> list[dict]:
     mine = {t["path"] for t in task["tickets"]} | {i["path"] for i in task["items"]}
     q = " ".join([task["title"]] + task["keys"][:3])
     try:
-        hits = searcher.find(q, limit=limit * 3, kinds=["file"], scope=scopes._build("data-tab", ["connections"]),
+        hits = searcher.find(q, limit=limit * 3, kinds=["doc"], scope=scopes._build("data-tab", ["connections"]),
                              retry=False)
     except Exception:
         return []
     hits = hits.get("results", hits) if isinstance(hits, dict) else hits
+    from pensieve import store as v2
+    from pensieve.store import documents
     out = []
     for h in hits:
-        p = h.get("path", "")
-        if p and p not in mine and p.startswith(str(connections.DIR)):
-            it = next((i for i in _items() if i["path"] == p), None)
-            out.append(dict(path=p, title=(it or {}).get("title") or h.get("title"), url=(it or {}).get("url", ""),
-                            status=(it or {}).get("status", ""), assignee=(it or {}).get("assignee", ""),
-                            server=Path(p).parent.name, snippet=h.get("snippet", "")))
+        p = h.get("id") or h.get("path", "")
+        if p.startswith("doc:") and p not in mine:
+            d = documents.get(v2.store_db(), int(p[4:]))
+            if d is None:
+                continue
+            it = _item(d, _assignees(v2.store_db(), [d.id])[0])
+            out.append(dict(path=p, title=it["title"], url=it["url"], status=it["status"], assignee=it["assignee"],
+                            server=it["server"], snippet=h.get("snippet", "")))
         if len(out) >= limit:
             break
     return out

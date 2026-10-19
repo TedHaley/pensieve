@@ -121,6 +121,46 @@ def window(db: Db, since: int, until: int | None = None, sources=None, private: 
     return rows.select(db.conn, Document, where, args, order=f"{TIME} DESC")
 
 
+def of_kinds(db: Db, kinds, sources, since: int | None = None) -> list[Document]:
+    """The documents of these kinds from `sources`, newest first (after `since` when given)."""
+    kinds, sources = list(kinds), list(sources)
+    where = f"kind IN ({rows.marks(len(kinds))}) AND source_id IN ({rows.marks(len(sources))})"
+    args = [*kinds, *sources]
+    if since is not None:
+        where += f" AND {TIME} > ?"
+        args.append(since)
+    return rows.select(db.conn, Document, where, args, order=f"{TIME} DESC")
+
+
+def ticket_prefixes(db: Db, sources) -> set[str]:
+    """The project prefixes of the ticket keys of `sources` (ABC of ABC-123)."""
+    sources = list(sources)
+    return {r[0] for r in db.query(f"SELECT DISTINCT substr(key, 1, instr(key, '-') - 1) FROM documents WHERE "
+                                   f"kind = 'ticket' AND source_id IN ({rows.marks(len(sources))})", sources)}
+
+
+def by_keys(db: Db, keys, sources, kind: str = "ticket") -> list[Document]:
+    """The documents of `sources` with these keys (ticket keys by default)."""
+    keys, sources = list(keys), list(sources)
+    out = []
+    for i in range(0, len(keys), 500):
+        part = keys[i:i + 500]
+        out += rows.select(db.conn, Document, f"kind = ? AND key IN ({rows.marks(len(part))}) AND source_id IN "
+                                              f"({rows.marks(len(sources))})", [kind, *part, *sources])
+    return out
+
+
+def by_branches(db: Db, branches, sources) -> list[Document]:
+    """The pull requests of `sources` from these head branches."""
+    branches, sources = list(branches), list(sources)
+    out = []
+    for i in range(0, len(branches), 500):
+        part = branches[i:i + 500]
+        out += rows.select(db.conn, Document, f"branch IN ({rows.marks(len(part))}) AND source_id IN "
+                                              f"({rows.marks(len(sources))})", [*part, *sources])
+    return out
+
+
 def ids_since(db: Db, since: int) -> list[tuple[int, str]]:
     """(id, hash) of the documents whose time is after `since`: what the indexer compares with its own state."""
     return db.query(f"SELECT id, hash FROM documents WHERE {TIME} > ?", (since,))

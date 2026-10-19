@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, connections, settings
+from pensieve import apps, settings
 
 ALL = None  # no scope: everything
 current = contextvars.ContextVar("pensieve_scope", default=None)  # set per MCP request
@@ -28,6 +28,7 @@ class Scope:
     repos: set | None = field(default_factory=set)     # None = every repo
     folders: list | None = field(default_factory=list)  # None = every indexed file
     agents: set | None = field(default_factory=set)     # None = every agent's sessions; sessions in `repos` always count
+    docs: set | None = field(default_factory=set)       # the sources of collected documents (doc:<id>); None = all
     unindexed: bool = False  # 'auto' in a git repo Pensieve doesn't index
 
     def label(self):
@@ -56,8 +57,10 @@ def _build(name, sources, description=""):
                     if a and a["available"]():
                         s.folders += [str(p.resolve()) for p in a["roots"]()]
         elif cat == "connections":
-            if s.folders is not None:
-                s.folders += [str(p.resolve()) for p in connections.roots(lambda x: not item or x == sid)]
+            if not item:
+                s.docs = None
+            elif s.docs is not None:
+                s.docs.add(item)
         elif cat == "agents":
             if not item:
                 s.agents = None
@@ -207,6 +210,12 @@ def contains(scope: Scope, item_id: str, store, repos) -> bool:
         return in_repo or scope.folders is None or _under(ref, scope.folders)
     if kind == "person":
         return True
+    if kind == "doc":
+        if scope.docs is None:
+            return True
+        from pensieve import store as v2
+        r = v2.store_db().one("SELECT source_id FROM documents WHERE id = ?", (int(ref) if ref.isdigit() else -1,))
+        return bool(r) and r[0] in scope.docs
     return False
 
 

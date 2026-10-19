@@ -252,7 +252,9 @@ class Searcher:
         pq = parse(q)
         f = pq["filters"]
         kf = f.get("kind")
-        kinds = [k for k in (kinds or CORPORA) if not kf or k in _KIND_CORPORA.get(kf, [kf])]
+        docs_too = (kinds is None or "doc" in kinds) and kf in (None, "doc", "file") and not f.get("ext") \
+            and not f.get("by")  # collected documents (doc:<id>, docindex.py)
+        kinds = [k for k in (kinds or CORPORA) if k in CORPORA and (not kf or k in _KIND_CORPORA.get(kf, [kf]))]
         if f.get("ext"):
             kinds = [k for k in kinds if k != "session"]
         by = f.get("by")
@@ -347,6 +349,9 @@ class Searcher:
                             line=r["line"], row=key, score=round(score, 4), ext=r["ext"],
                             match="both" if pq["exact"] and qv is not None else "exact" if pq["exact"] else "semantic",
                             mtime=r.get("mtime"), key=r.get("key"), is_dir=r.get("is_dir", False), author=r.get("author")))
+        if docs_too:
+            out += self._docs(pq, qv, scope, limit, rows, words)
+            lap("docs")
         out.sort(key=lambda x: (-x["score"], -_ts(x["mtime"])))
         best, seen = [], set()
         for x in out:  # best chunk per file / session (code ids are per chunk, so dedupe code by file)
@@ -392,6 +397,49 @@ class Searcher:
                     x["excerpt"] = _excerpt(text, x["chunk_line"], pq["semantic"], pq["exact"])
         lap("lines", done=True)
         return dict(query=pq, results=results, scope=scopes.describe(scope), timing=lap.ms)
+
+    @staticmethod
+    def _docs(pq, qv, scope, limit, rows, words) -> list[dict]:
+        """Hits in the collected documents (index.db), as results with the id doc:<id>. Their rows go into `rows`
+        under ("doc", chunk id), for the snippets."""
+        from pensieve import docindex
+        from pensieve.store import docchunks
+        di = docindex.get()
+        srcs = getattr(scope, "docs", None) if scope is not None else None
+        allow = di.allow(srcs) if srcs is not None else None
+        if allow is not None and not len(allow):
+            return []
+        hits = {}
+        exact_short = [p for p in pq["exact"] if len(p) < 3]
+        exact_fts = [p for p in pq["exact"] if len(p) >= 3]
+        if pq["exact"]:
+            found = docchunks.match(di.idx_db, _fts_query(exact_fts), 400) if exact_fts else \
+                [(c, 0.0) for c in docchunks.contains(di.idx_db, exact_short, 400)]
+            ok = set(allow.tolist()) if allow is not None else None
+            hits = {cid: dict(bm25=-bm, sem=None) for cid, bm in found if ok is None or cid in ok}
+        elif qv is not None:
+            hits = {cid: dict(bm25=0, sem=s) for cid, s in di.search(qv, max(60, limit * 4), allow)}
+        got = di.rows(hits)
+        out = []
+        for cid, r in got.items():
+            h, low = hits[cid], r["text"].lower()
+            if any(p.lower() not in low for p in exact_short):
+                continue
+            where = f"{r['title']} {r['subtitle']}".lower()
+            if any(x.lower() in low or x.lower() in where for x in pq["exclude"]):
+                continue
+            if pq["filters"].get("in") and pq["filters"]["in"] not in r["subtitle"].lower():
+                continue
+            if qv is not None and pq["exact"]:
+                h["sem"] = float(np.frombuffer(r["vec"], np.float16).astype(np.float32) @ qv)
+            score = h["sem"] + (0.05 if any(w in r["title"].lower() for w in words) else 0) if h["sem"] is not None \
+                else h["bm25"]
+            rows[("doc", cid)] = r
+            out.append(dict(id=r["id"], kind="doc", title=r["title"], subtitle=r["subtitle"], path=None, line=None,
+                            row=("doc", cid), score=round(score, 4), ext="", url=r["url"], private=r["private"],
+                            match="both" if pq["exact"] and qv is not None else "exact" if pq["exact"] else "semantic",
+                            mtime=r["mtime"], key=r["key"], is_dir=False, author=None))
+        return out
 
     @staticmethod
     def _on_disk(best, rows, limit):

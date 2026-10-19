@@ -336,7 +336,11 @@ def _has_data(sid: str) -> bool:
     if hit and now - hit[0] < 30:
         return hit[1]
     d = config.DATA_DIR / "connections"
-    has = sid == "agent_sessions" or (d / sid).is_dir() and any(f.suffix == ".md" for f in (d / sid).iterdir())
+    has = sid == "agent_sessions"
+    if not has:
+        from pensieve import store
+        from pensieve.store import sources
+        has = sources.has_data(store.store_db(), sid)
     if not has:
         try:
             has = sid in json.loads((d / "state.json").read_text()).get("session_servers", [])
@@ -349,7 +353,8 @@ def _has_data(sid: str) -> bool:
 def enabled(source_id: str) -> bool:
     """A source is on unless it, or any category above it, is in `disabled`. 'files/~/Docs' -> checks 'files' too.
     A connection is on once it is in `connections_on`, or once Pensieve holds data from it. Switching it off puts it
-    in `disabled`, which wins over both."""
+    in `disabled`, which wins over both. The same choice is in `sources.switched` of store.db (storage v2); the
+    lists here stay for the Mac app and older versions."""
     off = set(get("disabled"))
     if source_id in off or source_id.split("/", 1)[0] in off:
         return False
@@ -381,6 +386,12 @@ def file_type(t: str) -> dict:
 
 def set_enabled(source_id: str, on: bool) -> dict:
     if source_id.startswith("connections/"):  # off is explicit, so data from it does not switch it back on
+        from pensieve import store
+        from pensieve.models import Switched
+        db = store.store_db()
+        db.write(lambda c: c.execute("UPDATE sources SET switched = ? WHERE id = ?",
+                                     (Switched.ON.value if on else Switched.OFF.value, source_id.split("/", 1)[1])))
+        _HAS_DATA.pop(source_id.split("/", 1)[1], None)
         cur = [d for d in get("connections_on") if d != source_id]
         off = [d for d in get("disabled") if d != source_id]
         return update({"connections_on": cur + [source_id] if on else cur, "disabled": off if on else off + [source_id]})

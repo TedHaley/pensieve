@@ -218,6 +218,8 @@ def _lines(results):
         kind = x.get("kind") or str(x.get("id", "")).partition(":")[0]
         if kind == "session":
             where = f'session "{x.get("title") or ""}" ({x.get("subtitle") or x.get("updated") or ""})'
+        elif kind == "doc":  # a collected ticket, PR, message or page
+            where = f'"{x.get("title") or ""}" ({x.get("subtitle") or ""})' + (f" {x['url']}" if x.get("url") else "")
         else:
             line = x.get("focus_line") or x.get("line")
             where = path + (f":{line}" if line else "") if path else x.get("title") or ""
@@ -381,6 +383,12 @@ def _similar(id, limit):
     _check(id)
     kind, _, ref = id.partition(":")
     sc, st, rp = _scope(), _c()["store"], _c()["repos"]
+    if kind == "doc" or (kind == "file" and "/connections/" in ref):  # a collected item (a v1 file id: one release)
+        from pensieve import docindex
+        doc_id = (int(ref) if ref.isdigit() else None) if kind == "doc" else docindex.resolve_path(ref)
+        if doc_id is None:
+            raise KeyError(id)
+        return [x for x in docindex.similar(doc_id, limit * 3) if scopes.contains(sc, x["id"], st, rp)][:limit]
     if kind == "file":
         return [x for x in _c()["files"].similar(ref, limit * 3) if scopes.contains(sc, x["id"], st, rp)][:limit]
     if kind == "session":
@@ -393,7 +401,7 @@ def _similar(id, limit):
         text = re.sub(r'["\']|(?<!\S)-(?=\S)|\b(kind|ext|in):', " ", c["text"][:1500]) if c else ""
         hits = _c()["searcher"].find(text, limit + 1, ["code"], scope=sc)["results"] if c else []
         return [h for h in hits if h["id"] != id][:limit]
-    raise ValueError("id must start with file:, code: or session:")
+    raise ValueError("id must start with file:, code:, session: or doc:")
 
 
 @tool()

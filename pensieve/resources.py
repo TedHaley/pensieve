@@ -169,8 +169,10 @@ def read_full(r: Resource, store) -> str:
             whole = "\n".join(t["text"] for t in s.get("turns", []))
             at = whole.find(ref["url"])
             text = whole[max(0, at - 6000): at + 2000] if at >= 0 else ""
-        elif r.kind in ("message", "page") and ref.get("path"):
-            text = Path(ref["path"]).read_text(errors="replace")
+        elif r.kind in ("message", "page") and str(ref.get("path") or "").startswith("doc:"):
+            from pensieve import store as v2
+            from pensieve.store import documents
+            text = documents.markdown(v2.store_db(), int(ref["path"][4:])) or ""
         else:
             text = ""
     except (OSError, KeyError, ValueError):

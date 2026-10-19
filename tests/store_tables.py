@@ -221,6 +221,29 @@ def test_documents():
     assert documents.count(s) == 0 and s.one("SELECT count(*) FROM document_sessions")[0] == 0
 
 
+def test_connections_store():
+    import json
+    from pensieve import connections
+    fresh()
+    connections._sources_seen.clear()
+    item = {"key": "ABC-7", "summary": "Fix the login page", "status": "Open", "updated": "2026-01-02T03:04:05Z",
+            "assignee": {"displayName": "Sam Lee", "emailAddress": "sam@example.com"}}
+    text = json.dumps({"issues": [item]})
+    assert connections.store("jira_x", "Jira", "search_issues", {}, text) == 1
+    assert connections.store("jira_x", "Jira", "search_issues", {}, text) == 0, "an unchanged item writes nothing"
+    assert connections.store("jira_x", "Jira", "search_issues", {}, json.dumps({"issues": [dict(item, status="Done")]})) == 1
+    s = store.store_db()
+    d = documents.by_key(s, "jira_x", "ABC-7")
+    assert d.kind is models.DocKind.TICKET and d.status == "Done" and d.title == "Fix the login page"
+    assert d.updated_at == 1767323045
+    assert [(p.key, p.role.value) for p in documents.people(s, d.id)] == [("email:sam@example.com", "assignee")]
+    md = documents.markdown(s, d.id)
+    assert "# Fix the login page" in md and "status changed from Open to Done" in md, md
+    assert connections.store("agent_sessions", "Agent sessions", "x.get_issue", {}, json.dumps(item),
+                             session="claude:s1", seen_at="2026-01-05T00:00:00Z") == 1
+    assert "claude:s1" in documents.markdown(s, documents.by_key(s, "agent_sessions", "ABC-7").id)
+
+
 def test_cards():
     s, _ = fresh()
     M = models
