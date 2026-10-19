@@ -3509,11 +3509,12 @@ $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'da
 // The people the user works with, as a network around the user: nearer people sit closer to the centre and are drawn
 // larger. Nodes show the person's picture (Slack, then GitHub) or initials. A click opens their card: who they are,
 // what they work on, and the user's relation to them. The server builds the graph in the background (/api/people).
-S.people = {data: null, err: null, n: +store.get('peopleN', 24), sel: null, card: null, q: '', merging: null, stale: true,
+S.people = {data: null, err: null, n: 12, sel: null, card: null, q: '', merging: null, stale: true,
             view: store.get('peopleView', 'graph') === 'org' ? 'org' : 'graph', org: null,
             rel: null,  // the selected person's relations (/api/people/<id>/relations), for the panel under the graph
             cardMin: !!store.get('peopleCardMin', false), relMin: !!store.get('peopleRelMin', false)};
 const PP_STEP = 24;
+const PP_ZOOM = [12, 24, 48, 72, 96, 120, 150, 200];  // people shown at each step of zoom; the page opens zoomed in
 const ppHue = s => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 8;
 const ppShort = n => { const w = n.split(/\s+/).filter(Boolean); return w.length > 1 ? `${w[0]} ${w[w.length - 1][0]}.` : n; };
 function ppAv(p, size) {
@@ -3541,7 +3542,7 @@ function ppLayout(d, W, H) {
   const others = d.nodes.filter(n => !n.me).slice(0, narrow ? Math.ceil(S.people.n / 2) : S.people.n);
   const cx = W / 2, cy = H / 2, R = Math.max(80, Math.min(W, H) / 2 - 40), R0 = Math.min(118, R * 0.38);
   // the camera: more people spread over a larger area and the view zooms out to fit them; fewer zoom back in
-  const z = Math.max(1, Math.sqrt(others.length / (narrow ? PP_STEP / 2 : PP_STEP)));
+  const z = Math.max(0.7, Math.sqrt(others.length / (narrow ? PP_STEP / 2 : PP_STEP)));  // below 1: zoomed in, bigger
   const pos = new Map(), vis = new Set(others.map(n => n.id));
   if (me) pos.set(me.id, {x: cx, y: cy, r: 32, n: me});
   const small = narrow ? 0.8 : 1;
@@ -3601,13 +3602,11 @@ function renderPeople() {
   const typing = document.activeElement?.id === 'ppq';  // a new graph can arrive while the user types a name
   const from = [st.repos && plural(st.repos, 'repo'), st.prs && plural(st.prs, 'pull request'), st.tasks && plural(st.tasks, 'task'),
                 st.slack_threads && plural(st.slack_threads, 'Slack thread')].filter(Boolean).join(', ');
-  const noPics = (d?.nodes || []).filter(n => n.slack && !n.avatar).length;
   const shown = Math.min(P.n, Math.max(0, (d?.nodes.length || 1) - 1));
   const org = P.view === 'org';
   el.innerHTML = `<div class="wk-head pp-head"><h2>People</h2>
       <div class="pp-seg" role="group" aria-label="View"><button class="${org ? '' : 'on'}" data-pp-view="graph" aria-pressed="${!org}">Graph</button><button class="${org ? 'on' : ''}" data-pp-view="org" aria-pressed="${org}" title="Teams, seniority and reporting lines, all inferred">Org</button></div>
       <div class="wk-ctl"><div class="pp-find"><input id="ppq" type="search" placeholder="Find a person" aria-label="Find a person" autocomplete="off" spellcheck="false" value="${esc(P.q)}"><div class="pp-hits" id="pphits" hidden></div></div>
-        ${noPics ? `<button class="wk-btn" data-pp-pics title="Look up Slack pictures and titles with your Slack connection's read-only tools">Get Slack pictures</button>` : ''}
         <button class="wk-btn icon" data-pp-refresh title="Build again now" aria-label="Build again now"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
     <div class="pp-body" id="ppbody" data-card="${ppCardMode()}">
       <div class="pp-main">
@@ -3718,9 +3717,10 @@ function ppOrgHtml() {
 function ppStep(dir) {
   const P = S.people, d = P.data;
   if (!d) return false;
-  const n = Math.max(PP_STEP, P.n + PP_STEP * dir);
+  const i = PP_ZOOM.findIndex(z => z >= P.n), at = i < 0 ? PP_ZOOM.length - 1 : i;
+  const n = PP_ZOOM[Math.max(0, Math.min(PP_ZOOM.length - 1, at + dir))];
   if (n === P.n || dir > 0 && (P.drawn || 0) >= d.total - 1) return false;
-  P.n = n; store.set('peopleN', P.n); renderPeople();
+  P.n = n; renderPeople();
   return true;
 }
 // When the people on the graph change, they move like a camera: the ones that stay glide from where they were, new
@@ -3787,11 +3787,6 @@ function bindPeople(el) {
     if (v === 'org' && !P.org) { await loadOrg(); if (P.view === 'org') renderPeople(); }
   });
   $$('[data-pp-onode]', el).forEach(b => b.onclick = () => ppPick(b.dataset.ppOnode));
-  $('[data-pp-pics]', el)?.addEventListener('click', async e => {
-    e.currentTarget.disabled = true; toast('Looking up Slack profiles with read-only tools. This can take a minute…');
-    try { const r = await api('/api/people/profiles', {method: 'POST'}); toast(r.error || `Found ${plural(r.found || 0, 'Slack profile')}. Pictures appear when the graph is built again.`); }
-    catch (err) { toast('Could not look up Slack profiles: ' + err.message); }
-  });
   const q = $('#ppq', el), hits = $('#pphits', el);
   q.oninput = () => { P.q = q.value; ppSearch(q.value); };
   q.onfocus = () => { if (q.value.trim() && q.value.trim() !== S.people.find.q) ppSearch(q.value); else ppHitsHtml(); };
@@ -3900,7 +3895,7 @@ function ppDirCardHtml(p) {
 }
 function ppFind(id) {
   const P = S.people, n = P.data?.nodes.find(x => x.id === id);
-  if (n && !n.me && n.rank > P.n) { P.n = Math.ceil(n.rank / PP_STEP) * PP_STEP; store.set('peopleN', P.n); }
+  if (n && !n.me && n.rank > P.n) P.n = PP_ZOOM.find(z => z >= n.rank) || PP_ZOOM.at(-1);  // zoom out until they show
   P.q = ''; P.find.q = ''; P.find.ctl?.abort();
   const q = $('#ppq'); if (q) { q.value = ''; q.blur(); $('#pphits').hidden = true; }
   P.merging ? ppPick(id) : openPeopleCard(id);
