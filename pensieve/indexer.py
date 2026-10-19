@@ -507,7 +507,10 @@ class Store:
             if value is None:
                 r = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
                 return r[0] if r else None
+            # Commit at once: some callers never commit after it. A caller that wrote rows before this marker
+            # commits them here too, which is safe because the marker comes after the rows it describes.
             self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(value)))
+            self.db.commit()
 
     def needs_layout(self):
         with self.lock:

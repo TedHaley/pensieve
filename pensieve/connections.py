@@ -135,10 +135,7 @@ def _load() -> dict:
 
 
 def _save(st: dict):
-    DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, indent=1))
-    tmp.replace(STATE)
+    config.write_atomic(STATE, json.dumps(st, indent=1))
 
 
 def _update(fn):
@@ -187,9 +184,23 @@ def servers() -> list[dict]:
     return out
 
 
+_counts = {}  # sid -> (folder mtime_ns, number of items)
+
+
 def _count(sid: str) -> int:
+    """The number of items of a server. The indexer asks every few seconds, so the folder is read again only when its
+    mtime changes, that is when a file is added, removed or replaced."""
     d = DIR / sid
-    return sum(1 for _ in d.glob("*.md")) if d.is_dir() else 0
+    try:
+        m = d.stat().st_mtime_ns
+    except OSError:
+        return 0
+    hit = _counts.get(sid)
+    if hit and hit[0] == m:
+        return hit[1]
+    n = sum(1 for _ in d.glob("*.md"))
+    _counts[sid] = (m, n)
+    return n
 
 
 # Headless Claude Code starts before slow MCP servers connect, and lists them as pending with no tools; this makes it
@@ -820,6 +831,21 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
     for sub in ("", ".raw", ".history"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+    with _source_lock(sid):  # collect and from_session can store the same item at once
+        return _store_items(root, label, tool, items, session, seen_at, now)
+
+
+_source_locks: dict[str, threading.Lock] = {}
+_source_locks_lock = threading.Lock()
+
+
+def _source_lock(sid: str) -> threading.Lock:
+    with _source_locks_lock:
+        return _source_locks.setdefault(sid, threading.Lock())
+
+
+def _store_items(root: Path, label: str, tool: str, items: list[dict], session: str | None, seen_at: str,
+                 now: str) -> int:
     n = 0
     for item in items:
         kn = "_key" if item.get("_key") else _id_key(item)
@@ -844,8 +870,8 @@ def store(sid: str, label: str, tool: str, args: dict, text: str, session: str |
         if changes:
             with hist_p.open("a") as f:
                 f.write(json.dumps({"at": now, "changes": changes}) + "\n")
-        raw_p.write_text(json.dumps(merged))
-        (root / f"{name}.md").write_text(markdown(label, tool, kn, key, merged, hist_p))
+        config.write_atomic(raw_p, json.dumps(merged))
+        config.write_atomic(root / f"{name}.md", markdown(label, tool, kn, key, merged, hist_p))
         n += 1
     return n
 
