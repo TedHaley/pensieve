@@ -122,6 +122,13 @@ def _items() -> list[dict]:
             title = re.search(r"^# (.+)$", text, re.M)  # after the front matter, when there is one
             assignees = [p.get("name") or p.get("email") or p.get("id") for p in raw.get("_people") or []
                          if p.get("role") == "assignee"]
+            # the people a ticket belongs to, by name and email (see _is_mine)
+            owners = {str(p.get(f) or "").strip().lower() for p in raw.get("_people") or []
+                      if p.get("role") in ("assignee", "author", "owner") for f in ("name", "email")}
+            for f in ("assignee", "reporter", "creator"):
+                v = raw.get(f) if isinstance(raw.get(f), dict) else (raw.get("fields") or {}).get(f)
+                if isinstance(v, dict):
+                    owners |= {str(v.get(k) or "").strip().lower() for k in ("displayName", "emailAddress", "name", "email")}
             out.append(dict(path=str(md), server=d.name, key=key if KEY.fullmatch(key) else "",
                             title=raw.get("_title") or (title.group(1).strip() if title else md.stem), url=url,
                             branch=branch if isinstance(branch, str) else "",
@@ -131,8 +138,41 @@ def _items() -> list[dict]:
                             connections._render(raw.get("assignee")) if raw.get("assignee") else "",
                             updated=_ts(raw.get("_updated") or raw.get("updated") or raw.get("updated_at") or raw.get("_seen_at")
                                         or md.stat().st_mtime), text=text,
-                            private=private))
+                            private=private, owners=owners - {""}))
     return out
+
+
+_my_ids_cache = (0.0, set())
+
+
+def _my_ids() -> set[str]:
+    """The user's names and emails, lower case: from the People graph's "me" person, and git's user.name and
+    user.email."""
+    global _my_ids_cache
+    if time.time() - _my_ids_cache[0] < 300:
+        return _my_ids_cache[1]
+    out = {_git(str(Path.home()), "config", "--global", k, ttl=3600).strip().lower() for k in ("user.name", "user.email")}
+    try:
+        from pensieve import people
+        g = people.graph()
+        me = next((p for p in (g or {}).get("people", {}).values() if p.get("me")), None)
+        for k in (me or {}).get("keys", []):
+            kind, _, v = k.partition(":")
+            if kind in ("email", "name"):
+                out.add(v.lower())
+        if me and me.get("name"):
+            out.add(me["name"].lower())
+    except Exception:
+        pass
+    _my_ids_cache = (time.time(), out - {""})
+    return _my_ids_cache[1]
+
+
+def _is_mine(item: dict) -> bool:
+    """A ticket that belongs to the user: they are its assignee, creator or owner."""
+    me = _my_ids()
+    norm = {n for n in me if "@" not in n}
+    return any(o in me or o in norm for o in item.get("owners", ()))
 
 
 class _Union:
@@ -363,6 +403,11 @@ def _tasks(store, days, until: float | None = None):
         keys = sorted({n[2:] for n in nodes if n.startswith("t:")} | {i["key"] for i in tickets})
         cs = sorted((C[n] for n in nodes if n.startswith("c:")), key=lambda c: -c["ts"])
         brs = sorted({n[2:] for n in nodes if n.startswith("b:")})
+        # Tickets alone (no session, branch or commit of the user) are a card only when the ticket is the user's:
+        # agents' ticket searches and collection also bring in other people's tickets.
+        if not ss and not brs and tickets and not any(c["author"].lower() in _my_ids() for c in cs) \
+                and not any(_is_mine(i) for i in tickets):
+            continue
         files = Counter(p for s in ss for p in s["edited"])
         updated = max([s["updated"] for s in ss] + [i["updated"] for i in its] + [c["ts"] for c in cs] + [0])
         main = max(tickets, key=lambda i: i["updated"]) if tickets else None
