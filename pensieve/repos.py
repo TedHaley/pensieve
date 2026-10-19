@@ -375,14 +375,16 @@ class Repos:
             except Exception:
                 pass
         self.db.executescript("""
-        DROP INDEX IF EXISTS cc_wt;  -- cc_meta below starts with wt, so it serves the same reads
+        DROP INDEX IF EXISTS cc_wt;  -- cc_files below starts with wt, so it serves the same reads
+        DROP INDEX IF EXISTS cc_meta;  -- cc_files has its columns and last_ts
         CREATE TABLE IF NOT EXISTS checkout_files(repo TEXT, wt TEXT, path TEXT, blob TEXT, PRIMARY KEY(repo, wt, path));
         CREATE TABLE IF NOT EXISTS worktrees(path TEXT PRIMARY KEY, repo TEXT, branch TEXT);
         """)
         # the folder index and the Data map read these columns of every main-checkout chunk. Without this covering
         # index, SQLite reads each row's vector pages too (wt and authors come after vec): 10 s instead of 0.1 s.
-        # It also serves the map's fingerprint, which counts main-checkout chunks by wt.
-        self.db.execute("CREATE INDEX IF NOT EXISTS cc_meta ON code_chunks(wt, repo, path, authors)")
+        # It also serves the map's fingerprint, which counts main-checkout chunks by wt, and the Data map's points
+        # (datamap.points), which also read last_ts.
+        self.db.execute("CREATE INDEX IF NOT EXISTS cc_files ON code_chunks(wt, repo, path, authors, last_ts)")
         if not self.db.execute("SELECT 1 FROM checkout_files LIMIT 1").fetchone():  # carry over the old per-repo table
             self.db.execute("INSERT OR IGNORE INTO checkout_files SELECT repo, '', path, blob FROM code_files")
         self.db.commit()

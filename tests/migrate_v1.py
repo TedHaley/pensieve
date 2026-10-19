@@ -28,6 +28,9 @@ def make_v1(d: Path):
                                                           approvers=["ana"])},
         titles={"slack:U1": {"Engineer": {"first": NOW, "last": NOW, "n": 2}}}, managers={},
         first={"email:sam@example.com": NOW}, teams={})))
+    (d / "people" / "directory.json").write_text(json.dumps({"people": [dict(
+        id="d0123456789", name="Ana Diaz", emails=["ana@example.com"], login="ana", slack="", title="", avatar_url="",
+        sources=["github"], found_at=NOW, keys=["email:ana@example.com"], seen_at=NOW)]}))
     db = sqlite3.connect(d / "pensieve.db")
     db.execute("CREATE TABLE task_states(task_id TEXT, state TEXT, by TEXT, reason TEXT, at REAL)")
     db.executemany("INSERT INTO task_states VALUES (?,?,?,?,?)", [("t:A-1", "etched", "user", "done", NOW),
@@ -75,7 +78,7 @@ def test_import_twice():
     assert migrate.v1_detected()
     r = migrate.import_v1(DATA, s, dry=False)
     want = dict(person_overrides=3, card_states=2, feedback=1, card_notes=1, card_done=1, org_evidence=5, doc_paths=1,
-                usage=2, embed_cache=0, documents=1)
+                usage=2, embed_cache=0, documents=1, directory=1)
     for k, n in want.items():
         assert r[k]["status"] == "done" and r[k]["count"] == n, (k, r[k])
     assert s.one("SELECT tool, at, ok FROM usage_calls ORDER BY at")[0:3] == ("search", NOW, 1)

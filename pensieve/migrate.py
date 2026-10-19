@@ -33,7 +33,7 @@ DELETE = ("pensieve.db", "pensieve.db-wal", "pensieve.db-shm", "index.tv", "code
           "embed_model")
 KEEP_IN_CONNECTIONS = {".oauth"}  # sign-in tokens of the user's own MCP connections (mcp_oauth.py)
 # The v1 files that a step reads: kept until the step is done or given up.
-PROTECTS = {"person_overrides": ("people",), "org_evidence": ("people",), "card_states": ("pensieve.db",),
+PROTECTS = {"person_overrides": ("people",), "org_evidence": ("people",), "directory": ("people",), "card_states": ("pensieve.db",),
             "embed_cache": ("pensieve.db", "embed_model"), "feedback": ("feedback.jsonl",), "card_notes": ("work_notes.json",), "card_done": ("work_done.json",),
             "usage": ("usage.db",), "doc_paths": ("connections",),
             "documents": ("connections",)}
@@ -288,6 +288,21 @@ def read_doc_paths(v1: Path) -> list:
     return out
 
 
+def read_directory(v1: Path) -> list[dict]:
+    """people/directory.json: the people that Find a person found and kept."""
+    recs = (_json(v1 / "people" / "directory.json", {}) or {}).get("people") or []
+    return [r for r in recs if isinstance(r, dict) and r.get("id")]
+
+
+def _write_directory(store, recs) -> int:
+    from pensieve.store import people as people_db
+    have = {r["id"] for r in people_db.directory(store)}
+    new = [r for r in recs if r["id"] not in have]
+    if new:
+        people_db.put_directory(store, new)
+    return len(new)
+
+
 def read_documents(v1: Path) -> list[tuple]:
     """connections/<sid>/<name>.md and .raw/<name>.json: the collected items, as (sid, label, tool, raw item). v2
     would collect them again, but that costs the agent's time and tokens, and old items fall out of the window."""
@@ -444,6 +459,7 @@ STEPS = [  # the embed cache first: indexing waits for it (cache_ready)
     Step("card_notes", "AI notes of the cards", read_card_notes, ("card_id",)),
     Step("card_done", "note items that a commit did", read_card_done, ("card_id", "item")),
     Step("org_evidence", "org chart evidence", read_org_evidence, write=_write_org),
+    Step("directory", "people that Find a person kept", read_directory, write=_write_directory),
     Step("usage", "MCP tool call history", read_usage, write=_write_usage, available=lambda: _usage_model() is not None),
     Step("documents", "collected connection items", read_documents, write=_write_documents),
     Step("doc_paths", "old file ids of connection items", read_doc_paths, write=_write_doc_paths),
