@@ -47,8 +47,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--next", type=int, default=5, help="how many of the agent's next tool calls to look at")
     a = ap.parse_args()
-    db = sqlite3.connect(f"file:{Path.home() / '.pensieve' / 'usage.db'}?mode=ro", uri=True)
-    searches = db.execute("SELECT ts, cwd, args, results FROM calls WHERE tool='search' AND client='claude-code'").fetchall()
+    v2 = Path.home() / ".pensieve" / "v2" / "store.db"
+    if v2.exists():  # storage v2: the calls are in store.db
+        db = sqlite3.connect(f"file:{v2}?mode=ro", uri=True)
+        sql = "SELECT at, cwd, args, results FROM usage_calls WHERE tool='search' AND client='claude-code'"
+    else:
+        db = sqlite3.connect(f"file:{Path.home() / '.pensieve' / 'usage.db'}?mode=ro", uri=True)
+        sql = "SELECT ts, cwd, args, results FROM calls WHERE tool='search' AND client='claude-code'"
+    searches = db.execute(sql).fetchall()
     sessions = transcript_calls()
     rows = []
     for ts, cwd, args, results in searches:

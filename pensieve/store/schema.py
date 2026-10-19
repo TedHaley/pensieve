@@ -256,12 +256,118 @@ CREATE TABLE IF NOT EXISTS thread_snapshot_reasons (
 """,
     "feedback": """
 CREATE TABLE IF NOT EXISTS feedback (
-  id      INTEGER PRIMARY KEY,
-  at      INTEGER NOT NULL,
-  by      TEXT NOT NULL CHECK (by IN ('user', 'agent')),
-  kind    TEXT NOT NULL CHECK (kind IN ('bug', 'idea')),
-  text    TEXT NOT NULL,
-  status  TEXT NOT NULL CHECK (status IN ('new', 'sent', 'dismissed'))
+  id       TEXT PRIMARY KEY NOT NULL,
+  at       INTEGER NOT NULL,
+  by       TEXT NOT NULL CHECK (by IN ('user', 'agent')),
+  kind     TEXT NOT NULL CHECK (kind IN ('bug', 'idea')),
+  text     TEXT NOT NULL,
+  status   TEXT NOT NULL CHECK (status IN ('new', 'sent', 'dismissed')),
+  details  TEXT NOT NULL,
+  source   TEXT NOT NULL,
+  version  TEXT NOT NULL,
+  context  TEXT NOT NULL CHECK (json_valid(context))
+) STRICT;
+""",
+    "people_extra": """
+CREATE TABLE IF NOT EXISTS slack_users (
+  id          TEXT PRIMARY KEY NOT NULL,
+  name        TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  email       TEXT NOT NULL,
+  avatar_url  TEXT NOT NULL,
+  display     TEXT NOT NULL,
+  bot         INTEGER NOT NULL CHECK (bot IN (0, 1)),
+  is_me       INTEGER NOT NULL CHECK (is_me IN (0, 1)),
+  seen_at     INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS directory_people (
+  id          TEXT PRIMARY KEY NOT NULL,
+  name        TEXT NOT NULL,
+  login       TEXT NOT NULL,
+  slack       TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  avatar_url  TEXT NOT NULL,
+  found_at    INTEGER NOT NULL,
+  seen_at     INTEGER NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS directory_emails (
+  person_id  TEXT NOT NULL REFERENCES directory_people(id) ON DELETE CASCADE,
+  email      TEXT NOT NULL,
+  PRIMARY KEY (person_id, email)
+) STRICT;
+CREATE TABLE IF NOT EXISTS directory_sources (
+  person_id  TEXT NOT NULL REFERENCES directory_people(id) ON DELETE CASCADE,
+  idx        INTEGER NOT NULL,
+  source     TEXT NOT NULL,
+  PRIMARY KEY (person_id, idx)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS org_team_pairs (
+  a_key       TEXT NOT NULL,
+  b_key       TEXT NOT NULL,
+  weight      REAL NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (a_key, b_key)
+) STRICT;
+CREATE TABLE IF NOT EXISTS org_manager_titles (
+  key         TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  first_seen  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL,
+  builds      INTEGER NOT NULL,
+  PRIMARY KEY (key, title)
+) STRICT;
+CREATE TABLE IF NOT EXISTS org_state (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  since       INTEGER NOT NULL,
+  updated     INTEGER NOT NULL,
+  builds      INTEGER NOT NULL,
+  last_build  INTEGER NOT NULL,
+  teams_at    INTEGER NOT NULL
+) STRICT;
+""",
+    "usage": """
+CREATE TABLE IF NOT EXISTS usage_calls (
+  id         INTEGER PRIMARY KEY,
+  at         INTEGER NOT NULL,
+  source     TEXT,
+  tool       TEXT NOT NULL,
+  client     TEXT,
+  conn       TEXT,
+  cwd        TEXT,
+  scope      TEXT,
+  args       TEXT CHECK (args IS NULL OR json_valid(args)),
+  ms         REAL,
+  ok         INTEGER CHECK (ok IN (0, 1)),
+  error      TEXT,
+  n_results  INTEGER,
+  results    TEXT CHECK (results IS NULL OR json_valid(results)),
+  laps       TEXT CHECK (laps IS NULL OR json_valid(laps)),
+  out_chars  INTEGER
+) STRICT;
+CREATE INDEX IF NOT EXISTS usage_calls_at ON usage_calls (at);
+CREATE INDEX IF NOT EXISTS usage_calls_tool ON usage_calls (tool, at);
+""",
+    "agent_jobs": """
+CREATE TABLE IF NOT EXISTS agent_jobs (
+  id           TEXT PRIMARY KEY NOT NULL,
+  kind         TEXT NOT NULL,
+  system       TEXT NOT NULL,
+  prompt       TEXT NOT NULL,
+  schema       TEXT CHECK (schema IS NULL OR json_valid(schema)),
+  max_tokens   INTEGER NOT NULL,
+  asked_at     INTEGER NOT NULL,
+  answer       TEXT,
+  answered_at  INTEGER,
+  claimed_at   INTEGER,
+  claimer      TEXT
+) STRICT;
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  conn     TEXT PRIMARY KEY NOT NULL,
+  client   TEXT,
+  at       INTEGER NOT NULL,
+  answers  INTEGER NOT NULL
 ) STRICT;
 """,
 }
@@ -307,6 +413,59 @@ CREATE TABLE IF NOT EXISTS person_edges (
     "cache": """
 CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGER NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+""",
+    "avatars": """
+CREATE TABLE IF NOT EXISTS avatars (
+  hash  TEXT PRIMARY KEY NOT NULL,
+  ext   TEXT,
+  at    INTEGER NOT NULL
+) STRICT;
+""",
+    "projects": """
+CREATE TABLE IF NOT EXISTS projects (
+  id          TEXT PRIMARY KEY NOT NULL,
+  rank        INTEGER NOT NULL,
+  sig         TEXT NOT NULL,
+  keywords    TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  relevance   REAL NOT NULL,
+  near        INTEGER NOT NULL CHECK (near IN (0, 1)),
+  role        TEXT NOT NULL CHECK (role IN ('lead', 'contributor', 'occasional', 'none')),
+  me_share    REAL NOT NULL,
+  mine        REAL NOT NULL,
+  team        REAL NOT NULL,
+  last_at     INTEGER NOT NULL,
+  topic       INTEGER,
+  n_code      INTEGER NOT NULL,
+  n_docs      INTEGER NOT NULL,
+  n_sessions  INTEGER NOT NULL,
+  n_commits   INTEGER NOT NULL,
+  n_prs       INTEGER NOT NULL,
+  n_tickets   INTEGER NOT NULL,
+  n_tasks     INTEGER NOT NULL,
+  n_people    INTEGER NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_members (
+  project_id  TEXT NOT NULL,
+  person_id   TEXT NOT NULL,
+  idx         INTEGER NOT NULL,
+  weight      REAL NOT NULL,
+  n           REAL NOT NULL,
+  last_at     INTEGER NOT NULL,
+  PRIMARY KEY (project_id, person_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_items (
+  project_id  TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('rep', 'prefix', 'repo', 'area', 'pr', 'ticket', 'task', 'session',
+                                            'commit', 'file')),
+  idx         INTEGER NOT NULL,
+  value       TEXT NOT NULL CHECK (kind IN ('rep', 'prefix', 'repo', 'area') OR json_valid(value)),
+  PRIMARY KEY (project_id, kind, idx)
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_points (
+  point_id    TEXT PRIMARY KEY NOT NULL,
+  project_id  TEXT NOT NULL
+) STRICT;
 """,
 }
 

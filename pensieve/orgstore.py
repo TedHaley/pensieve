@@ -1,4 +1,4 @@
-"""Org evidence that builds up over time, in people/org_evidence.json.
+"""Org evidence that builds up over time, in the org tables of store.db (pensieve/store/org.py).
 
 One build of the people graph sees only a part of the org: the last pull requests of each repo, the Slack titles that
 the connection returns now, the teams that the clustering finds this time. This store keeps what each build saw, so
@@ -13,9 +13,10 @@ that the org chart can use all of it:
   decay with the same half-life.
 
 A build counts once: building again from the same raw data (after a merge or a split) does not add sightings or team
-counts. Pull requests and first commits are idempotent anyway."""
-import json
-from pathlib import Path
+counts. Pull requests and first commits are idempotent anyway. Build times are whole seconds, as the tables keep
+them."""
+from pensieve import store
+from pensieve.store import org as org_db
 
 HALF_LIFE_DAYS = 365
 KEEP_DAYS = 3 * 365
@@ -33,22 +34,12 @@ def empty() -> dict:
                 teams_at=0)
 
 
-def load(path: Path) -> dict:
-    try:
-        ev = json.loads(Path(path).read_text())
-        if ev.get("v") == 1:
-            return {**empty(), **ev}
-    except (OSError, ValueError):
-        pass
-    return empty()
+def load() -> dict:
+    return {**empty(), **org_db.load(store.store_db())}
 
 
-def save(path: Path, ev: dict):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(ev))
-    tmp.replace(path)
+def save(ev: dict):
+    org_db.save(store.store_db(), ev)
 
 
 def _title_key(keys: list[str]) -> str:
@@ -58,7 +49,7 @@ def _title_key(keys: list[str]) -> str:
 def merge(ev: dict, raw: dict, now: float, is_manager_title) -> bool:
     """Add one raw build's evidence to the store. True when this raw build is new to the store (then sightings
     count)."""
-    built = raw.get("built") or now
+    built = int(raw.get("built") or now)
     new = built > ev.get("last_build", 0) + 1
     prs = ev["prs"]
     for p in raw.get("pr_log") or []:

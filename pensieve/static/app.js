@@ -2610,7 +2610,7 @@ const SET_TABS = [
   ['usage', 'Usage', '#34c759', '<path d="M5 19V11M10 19V5M15 19v-6M20 19V9" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>'],
   ['feedback', 'Feedback', '#ff9f0a', '<path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H10l-4 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>'],
 ];
-// Usage: how agents call Pensieve over MCP, from the local log (~/.pensieve/usage.db)
+// Usage: how agents call Pensieve over MCP, from the local log (usage_calls in ~/.pensieve/v2/store.db)
 S.usageDays = +store.get('usageDays', 7);
 const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms / 1000).toFixed(1) + ' s' : Math.round(ms) + ' ms';
 const fmtWhen = ts => { const s = Date.now() / 1000 - ts; return s < 60 ? 'just now' : s < 3600 ? Math.floor(s / 60) + ' min ago' : s < 86400 ? Math.floor(s / 3600) + ' h ago' : new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'}); };
@@ -2879,7 +2879,7 @@ async function renderSettings() {
       <div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div>
       <div class="set-row"><div><div class="k">Reads</div><div class="d">Text always. Images, video and audio are found by name until you switch them on.</div></div><div id="contentbox"></div></div>
     </div>` + aiSettingsHtml();
-  else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/usage.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
+  else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/v2/store.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
     <div class="set-card" id="set-Mac-app"><h3>Mac app</h3>${setRow('hotkey')}${setRow('editor')}
@@ -3636,7 +3636,6 @@ async function loadOrg() {
 const ppPeople = n => n === 1 ? '1 person' : `${n.toLocaleString()} people`;
 const PP_LEVEL = {'IC': 0, 'senior IC': 1, 'lead': 2, 'manager': 3, 'director+': 4};
 const PP_LEVEL_NAME = {'IC': 'IC', 'senior IC': 'Senior IC', 'lead': 'Lead', 'manager': 'Manager', 'director+': 'Director+'};
-// How much org evidence the builds have gathered (people/org_evidence.json), in one line.
 function ppEvidenceLine(ev) {
   if (!ev || !ev.builds) return '';
   const bits = [plural(ev.prs || 0, 'pull request'), plural(ev.titles || 0, 'title'), ev.first_commits ? plural(ev.first_commits, 'first commit') : ''].filter(Boolean);

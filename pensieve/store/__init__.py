@@ -32,6 +32,11 @@ def vectors_dir() -> Path:
     return root() / "vectors"
 
 
+def avatars_dir() -> Path:
+    """People's pictures, as files <hash>.<ext>; the `avatars` table of index.db lists them."""
+    return root() / "avatars"
+
+
 def _get(name: str, make) -> Db:
     db = _open.get(name)
     if db is None:

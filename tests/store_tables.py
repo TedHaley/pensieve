@@ -21,12 +21,14 @@ from pensieve import store  # noqa: E402
 from pensieve.store import cards, documents, rows, schema, sources  # noqa: E402
 from pensieve.store.db import Db  # noqa: E402
 
-JSON = {"raw", "view", "card", "extra", "evidence"}
+JSON = {"raw", "view", "card", "extra", "evidence", "context", "args", "results", "laps", "schema"}
 REFS = {"doc_id": 1, "source_id": "src", "card_id": "c1", "thread_id": "th1", "snapshot_id": 1, "person_id": "p1",
         "key": "email:sam@example.com", "url": "https://example.com/pull/1", "goal_of": None}
-FIXED_ID = {models.Card: "c1", models.Thread: "th1", models.Source: "src", models.Person: "p1"}
+FIXED_ID = {models.Card: "c1", models.Thread: "th1", models.Source: "src", models.Person: "p1",
+            models.DirectoryPerson: "p1", models.Feedback: "f1", models.AgentJob: "j1", models.SlackUser: "U1",
+            models.Project: "pr1"}
 PARENTS = (models.Source, models.Document, models.Card, models.Thread, models.Person, models.Identity,
-           models.ThreadSnapshot, models.OrgPullRequest)
+           models.ThreadSnapshot, models.OrgPullRequest, models.DirectoryPerson)
 
 
 def _base(t):

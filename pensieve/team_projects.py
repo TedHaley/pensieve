@@ -13,8 +13,11 @@ each weighted by recency. The nearest projects form the "near you" band; the res
 
 The build runs in a background thread, at most every REBUILD_SECONDS. Git logs are cached per repo until its HEAD
 moves. Clusters are kept while the set of recent items changes by less than a sixth, so names stay put (new items
-join the nearest cluster); AI names are cached by membership like the Map's topics (meta 'dscope:<sig>')."""
+join the nearest cluster); AI names are cached by membership like the Map's topics (meta 'dscope:<sig>').
+
+The build, its cluster centers and the git logs are in index.db (pensieve/store/projects.py)."""
 import hashlib
+import io
 import json
 import math
 import re
@@ -25,13 +28,11 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import config, repos as repos_mod, work
+from pensieve import repos as repos_mod, store as v2, work
+from pensieve.store import cache as cache_db, projects as projects_db
 
-DIR = config.DATA_DIR / "projects"
-OUT = DIR / "projects.json"
-CENTS = DIR / "clusters.npz"
-CACHE = DIR / "cache"
 VERSION = 1
+GIT_TTL = 30 * 86400       # a git log is checked against its HEAD; the row expires only for the purge
 
 REBUILD_SECONDS = 1800
 PARTIAL_SECONDS = 180
@@ -68,19 +69,6 @@ def _hash(s: str, n=12) -> str:
     return hashlib.sha1(s.encode()).hexdigest()[:n]
 
 
-def _read(p: Path, default):
-    try:
-        return json.loads(p.read_text())
-    except (OSError, ValueError):
-        return default
-
-
-def _write(p: Path, data):
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data))
-    tmp.replace(p)
-
 
 # ---- git --------------------------------------------------------------------------------------------------------
 def _git_log(root: str) -> dict:
@@ -88,8 +76,8 @@ def _git_log(root: str) -> dict:
     head = repos_mod.git(root, "rev-parse", "HEAD").strip()
     if not head:
         return {"commits": []}
-    cf = CACHE / f"git-{_hash(root)}.json"
-    hit = _read(cf, {})
+    cf = "projects:git:" + root
+    hit = cache_db.get_json(v2.index_db(), cf, {})
     if hit.get("head") == head and hit.get("v") == VERSION:
         return hit
     from pensieve.people import is_bot
@@ -105,7 +93,7 @@ def _git_log(root: str) -> dict:
         if files and len(files) <= COMMIT_FILES_MAX:
             commits.append([int(bits[0]), bits[2].lower(), bits[1], bits[3][:200], files])
     res = {"v": VERSION, "head": head, "commits": commits}
-    _write(cf, res)
+    cache_db.put_json(v2.index_db(), cf, res, GIT_TTL)
     return res
 
 
@@ -163,11 +151,12 @@ def _cluster(X: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
 def _clusters(ids: list[str], X: np.ndarray, now: float, n_repos: int):
     """Labels for the recent items, keeping the last clusters while the set (and its repos) change little."""
     prev = None
+    idx = v2.index_db()
     try:
-        z = np.load(CENTS, allow_pickle=False)
+        z = np.load(io.BytesIO(projects_db.clusters(idx) or b""), allow_pickle=False)
         prev = dict(cents=z["cents"], sigs=[str(s) for s in z["sigs"]], n=int(z["n"]), at=float(z["at"]),
                     repos=int(z["repos"]), dim=int(z["cents"].shape[1]))
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, EOFError):
         pass
     if prev and prev["dim"] == X.shape[1] and prev["repos"] == n_repos and \
             abs(len(ids) - prev["n"]) <= RECLUSTER_SHARE * prev["n"] and now - prev["at"] < RECLUSTER_SECONDS:
@@ -179,10 +168,9 @@ def _clusters(ids: list[str], X: np.ndarray, now: float, n_repos: int):
     for c in range(k):
         mem = sorted(ids[i] for i in np.where(lab == c)[0][:400])
         sigs.append(_hash("|".join(mem) + f"p{VERSION}", 16))
-    DIR.mkdir(parents=True, exist_ok=True)
-    tmp = DIR / "clusters.tmp.npz"
-    np.savez(tmp, cents=cents, sigs=np.array(sigs), n=len(ids), at=now, repos=n_repos)
-    tmp.replace(CENTS)
+    buf = io.BytesIO()
+    np.savez(buf, cents=cents, sigs=np.array(sigs), n=len(ids), at=now, repos=n_repos)
+    projects_db.set_clusters(idx, buf.getvalue(), int(now + RECLUSTER_SECONDS))
     return lab, cents, sigs
 
 
@@ -432,11 +420,29 @@ def build(store, datamap) -> dict:
 
 
 # ---- serving ----------------------------------------------------------------------------------------------------
+def _load() -> dict | None:
+    """The last build from index.db, with each member's name and closeness from the People graph now."""
+    idx = v2.index_db()
+    st = projects_db.state(idx)
+    if not st or st.get("v") != VERSION:
+        return None
+    ppl = _People()
+    ps = projects_db.load(idx)
+    for e in ps:
+        e["members"] = [dict(**ppl.card(m["id"]), weight=m["weight"], n=m["n"], last=m["last"])
+                        for m in e["members"] if m["id"] in ppl.people]
+    return {**st, "projects": ps}
+
+
+def _save(d: dict):
+    st = {k: v for k, v in d.items() if k not in ("projects", "of")}
+    projects_db.save(v2.index_db(), st, d["projects"], d.get("of") or {})
+
+
 def data() -> dict | None:
     with _lock:
         if _state["data"] is None:
-            d = _read(OUT, None)
-            _state["data"] = d if d and d.get("v") == VERSION else None
+            _state["data"] = _load()
         return _state["data"]
 
 
@@ -457,9 +463,10 @@ def rebuild(store, datamap, force=False) -> bool:
     def run():
         try:
             d = build(store, datamap)
+            _save(d)
+            d.pop("of", None)
             with _lock:
                 _state["data"] = d
-            _write(OUT, d)
             _state["error"] = None
         except Exception as e:
             import traceback
@@ -535,7 +542,8 @@ def best_for(datamap, ids: list[str]) -> list[dict]:
     d = data()
     if not d or not ids:
         return []
-    n = Counter(d.get("of", {}).get(i) for i in ids)
+    of = projects_db.points(v2.index_db(), ids)
+    n = Counter(of.get(i) for i in ids)
     n.pop(None, None)
     by = {e["id"]: e for e in d["projects"]}
     hits = sorted((k for k in n if k in by), key=lambda k: (-n[k], by[k]["rank"]))[:3]
