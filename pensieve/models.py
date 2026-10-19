@@ -537,27 +537,6 @@ class Meta:
     value: str
 
 
-class ProjectRole(StrEnum):
-    """The user's part in a project, by their share of its weighted work."""
-    LEAD = "lead"
-    CONTRIBUTOR = "contributor"
-    OCCASIONAL = "occasional"
-    NONE = "none"
-
-
-class ProjectItemKind(StrEnum):
-    REP = "rep"
-    PREFIX = "prefix"
-    REPO = "repo"
-    AREA = "area"
-    PR = "pr"
-    TICKET = "ticket"
-    TASK = "task"
-    SESSION = "session"
-    COMMIT = "commit"
-    FILE = "file"
-
-
 @dataclass(frozen=True)
 class SlackUser:
     """A Slack user that a profile lookup or a collected message showed."""
@@ -693,68 +672,12 @@ class Avatar:
     at: int
 
 
-@dataclass(frozen=True)
-class Project:
-    """One project of the Projects tab."""
-    __table__ = "projects"
-    id: str  # the signature of its first members
-    rank: int
-    sig: str
-    keywords: str
-    name: str  # the keyword name; the AI name is in pensieve.db meta
-    relevance: float
-    near: bool
-    role: ProjectRole
-    me_share: float
-    mine: float
-    team: float
-    last_at: int
-    topic: int | None  # the Map topic of most of its items
-    n_code: int
-    n_docs: int
-    n_sessions: int
-    n_commits: int
-    n_prs: int
-    n_tickets: int
-    n_tasks: int
-    n_people: int
-
-
-@dataclass(frozen=True)
-class ProjectMember:
-    __table__ = "project_members"
-    project_id: str
-    person_id: str
-    idx: int
-    weight: float
-    n: float
-    last_at: int
-
-
-@dataclass(frozen=True)
-class ProjectItem:
-    __table__ = "project_items"
-    project_id: str
-    kind: ProjectItemKind
-    idx: int
-    value: str  # text for rep, prefix, repo and area; a JSON object for the others
-
-
-@dataclass(frozen=True)
-class ProjectPoint:
-    """The project of a Map item."""
-    __table__ = "project_points"
-    point_id: str
-    project_id: str
-
-
 STORE_MODELS = (Source, Document, DocumentPerson, DocumentChange, DocumentSession, Identity, Person, PersonKey,
                 PersonAlias, PersonOverride, OrgPullRequest, OrgReview, OrgTitle, OrgFirstCommit, Card, CardMember,
                 CardNote, CardStateSet, CardDone, Thread, ThreadMember, ThreadRepo, ThreadCard, ThreadEventRow,
                 ThreadSnapshot, ThreadSnapshotReason, Feedback, SlackUser, DirectoryPerson, DirectoryEmail,
                 DirectorySource, OrgTeamPair, OrgManagerTitle, OrgState, UsageCall, AgentJob, AgentSession)
-INDEX_MODELS = (DocChunk, DocIndexState, EmbedCache, PersonEdge, CacheEntry, Meta, Avatar, Project, ProjectMember,
-                ProjectItem, ProjectPoint)
+INDEX_MODELS = (DocChunk, DocIndexState, EmbedCache, PersonEdge, CacheEntry, Meta, Avatar)
 
 
 @cache

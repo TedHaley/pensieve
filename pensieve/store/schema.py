@@ -421,52 +421,6 @@ CREATE TABLE IF NOT EXISTS avatars (
   at    INTEGER NOT NULL
 ) STRICT;
 """,
-    "projects": """
-CREATE TABLE IF NOT EXISTS projects (
-  id          TEXT PRIMARY KEY NOT NULL,
-  rank        INTEGER NOT NULL,
-  sig         TEXT NOT NULL,
-  keywords    TEXT NOT NULL,
-  name        TEXT NOT NULL,
-  relevance   REAL NOT NULL,
-  near        INTEGER NOT NULL CHECK (near IN (0, 1)),
-  role        TEXT NOT NULL CHECK (role IN ('lead', 'contributor', 'occasional', 'none')),
-  me_share    REAL NOT NULL,
-  mine        REAL NOT NULL,
-  team        REAL NOT NULL,
-  last_at     INTEGER NOT NULL,
-  topic       INTEGER,
-  n_code      INTEGER NOT NULL,
-  n_docs      INTEGER NOT NULL,
-  n_sessions  INTEGER NOT NULL,
-  n_commits   INTEGER NOT NULL,
-  n_prs       INTEGER NOT NULL,
-  n_tickets   INTEGER NOT NULL,
-  n_tasks     INTEGER NOT NULL,
-  n_people    INTEGER NOT NULL
-) STRICT;
-CREATE TABLE IF NOT EXISTS project_members (
-  project_id  TEXT NOT NULL,
-  person_id   TEXT NOT NULL,
-  idx         INTEGER NOT NULL,
-  weight      REAL NOT NULL,
-  n           REAL NOT NULL,
-  last_at     INTEGER NOT NULL,
-  PRIMARY KEY (project_id, person_id)
-) STRICT;
-CREATE TABLE IF NOT EXISTS project_items (
-  project_id  TEXT NOT NULL,
-  kind        TEXT NOT NULL CHECK (kind IN ('rep', 'prefix', 'repo', 'area', 'pr', 'ticket', 'task', 'session',
-                                            'commit', 'file')),
-  idx         INTEGER NOT NULL,
-  value       TEXT NOT NULL CHECK (kind IN ('rep', 'prefix', 'repo', 'area') OR json_valid(value)),
-  PRIMARY KEY (project_id, kind, idx)
-) STRICT;
-CREATE TABLE IF NOT EXISTS project_points (
-  point_id    TEXT PRIMARY KEY NOT NULL,
-  project_id  TEXT NOT NULL
-) STRICT;
-""",
 }
 
 # version -> the statements that take a file from version - 1 to version. Empty while v2 is new.

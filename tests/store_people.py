@@ -1,5 +1,5 @@
-"""Tests of storage v2's People, org, Projects, cache and other user data (pensieve/store/people.py, org.py,
-projects.py, cache.py, misc.py). Run: python tests/store_people.py
+"""Tests of storage v2's People, org, cache and other user data (pensieve/store/people.py, org.py, cache.py,
+misc.py). Run: python tests/store_people.py
 
 Each test opens new files in a temporary PENSIEVE_DATA."""
 import os
@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from pensieve import models as M  # noqa: E402
 from pensieve import store  # noqa: E402
-from pensieve.store import cache, misc, org, people, projects  # noqa: E402
+from pensieve.store import cache, misc, org, people  # noqa: E402
 
 
 def fresh():
@@ -101,23 +101,6 @@ def test_org():
     org.save(s, {**ev, "prs": {}})
     assert org.load(s)["prs"] == {} and s.one("SELECT count(*) FROM org_reviews")[0] == 0
 
-
-def test_projects():
-    _, i = fresh()
-    e = dict(id="s1", key="dscope:s1", sig="s1", keywords="auth, login", reps=["code:r:a.py"], name="Auth",
-             description="", named=False, team=0.5, mine=1.0, me_share=0.6, role="lead", last=1000, topic=3,
-             counts=dict(code=1, docs=0, sessions=2, commits=3, prs=1, tickets=0, tasks=0, people=1),
-             prefixes=["ABC"], repos=["r"], areas=["r/auth"],
-             members=[dict(id="p1", weight=0.7, n=2.0, last=900)],
-             prs=[dict(url="https://example.com/pull/1", title="Fix", state="open", ts=900, author="p1", via="card")],
-             tickets=[], tasks=[], sessions=[dict(id="claude:x", title="T", ts=800, repo="r")], commits=[], files=[],
-             relevance=1.0, rank=1, near=True)
-    projects.save(i, {"v": 1, "built": 5}, [e], {"code:r:a.py": "s1"})
-    assert projects.state(i) == {"v": 1, "built": 5}
-    assert projects.load(i) == [e]
-    assert projects.points(i, ["code:r:a.py", "nope"]) == {"code:r:a.py": "s1"}
-    projects.set_clusters(i, b"npz", 99)
-    assert projects.clusters(i) == b"npz"
 
 
 def test_cache():

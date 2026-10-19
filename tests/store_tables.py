@@ -25,8 +25,7 @@ JSON = {"raw", "view", "card", "extra", "evidence", "context", "args", "results"
 REFS = {"doc_id": 1, "source_id": "src", "card_id": "c1", "thread_id": "th1", "snapshot_id": 1, "person_id": "p1",
         "key": "email:sam@example.com", "url": "https://example.com/pull/1", "goal_of": None}
 FIXED_ID = {models.Card: "c1", models.Thread: "th1", models.Source: "src", models.Person: "p1",
-            models.DirectoryPerson: "p1", models.Feedback: "f1", models.AgentJob: "j1", models.SlackUser: "U1",
-            models.Project: "pr1"}
+            models.DirectoryPerson: "p1", models.Feedback: "f1", models.AgentJob: "j1", models.SlackUser: "U1"}
 PARENTS = (models.Source, models.Document, models.Card, models.Thread, models.Person, models.Identity,
            models.ThreadSnapshot, models.OrgPullRequest, models.DirectoryPerson)
 
