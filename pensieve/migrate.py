@@ -35,7 +35,8 @@ KEEP_IN_CONNECTIONS = {".oauth"}  # sign-in tokens of the user's own MCP connect
 # The v1 files that a step reads: kept until the step is done or given up.
 PROTECTS = {"person_overrides": ("people",), "org_evidence": ("people",), "card_states": ("pensieve.db",),
             "embed_cache": ("pensieve.db", "embed_model"), "feedback": ("feedback.jsonl",), "card_notes": ("work_notes.json",), "card_done": ("work_done.json",),
-            "usage": ("usage.db",), "doc_paths": ("connections",)}
+            "usage": ("usage.db",), "doc_paths": ("connections",),
+            "documents": ("connections",)}
 # Paths that v1 code in this process still uses: delete_v1 keeps them, so it never removes a live index.
 LIVE = (("pensieve.config", "DB_PATH"), ("pensieve.config", "INDEX_PATH"), ("pensieve.repos", "CODE_INDEX_PATH"),
         ("pensieve.repos", "SHADOW_DIR"), ("pensieve.files", "FILES_INDEX_PATH"), ("pensieve.connections", "DIR"),
@@ -287,6 +288,76 @@ def read_doc_paths(v1: Path) -> list:
     return out
 
 
+def read_documents(v1: Path) -> list[tuple]:
+    """connections/<sid>/<name>.md and .raw/<name>.json: the collected items, as (sid, label, tool, raw item). v2
+    would collect them again, but that costs the agent's time and tokens, and old items fall out of the window."""
+    root, out = v1 / "connections", []
+    if not root.is_dir():
+        return out
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        for md in sorted(d.glob("*.md")):
+            front = _front(md)
+            try:
+                raw = json.loads((d / ".raw" / f"{md.stem}.json").read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(raw, dict) and front.get("source"):
+                out.append((d.name, front["source"], front.get("tool") or raw.get("_tool") or "", raw))
+    return out
+
+
+def _write_documents(store, items) -> int:
+    """Each v1 item into `documents`, as a collection would store it, with the sessions that saw it."""
+    from pensieve import connections, connectors
+    from pensieve.store import documents
+    n, futs = 0, []
+    for sid, label, tool, raw in items:
+        kn = raw.get("_key_name") or ("_key" if raw.get("_key") else connections._id_key(raw))
+        if not kn or raw.get(kn) in (None, ""):
+            continue
+        key = str(raw[kn])
+        pid = connectors.match(sid, label, tool)
+        chat = bool(connections.CHAT.search(f"{sid} {tool}")) or pid == "slack"
+        connections._source(sid, label)
+        at = connections._when(raw.get("_seen_at")) or models.now()
+        seen = [s for s in raw.get("_seen_in") or [] if isinstance(s, str)] or [None]
+        for i, sess in enumerate(seen):
+            make = (lambda old, raw=raw, kn=kn, key=key, pid=pid, sid=sid, label=label, tool=tool, chat=chat:
+                    connections._write(pid, sid, label, tool, kn, key, raw, old, chat))
+            futs.append((i, documents.upsert(store, sid, key, make, seen=documents.Seen(sess, at) if sess else None,
+                                             wait=False)))
+    for i, f in futs:
+        r = f.result()
+        if i == 0 and r is not None:
+            n += 1
+            for fn in connections.listeners:
+                fn(r)
+    return n
+
+
+def _front(md: Path) -> dict:
+    """The front matter of a v1 item file, as {name: value}."""
+    out = {}
+    try:
+        with md.open(errors="replace") as f:
+            if f.readline().strip() != "---":
+                return out
+            for _ in range(40):
+                line = f.readline()
+                if not line or line.strip() == "---":
+                    break
+                k, _, v = line.partition(": ")
+                try:
+                    out[k.strip()] = json.loads(v)
+                except ValueError:
+                    out[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return out
+
+
 def _front_key(md: Path) -> str | None:
     try:
         with md.open(errors="replace") as f:
@@ -374,6 +445,7 @@ STEPS = [  # the embed cache first: indexing waits for it (cache_ready)
     Step("card_done", "note items that a commit did", read_card_done, ("card_id", "item")),
     Step("org_evidence", "org chart evidence", read_org_evidence, write=_write_org),
     Step("usage", "MCP tool call history", read_usage, write=_write_usage, available=lambda: _usage_model() is not None),
+    Step("documents", "collected connection items", read_documents, write=_write_documents),
     Step("doc_paths", "old file ids of connection items", read_doc_paths, write=_write_doc_paths),
 ]
 

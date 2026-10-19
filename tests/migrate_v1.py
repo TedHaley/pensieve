@@ -54,7 +54,10 @@ def make_v1(d: Path):
     (d / "work_done.json").write_text(json.dumps({"t:A-1": {"key": "k", "done": {"Ship it.": "abc123"}}}))
     c = d / "connections" / "claude_ai_Example"
     c.mkdir(parents=True, exist_ok=True)
-    (c / "A-1.md").write_text('---\nsource: "Example"\nkey: "A-1"\ntitle: "One"\n---\n\nbody\n')
+    (c / "A-1.md").write_text('---\nsource: "Example"\ntool: "getIssue"\nkey: "A-1"\ntitle: "One"\n---\n\nbody\n')
+    (c / ".raw").mkdir(exist_ok=True)
+    (c / ".raw" / "A-1.json").write_text(json.dumps(dict(key="A-1", summary="One", status="Done", _key_name="key",
+                                                         _seen_in=["claude:s1"], _seen_at="2026-09-01T00:00:00Z")))
     (d / "connections" / ".oauth").mkdir(exist_ok=True)
     (d / "connections" / ".oauth" / "own.json").write_text("{}")
     for n in ("code.tv", "index.tv", "work.log", "server.log"):
@@ -72,12 +75,14 @@ def test_import_twice():
     assert migrate.v1_detected()
     r = migrate.import_v1(DATA, s, dry=False)
     want = dict(person_overrides=3, card_states=2, feedback=1, card_notes=1, card_done=1, org_evidence=5, doc_paths=1,
-                usage=2, embed_cache=0)
+                usage=2, embed_cache=0, documents=1)
     for k, n in want.items():
         assert r[k]["status"] == "done" and r[k]["count"] == n, (k, r[k])
     assert s.one("SELECT tool, at, ok FROM usage_calls ORDER BY at")[0:3] == ("search", NOW, 1)
     assert s.one("SELECT state FROM card_states WHERE card_id = 't:A-2'")[0] == "forgotten"
     assert s.one("SELECT id, source, details FROM feedback") == ("a", "some-agent", "x")
+    assert s.one("SELECT d.key, d.status, ds.session_id FROM documents d JOIN document_sessions ds ON ds.doc_id = d.id "
+                 "WHERE d.source_id = 'claude_ai_Example'") == ("A-1", "Done", "claude:s1")
     assert json.loads(s.one("SELECT extra FROM card_notes")[0]) == {"also": ["more"]}
     again = migrate.import_v1(DATA, s, dry=False)
     assert set(again) >= set(want) and all(again[k]["status"] == "done" for k in want)
@@ -129,7 +134,7 @@ def test_compat_id():
     from pensieve.models import SourceKind, SourceOrigin
     from pensieve.store import sources
     sources.ensure(s, "claude_ai_Example", SourceKind.MCP, "Example", SourceOrigin.ENGINE)
-    s.write(lambda c: c.execute("INSERT INTO documents (source_id, key, kind, title, text, raw, hash) VALUES "
+    s.write(lambda c: c.execute("INSERT OR IGNORE INTO documents (source_id, key, kind, title, text, raw, hash) VALUES "
                                 "('claude_ai_Example', 'A-1', 'ticket', 'One', 'body', '{}', 'h')"))
     doc = s.one("SELECT id FROM documents WHERE key = 'A-1'")[0]
     old = f"file:{DATA}/connections/claude_ai_Example/A-1.md"
