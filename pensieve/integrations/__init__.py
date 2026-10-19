@@ -38,6 +38,9 @@ SKILLS = {  # id -> (label, what it does, recommended)
     "pensieve-plan": ("Plan with prior art and experts",
                       "Plans for new code list existing code to reuse, earlier attempts, people to loop in and "
                       "knowledge risks.", False),
+    "pensieve-wrap-up": ("Wrap up threads",
+                         "Gets the threads closest to done and does the steps that close them in git, GitHub and the "
+                         "tracker; asks before a merge or a close.", False),
 }
 
 
@@ -48,11 +51,13 @@ HOOKS = {  # id -> (label, what it does, recommended)
                     "the new code instead of the old.", True),
     "claude-repo-check": ("Ask before indexing a new repo",
                           "When a session starts in a repo Pensieve doesn't index, Claude asks you once whether to "
-                          "index it. If you say no, it uses grep there and doesn't ask again.", True),
+                          "index it. If you say no, it uses grep there and doesn't ask again. In an indexed repo, "
+                          "Claude gets the number of loose ends and the thread closest to done, and offers to close "
+                          "it at a natural pause.", True),
     "claude-prompt-search": ("Add context to each prompt",
                              "When you send Claude Code a prompt in an indexed repo, Pensieve adds what it needs: the "
-                             "context card of the work it names, your task list for a standup, who knows the code, or "
-                             "the best code matches. Claude starts with the answer instead of looking it up.", True),
+                             "thread of the work it names, your threads for a standup, who knows the code, or the "
+                             "best code matches. Claude starts with the answer instead of looking it up.", True),
 }
 HOOK_SPEC = {  # id -> (Claude Code hook event, matcher or None, the URL path the hook posts its JSON to)
     "claude-hook": ("PostToolUse", "Edit|MultiEdit|Write|NotebookEdit", "/api/touched"),
@@ -95,8 +100,8 @@ def claude_plugin() -> bool:
 
 
 def _claude_bin():
-    from pensieve.llm import _find
-    return shutil.which("claude") or _find("claude")
+    from pensieve.config import find_exe
+    return find_exe("claude")
 
 
 def _pensieve_bin() -> str:
@@ -215,6 +220,25 @@ def stale_note(name: str, items: list[dict]) -> str | None:
             f"the task for this. At a "
             f"natural pause, offer the user a cleanup: call Pensieve's `stale` tool and show its list. Remove nothing "
             f"without their yes.")
+
+
+def threads_note(name: str, root: str, threads: list[dict]) -> str | None:
+    """What the SessionStart hook adds about the repo's threads that are not done: how many are loose ends, and the
+    one closest to done (fewest steps left) with its first step. None when nothing waits."""
+    from pensieve import insights_stats
+    mine = [t for t in threads if root in t.get("repos", []) and t["state"] in ("open", "loose_ends")
+            and (t.get("left") or t["state"] == "loose_ends")]
+    if not mine:
+        return None
+    loose = sum(t["state"] == "loose_ends" for t in mine)
+    t = min(mine, key=lambda t: insights_stats.closest_first(len(t.get("left") or []), t["updated"]))
+    title = (t.get("anchor") or {}).get("title") or t["title"]
+    step = (t.get("left") or [{}])[0].get("text", "")
+    return (f"{name} has {loose} loose end{'s' if loose != 1 else ''} (threads that are not done and went quiet). The "
+            f"thread closest to done is \"{title}\" ({t['id']})" + (f"; its next step: {step}" if step else "") + ". "
+            "Don't interrupt the task for this. At a natural pause, offer the user to close it: call Pensieve's "
+            "`threads` tool and follow the pensieve-wrap-up skill if it is installed. Pensieve only reads: a thread "
+            "closes when its PR merges, its ticket closes or its branch goes.")
 
 
 def hook_command(hook: str, port: int) -> str:

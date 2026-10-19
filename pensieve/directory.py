@@ -327,11 +327,6 @@ def user_servers() -> list[dict]:
     return out
 
 
-SEARCH = """Find the people named "{q}" with the {name} tools only. Call the user search tool once with that query.
-Make at most 2 tool calls. Do not summarize, and do not change anything: Pensieve keeps the tool results.
-When you are done, reply DONE."""
-
-
 def _text(d: dict, *keys) -> str:
     return next((d[k] for k in keys if isinstance(d.get(k), str) and d[k]), "")
 
@@ -392,14 +387,10 @@ async def _search_own(cfg: dict, q: str) -> list[tuple]:
 
 
 def search_server(r: dict, q: str) -> list[dict]:
-    """Ask one server for the people who match: own and agent servers directly, a Claude Code server headless."""
-    if r["origin"] == "engine":  # the run's cost goes into r["_cost"]
-        results = connections._collect_engine(r, 2, SEARCH.format(q=q.replace('"', ""), name=r["name"]),
-                                              only=lambda n: _search_tool([n]) == n)
-    else:
-        cfg = connections.agent_configs()[r["id"]]["cfg"] if r["origin"] == "agent" else \
-            next(c for c in settings.get("mcp_servers") if connections.slug(c["name"]) == r["id"])
-        results = asyncio.run(asyncio.wait_for(_search_own(cfg, q), 60))
+    """Ask one server (own, or in an agent's config) for the people who match."""
+    cfg = connections.agent_configs()[r["id"]]["cfg"] if r["origin"] == "agent" else \
+        next(c for c in settings.get("mcp_servers") if connections.slug(c["name"]) == r["id"])
+    results = asyncio.run(asyncio.wait_for(_search_own(cfg, q), 60))
     found = _parse(results, r["connector"])
     # a list tool gives everyone, and a search can match on other fields: keep the people whose name matches first
     found.sort(key=lambda p: -score(q, p["name"], p.get("login", ""), p["emails"], p.get("slack", "")))

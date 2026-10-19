@@ -106,20 +106,20 @@ class CardKind(StrEnum):
 
 
 class State(StrEnum):
-    """A card's state (pensieve/task_states.py says what each one means)."""
-    LATENT = "latent"
-    CONSCIOUS = "conscious"
-    SUBCONSCIOUS = "subconscious"
-    ETCHED = "etched"
+    """A thread's state (pensieve/task_states.py says what each one means)."""
+    TODO = "todo"
+    OPEN = "open"
+    LOOSE_ENDS = "loose_ends"
+    COMPLETE = "complete"
     FORGOTTEN = "forgotten"
 
 
 class StateSet(StrEnum):
     """What a row of card_states sets: a state, or `auto` (the automatic state applies again)."""
-    LATENT = "latent"
-    CONSCIOUS = "conscious"
-    SUBCONSCIOUS = "subconscious"
-    ETCHED = "etched"
+    TODO = "todo"
+    OPEN = "open"
+    LOOSE_ENDS = "loose_ends"
+    COMPLETE = "complete"
     FORGOTTEN = "forgotten"
     AUTO = "auto"
 

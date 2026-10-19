@@ -18,11 +18,11 @@ by = {p["slug"]: p for p in pages_a.PAGES}
 GROUPS = [
     ("Start", ["", "install", "faq"]),
     ("Agents", ["agents"]),
-    ("Reference", ["mcp-tools", "context-cards", "connections"]),
+    ("Reference", ["mcp-tools", "threads", "connections"]),
     ("Evidence", ["benchmark", "privacy"]),
 ]
 CLIENT_SLUGS = [s for s in by if s.startswith("agents/")]
-ORDER = ["", "install", "agents", *CLIENT_SLUGS, "mcp-tools", "context-cards", "connections", "benchmark", "privacy", "faq"]
+ORDER = ["", "install", "agents", *CLIENT_SLUGS, "mcp-tools", "threads", "connections", "benchmark", "privacy", "faq"]
 assert sorted(ORDER) == sorted(by), set(by) ^ set(ORDER)
 
 

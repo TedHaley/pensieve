@@ -248,8 +248,8 @@ def test_connections_store():
 def test_cards():
     s, _ = fresh()
     M = models
-    main = M.Card("t:ABC-1", M.CardKind.TICKET, None, "Fix login", M.State.CONSCIOUS, 1, 2, 3, "sig", "{}")
-    goal = M.Card("t:ABC-1~pr2", M.CardKind.GOAL, "t:ABC-1", "Docs", M.State.LATENT, 1, 2, 3, "sig2", "{}")
+    main = M.Card("t:ABC-1", M.CardKind.TICKET, None, "Fix login", M.State.OPEN, 1, 2, 3, "sig", "{}")
+    goal = M.Card("t:ABC-1~pr2", M.CardKind.GOAL, "t:ABC-1", "Docs", M.State.TODO, 1, 2, 3, "sig2", "{}")
     cards.save(s, [(goal, [M.CardMember(goal.id, M.MemberKind.PULL_REQUEST, "https://example.com/pull/2", 2)]),
                    (main, [M.CardMember(main.id, M.MemberKind.SESSION, "claude:abc", 2),
                            M.CardMember(main.id, M.MemberKind.TICKET_KEY, "ABC-1", None)])])
@@ -259,7 +259,7 @@ def test_cards():
     assert [m.ref for m in cards.members(s, main.id)] == ["claude:new"]
     cards.save(s, [], delete=[main.id])
     assert cards.ids(s) == set(), "a goal card goes with its main card"
-    cards.add_state(s, M.CardStateSet(None, "t:ABC-1", M.StateSet.ETCHED, M.SetBy.USER, "done", 10))
+    cards.add_state(s, M.CardStateSet(None, "t:ABC-1", M.StateSet.COMPLETE, M.SetBy.USER, "done", 10))
     cards.add_state(s, M.CardStateSet(None, "t:ABC-1", M.StateSet.AUTO, M.SetBy.USER, "", 11))
     assert cards.latest_states(s)["t:ABC-1"].state is M.StateSet.AUTO
     assert len(cards.state_history(s, "t:ABC-1")) == 2

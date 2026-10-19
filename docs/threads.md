@@ -10,12 +10,12 @@ A thread follows one goal over time, so you can see how a piece of work changed,
 | **Thread** | One goal, followed over time. The goal is the identity of the thread. |
 | **Member** | Work done for the goal: a ticket, a pull request (PR), a feature branch, a commit, an agent session, an edited file. |
 | **Reference** | Something that only mentions the thread: a standup session that names the ticket, a PR description that links another PR. |
-| **Snapshot** | A thread at one point in time: its members and its core (problem, goal, state, next). A context card shows one snapshot. |
+| **Snapshot** | A thread at one point in time: its members and its core (problem, goal, state, next). A thread page shows one snapshot: the thread now, or a saved version. |
 | **History** | The snapshots of a thread, oldest first, with the events between them. |
 | **Collection** | A set of threads: a person's, a team's or a project's. |
 
 ```
-member ─▶ snapshot (a card at time t) ─▶ thread (one goal over time) ─▶ collection (many threads)
+member ─▶ snapshot (a version at time t) ─▶ thread (one goal over time) ─▶ collection (many threads)
 ```
 
 A thread has two ids:
@@ -31,7 +31,7 @@ A thread has one goal. The steps that serve the goal stay in the thread: a CI fi
 
 ### 2. Members and references
 
-A member is work done for the goal. A reference only mentions the thread. The card shows references, but references never decide which thread an item belongs to.
+A member is work done for the goal. A reference only mentions the thread. The thread shows references, but references never decide which thread an item belongs to.
 
 ### 3. Who owns a member
 
@@ -82,7 +82,7 @@ Each event goes into the history of the thread. Old ids and old links continue t
 | **Split** | One thread turns out to hold two goals. The part with the larger overlap keeps the thread id. The other part starts a thread that is "split from" it. |
 | **Merge** | Two threads turn out to be one goal. The older thread continues. The other thread is "merged into" it. |
 | **Fork** | The members match, but the goal moved: a new thread "forked from" the old one. |
-| **End** | The goal is done (etched) or left (forgotten). |
+| **End** | The goal is done (Complete) or left (Forgotten). |
 | **Revive** | New work on an ended thread, with the same goal. The thread opens again, with no time limit. A different goal starts a new thread. |
 
 ### 8. Threads cross repos and people
@@ -96,27 +96,27 @@ A thread is the smallest unit that you hand off or report in a standup. These it
 - A session that only asked a question and changed nothing. It is a reference.
 - A long-lived branch.
 - An epic or a project. It is a collection.
-- A ticket with no work yet. It is a latent thread: a goal with no members.
+- A ticket with no work yet. It is a thread in the To do state: a goal with no members.
 
 ### 10. A goal in a session becomes a thread when data outside the session supports it
 
-A long session can work toward several goals. Each goal that has its own PR, ticket or commit is a thread, and has its own card. A goal that only the session talks about is a line on the card of the main goal ("Also in these sessions"). It becomes a thread when its first PR, ticket or commit appears.
+A long session can work toward several goals. Each goal that has its own PR, ticket or commit is a thread. A goal that only the session talks about is a line on the thread of the main goal ("Also in these sessions"). It becomes a thread when its first PR, ticket or commit appears.
 
 The main goal is the newest goal that a session did work toward: it changed code, made a commit or PR, ran a job or made a decision. A session that only explained code or answered questions does not set the main goal. A step that serves a goal (a change it needs, a revert, a CI fix, a review round) is part of that goal (rule 1). Each PR, commit and ticket belongs to the goal that it was made for.
 
-`bench/goals.py` measures this rule on labelled tasks: is the main goal right, and do the PRs, tickets and commits land in the right goals?
+`bench/goals.py` measures this rule on labelled examples: is the main goal right, and do the PRs, tickets and commits land in the right goals?
 
-Pensieve finds the goals in the note that the model writes for each task: each goal names its evidence (PR numbers, ticket keys, commit hashes). Pensieve keeps only the evidence that is real: a PR or ticket of the task, or a commit that git has in the task's repos. A model cannot add a member.
+Pensieve finds the goals in the note that the agent writes for each thread: each goal names its evidence (PR numbers, ticket keys, commit hashes). Pensieve keeps only the evidence that is real: a PR or ticket of the thread, or a commit that git has in the thread's repos. A model cannot add a member.
 
 ## History
 
 The snapshots of a thread form its history, as commits form the history of a branch. The history shows how the goal, the state and the next step changed over time.
 
-To start a thread again, start a new agent session from one of its cards: the card now, or a saved one. Pensieve writes the card to a file and opens the agent in the work's folder, with a prompt to read the card, to get what changed since (the card's refresh commands), and to report before it changes anything. When the folder is gone, the card's start commands get the work back.
+To start a thread again, start a new agent session from it: the thread now, or a saved version. Pensieve writes the thread to a file and opens the agent in the work's folder. The prompt tells the agent to read the thread, to get what changed since (the thread's refresh commands), and to report before it changes anything. When the folder is gone, the thread's start commands get the work back.
 
 ## How Pensieve links snapshots
 
-1. Pensieve builds the snapshots from the sessions, git, PRs, tickets and connections, as for the Context tab.
+1. Pensieve builds the snapshots from the sessions, git, PRs, tickets and connections, as for the Threads tab.
 2. For each snapshot, it calculates the weighted overlap of members with the snapshots that it built before:
 
    | Member | Weight |
@@ -141,7 +141,7 @@ Members do the work. The goal check adds nothing on this data, and it stays as a
 
 ## Local history
 
-Pensieve saves each thread's card when it changes (`pensieve/history.py`). It checks every 10 minutes, and it saves a card when:
+Pensieve saves a version of each thread when it changes (`pensieve/history.py`). It checks every 10 minutes, and it saves a version when:
 
 - the linker records an event (start, fork, split, merge, revive);
 - the state of the thread changes;
@@ -155,5 +155,5 @@ A thread is saved at most once in 30 minutes, except for an event, a state chang
 
 - **One goal, three PRs.** A change merges into the wrong branch, a revert undoes it, and a new PR carries the same change. All three PRs are one thread, because the goal is the same.
 - **A shared branch.** Two sessions work on a long-lived branch: one changes the logo, one measures search. The branch is not evidence (rule 5), so they are two threads.
-- **A PR that another thread owns.** A card about a model fix shows the merged PR of a different feature, which one of its sessions mentions. That PR is a reference on the model fix, and a member of its own thread (rules 2 and 3).
+- **A PR that another thread owns.** A thread about a model fix shows the merged PR of a different feature, which one of its sessions mentions. That PR is a reference on the model fix, and a member of its own thread (rules 2 and 3).
 - **A fork.** A session starts on a bug and ends on a new feature. The members match, but the goal moved, so the feature is a new thread, forked from the bug.

@@ -1234,7 +1234,7 @@ const TYPE_ONE = {doc: 'Document', code: 'Code', session: 'Agent session'};
 S.data = {points: [], repos: [], home: '', types: new Set(['doc', 'code', 'session']), folders: new Set(), colorBy: store.get('dataColor', 'type') === 'context' ? 'type' : store.get('dataColor', 'type'),  // the Context lens is gone
           treeOpen: new Set(store.get('dataTreeOpen', [])), tree: null, highlight: null, loaded: false, stale: false, repoKeys: new Map(),
           srcOff: new Set(store.get('dataSrcOff', [])), srcOpen: new Set(store.get('dataSrcOpen', [])),
-          topics: new Map(), topicsAI: false, sel: null, selStack: [], search: null, ctx: null, view: null, rev: '', authors: new Set(), drawerPerson: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
+          topics: new Map(), sel: null, selStack: [], search: null, ctx: null, view: null, rev: '', authors: new Set(), drawerPerson: null};  // sel: the map label you zoomed into {kind, key, cam, folders}
 const relHome = (p = '') => { p = p || ''; const h = S.data.home; return h && p.startsWith(h + '/') ? p.slice(h.length + 1) : p.replace(/^\//, ''); };
 const ptTime = p => typeof p.mtime === 'number' ? p.mtime * 1000 : T(p.mtime);
 // A repo, or a folder two levels under home (~/Documents/taxes): "Desktop" alone would color nearly everything the same.
@@ -1292,8 +1292,7 @@ function canonAuthors(points) {
 }
 async function loadDataTopics() {
   const r = await api('/api/data/topics').catch(() => null);
-  S.data.topics = new Map((r?.topics || []).map(t => [t.id, t])); S.data.topicsAI = !!r?.ai; S.data.topicsPaused = r?.ai_paused || null;
-  if (S.data.view) refreshViewNames();
+  S.data.topics = new Map((r?.topics || []).map(t => [t.id, t]));  if (S.data.view) refreshViewNames();
 }
 // Topics follow what's on screen: the items that pass the filters and sit inside the camera's view are re-clustered on
 // the server, so zooming into an area (or into a topic) brings out its finer topics, and a filter re-finds topics among
@@ -1535,7 +1534,7 @@ function openTopic(entry) {
   const recent = [...mem].filter(p => !isNaN(p.t)).sort((a, b) => b.t - a.t).filter(p => !central.includes(p)).slice(0, 5);
   const itemRow = p => `<button class="item" data-open="${esc(p.open)}"><div class="t"><i class="sw" style="background:${slotColor(TYPE_SLOT[p.type])}"></i><span class="grow">${esc(p.title)}</span>${isNaN(p.t) ? '' : `<span class="muted">${rel(p.t)}</span>`}</div><div class="s">${esc(p.type === 'session' ? (p.repo ? 'in ' + p.repo : p.display) : p.display.replace(/\/[^/]*$/, ''))}</div></button>`;
   openDrawer(`<div class="meta"><span class="badge"><i class="sw" style="background:${slotColor(slot)}"></i>Topic</span>${plural(mem.length, 'item')}${D.selStack.filter(e => e.kind === 'topic').length > 1 ? ` · inside ${esc(D.selStack.filter(e => e.kind === 'topic').slice(0, -1).map(e => e.name).join(' › '))}` : ''}</div><h2>${esc(t.name)}</h2>`,
-    `${t.description ? `<p>${esc(t.description)}</p>` : `<p class="muted">${D.topicsAI ? (D.topicsPaused ? `Named from its most distinctive words for now. A written name and description come when background AI resumes (${esc(D.topicsPaused.toLowerCase())}).` : 'A written description is on its way; named from its most distinctive words for now.') : 'Named from its most distinctive words. Choose an AI engine in Settings for written names and descriptions.'}</p>`}
+    `${t.description ? `<p>${esc(t.description)}</p>` : `<p class="muted">Named from its most distinctive words for now. Your agent writes a name and a description when you ask it to do Pensieve’s pending work.</p>`}
      <div class="kpis" style="grid-template-columns:repeat(3,1fr)">${Object.keys(TYPE_SLOT).map(k => `<div class="kpi"><div class="l">${TYPE_NAME[k]}</div><div class="v">${(tc[k] || 0).toLocaleString()}</div></div>`).join('')}</div>
      ${ts.length ? `<p class="muted" style="font-size:12px;margin:8px 0 0">Last changed ${rel(ts[0])}${ts.length > 1 ? ` · oldest ${rel(ts[ts.length - 1])}` : ''}</p>` : ''}
      <div class="h4">Where it lives</div><div class="list">${places.map(([k, n]) => { const r = repoOfKey(k); return `<button class="item" data-place="${esc(k)}"><div class="t"><span class="grow">${esc(r ? r.name : '~/' + k)}${r ? '<span class="cbadge">code</span>' : ''}</span><span class="muted">${Math.round(n / mem.length * 100)}%</span></div></button>`; }).join('')}</div>
@@ -1633,7 +1632,7 @@ function dataPeople() {
 const whoOf = author => S.data.whoMap?.get(person(author)) || S.data.whoMap?.get(author) || person(author);
 // What one person knows about, within whatever the map is filtered to (types, folders, search; any repos): the topics
 // and places where they wrote the biggest share, who they work alongside, and what they changed recently. Code repos
-// add their last 90 days of commits and, with an AI engine, a written summary of their focus.
+// add their last 90 days of commits and the summary of their focus that the user's agent wrote.
 function openPersonPanel(who, {keep = false} = {}) {
   const D = S.data;
   const ctx = D.points.filter(p => dataPass(p, 'authors') && (!D.search || D.search.has(p.id)));
@@ -1954,7 +1953,7 @@ async function openFile(path) {
 
 /* ============================== settings view ============================== */
 // Each setting sits with the thing it controls: a source's options in its Sources card, the Mac app's in General,
-// the AI models with the engines. Every change saves at once, like the switches next to them.
+// the models in Models. Every change saves at once, like the switches next to them.
 const SRC_OPTS = {agents: ['skip_temp_sessions'], files: ['exclude', 'exclude_files', 'max_file_mb'], repos: ['sweep_roots', 'sweep_depth', 'max_repo_files']};
 const CHIP_LISTS = new Set(['exclude', 'exclude_files']);
 function setRow(k) {
@@ -2298,11 +2297,11 @@ function renderSources() {
 const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') return; await Promise.all([loadSources(), loadScopes()]); renderSources(); renderScopes(); }, 1200);
 
 const ENERGY_IC = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M13 2 4 14h7l-1 8 9-12h-7Z" fill="currentColor"/></svg>';
-// First run (and after a reset), in the same steps an agent takes through the MCP setup tools: what Pensieve is, who
-// it's for, permission to look, what to index, the insights engine, then start. No folder is read before "Look".
+// First run (and after a reset), in the same steps an agent takes through the MCP setup tools: what Pensieve is, the
+// user's profiles, permission to look, what to index, the search model, then start. No folder is read before "Look".
 const SETUP_STEPS = ['about', 'profile', 'look', 'choose', 'ai', 'start'];
 const SETUP_ADD = {files: 'Add folder…', repos: 'Add repo…', agents: 'Add session folder…'};
-const setupState = {step: 'about', guide: null, profiles: new Set(), cands: null, chosen: new Set(), ai: null, busy: false, err: null, adding: null};
+const setupState = {step: 'about', guide: null, profiles: new Set(), cands: null, chosen: new Set(), busy: false, err: null, adding: null};
 async function openSetup() {
   let el = $('#setupsheet');
   if (!el) { el = document.createElement('div'); el.id = 'setupsheet'; el.className = 'setup-sheet'; document.body.appendChild(el); }
@@ -2310,8 +2309,6 @@ async function openSetup() {
   el.innerHTML = '<div class="setup-card"><div class="spinner" style="margin:24px auto"></div></div>';
   try { setupState.guide = await api('/api/setup?scan=0'); }
   catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
-  const ai = setupState.guide.ai;
-  setupState.ai = ai.find(o => o.id === 'builtin' && o.available) ? 'builtin' : 'agent';
   setupState.embed = setupState.guide.embed_model;
   setupState.kinds = new Set((setupState.guide.content || []).filter(c => c.id !== 'text' && c.on).map(c => c.id));
   renderSetup();
@@ -2340,7 +2337,7 @@ function renderSetup() {
   if (step === 'about') {
     body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg>
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-      <p class="sub">Setup takes a minute: tell Pensieve how you work, choose what it indexes, and pick an engine for insights.</p>${btns('profile', 'Get started')}`;
+      <p class="sub">Setup takes a minute: tell Pensieve how you work, choose what it indexes, and pick a search model.</p>${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
     body = `<h1>How do you use your Mac?</h1><p class="sub">Choose all that fit. Pensieve suggests what to index from this.</p>
       <div class="setup-profiles">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="checkbox" aria-checked="${st.profiles.has(p.id)}">
@@ -2365,15 +2362,12 @@ function renderSetup() {
       ${(g.content || []).length ? `<div class="setup-cat"><h3>What Pensieve reads</h3><p>Text is always read. Images, video and audio are found by name unless you switch them on. You can change this later in Settings → Models.</p>${g.content.map(reads).join('')}</div>` : ''}
       ${btns('ai', 'Next', picked.length > 0)}`;
   } else if (step === 'ai') {
-    body = `<h1>Choose your models</h1>
+    body = `<h1>Choose your search model</h1>
       <h3 class="setup-h">Embedding model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Embedding model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
         <div class="ai-opt-h"><b>${esc(m.label)}</b><span class="priv local">Local</span></div><p>${esc(m.about)}</p></button>`).join('')}</div>
-      <h3 class="setup-h">Generation model</h3><p class="sub">Writes task notes, summaries, topic names and insights. With Your agent, nothing runs in the background: your coding agent writes them when you ask.</p>
-      <div class="ai-opts" role="radiogroup" aria-label="Generation model">${g.ai.map(o => `<button class="ai-opt ${st.ai === o.id ? 'on' : ''}" data-setup-ai="${esc(o.id)}" role="radio" aria-checked="${st.ai === o.id}" ${o.available ? '' : 'disabled'}>
-        <div class="ai-opt-h"><b>${esc(o.id === 'none' ? 'Not now' : o.label)}</b>${o.privacy && o.id !== 'none' ? `<span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span>` : ''}</div>
-        <p>${esc(o.id === 'none' ? 'Turn insights on later in Settings → Models.' : o.description)}</p>${o.note ? `<p class="note">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</p>` : ''}</button>`).join('')}</div>
-      ${btns('start', 'Next', !!st.ai)}`;
+      <h3 class="setup-h">Notes and insights</h3><p class="sub">Pensieve has no text model of its own. Your agent writes thread notes, summaries, topic names and insights with Pensieve's MCP tools, when you ask it to do Pensieve's pending work.</p>
+      ${btns('start', 'Next')}`;
   } else {
     body = `<h1>Ready to index</h1><p class="sub">Pensieve will index ${esc(plural(picked.filter(i => !i.rule).length, 'source'))}${files ? `, including ${files.toLocaleString()} code files` : ''}.</p>
       <div class="setup-energy">${ENERGY_IC}<div><b>${secs < 60 ? 'Almost everything is indexed already' : 'This takes a while and uses a lot of energy'}</b><span>${secs >= 60 ? `About ${mins < 90 ? `${mins} minute${mins === 1 ? '' : 's'}` : `${(mins / 60).toFixed(1)} hours`} on this Mac, counting only what isn't indexed yet${picked.some(i => /^(files|apps)\//.test(i.id)) ? ', plus your documents' : ''}. Indexing runs the embedding model on the GPU, so the Mac gets warm and uses more battery. If this is a laptop, plug it in. When the first index is done, energy use drops back to normal. ` : ''}Search works while Pensieve indexes, and the dots in the menu bar turn until it is done.</span></div></div>
@@ -2384,7 +2378,6 @@ function renderSetup() {
   $('[data-setup-back]', el)?.addEventListener('click', () => setupGo(SETUP_STEPS[n - 1]));
   $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { const id = b.dataset.setupProf; st.profiles[st.profiles.has(id) ? 'delete' : 'add'](id); st.cands = null; st.chosen.clear(); renderSetup(); });
   $$('[data-setup-id]', el).forEach(c => c.onchange = () => { st.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
-  $$('[data-setup-ai]', el).forEach(b => b.onclick = () => { st.ai = b.dataset.setupAi; renderSetup(); });
   $$('[data-setup-embed]', el).forEach(b => b.onclick = () => {
     st.embed = b.dataset.setupEmbed;
     const needs = (g.content || []).find(c => c.needs_model)?.needs_model;
@@ -2412,13 +2405,13 @@ function renderSetup() {
     }
     if (next !== 'go') return setupGo(next);
     st.busy = true; renderSetup();
-    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], ai: st.ai, embed_model: st.embed, content: [...st.kinds]})});
+    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], embed_model: st.embed, content: [...st.kinds]})});
     const j = await r.json().catch(() => ({}));
     st.busy = false;
     if (!r.ok) { st.err = typeof j.detail === 'string' ? j.detail : 'Could not start indexing'; return renderSetup(); }
     el.remove(); S.status.setup_done = true;
     S.setTab = 'sources'; store.set('setTab', 'sources');
-    await loadSettings(true); await setView('settings'); renderSettings(); pollStatus(); loadAI();
+    await loadSettings(true); await setView('settings'); renderSettings(); pollStatus();
     toast('Indexing started');
   });
 }
@@ -2810,7 +2803,7 @@ function renderReset(step) {
     ? `<p class="sc-p"><b>Delete the index${all ? ' and your settings' : ''} and restart?</b> Search, maps and insights start empty and fill in again as Pensieve re-indexes your ${all ? 'default' : ''} sources, which can take a while for big repos. Your files, repos and agent sessions themselves are not touched.</p>
        <div class="bar-btns" style="justify-content:flex-start"><button class="btn" data-reset-cancel>Cancel</button><button class="btn danger" data-reset-go>Delete and restart</button></div>`
     : `<div class="set-row" style="border-top:0"><div><div class="k">Delete the index and start over</div><div class="d">Removes everything Pensieve has indexed (search, maps, summaries, insights) and rebuilds it. Use it if results look wrong after an upgrade.</div></div><div><button class="btn danger" data-reset>Reset…</button></div></div>
-       <div class="set-row"><div><div class="k">Factory reset</div><div class="d">Deletes the index and puts folders, scopes, AI engine and hotkey back to their defaults.</div></div><div><button class="btn danger" data-reset-all>Factory reset…</button></div></div>`;
+       <div class="set-row"><div><div class="k">Factory reset</div><div class="d">Deletes the index and puts folders, scopes and hotkey back to their defaults.</div></div><div><button class="btn danger" data-reset-all>Factory reset…</button></div></div>`;
   $('[data-reset]', box)?.addEventListener('click', () => { delete box.dataset.all; renderReset('confirm'); });
   $('[data-reset-all]', box)?.addEventListener('click', () => { box.dataset.all = '1'; renderReset('confirm'); });
   $('[data-reset-cancel]', box)?.addEventListener('click', () => renderReset());
@@ -2886,12 +2879,12 @@ async function renderSettings() {
       <p class="sc-p">The agent that "New session" on a thread starts in Terminal. "Resume last session" always uses the agent that wrote the session.</p>
       <div id="agentpick"><div class="spinner" style="margin:8px 0"></div></div></div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
-  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. A generation model writes notes and insights. MCP servers bring in tickets and messages.') + `
+  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. MCP servers bring in tickets and messages.') + `
     <div class="set-card mdl" id="set-Embedding-model">
       <div class="mdl-h"><span class="mdl-n">1</span><div class="mdl-t"><h3>Embedding model</h3><p>Finds your files, code and sessions by meaning. Always on.</p></div><span class="priv local">Local</span></div>
       <div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div>
       <div class="set-row"><div><div class="k">Reads</div><div class="d">Text always. Images, video and audio are found by name until you switch them on.</div></div><div id="contentbox"></div></div>
-    </div>` + aiSettingsHtml();
+    </div>` + mcpCardHtml();
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/v2/store.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
@@ -2900,7 +2893,7 @@ async function renderSettings() {
       <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>
     <div class="set-card" id="set-About"><h3>About</h3><div id="aboutbox"><div class="spinner" style="margin:8px 0"></div></div>
       <div class="set-stats" style="margin-top:12px">${kpi('Files', st.files)}${kpi('Repositories', st.repos)}${kpi('Code chunks', st.code_chunks)}${kpi('Agent sessions', st.sessions)}</div>
-      <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}${st.llm ? ` · model: ${esc(st.llm)}` : ''}</p></div>
+      <p class="sc-p" style="margin:10px 0 0">${esc(st.message || '')}${st.embed ? ` · embeddings: ${esc(st.embed)}` : ''}</p></div>
     <div class="set-card" id="set-Updates"><h3>Updates</h3>
       <div class="set-row" style="border-top:0"><div><div class="k">Check for updates</div><div class="d" id="updmsg">${IN_APP ? 'Pensieve checks GitHub and offers to install a newer version.' : 'Compares this version with the latest release on GitHub.'}</div></div>
         <div><button class="btn" id="updcheck">Check now</button></div></div>
@@ -2933,7 +2926,7 @@ async function renderSettings() {
   $$('#setmain > .set-card [data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
   renderSources(); renderScopes(); renderSyncing();
 }
-const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Ask before indexing found repos larger than (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in', llm_url: 'Model server URL', llm_model: 'Model', builtin_model: 'Built-in engine', agent_model: 'Claude Code engine'};
+const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Ask before indexing found repos larger than (files)', repos: 'Extra repos', hotkey: 'Search shortcut', editor: 'Open code in'};
 async function saveSettings() {
   const ks = setDirty(); if (!ks.length) return;
   const body = Object.fromEntries(ks.map(k => [k, S.set.draft[k]]));
@@ -3115,7 +3108,7 @@ async function openTopicAsProject(ids) {
 }
 
 /* ============================== deep links (#open=, #view=, #settings) ============================== */
-const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings', tasks: 'work', people: 'people', projects: 'projects'};
+const VIEW_ALIAS = {sessions: 'map', session: 'map', map: 'map', code: 'code', files: 'files', file: 'files', insights: 'insights', settings: 'settings', threads: 'work', thread: 'work', tasks: 'work', people: 'people', projects: 'projects'};
 async function openItem(id) {
   const i = id.indexOf(':'), kind = id.slice(0, i), ref = id.slice(i + 1);
   if (kind === 'file') return openFile(ref);
@@ -3147,7 +3140,7 @@ async function route() {
   if (!h) return;
   history.replaceState(null, '', location.pathname + location.search);  // so the same link works twice
   if (h === 'settings') return setView('settings');
-  if (['context', 'currents', 'tasks', 'work'].includes(h)) return setView('work');
+  if (['threads', 'context', 'currents', 'tasks', 'work'].includes(h)) return setView('work');
   if (h === 'people') return setView('people');
   if (h === 'insights') return setView('insights');
   if (h === 'projects') return setView('work');  // the Projects tab is removed for now
@@ -3164,285 +3157,20 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
-/* ============================== AI engine (optional: summaries, topic names, insights) ============================== */
-const aiState = {data: null, timer: null, busy: null, err: null};
-const AI_STATUS = {ready: ['live', 'Ready'], starting: ['busy', 'Starting…'], downloading: ['busy', 'Downloading…'], offline: ['warn', 'Not reachable'], waiting: ['warn', 'Waiting for a session'], off: ['off', 'Off'], error: ['off', 'Error']};
-const aiPreparing = d => !!d && ['downloading', 'starting'].includes(d.status);
-// Insights are "on" once an engine is enabled and ready; until then the tab is greyed and shows the setup page
-const insightsOn = () => { const d = aiState.data; return !d || (d.enabled && !aiPreparing(d)); };
-async function loadAI() {
-  try { aiState.data = await api('/api/ai'); } catch { aiState.data = aiState.data || null; }
-  clearTimeout(aiState.timer);
-  const d = aiState.data, prep = aiPreparing(d);
-  const watching = (S.view === 'settings' && S.setTab === 'ai') || S.view === 'insights';
-  if (prep || watching) aiState.timer = setTimeout(async () => {  // fast while preparing; slowly while an AI view is open
-    const before = JSON.stringify(aiState.data); await loadAI(); if (JSON.stringify(aiState.data) !== before) refreshAIViews();
-  }, prep ? 3000 : 10000);
-  syncInsightsTab();
-  return d;
-}
-function syncInsightsTab() {
-  const b = $('#tabs [data-view=insights]'); if (!b) return;
-  const d = aiState.data, prep = aiPreparing(d);  // the stats need no AI: the tab is always on
-  b.title = prep ? (d.detail || 'Preparing the AI notes…') : 'Insights (5)';
-  const pct = prep && d.progress != null ? Math.round(d.progress * 100) : null;
-  b.innerHTML = `Insights${prep ? `<i class="tab-ring" style="--p:${pct ?? 25}" ${pct == null ? 'data-spin' : ''}></i>` : ''}`;
-}
-function refreshAIViews() {
-  syncInsightsTab();
-  if (S.view === 'settings' && S.setTab === 'ai' && !document.activeElement?.dataset?.aif) renderSettings();
-  if (S.view === 'insights') renderInsights();
-}
-async function setAI(changes, msg) {
-  aiState.err = null;
-  try {
-    const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(changes)});
-    if (!r.ok) aiState.err = (await r.json().catch(() => ({}))).detail || `Could not save (${r.status})`;
-    else if (msg) toast(msg);
-  } catch (e) { aiState.err = e.message; }
-  aiState.busy = null; await loadAI(); refreshAIViews(); pollStatus();
-}
-function aiStatusHtml(d) {
-  if (!d) return '';
-  const [cls, label] = AI_STATUS[d.status] || ['off', d.status];
-  const opt = d.options.find(o => o.id === d.provider);
-  return `<div class="ai-status"><i class="dot ${cls}"></i><b>${esc(label)}</b><span class="muted">${esc(opt && d.provider !== 'none' ? opt.label : 'No engine')}${d.detail ? ' · ' + esc(d.detail) : ''}</span>${d.setting === 'auto' && d.provider && d.provider !== 'none' ? '<span class="badge">picked automatically</span>' : ''}</div>`;
-}
-function aiProgressHtml(d) {
-  if (!aiPreparing(d) && !d?.paused) return '';
-  const pct = d.progress != null ? Math.round(d.progress * 100) : null;
-  return `<div class="ai-prog"><div class="ai-prog-t"><span>${esc(d.detail || (d.status === 'starting' ? 'Starting the model…' : 'Downloading…'))}</span>${pct != null ? `<b>${pct}%</b>` : ''}</div>
-    <div class="ai-bar ${pct == null ? 'indet' : ''}"><i style="width:${pct ?? 30}%"></i></div>
-    ${d.paused ? `<p class="ai-paused">⏸ ${esc(d.paused)}${(S.set?.orig?.ai_on_battery === false || !S.set) && S.view !== 'settings' ? ' — <a href="#ai">change in Settings</a>' : ''}</p>` : '<p class="ai-paused muted">Keep working; Pensieve carries on in the background.</p>'}</div>`;
-}
-const INSIGHTS_ADD = ['Plain-language summaries of every session and code area', 'Topic names instead of keyword lists', 'Themes, open threads and unexplored directions across your work', 'Short summaries of what each teammate has been shipping'];
-const NO_AI_WORKS = 'Maps, search, activity, keyword topics, your code footprint and team commits all work without it.';
-// The calm setup page shown on the Insights tab while insights are off or getting ready
-function aiOffPage() {
-  const d = aiState.data;
-  if (!d) return '<div class="empty"><div class="spinner" style="margin:auto"></div></div>';
-  const prep = aiPreparing(d), opts = d.options.filter(o => o.id !== 'none');
-  const builtin = opts.find(o => o.id === 'builtin'), others = opts.filter(o => o.id !== 'builtin');
-  return `<div class="ai-off">
-    <div class="ai-off-h"><span class="brand"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg></span>
-      <div><h1>${prep ? 'Getting insights ready' : 'Insights are off'}</h1><p>${esc(NO_AI_WORKS)} Insights add:</p>
-      <ul>${INSIGHTS_ADD.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div></div>
-    ${prep ? `<div class="card ai-rec">${aiProgressHtml(d)}</div>` : ''}
-    ${builtin && !prep ? `<div class="card ai-rec"><div class="ai-rec-h"><div><span class="badge rec">Recommended</span><h3>Run insights in the background on this Mac</h3></div>
-      <button class="btn primary" data-ai="builtin" ${builtin.available ? '' : 'disabled'}>${aiState.busy === 'builtin' ? 'Turning on…' : 'Turn on'}</button></div>
-      <p>Pensieve downloads ${esc(builtin.label.replace(/^Built-in:\s*/, ''))} while you keep working${builtin.note ? ` (${esc(builtin.note.replace(/\.$/, '').replace(/^\w/, c => c.toLowerCase()))})` : ''}, then runs it at low priority. Nothing leaves this Mac.</p>
-      <p class="muted">It loads only when there's work, unloads after 10 idle minutes, and pauses on battery power.</p></div>` : ''}
-    ${!prep ? `<div class="ai-alt"><div class="h4" style="margin-top:4px">Or use</div>${others.map(o => `<div class="ai-alt-row ${o.available ? '' : 'na'}">
-        <div class="tx"><b>${esc(o.label)}</b> <span class="priv ${o.privacy}">${o.privacy === 'cloud' ? 'Cloud' : 'Local'}</span>
-          <div class="muted">${esc(o.privacy === 'cloud' ? o.description.replace(/^.*?\)\.\s*/, '') : o.description)}${o.note ? ' · ' + esc(o.note) : ''}</div></div>
-        ${['server', 'cli'].includes(o.id) ? '<a class="btn" href="#ai">Set up</a>' : `<button class="btn" data-ai="${esc(o.id)}" ${o.available ? '' : 'disabled'}>${aiState.busy === o.id ? 'Saving…' : 'Use'}</button>`}</div>`).join('')}</div>` : ''}
-    ${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
-  </div>`;
-}
-function bindAIButtons(root) {
-  $$('[data-ai]', root).forEach(b => b.onclick = () => {
-    const id = b.dataset.ai; aiState.busy = id; refreshAIViews();
-    setAI({ai: id}, id === 'none' ? 'Insights are off' : id === 'builtin' ? 'Turning on insights in the background' : 'AI engine saved');
-  });
-}
-function aiSettingsHtml() {
-  const d = aiState.data;
-  if (!d) { loadAI().then(() => S.setTab === 'ai' && renderSettings()); return '<div class="set-card"><p class="sc-p">Checking…</p></div>'; }
-  const bat = !!S.set?.orig?.ai_on_battery;
-  const cur = d.setting === 'auto' ? d.provider || 'none' : d.setting, auto = d.setting === 'auto';
-  const view = aiState.eng && d.options.some(o => o.id === aiState.eng) ? aiState.eng : cur === 'none' ? 'builtin' : cur;
-  const opt = id => d.options.find(o => o.id === id);
-  const SHORT = {builtin: 'Built-in', server: 'Model server', cli: 'Command line', agent: 'Your agent'};
-  const seg = `<div class="seg mdl-seg" role="radiogroup" aria-label="Generation model">${['builtin', 'server', 'cli', 'agent'].filter(opt).map(id =>
-    `<button class="${view === id ? 'on' : ''}" data-eng="${id}" role="radio" aria-checked="${view === id}">${SHORT[id]}${cur === id ? ' <i class="mdl-dot"></i>' : ''}</button>`).join('')}</div>`;
-  const o = opt(view), using = view === cur;
-  const useBtn = id => using ? `<span class="ai-check">✓ In use${auto ? ' (picked automatically)' : ''}</span>`
-    : `<button class="btn primary" data-ai="${id}" ${opt(id).available ? '' : 'disabled'}>${aiState.busy === id ? 'Saving…' : 'Use this'}</button>`;
-  let panel;
-  if (view === 'server') { aiState.srvOpen = true; panel = aiServerCard(o, using, auto); }
-  else if (view === 'cli') panel = aiCliCard(o, using);
-  else if (view === 'agent') {
-    const live = d.agent?.sessions || [];
-    const who = s => s.client ? s.client.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'An agent';
-    const names = [...new Set(live.map(who))].join(', ');
-    panel = `<div class="mdl-panel"><p>${esc(o.description)}</p>
-      <div class="mdl-act">${!using ? useBtn('agent')
-        : live.length ? `<span class="ai-check" title="${esc(live.map(s => `${who(s)}: ${plural(s.answers, 'job')}, last ${rel(s.at * 1000)}`).join('\n'))}">✓ ${live.length === 1 ? 'Active session' : `${live.length} active sessions`}</span><span class="muted" style="font-size:12px;margin-left:8px">${esc(names)}</span>`
-        : '<span class="muted" style="font-size:12px">Waiting for a session: ask your agent to “do Pensieve’s pending work”.</span>'}</div></div>`;
-  }
-  else panel = `<div class="mdl-panel"><p>${esc(o.description)}${o.note ? ` <span class="muted">${o.available ? '' : 'Unavailable · '}${esc(o.note)}</span>` : ''}</p>
-      <div class="mdl-act">${useBtn('builtin')}</div></div>`;
-  const privOf = id => id === 'cli' ? (opt('cli')?.privacy || 'cloud') : id === 'server' ? (isLocalUrl(opt('server')?.url || '') ? 'local' : 'cloud') : opt(id)?.privacy || 'local';
-  return `<div class="set-card mdl ai-set" id="set-Generation-model">
-      <div class="mdl-h"><span class="mdl-n">2</span><div class="mdl-t"><h3>Generation model</h3><p>Writes task notes, summaries, topic names and insights.</p></div>
-        ${cur !== 'none' ? `<span class="priv ${privOf(cur)}">${privOf(cur) === 'cloud' ? 'Cloud' : 'Local'}</span>` : ''}</div>
-      ${cur !== 'none' ? aiStatusHtml(d) : ''}${aiProgressHtml(d)}
-      ${seg}${panel}${aiState.err ? `<p class="err">${esc(aiState.err)}</p>` : ''}
-      <details class="src-opts"><summary>Options</summary>
-        <div class="set-row"><div><div class="k">Keep working on battery power</div><div class="d">Off: background work pauses until your Mac is plugged in.</div></div>
-          <div><label class="tog"><input type="checkbox" data-aibat ${bat ? 'checked' : ''}></label></div></div>
-        <div class="set-row"><div><div class="k">Refresh insights automatically</div><div class="d">When the sessions or topics behind them change a lot, at most every 6 hours.</div></div>
-          <div><label class="tog"><input type="checkbox" data-aiauto ${S.set?.orig?.insights_auto !== false ? 'checked' : ''}></label></div></div></details>
-    </div>${mcpCardHtml()}`;
-}
 function mcpCardHtml() {
   const c = (srcState.cat || []).find(x => x.id === 'connections');
-  if (!srcState.cat) loadSources().then(() => S.setTab === 'ai' && refreshAIViews());
+  if (!srcState.cat) loadSources().then(() => S.view === 'settings' && S.setTab === 'ai' && renderSettings());
   const servers = (c?.items || []).filter(i => i.id !== 'connections/agent_sessions' && i.available);
   const on = servers.filter(i => i.enabled).length;
   return `<div class="set-card mdl" id="set-MCP-servers">
-      <div class="mdl-h"><span class="mdl-n">3</span><div class="mdl-t"><h3>MCP servers</h3><p>Where tickets and messages come from. Pensieve uses only read-only tools.</p></div>
+      <div class="mdl-h"><span class="mdl-n">2</span><div class="mdl-t"><h3>MCP servers</h3><p>Where tickets and messages come from. Pensieve uses only read-only tools.</p></div>
         ${servers.length ? `<span class="muted" style="font-size:12px">${on} of ${servers.length} on</span>` : ''}</div>
       ${c?.note ? `<p class="mdl-mcp-note">${esc(c.note)}</p>` : ''}
       ${servers.length ? `<div class="mdl-mcp">${servers.slice(0, 12).map(i => `<span class="mdl-srv ${i.enabled ? 'on' : ''}" title="${esc(i.detail || '')}"><i></i>${esc(i.label)}${i.count ? `<small>${i.count.toLocaleString()}</small>` : ''}</span>`).join('')}${servers.length > 12 ? `<span class="muted" style="font-size:12px;align-self:center">and ${servers.length - 12} more</span>` : ''}</div>` : ''}
       <div style="padding:2px 0 8px"><button class="linkbtn" data-goto-conn>${servers.length ? 'Switch servers on in Sources' : 'Add a server in Sources'} ›</button></div></div>`;
 }
-// The local-or-hosted server option: URL, model and an optional API key, with a connection test that lists models.
-const isLocalUrl = u => { try { const h = new URL(u).hostname; return ['localhost', '127.0.0.1', '[::1]'].includes(h) || h.endsWith('.local'); } catch { return true; } };
-function aiServerStatus(o) {
-  const f = aiState.form, t = f?.test;
-  if (t === 'busy') return ['', 'Checking…'];
-  if (t) return t.ok ? ['ok', `Connected · ${plural(t.models.length, 'model')}`] : ['bad', t.error];
-  if (!f?.url) return ['', 'Enter the address of the server'];
-  if (f.url.replace(/\/+$/, '') !== o.url.replace(/\/+$/, '')) return ['', 'Not tested yet'];
-  return o.up ? ['ok', `Connected to ${o.url}`] : ['bad', `Can't reach ${o.url}`];
-}
-// A connection from the saved list, or the current server when nothing is saved yet (settings from before the list).
-function aiConnForm(o, name) {
-  const c = (o.connections || []).find(x => x.name === name);
-  if (c) return {sel: c.name, name: c.name, url: c.url, model: c.model, key: '', keySet: c.key_set, test: null};
-  if (name === '' || (o.connections || []).length) return {sel: '', name: '', url: '', model: '', key: '', keySet: false, test: null};
-  const host = (() => { try { return new URL(o.url).hostname; } catch { return 'My server'; } })();
-  return {sel: '', name: isLocalUrl(o.url) ? 'This Mac' : host, url: o.url, model: o.model, key: '', keySet: o.key_set, test: null};
-}
-function aiServerCard(o, on, auto) {
-  const conns = o.connections || [];
-  const inUse = conns.find(c => c.url.replace(/\/+$/, '') === o.url.replace(/\/+$/, '') && c.model === o.model);
-  if (!on && !aiState.srvOpen) return `<button class="ai-opt" data-aisrvopen role="radio" aria-checked="false">
-      <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${isLocalUrl(o.url) ? 'local' : 'cloud'}">${isLocalUrl(o.url) ? 'Local' : 'Cloud'}</span></div>
-      <p>${esc(o.description)}</p><p class="note">${conns.length ? `${plural(conns.length, 'saved connection')} · click to choose or add one` : 'Click to connect to one'}</p></button>`;
-  const f = aiState.form || (aiState.form = aiConnForm(o, inUse ? inUse.name : undefined)), local = isLocalUrl(f.url);
-  const [cls, msg] = aiServerStatus(o);
-  return `<div class="ai-opt ai-srv ${on ? 'on' : ''}" role="radio" aria-checked="${on}">
-    <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${local ? 'local' : 'cloud'}" data-aipriv>${local ? 'Local' : 'Cloud'}</span></div>
-    <p>${esc(o.description)}</p>
-    <label class="ai-f"><span>Connection</span><select class="set-in" data-aiconn>${conns.map(c => `<option value="${esc(c.name)}" ${f.sel === c.name ? 'selected' : ''}>${esc(c.name)} · ${esc(c.model)}${inUse?.name === c.name && on ? ' (in use)' : ''}</option>`).join('')}
-      <option value="" ${f.sel ? '' : 'selected'}>New connection…</option></select></label>
-    <label class="ai-f"><span>Name</span><input class="set-in" data-aif="name" value="${esc(f.name)}" placeholder="e.g. LM Studio, OpenRouter, Work server" spellcheck="false" autocomplete="off" ${f.sel ? 'disabled' : ''}></label>
-    <label class="ai-f"><span>Address</span><input class="set-in" data-aif="url" value="${esc(f.url)}" placeholder="http://localhost:1234/v1 or https://openrouter.ai/api/v1" spellcheck="false" autocomplete="off"></label>
-    <label class="ai-f"><span>Model</span><input class="set-in" data-aif="model" list="aimodels" value="${esc(f.model)}" placeholder="e.g. qwen/qwen3.5-9b" spellcheck="false" autocomplete="off">
-      <datalist id="aimodels">${(f.test?.models || []).map(m => `<option value="${esc(m)}">`).join('')}</datalist></label>
-    <label class="ai-f"><span>API key <span class="muted">· if the server needs one</span></span><input class="set-in" type="password" data-aif="key" value="${esc(f.key)}" placeholder="${f.keySet ? 'Saved · leave empty to keep it' : 'Not needed for LM Studio or Ollama'}" autocomplete="off"></label>
-    <div class="ai-srv-st ${cls}" data-aist>${esc(msg)}</div>
-    <div class="ai-srv-btns">${f.sel ? `<button class="btn" data-aidel>Delete</button>` : ''}<button class="btn" data-aitest>Test connection</button><button class="btn primary" data-aisave>${aiState.busy === 'server' ? 'Saving…' : on && !auto && inUse?.name === f.sel ? 'Save' : 'Use this connection'}</button></div>
-    ${on ? `<span class="ai-check">✓ ${auto ? 'In use (picked automatically)' : 'Selected'}</span>` : ''}</div>`;
-}
-function bindAIServer(root) {
-  $('[data-aisrvopen]', root)?.addEventListener('click', () => { aiState.srvOpen = true; aiState.form = null; refreshAIViews(); });
-  const card = $('.ai-srv', root); if (!card) return;
-  const f = aiState.form, inp = k => $(`[data-aif=${k}]`, card);
-  const paint = () => {  // update in place: re-rendering would lose the cursor in the field being typed in
-    const o = aiState.data.options.find(x => x.id === 'server'), [cls, msg] = aiServerStatus(o), st = $('[data-aist]', card);
-    st.className = 'ai-srv-st ' + cls; st.textContent = msg;
-    $('#aimodels', card).innerHTML = (f.test?.models || []).map(m => `<option value="${esc(m)}">`).join('');
-    const local = isLocalUrl(f.url), pv = $('[data-aipriv]', card); pv.className = 'priv ' + (local ? 'local' : 'cloud'); pv.textContent = local ? 'Local' : 'Cloud';
-  };
-  const test = async () => {
-    if (!f.url.trim()) return;
-    f.test = 'busy'; paint();
-    const r = await api(`/api/ai/models?url=${enc(f.url.trim())}&key=${enc(f.key)}&name=${enc(f.sel)}`).catch(e => ({ok: false, models: [], error: e.message}));
-    f.test = r;
-    if (r.ok && r.models.length && !r.models.includes(f.model.trim())) {  // suggest a chat model when the current one isn't served
-      const pick = r.models.find(m => !/embed/i.test(m)); if (pick && !f.model.trim()) { f.model = pick; inp('model').value = pick; }
-    }
-    paint();
-  };
-  ['name', 'url', 'model', 'key'].forEach(k => inp(k).oninput = () => { f[k] = inp(k).value; if (k === 'url' || k === 'key') { f.test = null; paint(); } });
-  inp('url').onchange = test; inp('key').onchange = test;
-  $('[data-aiconn]', card).onchange = e => {
-    aiState.form = aiConnForm(aiState.data.options.find(x => x.id === 'server'), e.target.value);
-    refreshAIViews(); if (aiState.form.url) test();
-  };
-  $('[data-aitest]', card).onclick = test;
-  const send = async (method, path, body, msg) => {
-    aiState.err = null;
-    const r = await fetch(path, {method, headers: {'content-type': 'application/json'}, body: body && JSON.stringify(body)}).catch(e => ({ok: false, json: async () => ({detail: e.message})}));
-    if (!r.ok) aiState.err = (await r.json().catch(() => ({}))).detail || 'Could not save';
-    else toast(msg);
-    aiState.busy = null; aiState.form = null; await loadAI(); refreshAIViews(); pollStatus();
-  };
-  $('[data-aisave]', card).onclick = () => {
-    const name = f.name.trim(), url = f.url.trim().replace(/\/+$/, ''), model = f.model.trim();
-    if (!name || !url || !model) { aiState.err = 'Enter a name, the address and a model.'; refreshAIViews(); return; }
-    aiState.busy = 'server';
-    send('POST', '/api/ai/connections', {name, url, model, key: f.key || null, use: true}, `Using “${name}”`);
-  };
-  $('[data-aidel]', card)?.addEventListener('click', () => send('DELETE', `/api/ai/connections?name=${enc(f.sel)}`, null, `Deleted “${f.sel}”`));
-}
-// The command-line option: an AI CLI the user already has, from a template or typed, tested before it is saved.
-const aiCliTemplate = (o, cmd) => (o.templates || []).find(t => t.command === cmd.trim());
-function aiCliCard(o, on) {
-  const f = aiState.cli || (aiState.cli = {command: o.command || '', privacy: o.privacy || 'cloud', test: null});
-  const t = aiCliTemplate(o, f.command), st = f.test === 'busy' ? ['', 'Sending a test prompt…']
-    : f.test ? (f.test.ok ? ['ok', `Answered “${f.test.reply.slice(0, 60)}” in ${(f.test.ms / 1000).toFixed(1)} s`] : ['bad', f.test.error])
-    : ['', f.command.trim() ? (f.command.trim() === (o.command || '').trim() ? o.note : 'Not tested yet') : 'Pick a template or type a command'];
-  return `<div class="ai-opt ai-cli ${on ? 'on' : ''}" role="radio" aria-checked="${on}">
-    <div class="ai-opt-h"><b>${esc(o.label)}</b><span class="priv ${f.privacy}" data-aiclipriv>${f.privacy === 'cloud' ? 'Cloud' : 'Local'}</span></div>
-    <p>${esc(o.description)}</p>
-    <label class="ai-f"><span>Template</span><select class="set-in" data-aiclitpl>${(o.templates || []).map(x =>
-      `<option value="${esc(x.id)}" ${t?.id === x.id ? 'selected' : ''}>${esc(x.label)}${x.installed ? '' : ' (not installed)'}</option>`).join('')}
-      <option value="" ${t ? '' : 'selected'}>Custom</option></select></label>
-    <label class="ai-f"><span>Command <span class="muted">· gets the prompt on stdin, or in place of {prompt}; {out} is a file for the answer</span></span>
-      <input class="set-in mono" data-aiclicmd value="${esc(f.command)}" placeholder="e.g. claude -p --model haiku" spellcheck="false" autocomplete="off"></label>
-    <label class="ai-f"><span>Where the text goes</span><select class="set-in" data-aicliprivsel>
-      <option value="cloud" ${f.privacy === 'cloud' ? 'selected' : ''}>Off this Mac (a cloud model)</option>
-      <option value="local" ${f.privacy === 'local' ? 'selected' : ''}>Stays on this Mac (a local model)</option></select></label>
-    <p class="note">The command must answer without using tools. Pensieve runs it in an empty folder.</p>
-    <div class="ai-srv-st ${st[0]}" data-aiclist>${esc(st[1] || '')}</div>
-    <div class="ai-srv-btns"><button class="btn" data-aiclitest>Test</button><button class="btn primary" data-aiclisave>${aiState.busy === 'cli' ? 'Saving…' : on ? 'Save' : 'Use this command'}</button></div>
-    ${on ? '<span class="ai-check">✓ Selected</span>' : ''}</div>`;
-}
-function bindAICli(root) {
-  const card = $('.ai-cli', root); if (!card) return;
-  const o = aiState.data.options.find(x => x.id === 'cli'), f = aiState.cli;
-  $('[data-aiclitpl]', card).onchange = e => {
-    const x = (o.templates || []).find(t => t.id === e.target.value);
-    if (x) Object.assign(f, {command: x.command, privacy: x.privacy, test: null});
-    refreshAIViews();
-  };
-  $('[data-aiclicmd]', card).oninput = e => {  // update in place: re-rendering would lose the cursor
-    f.command = e.target.value; f.test = null;
-    const x = aiCliTemplate(o, f.command); $('[data-aiclitpl]', card).value = x ? x.id : '';
-    $('[data-aiclist]', card).className = 'ai-srv-st'; $('[data-aiclist]', card).textContent = f.command.trim() ? 'Not tested yet' : 'Pick a template or type a command';
-  };
-  $('[data-aicliprivsel]', card).onchange = e => {
-    f.privacy = e.target.value; const pv = $('[data-aiclipriv]', card);
-    pv.className = 'priv ' + f.privacy; pv.textContent = f.privacy === 'cloud' ? 'Cloud' : 'Local';
-  };
-  $('[data-aiclitest]', card).onclick = async () => {
-    if (!f.command.trim()) return;
-    f.test = 'busy'; refreshAIViews();
-    f.test = await fetch('/api/ai/cli/test', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({command: f.command})})
-      .then(r => r.json()).catch(e => ({ok: false, error: e.message}));
-    refreshAIViews();
-  };
-  $('[data-aiclisave]', card).onclick = () => {
-    if (!f.command.trim()) { aiState.err = 'Pick a template or type a command.'; refreshAIViews(); return; }
-    aiState.busy = 'cli';
-    setAI({ai: 'cli', cli_command: f.command.trim(), cli_privacy: f.privacy}, 'AI engine saved')
-      .then(() => { aiState.cli = null; refreshAIViews(); });  // the form again from what was saved
-  };
-}
 function bindAISettings(root) {
-  bindAIButtons(root);
-  $$('[data-eng]', root).forEach(b => b.onclick = () => { aiState.eng = b.dataset.eng; aiState.err = null; refreshAIViews(); });
   $('[data-goto-conn]', root)?.addEventListener('click', () => { setTab('sources'); setTimeout(() => $('.conn-add')?.closest('.src-card')?.scrollIntoView({block: 'start', behavior: 'smooth'}), 300); });
-  bindAIServer(root);
-  bindAICli(root);
-  const bat = $('[data-aibat]', root);
-  const auto = $('[data-aiauto]', root);
-  if (auto) auto.onchange = async () => { await setAI({insights_auto: auto.checked}, auto.checked ? 'Insights refresh when they’re out of date' : 'Insights refresh only when you ask'); await loadSettings(true); renderSettings(); };
-  if (bat) bat.onchange = async () => { await setAI({ai_on_battery: bat.checked}, bat.checked ? 'Insights keep working on battery' : 'Insights pause on battery'); await loadSettings(true); renderSettings(); };
 }
 
 /* ============================== views ============================== */
@@ -3501,7 +3229,7 @@ async function setView(v, repo) {
     renderToolbar(); buildMap(); gl.loadCam(cams[camKey()]);
   }
   renderSidebar(); renderTimeline();
-  if (v === 'insights') { await insightsFollowData(); renderInsights(); loadAI().then(refreshAIViews); }
+  if (v === 'insights') { await insightsFollowData(); renderInsights(); }
   if (v === 'settings') renderSettings();
   if (v === 'work') { renderWork(); loadWork(true); }
   if (v === 'people') { renderPeople(); loadPeople(); }
@@ -3603,7 +3331,7 @@ function renderPeople() {
   const P = S.people, d = P.data;
   const st = d?.stats || {};
   const typing = document.activeElement?.id === 'ppq';  // a new graph can arrive while the user types a name
-  const from = [st.repos && plural(st.repos, 'repo'), st.prs && plural(st.prs, 'pull request'), st.tasks && plural(st.tasks, 'task'),
+  const from = [st.repos && plural(st.repos, 'repo'), st.prs && plural(st.prs, 'pull request'), st.tasks && plural(st.tasks, 'thread'),
                 st.slack_threads && plural(st.slack_threads, 'Slack thread')].filter(Boolean).join(', ');
   const shown = Math.min(P.n, Math.max(0, (d?.nodes.length || 1) - 1));
   const org = P.view === 'org';
@@ -3802,11 +3530,10 @@ function bindPeople(el) {
   };
 }
 // Find a person: the graph and the people that earlier searches found come first (local), then what GitHub and the
-// switched-on Slack connection find. A Slack connection through Claude Code costs a model run, so it is asked only
-// when the user picks "Search Slack" (deep). The server answers in lines of JSON, one for each source.
+// switched-on Slack connection find. The server answers in lines of JSON, one for each source.
 S.people.find = {q: '', local: [], remote: [], asking: [], skipped: [], errors: [], pending: false, deep: false, on: 0, ctl: null};
-const PP_SRC = {github: 'GitHub', slack: 'Slack', teams: 'Teams', linear: 'Linear', notion: 'Notion', hubspot: 'HubSpot', git: 'git', task: 'tasks'};
-const ppRemote = debounce((s, deep) => ppAsk(s, deep), 700);  // a pause in typing: Slack through Claude Code costs a model run
+const PP_SRC = {github: 'GitHub', slack: 'Slack', teams: 'Teams', linear: 'Linear', notion: 'Notion', hubspot: 'HubSpot', git: 'git', task: 'threads'};
+const ppRemote = debounce((s, deep) => ppAsk(s, deep), 700);  // after a pause in typing
 function ppSearch(text, deep = false) {
   const F = S.people.find, s = text.trim();
   if (s !== F.q) { F.on = 0; F.remote = []; F.deep = false; F.skipped = []; F.errors = []; }
@@ -3861,11 +3588,6 @@ function ppHitsHtml() {
   const asking = F.asking.length ? F.asking.join(' and ') : 'Slack and GitHub';
   const note = F.pending ? `<div class="pp-hit note"><span class="spinner"></span>Searching ${esc(asking)}…</div>`
     : !all.length ? `<div class="pp-hit note">No one found${F.errors.length ? ` · could not ask ${esc(F.errors.join(', '))}` : ''}</div>` : '';
-  if (F.skipped.length && !F.deep) {
-    const what = [...new Set(F.skipped.map(x => x.label))].join(' and ');
-    rows.push({html: `<span class="pp-av pp-deep" style="width:22px;height:22px">↵</span><span>Search ${esc(what)}<small title="Runs Claude Code with the connection's read-only tools">Uses Claude Code · about 20 s</small></span>`,
-               open: () => ppSearch(F.q, true), deep: true});
-  }
   if (F.on >= rows.length) F.on = 0;
   hits.hidden = false;
   const row = (r, i) => `<button class="pp-hit ${r.deep ? 'deep' : ''} ${i === F.on ? 'on' : ''}" data-pp-row="${i}">${r.html}</button>`;
@@ -3890,7 +3612,7 @@ function ppDirCardHtml(p) {
   const where = (p.public ? ['GitHub (public profile)'] : p.sources.map(s => PP_SRC[s] || s)).join(' and ');
   return `<div class="meta"><span class="badge">Person</span>${esc(where)}</div>
     <div class="pp-id">${ppAv(p, 56)}<div style="min-width:0"><h2>${esc(p.name)}</h2>${p.title ? `<div class="pp-fn">${esc(p.title)}</div>` : ''}</div></div>
-    <p class="pp-lead">Pensieve has not seen you work with them yet: no shared files, pull requests, tasks or Slack threads. ${p.public ? 'This is a public GitHub profile.' : `Found in ${esc(where)}${p.found_at ? ' ' + rel(p.found_at * 1000) : ''}; kept on this Mac for the next search.`}</p>
+    <p class="pp-lead">Pensieve has not seen you work with them yet: no shared files, pull requests, threads or Slack threads. ${p.public ? 'This is a public GitHub profile.' : `Found in ${esc(where)}${p.found_at ? ' ' + rel(p.found_at * 1000) : ''}; kept on this Mac for the next search.`}</p>
     <div class="h4">Identities</div><div>${ids.map(([k, v]) => `<div class="pp-idrow"><span class="k">${esc(k)}</span><span class="v" title="${esc(v)}">${esc(v)}</span></div>`).join('')}</div>
     ${p.login ? `<div class="actions"><a class="btn" href="https://github.com/${esc(enc(p.login))}" target="_blank" rel="noopener">Open on GitHub</a></div>` : ''}`;
 }
@@ -4052,7 +3774,7 @@ function ppCardHtml(p) {
   const fn = p.function || lv ? `<div class="pp-fn">${p.function ? `<span title="${p.function_inferred ? 'Domain, inferred from the kinds of files in their commits' : 'Their Slack title'}">${esc(p.function)}</span>` : ''}${p.function && lv ? ' · ' : ''}${lv ? `<span class="pp-sen" title="Role, inferred from the depth and breadth of their work: ${Math.round((p.seniority.confidence || 0) * 100)}% confidence">${esc(PP_LEVEL_NAME[lv] || lv)} <i>(inferred)</i></span>` : ''}${p.function_inferred && p.function && !lv ? ' <i>(inferred)</i>' : ''}</div>` : '';
   const rels = r ? [
     r.shared_areas?.length ? `<div class="h4">Areas you both work in</div><div class="chips">${r.shared_areas.map(a => `<span class="chip">${esc(a)}</span>`).join('')}</div>` : '',
-    r.tasks?.length ? `<div class="h4">Your tasks they are part of</div><div class="list">${r.tasks.map(t => `<button class="item" data-pp-task="${esc(t.id || '')}"><div class="t"><span class="grow">${esc(t.t || 'Task')}</span>${when(t.ts)}</div></button>`).join('')}</div>` : '',
+    r.tasks?.length ? `<div class="h4">Your threads they are part of</div><div class="list">${r.tasks.map(t => `<button class="item" data-pp-task="${esc(t.id || '')}"><div class="t"><span class="grow">${esc(t.t || 'Task')}</span>${when(t.ts)}</div></button>`).join('')}</div>` : '',
     r.prs?.length ? `<div class="h4">Pull request reviews between you</div><div class="list">${r.prs.map(x => link(x.url, x.t, `${when(x.ts)}`)).join('')}</div>` : '',
     r.threads?.length ? `<div class="h4">Slack threads you share</div><div class="list">${r.threads.map(x => link(x.url, x.t, when(x.ts))).join('')}</div>` : '',
     r.code?.length && !r.shared_areas?.length ? `<div class="h4">Files you both edited</div><div class="list">${r.code.map(x => link('', x.t, when(x.ts))).join('')}</div>` : '',
@@ -4076,7 +3798,7 @@ function ppCardHtml(p) {
   const joins = shown.length ? `<div class="h4">Why these are one person</div><div class="pp-joins">${shown.slice(0, 12).map(j => `<div class="pp-join ${esc(j.kind)}"><span class="v" title="${esc(j.a_label)} ↔ ${esc(j.b_label)}">${esc(j.a_label)} ↔ ${esc(j.b_label)}</span><small>${esc(j.reason)}${j.kind === 'evidence' ? ` · score ${j.score}` : ''}${j.evidence?.length ? ' · ' + j.evidence.map(esc).join('; ') : ''}</small></div>`).join('')}</div>
     <p class="pp-note">Joined in error? Press <b>Not them</b> on the identity that is someone else. The split stays across rebuilds.</p>` : '';
   const maybe = p.maybe?.length ? `<div class="h4">Maybe also them</div><div class="list">${p.maybe.map(m => `<div class="item"><div class="t"><span class="grow"><button class="linkbtn" data-pp-open="${esc(m.id)}">${esc(m.name)}</button></span><button class="linkbtn" data-pp-maybe="${esc(m.id)}" title="These are one person: merge them">Merge</button></div><div class="s">${esc(m.reason)} · score ${m.score} (too low to join without you)</div></div>`).join('')}</div>` : '';
-  return `<div class="meta"><span class="badge">Person</span>${p.sources.map(s => esc({git: 'git', github: 'GitHub', slack: 'Slack', task: 'tasks'}[s] || s)).join(' · ')}</div>
+  return `<div class="meta"><span class="badge">Person</span>${p.sources.map(s => esc({git: 'git', github: 'GitHub', slack: 'Slack', task: 'threads'}[s] || s)).join(' · ')}</div>
     <div class="pp-id">${ppAv(p, 56)}<div style="min-width:0"><h2>${esc(p.name)}</h2>${fn}</div></div>
     <p class="pp-lead">${lead}</p>${kpis}
     ${profs}${via}${org}
@@ -4116,7 +3838,7 @@ function bindPeopleCard() {
 async function goThread(id) {
   await setView('work');
   if (!S.work.data) await loadWork();
-  const t = S.work.data?.tasks.find(x => x.id === id);
+  const t = S.work.data?.threads.find(x => x.id === id);
   if (!t) return toast('That thread is not in the Threads tab now.');
   S.work.q = ''; S.work.hits = null; S.work.flash = {id, state: t.state, until: Date.now() + 6000}; renderWork();
 }
@@ -4137,17 +3859,17 @@ async function openPeopleFor(who) {
 }
 window.addEventListener('resize', debounce(() => { if (S.view === 'people') { ppDrawGraph(); if (ppRelOn()) ppFillRel(); } }, 200));
 
-/* ============================== data tab ============================== */
-// Each task: its data points from every source, newest first, and an AI note on how it stands and is moving.
+/* ============================== threads tab ============================== */
+// Each thread: its data points from every source, newest first, and an AI note on how it stands and is moving.
 S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, asked: new Set(), menu: false,
-          states: new Set((() => { const v = store.get('taskStates', ['conscious', 'subconscious']); return Array.isArray(v) ? v : [v]; })()),
-          view: store.get('workView', 'compact'), full: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a card; full: the rows opened
-          details: new Set()};  // the cards whose problem, goal, state and sections are open
+          states: new Set((() => { const v = store.get('threadStates', ['open', 'loose_ends']); return Array.isArray(v) ? v : [v]; })()),
+          view: store.get('workView', 'compact'), full: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a thread; full: the rows opened
+          details: new Set()};  // the threads whose problem, goal, state and sections are open
 const wkPageSize = () => S.work.view === 'compact' ? 40 : 10;
 const wkModel = s => (S.work.data?.states || []).find(m => m.state === s) || {label: s, color: '#8e8e93', meaning: ''};
-// A search shows its matches best first, in every state; otherwise the cards of the states picked
+// A search shows its matches best first, in every state; otherwise the threads of the states picked
 const wkShown = () => {
-  const ts = S.work.data?.tasks || [];
+  const ts = S.work.data?.threads || [];
   if (S.work.hits) { const by = new Map(ts.map(t => [t.id, t])); return S.work.hits.map(id => by.get(id)).filter(Boolean); }
   return ts.filter(t => !S.work.states.size || S.work.states.has(t.state));
 };
@@ -4156,7 +3878,7 @@ const wkSearch = debounce(async () => {
   const q = S.work.q.trim(), seq = ++wkSeq;
   let hits = null;
   if (q) {
-    try { hits = (await api(`/api/work/search?days=${S.work.days}&q=${encodeURIComponent(q)}`)).results.map(r => r.id); }
+    try { hits = (await api(`/api/threads/search?days=${S.work.days}&q=${encodeURIComponent(q)}`)).results.map(r => r.id); }
     catch { hits = []; }
   }
   if (seq !== wkSeq) return;  // a newer query is on its way
@@ -4183,7 +3905,7 @@ const WK_IC = {
   branch: '<svg viewBox="0 0 24 24" width="12" height="12"><circle cx="6.5" cy="5.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6.5" cy="18.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.5" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 7.5v9M17.5 10c0 4-6 3-11 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
 };
 const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
-// The bar at the foot of a card: resume the last session, and see coworkers and related work
+// The bar at the foot of a thread: resume the last session, and see coworkers and related work
 // The coding agents Pensieve can start (/api/agents): a session resumes only in the agent that wrote it
 const wkAgentName = sid => S.agents?.agents.find(a => a.id === sid.split(':')[0])?.name || sid.split(':')[0];
 const wkAgentMissing = sid => {
@@ -4212,23 +3934,23 @@ async function loadAgents() {
 function wkActions(t) {
   const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume last session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
-  const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}New session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this card in it" title="Copy a prompt with this card in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
+  const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}New session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
   return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
 }
-// A card on one line: where, its PRs and what is next. A click opens it in full, in place.
+// A thread on one line: where, its PRs and what is next. A click opens it in full, in place.
 function wkRow(t, n) {
   const p = (t.places || [])[0] || {};
   const where = [p.repo || (p.path || '').split('/').pop(), p.branch].filter(Boolean).join(' · ');
   const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).slice(0, 2)
     .map(r => `<a class="wk-st pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener">#${esc(prNum(r.url) || '')} ${esc(r.state || '')}</a>`).join('');
   const next = wkNext(n, t);
-  return `<article class="wk-task wk-row-c" data-id="${esc(t.id)}" data-wk-row="${esc(t.id)}" style="--acc:${wkModel(t.state).color}" title="Show this card in full">
-    <div class="c-main"><div class="c-l1"><h4 title="${esc(t.title)}">${esc(wkTitle(t, n))}</h4>${wkThread(S.work.data?.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
+  return `<article class="wk-task wk-row-c" data-id="${esc(t.id)}" data-wk-row="${esc(t.id)}" style="--acc:${wkModel(t.state).color}" title="Show this thread in full">
+    <div class="c-main"><div class="c-l1"><h4 title="${esc(t.title)}">${esc(wkTitle(t, n))}</h4>${wkThread(S.work.data?.history?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
       <div class="c-l2">${where ? `<span class="c-where">${esc(where)}</span>` : ''}${next ? `<span class="c-next">${esc(next)}</span>` : ''}</div></div>
     <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>
-    <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}<button class="wk-btn icon" data-wk-revive="${esc(t.id)}" title="Start a new agent session that reads this card first">${WK_IC.spark}</button>${wkCardBtns(t)}</div>
+    <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}<button class="wk-btn icon" data-wk-revive="${esc(t.id)}" title="Start a new agent session that reads this thread first">${WK_IC.spark}</button>${wkCardBtns(t)}</div>
   </article>`;
 }
 // The note's next step; before a note is written, the first item left to close the thread (see cardtext.pending)
@@ -4259,7 +3981,7 @@ function wkGlance(t, n, writing) {
     <p class="wk-next">${next ? `<b>Next</b> ${esc(next)}` : writing ? '<span class="shimmer-text">Writing a note…</span>' : ''}</p>
     ${prs || tix || sess ? `<div class="wk-chips">${prs}${tix}${sess}</div>` : ''}</div>`;
 }
-const wkThread = th => th ? `<button class="wk-thread" data-wk-thread="${esc(th.id)}" title="Thread ${esc(th.id)}: one goal over time. Pensieve saves its card when it changes; click for its ${plural(th.saves, 'saved card')}">${WK_IC.branch}${esc(th.id.slice(3, 9))}<span>${th.saves}</span></button>` : '';
+const wkThread = th => th ? `<button class="wk-thread" data-wk-thread="${esc(th.id)}" title="Thread ${esc(th.id)}: one goal over time. Pensieve saves a version of the thread when it changes. Click to see its ${plural(th.saves, 'saved version')}.">${WK_IC.branch}${esc(th.id.slice(3, 9))}<span>${th.saves}</span></button>` : '';
 async function openThread(tid, title) {
   const m = document.createElement('div');
   m.className = 'modal'; m.id = 'threadmodal';
@@ -4268,29 +3990,29 @@ async function openThread(tid, title) {
   document.body.append(m);
   m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
   let saves;
-  try { saves = await api(`/api/threads/${enc(tid)}`); }
-  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">No saved threads yet: ${esc(e.message)}</div>`; return; }
-  $('.sh-body', m).innerHTML = `<p class="cap">Thread <code>${esc(tid)}</code>. Pensieve saves this card when its PRs, commits, sessions, state or what’s next change.</p>`
+  try { saves = await api(`/api/thread/versions?id=${enc(tid)}`); }
+  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">No saved versions yet: ${esc(e.message)}</div>`; return; }
+  $('.sh-body', m).innerHTML = `<p class="cap">Thread <code>${esc(tid)}</code>. Pensieve saves a version of this thread when its PRs, commits, sessions, state or next step change.</p>`
     + saves.map((s, i) => ({s, i})).reverse().map(({s, i}) => `<div class="sh-r th-save">
-      <label><b>${esc(new Date(s.at * 1000).toLocaleString())}</b><span class="muted">${esc(s.reasons.join(', '))} · ${esc(wkModel(s.card.state?.value || '').label || s.card.state?.value || '')}</span></label>
-      <p class="cap">${esc((s.card.core?.next || s.card.core?.state || '').slice(0, 220))}</p>
-      <div class="th-btns"><button class="btn" data-th-preview="${i}">Preview</button><button class="btn" data-th-revive="${i}">New session from this card</button><button class="btn" data-th-copy="${i}" title="Copy a prompt with this card in it, to start the work in any agent">Copy prompt</button></div></div>`).join('')
-    + `<p class="cap">${plural(saves.length, 'saved card')}.</p>`;
-  $$('[data-th-preview]', m).forEach(b => b.onclick = () => openPreview(() => fetch(`/api/threads/${enc(tid)}?format=html&n=${b.dataset.thPreview}`),
+      <label><b>${esc(new Date(s.at * 1000).toLocaleString())}</b><span class="muted">${esc(s.reasons.join(', '))} · ${esc(wkModel(s.thread.state?.value || '').label || s.thread.state?.value || '')}</span></label>
+      <p class="cap">${esc((s.thread.core?.next || s.thread.core?.state || '').slice(0, 220))}</p>
+      <div class="th-btns"><button class="btn" data-th-preview="${i}">Preview</button><button class="btn" data-th-revive="${i}">New session from this version</button><button class="btn" data-th-copy="${i}" title="Copy a prompt with this version in it, to start the work in any agent">Copy prompt</button></div></div>`).join('')
+    + `<p class="cap">${plural(saves.length, 'saved version')}.</p>`;
+  $$('[data-th-preview]', m).forEach(b => b.onclick = () => openPreview(() => fetch(`/api/thread?id=${enc(tid)}&format=html&version=${b.dataset.thPreview}`),
     `${title} · ${new Date(saves[+b.dataset.thPreview].at * 1000).toLocaleDateString()}`));
   $$('[data-th-revive]', m).forEach(b => b.onclick = async () => {
-    try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, n: +b.dataset.thRevive})}); toast('Starting a new session from this card in Terminal'); }
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, version: +b.dataset.thRevive})}); toast('Starting a new session from this version in Terminal'); }
     catch (err) { toast('Could not start it: ' + err.message); }
   });
   $$('[data-th-copy]', m).forEach(b => b.onclick = async () => {
     try {
-      const r = await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, n: +b.dataset.thCopy, run: false})});
-      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the card copied: paste it into any agent');
+      const r = await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, version: +b.dataset.thCopy, run: false})});
+      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the thread copied: paste it into any agent');
     } catch (err) { toast('Could not copy it: ' + err.message); }
   });
 }
 function wkCardBtns(t) {
-  return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this card as a page">${WK_IC.eye}</button>`
+  return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this thread as a page">${WK_IC.eye}</button>`
     + `<button class="wk-btn icon" data-wk-share="${esc(t.id)}" title="Share: preview what goes, then save a page to Downloads that people open and agents read">${WK_IC.share}</button>`;
 }
 // The page in an iframe's srcdoc: the Mac app's web view can't open a second window
@@ -4307,7 +4029,7 @@ async function openPreview(load, title) {
     const f = document.createElement('iframe');
     f.title = title; f.srcdoc = await r.text();
     $('.pv-body', m).replaceChildren(f);
-  } catch (e) { $('.pv-body', m).innerHTML = `<div class="empty">Could not show the card: ${esc(e.message)}</div>`; }
+  } catch (e) { $('.pv-body', m).innerHTML = `<div class="empty">Could not show the thread: ${esc(e.message)}</div>`; }
 }
 // The Share dialog: Pensieve drafts the shared card (summaries of what the reader can't open, read whole now); the
 // person writes what they need, edits the core, unticks what doesn't belong, and saves the page to Downloads.
@@ -4315,15 +4037,15 @@ const REACH_TXT = {local: 'summary only', git: 'link (git)', mcp: 'link (via MCP
 async function openShare(id) {
   const m = document.createElement('div');
   m.className = 'modal'; m.id = 'sharemodal';
-  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>Share this card</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>Share this thread</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
     <div class="sh-body"><p class="cap">Reading the sessions, changes and files of this work, and writing a summary of each one that your reader can’t open…</p><div class="shimmer" style="height:160px"></div></div></div>`;
   document.body.append(m);
   const close = () => m.remove();
   m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) close(); };
   let d;
-  try { d = await api('/api/work/card/draft', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, days: S.work.days})}); }
-  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">Could not draft the card: ${esc(e.message)}</div>`; return; }
-  const c = d.card, core = c.core || {}, rs = c.resources || [];
+  try { d = await api('/api/thread/share/draft', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, days: S.work.days})}); }
+  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">Could not draft the thread: ${esc(e.message)}</div>`; return; }
+  const c = d.thread, core = c.core || {}, rs = c.resources || [];
   const left = d.resources.filter(r => r.reach === 'local' && r.kind !== 'folder').length - rs.filter(r => r.reach === 'local').length;
   const priv = d.resources.filter(r => r.reach === 'private').length;
   $('.sh-body', m).innerHTML = `
@@ -4333,25 +4055,25 @@ async function openShare(id) {
     ${rs.map((r, i) => `<div class="sh-r"><label><input type="checkbox" data-sh-keep="${i}" checked><b>${esc(r.title)}</b><span class="muted">${esc(REACH_TXT[r.reach] || r.reach)}</span></label>
       ${r.summary || r.reach === 'local' || r.reach === 'restricted' ? `<textarea data-sh-sum="${i}" rows="3">${esc(r.summary || '')}</textarea>` : ''}</div>`).join('')}
     <div class="sh-foot"><span class="muted">Saved to Downloads as one page: people open it, agents read the data in it.</span><button class="btn" data-close>Cancel</button><button class="btn" data-sh-preview>Preview</button><button class="btn primary" data-sh-save>Save to Downloads</button></div>`;
-  const edited = () => {  // the card as the person edited it in this dialog
-    const card = JSON.parse(JSON.stringify(c));
-    card.core = {...card.core};
-    $$('[data-sh-core]', m).forEach(t => { const v = t.value.trim(); if (v) card.core[t.dataset.shCore] = v; else delete card.core[t.dataset.shCore]; });
-    card.resources = rs.map((r, i) => ({...r, summary: ($(`[data-sh-sum="${i}"]`, m)?.value ?? r.summary ?? '').trim()}))
+  const edited = () => {  // the thread as the person edited it in this dialog
+    const th = JSON.parse(JSON.stringify(c));
+    th.core = {...th.core};
+    $$('[data-sh-core]', m).forEach(t => { const v = t.value.trim(); if (v) th.core[t.dataset.shCore] = v; else delete th.core[t.dataset.shCore]; });
+    th.resources = rs.map((r, i) => ({...r, summary: ($(`[data-sh-sum="${i}"]`, m)?.value ?? r.summary ?? '').trim()}))
       .filter((r, i) => $(`[data-sh-keep="${i}"]`, m).checked);
-    return card;
+    return th;
   };
-  $('[data-sh-preview]', m).onclick = () => openPreview(() => fetch('/api/work/card/render', {method: 'POST', headers: {'content-type': 'application/json'},
-    body: JSON.stringify({card: edited(), ask: $('[data-sh="ask"]', m).value})}), 'Preview: the page you would send');
+  $('[data-sh-preview]', m).onclick = () => openPreview(() => fetch('/api/thread/share/render', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({thread: edited(), ask: $('[data-sh="ask"]', m).value})}), 'Preview: the page you would send');
   $('[data-sh-save]', m).onclick = async e => {
     e.target.disabled = true;
-    const card = edited();
+    const thread = edited();
     try {
-      const r = await api('/api/work/card/save', {method: 'POST', headers: {'content-type': 'application/json'},
-        body: JSON.stringify({id, days: S.work.days, card, ask: $('[data-sh="ask"]', m).value})});
+      const r = await api('/api/thread/share/save', {method: 'POST', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({id, days: S.work.days, thread, ask: $('[data-sh="ask"]', m).value})});
       await api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: 'file:' + r.path, action: 'reveal'})}).catch(() => {});
       toast(`Saved ${r.path.split('/').pop()} to Downloads`); close();
-    } catch (err) { toast('Could not save the card: ' + err.message); e.target.disabled = false; }
+    } catch (err) { toast('Could not save the thread: ' + err.message); e.target.disabled = false; }
   };
 }
 const wkSt = (text, kind = '') => `<span class="wk-st ${kind}">${esc(text)}</span>`;
@@ -4405,21 +4127,21 @@ function wkSections(t) {
 }
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
-  try { S.work.data = await api(`/api/work?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
+  try { S.work.data = await api(`/api/threads?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
   if (first) S.work.asked.clear();
   askNotes();
   if (S.view === 'work') renderWork();
-  if (S.work.q.trim()) wkSearch();  // the cards changed: so can what matches
+  if (S.work.q.trim()) wkSearch();  // the threads changed: so can what matches
 }
 const wkPageTasks =() => wkShown().slice(S.work.page * wkPageSize(), (S.work.page + 1) * wkPageSize());
 // The notes of the page in view that are missing or out of date: written by the server in the background, once per page
 function askNotes() {
   const d = S.work.data, key = `${S.work.days}:${[...S.work.states].sort()}:${S.work.page}`;
-  if (!d || !insightsOn() || S.work.asked.has(key)) return;
+  if (!d || S.work.asked.has(key)) return;
   const ids = wkPageTasks().filter(t => !d.notes[t.id] || d.notes[t.id].stale).map(t => t.id);
   if (!ids.length) return;
   S.work.asked.add(key);
-  api(`/api/work/notes?days=${S.work.days}&ids=${enc(ids.join(','))}`, {method: 'POST'})
+  api(`/api/threads/notes?days=${S.work.days}&ids=${enc(ids.join(','))}`, {method: 'POST'})
     .then(r => { if (r.started) { d.writing = ids; renderWork(); } else S.work.asked.delete(key); }).catch(() => S.work.asked.delete(key));
 }
 const wkDate = ts => new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
@@ -4450,15 +4172,14 @@ function wkNote(t, d) {
   const done = n && /^(nothing|none|n\/a)\.?$/i.test((n.next || '').trim());
   if (n) return `<div class="wk-note">${NOTE_ROWS.filter(([k]) => n[k] && (['problem', 'state'].includes(k) || (k === 'next' && n.question))).map(([k, l, tip]) => `<div class="nrow ${k === 'problem' ? 'recap' : k === 'next' ? (done ? 'done' : 'left') : ''}" title="${tip}"><span class="nlbl">${l}</span><p>${k === 'next' && done ? 'Nothing left' : esc(n[k])}</p></div>`).join('')}
     ${wkWriting(t, d) ? '<div class="foot">Updating…</div>' : ''}</div>`;
-  if (!insightsOn()) return '<div class="wk-note empty-note">Choose a generation model in Settings → Models to get a note on each task.</div>';
   return `<div class="wk-note empty-note">${wkWriting(t, d) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
 }
-// One card of the Context tab: a compact row, or the whole card
+// One thread of the Threads tab: a compact row, or the whole thread
 function wkCard(t, d) {
   if (S.work.view === 'compact' && !S.work.full.has(t.id)) return wkRow(t, d.notes[t.id]);
   return `<article class="wk-task${S.work.view === 'compact' ? ' opened' : ''}" data-id="${esc(t.id)}" ${S.work.view === 'compact' ? `data-wk-row="${esc(t.id)}"` : ''} style="--acc:${wkModel(t.state).color}">
       <div class="wk-main">
-        <header><h4 title="${esc(t.title)}">${esc(wkTitle(t, d.notes[t.id]))}</h4>${wkThread(d.threads?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${wkStateSel(t, d)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
+        <header><h4 title="${esc(t.title)}">${esc(wkTitle(t, d.notes[t.id]))}</h4>${wkThread(d.history?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${wkStateSel(t, d)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
         ${wkGlance(t, d.notes[t.id], wkWriting(t, d))}
         ${S.work.details.has(t.id) ? `<div class="wk-detail">${wkNote(t, d)}${wkSections(t)}</div>` : ''}
       </div>
@@ -4471,10 +4192,10 @@ function wkOrder(d) {
   const at = new Map(d.states.map((m, i) => [m.state, i]));
   return (a, b) => (at.get(a.state) - at.get(b.state)) || (!!b.active - !!a.active) || (b.updated - a.updated);
 }
-// A `card` event: the server built these cards again (or removed them). Ask for those cards only; when the page shows
-// the same cards in the same places, draw only the changed ones, else draw the tab again.
+// A `thread` event: the server built these threads again (or removed them). Ask for those threads only; when the page
+// shows the same threads in the same places, draw only the changed ones, else draw the tab again.
 // Thread changes from the server wait, and the whole Threads list loads again at most once a minute: one update a
-// minute, not a card at a time while its sessions are still being grouped.
+// minute, not a thread at a time while its sessions are still being grouped.
 const WK_EVERY = 60e3;
 function wkStage() {
   const st = S.work.stage ||= {t: null, at: 0};
@@ -4486,21 +4207,21 @@ async function patchWork(ids = [], removed = []) {
   if (!d || S.work.hits) return loadWork();
   const page = () => wkPageTasks().map(t => `${t.id}:${t.state}`).join('\n');
   const before = page();
-  let got = {tasks: [], notes: {}, threads: {}};
+  let got = {threads: [], notes: {}, history: {}};
   if (ids.length) {
-    try { got = await api(`/api/work?days=${S.work.days}&ids=${enc(ids.join(','))}`); } catch { return loadWork(); }
+    try { got = await api(`/api/threads?days=${S.work.days}&ids=${enc(ids.join(','))}`); } catch { return loadWork(); }
   }
   if (S.work.data !== d) return;  // a full load came in meanwhile
   const drop = new Set([...ids, ...removed]);
-  d.tasks = d.tasks.filter(t => !drop.has(t.id)).concat(got.tasks).sort(wkOrder(d));
-  for (const i of drop) { delete d.notes[i]; if (d.threads) delete d.threads[i]; }
+  d.threads = d.threads.filter(t => !drop.has(t.id)).concat(got.threads).sort(wkOrder(d));
+  for (const i of drop) { delete d.notes[i]; if (d.history) delete d.history[i]; }
   Object.assign(d.notes, got.notes || {});
-  d.threads = Object.assign(d.threads || {}, got.threads || {});
+  d.history = Object.assign(d.history || {}, got.history || {});
   S.work.patched = (S.work.patched || 0) + 1;
   const el = $('#work');
   if (S.view !== 'work' || !el) return;
   if (page() !== before) return renderWork();
-  for (const t of got.tasks) {
+  for (const t of got.threads) {
     const old = $(`.wk-task[data-id="${CSS.escape(t.id)}"]`, el);
     if (!old) continue;
     const box = document.createElement('div');
@@ -4512,17 +4233,17 @@ async function patchWork(ids = [], removed = []) {
 function renderWork() {
   const el = $('#work'); if (!el) return;
   const d = S.work.data;
-  if (!d) { el.innerHTML = S.work.err ? `<div class="empty">Could not load your tasks: ${esc(S.work.err)}</div>` : '<div class="shimmer" style="height:160px"></div>'; return; }
+  if (!d) { el.innerHTML = S.work.err ? `<div class="empty">Could not load your threads: ${esc(S.work.err)}</div>` : '<div class="shimmer" style="height:160px"></div>'; return; }
   const fl = S.work.flash && Date.now() < S.work.flash.until ? S.work.flash : null;
-  if (fl && !fl.shown) {  // a card opened from the map: its state into the filter, its page in view
-    if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('taskStates', [...S.work.states]); }
+  if (fl && !fl.shown) {  // a thread opened from the map: its state into the filter, its page in view
+    if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('threadStates', [...S.work.states]); }
     const at = wkShown().findIndex(x => x.id === fl.id);
     if (at >= 0) S.work.page = Math.floor(at / wkPageSize());
   }
   const shown = wkShown(), pages = Math.max(1, Math.ceil(shown.length / wkPageSize()));
   S.work.page = Math.min(S.work.page, pages - 1);
   const tasks = wkPageTasks(), first = S.work.page * wkPageSize();
-  const count = s => d.tasks.filter(t => t.state === s).length;
+  const count = s => d.threads.filter(t => t.state === s).length;
   const def = m => `${m.meaning} ${m.rule}`;
   const picked = d.states.filter(m => S.work.states.has(m.state));
   const label = !picked.length || picked.length === d.states.length ? 'All states' : picked.length <= 2 ? picked.map(m => m.label).join(', ') : `${picked.length} states`;
@@ -4539,7 +4260,7 @@ function renderWork() {
   const box = document.activeElement?.id === 'wksearch' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const search = `<div class="wk-search"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       <input id="wksearch" type="search" value="${esc(S.work.q)}" placeholder="Search threads" aria-label="Search threads" autocomplete="off" spellcheck="false"
-        title="Plain words search by meaning · &quot;exact words&quot; must appear · -word leaves cards out">
+        title="Plain words search by meaning · &quot;exact words&quot; must appear · -word leaves threads out">
       <span class="syn">${S.work.hits ? `${S.work.hits.length} match${S.work.hits.length === 1 ? '' : 'es'}` : '"exact" · -exclude'}</span></div>`;
   el.innerHTML = `<div class="wk-head"><h2>Threads</h2>
       <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>
@@ -4549,7 +4270,7 @@ function renderWork() {
       const prev = i ? tasks[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== t.state) ? `<h3 class="wk-group" style="--acc:${wkModel(t.state).color}" title="${esc(def(wkModel(t.state)))}">${esc(wkModel(t.state).label)}<span>${count(t.state)}</span></h3>` : '';
       return head + wkCard(t, d);
-    }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.tasks.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
+    }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.threads.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
     if (!fl.shown) { fl.shown = true; fl.t0 = performance.now(); flashed.scrollIntoView({block: 'center'}); }
@@ -4569,7 +4290,7 @@ function renderWork() {
   if (box) { sb.focus(); sb.setSelectionRange(...box); }  // the page was drawn again while you typed
   sb.oninput = () => { S.work.q = sb.value; wkSearch(); };
   sb.onkeydown = e => { if (e.key === 'Escape' && sb.value) { e.stopPropagation(); sb.value = S.work.q = ''; wkSearch(); } };
-  const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('taskStates', [...S.work.states]); renderWork(); askNotes(); };
+  const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('threadStates', [...S.work.states]); renderWork(); askNotes(); };
   $$('[data-wk-menu]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.menu = !S.work.menu; renderWork(); });
   $$('[data-wk-st]', el).forEach(c => c.onchange = () => pick(d.states.map(m => m.state).filter(s => s === c.dataset.wkSt ? c.checked : S.work.states.has(s))));
   $$('[data-wk-st-all]', el).forEach(b => b.onclick = () => pick(d.states.map(m => m.state)));
@@ -4580,23 +4301,23 @@ function renderWork() {
     S.work.view = b.dataset.wkView; S.work.page = 0; S.work.full.clear(); store.set('workView', S.work.view); renderWork(); askNotes();
   });
 }
-// The handlers of the cards in `el`: the whole tab, or one card that patchWork drew again
+// The handlers of the threads in `el`: the whole tab, or one thread that patchWork drew again
 function wkBind(el, d) {
   $$('[data-wk-state]', el).forEach(s => s.onchange = async () => {
     try {
-      await api('/api/work/state', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: s.dataset.wkState, state: s.value})});
+      await api('/api/thread/state', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: s.dataset.wkState, state: s.value})});
       toast(s.value === 'auto' ? 'Back to automatic' : `Moved to ${wkModel(s.value).label}`);
       patchWork([s.dataset.wkState]);
     } catch (e) { toast('Could not change it: ' + e.message); }
   });
   $$('[data-wk-resume]', el).forEach(b => b.onclick = async () => {
-    try { await api('/api/work/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
+    try { await api('/api/thread/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
     catch (e) { toast('Could not resume it: ' + e.message); }
   });
   $$('[data-wk-share]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openShare(b.dataset.wkShare); });
   $$('[data-wk-thread]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
-    const t = d.tasks.find(x => d.threads?.[x.id]?.id === b.dataset.wkThread);
+    const t = d.threads.find(x => d.history?.[x.id]?.id === b.dataset.wkThread);
     openThread(b.dataset.wkThread, t ? t.title : 'Thread');
   });
   $$('[data-wk-details]', el).forEach(b => b.onclick = e => {
@@ -4605,7 +4326,7 @@ function wkBind(el, d) {
   });
   $$('[data-wk-revive]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
-    try { await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkRevive, days: S.work.days})}); toast('Starting a new session from this card in Terminal'); }
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkRevive, days: S.work.days})}); toast('Starting a new session from this thread in Terminal'); }
     catch (err) { toast('Could not start it: ' + err.message); }
   });
   $$('[data-wk-resume-copy]', el).forEach(b => b.onclick = e => {
@@ -4614,14 +4335,14 @@ function wkBind(el, d) {
   $$('[data-wk-revive-copy]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
     try {
-      const r = await api('/api/work/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkReviveCopy, days: S.work.days, run: false})});
-      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the card copied: paste it into any agent');
+      const r = await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkReviveCopy, days: S.work.days, run: false})});
+      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the thread copied: paste it into any agent');
     } catch (err) { toast('Could not copy it: ' + err.message); }
   });
   $$('[data-wk-preview]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
-    const t = d.tasks.find(x => x.id === b.dataset.wkPreview);
-    openPreview(() => fetch(`/api/work/card?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Thread');
+    const t = d.threads.find(x => x.id === b.dataset.wkPreview);
+    openPreview(() => fetch(`/api/thread?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Thread');
   });
   $$('[data-wk-row]', el).forEach(r => r.onclick = e => {
     if (e.target.closest('button, a, select')) return;
@@ -4641,7 +4362,7 @@ function wkBind(el, d) {
     const id = b.dataset.wkAdj;
     if (S.work.adj[id] && !S.work.adj[id].loading) { delete S.work.adj[id]; return renderWork(); }  // a second click hides it
     S.work.adj[id] = {loading: true}; renderWork();
-    try { S.work.adj[id] = await api(`/api/work/adjacent?id=${enc(id)}&days=${S.work.days}`); }
+    try { S.work.adj[id] = await api(`/api/thread/adjacent?id=${enc(id)}&days=${S.work.days}`); }
     catch (e) { S.work.adj[id] = {coworkers: [], related: []}; toast('Could not look: ' + e.message); }
     renderWork();
   });
@@ -5211,18 +4932,14 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 function renderStatus() {
   const st = S.status, pill = $('#statuspill'), label = $('span', pill);
   const mig = st.migration?.phase, moving = mig === 'importing' || mig === 'cleanup';
-  const busy = moving || st.layout || st.insights_running || st.indexing || st.summarized_sessions < st.sessions || st.topics_named < st.topics;
-  const state = st.message?.startsWith('error') ? 'off' : st.llm_offline ? 'warn' : busy ? 'busy' : 'live';
+  // summaries and topic names wait for the user's agent, so they don't make Pensieve look busy
+  const busy = moving || st.layout || st.insights_running || st.indexing;
+  const state = st.message?.startsWith('error') ? 'off' : busy ? 'busy' : 'live';
   pill.className = 'menu-status ' + state; $('#gearbtn').dataset.state = state;
-  if (st.llm_offline) {
-    label.textContent = 'Language model offline';
-    pill.title = `No language model at ${st.llm_url || 'the LLM URL'}. Start that server, or pick another in Settings → Models, for summaries, topic names and insights. Search, maps, files and code views still work.`;
-    return;
-  }
-  label.textContent = mig === 'importing' ? `Moving to new storage ${st.migration.done || 0}/${st.migration.total || 0}…` : mig === 'cleanup' ? 'Removing old data…' : st.layout ? 'Laying out map…' : st.summarized_sessions < st.sessions ? `Summarizing ${st.summarized_sessions}/${st.sessions}` :
-    st.topics_named < st.topics ? 'Naming topics…' : st.insights_running ? 'Generating insights…' : st.indexing && st.message && st.message !== 'idle' ? st.message[0].toUpperCase() + st.message.slice(1) + '…' : `Live · ${plural(st.files || 0, 'file')} · ${plural(st.sessions || 0, 'session')}`;
+  label.textContent = mig === 'importing' ? `Moving to new storage ${st.migration.done || 0}/${st.migration.total || 0}…` : mig === 'cleanup' ? 'Removing old data…' : st.layout ? 'Laying out map…' :
+    st.insights_running ? 'Generating insights…' : st.indexing && st.message && st.message !== 'idle' ? st.message[0].toUpperCase() + st.message.slice(1) + '…' : `Live · ${plural(st.files || 0, 'file')} · ${plural(st.sessions || 0, 'session')}`;
   $('#gearbtn').title = label.textContent;
-  pill.title = `${(st.files || 0).toLocaleString()} files · ${(st.repos || 0)} repos · ${(st.sessions || 0)} sessions · ${(st.chunks || 0).toLocaleString()} moments · ${(st.code_chunks || 0).toLocaleString()} code chunks\nSummaries: ${st.summarized_sessions}/${st.sessions} sessions, ${st.summarized_chunks?.toLocaleString()} moments\nModels: ${st.llm} + ${st.embed}${migrationLine(st.migration)}`;
+  pill.title = `${(st.files || 0).toLocaleString()} files · ${(st.repos || 0)} repos · ${(st.sessions || 0)} sessions · ${(st.chunks || 0).toLocaleString()} moments · ${(st.code_chunks || 0).toLocaleString()} code chunks\nSummaries by your agent: ${st.summarized_sessions}/${st.sessions} sessions\nSearch model: ${st.embed}${migrationLine(st.migration)}`;
 }
 function migrationLine(m) {
   if (!m || !['importing', 'indexing', 'cleanup'].includes(m.phase)) return '';
@@ -5230,7 +4947,7 @@ function migrationLine(m) {
   const left = Object.entries(m.first_index || {}).filter(([, at]) => !at).map(([k]) => k);
   return left.length ? `\nNew storage: first index of ${left.join(', ')} still to finish; the old data stays until then` : '';
 }
-$('#statuspill').onclick = () => toast(S.status.llm_offline ? $('#statuspill').title : $('#statuspill').title.split('\n')[0]);
+$('#statuspill').onclick = () => toast($('#statuspill').title.split('\n')[0]);
 
 /* ============================== data loading + live updates ============================== */
 async function loadSessions() {
@@ -5284,11 +5001,11 @@ async function handleEvent(m) {
     else if (m.type === 'topics') { await loadSessions(); renderSidebar(); if (S.view === 'map') renderLabels(); if (S.view === 'insights') renderInsights(); pollStatus(); }
     else if (m.type === 'insights') { await loadInsights(); if (S.view === 'insights') renderInsights(); toast('New insights are ready'); pollStatus(); }
     else if (m.type === 'files') { S.files.stale = true; reloadFilesSoon(); reloadDataSoon(); refetchSourcesSoon(); }
-    else if (m.type === 'settings') { loadScopes(); loadAppearance(); loadAI().then(refreshAIViews); if (S.set && !setDirty().length) { await loadSettings(true); if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
+    else if (m.type === 'settings') { loadScopes(); loadAppearance(); if (S.set && !setDirty().length) { await loadSettings(true); if (S.view === 'settings') renderSettings(); } else refetchSourcesSoon(); }
     else if (m.type === 'repos') { refetchSourcesSoon(); reloadDataSoon(); reloadRepoSoon(); }
     else if (m.type === 'toast') toast(m.message);
     else if (m.type === 'upstream') loadUpstream();
-    else if (m.type === 'work' || m.type === 'card') { if (S.work.data) wkStage(); }
+    else if (m.type === 'threads' || m.type === 'thread') { if (S.work.data) wkStage(); }
     else if (m.type === 'people') { if (S.view === 'people') loadPeople(); else S.people.stale = true; }
     else if (m.type === 'projects') { if (S.view === 'projects') loadProjects(); else S.proj.stale = true; }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
@@ -5328,7 +5045,7 @@ async function init() {
   connect();
   await loadRepos().catch(() => {});
   loadUpstream();
-  loadScopes(); loadAppearance(); syncThemeLabel(); loadAI().then(() => S.view === 'insights' && renderInsights());
+  loadScopes(); loadAppearance(); syncThemeLabel();
   if (location.hash.length > 1) await route();
 }
 init();

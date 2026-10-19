@@ -1,14 +1,14 @@
-"""Context cards as files, in the context-card/1 format (context-card.schema.json).
+"""Threads as files, in the pensieve-thread/2 format (thread.schema.json).
 
-A local card and a shared card have the same core: the problem, the goal, the state and what is next. They differ
-in their supporting context, the resources (pensieve/resources.py). A local card points to everything, paths
-included. A shared card keeps what its reader can open (PRs, the branch, tickets, messages, public pages) and
+A local thread and a shared thread have the same core: the problem, the goal, the state and what is next. They
+differ in their supporting context, the resources (pensieve/resources.py). A local thread points to everything,
+paths included. A shared thread keeps what its reader can open (PRs, the branch, tickets, messages, public pages) and
 replaces what they can't (transcripts, memory files, uncommitted changes, private artifacts) with summaries that
-were written from the whole document when the card was shared.
+were written from the whole document when the thread was shared.
 
-Each card has two renderings: `render_html` for people (one page with no outside files that also holds the JSON),
-and `render_agent` for agents (the data as compact JSON). Agents in a Pensieve session get the text card
-(work.compact) from the MCP tools and the prompt hook."""
+Each thread has two renderings: `render_html` for people (one page with no outside files that also holds the JSON),
+and `render_agent` for agents (the data as compact JSON). Agents in a Pensieve session get the text view
+(work.compact) from the MCP tools and the prompt hook. Pages in the older context-card/1 format still read."""
 import html
 import json
 import re
@@ -16,9 +16,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from pensieve import cardtext, resources as res
-from pensieve import work
+from pensieve import task_states, work
 
-SCHEMA = "context-card/1"
+SCHEMA = "pensieve-thread/2"
+PAGE_ID = "pensieve-thread"  # the id of the <script> that holds the JSON; pages before version 2 used "context-card"
 _SECRET = re.compile(
     r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|"
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|"
@@ -206,7 +207,7 @@ def render_agent(card: dict) -> str:
     read it. Agents follow ids, URLs and commands; they don't need layout."""
     c = dict(card, timeline=card.get("timeline", [])[:5], history=card.get("history", [])[-3:])
     c["resources"] = [{k: v for k, v in r.items() if k != "relevance"} for r in card.get("resources", [])]
-    head = ("Context card (context-card/1). 'core' (problem, goal, state, next, question) is a model's note as of "
+    head = ("Pensieve thread (pensieve-thread/2). 'core' (problem, goal, state, next, question) is a model's note as of "
             "core.as_of; a sentence marked [outdated: …] is wrong now. Each resource has a reach: git, mcp and public "
             "ones can be opened with their ref; local and restricted ones are summarized. 'handoff' says how to start "
             "and how to get the live state. "
@@ -214,8 +215,8 @@ def render_agent(card: dict) -> str:
     return head + "\n" + json.dumps(_clean(c), ensure_ascii=False, separators=(",", ":"))
 
 
-STATE_LABEL = {"latent": "Defined", "conscious": "In progress", "subconscious": "Gone quiet", "etched": "Done",
-               "forgotten": "Left"}
+STATE_LABEL = {"todo": "To do", "open": "Open", "loose_ends": "Loose ends", "complete": "Complete",
+               "forgotten": "Forgotten"}
 NOTE_LABEL = {"session": "Session", "memory": "Memory", "change": "Changes", "file": "File", "artifact": "Artifact",
               "message": "Message", "page": "Page", "ticket": "Ticket"}
 REACH_LABEL = {res.LOCAL: "summary", res.GIT: "git", res.MCP: "via MCP", res.RESTRICTED: "may need access", res.PUBLIC: "public",
@@ -237,7 +238,7 @@ a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
 code,pre{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13px}
 .meta{color:var(--ink-2);font-size:13px}.meta span+span:before{content:"·";margin:0 6px;color:var(--ink-3)}
 .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--chip);margin-right:6px}
-.s-conscious{color:var(--link)}.s-subconscious{color:var(--warn)}.s-etched{color:var(--good)}.s-forgotten,.s-latent{color:var(--ink-2)}
+.s-open{color:var(--link)}.s-loose_ends{color:var(--warn)}.s-complete{color:var(--good)}.s-forgotten,.s-todo{color:var(--ink-2)}
 .box{margin-top:18px;border-radius:12px;padding:12px 14px}.box b{display:block;font-size:12px;text-transform:uppercase;
 letter-spacing:.06em;margin-bottom:2px}.ask{background:var(--ask);border:1px solid var(--ask-line)}
 .req{background:var(--req);border:1px solid var(--req-line)}
@@ -286,15 +287,16 @@ def _url(r: dict) -> str:
 
 
 def render_html(card: dict) -> str:
-    """The card for people: one page with no outside files, light and dark, that leads with the ask and the core.
-    The page holds the card's JSON in <script type="application/json" id="context-card">, so `from_html` and any
-    tool can read it back."""
+    """The thread for people: one page with no outside files, light and dark, that leads with the ask and the core.
+    The page holds the thread's JSON in <script type="application/json" id="pensieve-thread">, so `from_html` and
+    any tool can read it back."""
     e = lambda s: html.escape(str(s or ""))
     day = lambda s: (s or "")[:10]
     st, core, rs = card.get("state", {}), card.get("core", {}), card.get("resources", [])
+    sv = task_states.RENAMED.get(st.get("value"), st.get("value"))  # a page saved before the states were renamed
     shared = card.get("locality") == "shared"
     by = (card.get("origin") or {}).get("by")
-    out = [f'<span class="pill s-{e(st.get("value"))}">{e(STATE_LABEL.get(st.get("value"), st.get("value")))}</span>'
+    out = [f'<span class="pill s-{e(sv)}">{e(STATE_LABEL.get(sv, sv))}</span>'
            + ('<span class="pill">Shared</span>' if shared else ""),
            f"<h1>{e(card['title'])}</h1>",
            '<div class="meta">' + "".join(f"<span>{x}</span>" for x in [
@@ -334,16 +336,16 @@ def render_html(card: dict) -> str:
             f'<li><span class="badge">{e(r["kind"])}</span><span class="grow">{e(r["title"])}<p><code>{e(r["ref"]["path"])}</code></p></span></li>'
             for r in mine) + "</ul></section>"]
     th = card.get("thread") or {}
-    foot = (f"Context card · {e(card.get('schema'))} · made {e(day(card.get('made_at')))} by "
+    foot = (f"Pensieve thread · {e(card.get('schema'))} · made {e(day(card.get('made_at')))} by "
             f"{e((card.get('origin') or {}).get('generator'))}"
             + (f' · <a href="{e(th["url"])}">thread</a> revision {e(th.get("revision"))}' if th.get("url") else "")
-            + " · this page holds the card as JSON")
+            + " · this page holds the thread as JSON")
     data = json.dumps(card, ensure_ascii=False).replace("<", "\\u003c")
     return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
             '<meta name=viewport content="width=device-width,initial-scale=1">'
             f"<title>{e(card['title'])}</title><style>{CSS}</style></head><body><main>"
             + "".join(out) + f"<footer>{foot}</footer></main>"
-            f'<script type="application/json" id="context-card">{data}</script></body></html>')
+            f'<script type="application/json" id="{PAGE_ID}">{data}</script></body></html>')
 
 
 def _link_row(r: dict, e) -> str:
@@ -356,7 +358,7 @@ def _link_row(r: dict, e) -> str:
             + (f"<p>{e(r['summary'])}</p>" if r.get("summary") else "") + f'</span><span class="reach">{e(REACH_LABEL[r["reach"]])}</span></li>')
 
 
-REVIVE_PROMPT = ("Pick up this thread: \"{title}\" (Pensieve thread {id}). Read it first with Pensieve's `task` tool "
+REVIVE_PROMPT = ("Pick up this thread: \"{title}\" (Pensieve thread {id}). Read it first with Pensieve's `thread` tool "
                  "(id {id}): it gives the thread as it is now, with what is left to close it. If you do not have "
                  "Pensieve's tools, read {copy}. Then check the live state of its branch, pull requests and tickets, "
                  "and review what has been done. What is left says who can do each step: the agent's steps are yours, "
@@ -397,18 +399,22 @@ def revive_command(card: dict, folder, agent: str = "") -> str:
 
 
 def save(card: dict, folder) -> str:
-    """Write the card's HTML page into folder, named after its title; returns the path."""
+    """Write the thread's HTML page into folder, named after its title; returns the path."""
     from pathlib import Path
-    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:60] or "context-card"
-    path = Path(folder).expanduser() / f"{slug}.context-card.html"
+    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:60] or "thread"
+    path = Path(folder).expanduser() / f"{slug}.thread.html"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_html(card))
     return str(path)
 
 
 def from_html(page: str) -> dict:
-    """The card that an HTML card page carries."""
-    m = re.search(r'<script type="application/json" id="context-card">(.*?)</script>', page, re.S)
+    """The thread that an HTML thread page carries (or a context-card/1 page, from before version 2)."""
+    m = re.search(r'<script type="application/json" id="(?:pensieve-thread|context-card)">(.*?)</script>', page, re.S)
     if not m:
-        raise ValueError("not a context card page")
-    return json.loads(m.group(1))
+        raise ValueError("not a Pensieve thread page")
+    t = json.loads(m.group(1))
+    st = t.get("state") or {}
+    if st.get("value") in task_states.RENAMED:
+        t["state"] = {**st, "value": task_states.RENAMED[st["value"]]}
+    return t

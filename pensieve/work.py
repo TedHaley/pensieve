@@ -655,6 +655,8 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
             t["places"] = []
     _own_prs(out)
     have, manual = notes(), task_states.latest(store)
+    if inp.until is None:
+        _integrated(out, have)
     out += _goal_tasks(out, have)
     for t in out:
         _attention(t)
@@ -711,6 +713,80 @@ def _own_prs(ts: list[dict]):
         t["prs"] = keep
         for p in t["prs"]:
             p["own"] = owner.get(p["url"]) == t["id"]
+
+
+_squash_cache = {}  # (repo, default branch tip, branch tips) -> the squash-merged branches
+PR_SUBJECT = re.compile(r"^Merge pull request #(\d+)\b|\(#(\d+)\)\s*$")  # a GitHub merge commit, a squash commit
+
+
+def _integrated(ts: list[dict], have: dict):
+    """Where a task's work reached the default branch of its repo, from git. Pensieve only reads: the merge is the
+    evidence, and task_states.derive turns it into a state. Without an open PR, a task is integrated when:
+    - it has a feature branch and every commit of the task is in the default branch (a merge or a fast-forward);
+    - its feature branch is squash-merged (stale._squashed);
+    - it has no feature branch (its commits are on a shared branch), every commit of the task is in the default
+      branch, and its note says that nothing is left.
+    Sets task["integrated"] (why, and the PR that merged it) and adds that PR to the card, so the record names it."""
+    from pensieve import stale
+    bases, webs, squash = {}, {}, defaultdict(list)
+
+    def base(root):
+        if root not in bases:
+            bases[root] = stale._default_branch(root) or ""
+        return bases[root]
+
+    def in_base(root, sha):
+        return bool(_git(root, "rev-parse", "-q", "--verify", f"{sha}^{{commit}}", ttl=3600)) and \
+            not _git(root, "rev-list", "-1", f"{base(root)}..{sha}", ttl=300)
+
+    for t in ts:
+        if any(p.get("state") in ("open", "draft") for p in t["prs"]):
+            continue
+        cs = [c for c in t["commits"] if Path(c.get("repo", "")).is_dir() and base(c["repo"])]
+        feature = [b for b in t["branches"] if b["branch"] not in DEFAULT_BRANCHES and Path(b["repo"]).is_dir()]
+        if cs and len(cs) == len(t["commits"]) and all(in_base(c["repo"], c["sha"]) for c in cs):
+            root, name = cs[0]["repo"], base(cs[0]["repo"]).rsplit("/", 1)[-1]
+            if feature:
+                _mark(t, root, base(root), cs[0]["sha"], f"its branch {feature[0]['branch']} is merged into {name}", webs)
+                continue
+            # a check_done match is a model's guess, not evidence: only a note that says nothing is left counts
+            if task_states._nothing_left(core(have.get(t["id"], {}))):
+                _mark(t, root, base(root), cs[0]["sha"], f"its commits are in {name}, and nothing is left", webs)
+                continue
+        for b in feature:
+            if base(b["repo"]) and _git(b["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b['branch']}", ttl=300):
+                squash[b["repo"]].append((t, b["branch"]))
+    for root, pairs in squash.items():  # one git pass per repo: _squashed reads the default branch's patches once
+        names = sorted({b for _, b in pairs})
+        key = (root, _git(root, "rev-parse", base(root), ttl=60),
+               _git(root, "rev-parse", *(f"refs/heads/{b}" for b in names), ttl=60))
+        if key not in _squash_cache:  # the same tips give the same answer
+            _squash_cache[key] = set(stale._squashed(root, base(root), names))
+        got = _squash_cache[key]
+        for t, b in pairs:
+            if b in got and not t.get("integrated"):
+                _mark(t, root, base(root), "", f"its branch {b} is squash-merged into {base(root).rsplit('/', 1)[-1]}",
+                      webs)
+
+
+def _mark(t: dict, root: str, base: str, sha: str, why: str, webs: dict):
+    """Record that `t` is integrated, and the PR that merged `sha` into `base`: the first GitHub merge commit after
+    it, or the squash commit itself ("… (#12)"). Without `sha` (a squash-merged branch), the PR is the one that gh
+    found for the branch, if any."""
+    if root not in webs:
+        webs[root] = web_url(_git(root, "remote", "get-url", "origin", ttl=3600))
+    pr = ""
+    if sha and "github.com" in webs[root]:
+        subjects = [_git(root, "log", "-1", "--format=%s", sha, ttl=3600)] + _git(
+            root, "log", "--ancestry-path", "--merges", "--reverse", "--format=%s", f"{sha}..{base}",
+            ttl=300).splitlines()
+        n = next((m.group(1) or m.group(2) for s in subjects if (m := PR_SUBJECT.search(s))), "")
+        if n:
+            pr = f"{webs[root]}/pull/{n}"
+            if pr not in {p["url"] for p in t["prs"]}:
+                t["prs"].append(dict(url=pr, title="", state="merged", source="git", own=False))
+            why += f" (#{n})"
+    t["integrated"] = dict(why=why, pr=pr)
 
 
 ACTIVE_MINUTES = 10      # a transcript written this recently: the session is running now
@@ -936,15 +1012,21 @@ def reconcile(note: dict, t: dict) -> tuple[dict, list[str]]:
     return out, list(dict.fromkeys(changes))
 
 
-DONE_PROMPT = """A developer's task has things left to do, from a note written when its last agent session ended.
-Commits made since that session, in the task's repos, on any branch (hash, author, subject, body):
+DONE_PROMPT = """A developer's thread of work has things left to do, from a note written when its last agent session ended.
+Commits made since that session, in the thread's repos, on any branch (hash, author, subject, body):
 {commits}
 
 Left to do:
 {items}
 
 For each item that one of these commits clearly does in full, give the item's number and the commit's hash. Leave out
-an item that a commit only starts or only resembles."""
+an item that a commit only starts or only resembles. A commit that only writes a plan, a design note or docs does not
+do an item that asks for a change to code. A commit never does an item about a pull request (mark it ready, review or
+merge it), a ticket, or a person's answer: those happen outside git."""
+DONE_CHECK_VERSION = 2  # in each check's key: a new version checks every task again
+# a step that happens outside git (a PR, a review, a ticket, an answer): check_done never asks about it
+OUTSIDE_GIT = re.compile(r"#\d+|\bPRs?\b|pull request|\b[A-Z][A-Z0-9]+-\d+\b|^(?:mark|merge|review|approve|ask|answer|"
+                         r"wait|decide|confirm|tell|close)\b", re.I)
 DONE_SCHEMA = {"type": "object", "properties": {"done": {"type": "array", "items": {
     "type": "object", "properties": {"item": {"type": "integer"}, "commit": {"type": "string"}},
     "required": ["item", "commit"], "additionalProperties": False}}}, "required": ["done"], "additionalProperties": False}
@@ -974,7 +1056,7 @@ def check_done(ts: list[dict], limit: int = 15) -> int:
     from pensieve import llm
     have, saved, calls = notes(), dict(_done_items()), 0
     for t in [t for t in ts if t["state"] not in DONE and t["sessions"]][:limit]:
-        items = _left_items(have.get(t["id"], {}))
+        items = [s for s in _left_items(have.get(t["id"], {})) if not OUTSIDE_GIT.search(s)]
         if not items:
             continue
         since = datetime.fromtimestamp(t["sessions"][0]["updated"]).isoformat(timespec="seconds")
@@ -987,7 +1069,7 @@ def check_done(ts: list[dict], limit: int = 15) -> int:
         log = [c for c in log if len(c) == 4]
         if not log:
             continue
-        key = json.dumps([have[t["id"]].get("at"), items, sorted(c[0] for c in log)])
+        key = json.dumps([DONE_CHECK_VERSION, have[t["id"]].get("at"), items, sorted(c[0] for c in log)])
         if saved.get(t["id"], {}).get("key") == key:
             continue
         try:
@@ -1108,10 +1190,10 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
     raw = notes().get(t["id"], {})
     if raw.get("also"):
         done = _done_items().get(t["id"], {}).get("done", {})
-        out.append("Also talked about in these sessions, with no PR, ticket or commit apart from this card's then: " + "; ".join(
+        out.append("Also talked about in these sessions, with no PR, ticket or commit apart from this thread's then: " + "; ".join(
             a + (f" [outdated: {done[a]}]" if a in done else "") for a in raw["also"]))
     if split := [s for s in raw.get("split") or [] if not _part_of_main(s, raw)]:
-        out.append("Other goals of these sessions, each its own card: " + ", ".join(s["id"] for s in split))
+        out.append("Other goals of these sessions, each its own thread: " + ", ".join(s["id"] for s in split))
     if t.get("last_words"):
         out += ["", "Last words of the last session:", _clean_words(t["last_words"])[-450:]]
     roots = [p["path"] + "/" for p in t.get("places", [])]
@@ -1421,8 +1503,8 @@ def _task_id(keys, branches, sessions, items=()) -> str:
     return f"p:{min(i['url'] for i in items if i['pr'])}"
 
 
-NOTE_PROMPT = """You write the status line of one task on a developer's work dashboard.
-Task: {title}{keys}{status}
+NOTE_PROMPT = """You write the status line of one thread of work on a developer's work dashboard.
+Thread: {title}{keys}{status}
 Pull requests: {prs}
 Working folders: {places}
 Its data points, newest first (date, source, what happened):
@@ -1613,10 +1695,10 @@ def resume_command(store, session_id: str) -> str | None:
 def write_note(task: dict, all_tasks: list[dict]) -> str:
     """Ask the insights engine for the task's note, and keep it with the signature of the data it saw."""
     note = _split_goals(task, make_note(task))
-    from pensieve import settings, store as v2
+    from pensieve import store as v2
     from pensieve.models import CardNote
     from pensieve.store import cards as store_cards
-    sig, now, model = _signature(task), int(time.time()), settings.get("ai") or ""
+    sig, now, model = _signature(task), int(time.time()), "agent"
     goals = []
     for s in note["split"]:
         g = note["goals"][s["n"]]
@@ -1667,7 +1749,7 @@ def make_note(task: dict) -> dict:
     """The insights engine's note for a task ({problem, goal, state, next, question}), not saved: write_note keeps
     it; a replay writes notes for past snapshots with it."""
     from pensieve import llm
-    ans = llm.complete(NOTE_PROMPT.format(**note_fields(task)), max_tokens=700, schema=NOTE_SCHEMA, kind="task note")
+    ans = llm.complete(NOTE_PROMPT.format(**note_fields(task)), max_tokens=700, schema=NOTE_SCHEMA, kind="thread note")
     note = {k: str(ans.get(k, "")).strip() for k in ("title",) + CORE}
     note["resolved"] = bool(ans.get("resolved"))
     note["evidence"] = [str(x) for x in ans.get("evidence") or []]

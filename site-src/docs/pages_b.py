@@ -9,7 +9,7 @@ CLIENTS = [
          skills="a link to <code>~/.agents/skills</code> in <code>~/.claude/skills</code>",
          title="Pensieve MCP server for Claude Code: install and setup",
          desc="Connect Pensieve to Claude Code as an MCP server with one command or the Claude Code plugin. Search "
-              "code, past sessions and context cards before you grep."),
+              "code, past sessions and threads before you grep."),
     dict(slug="codex", name="Codex", id="codex-mcp", instr="codex", instr_file="~/.codex/AGENTS.md",
          cfg="<code>~/.codex/config.toml</code>", skills="<code>~/.agents/skills</code>",
          title="Pensieve MCP server for OpenAI Codex CLI: setup",
@@ -19,7 +19,7 @@ CLIENTS = [
          cfg="<code>~/.cursor/mcp.json</code>", skills="<code>~/.agents/skills</code>",
          title="Pensieve MCP server for Cursor: mcp.json setup",
          desc="Add Pensieve to Cursor as an MCP server in ~/.cursor/mcp.json, and add the search-before-grep rule. "
-              "Local code search and context cards for the Cursor agent."),
+              "Local code search and threads for the Cursor agent."),
     dict(slug="gemini-cli", name="Gemini CLI", id="gemini-mcp", instr="gemini", instr_file="~/.gemini/GEMINI.md",
          cfg="<code>~/.gemini/settings.json</code>", skills="<code>~/.agents/skills</code>",
          title="Pensieve MCP server for Gemini CLI: settings.json setup",
@@ -40,12 +40,12 @@ CLIENTS = [
          cfg="<code>~/Library/Application Support/Claude/claude_desktop_config.json</code>", skills=None,
          title="Pensieve MCP server for Claude Desktop: setup on Mac",
          desc="Add Pensieve to the Claude Desktop app as a local MCP server in claude_desktop_config.json. Search "
-              "your files, repos, agent sessions and context cards from Claude."),
+              "your files, repos, agent sessions and threads from Claude."),
     dict(slug="vs-code", name="VS Code", id="vscode-mcp", instr=None, instr_file=None,
          cfg="<code>~/Library/Application Support/Code/User/mcp.json</code>", skills="<code>~/.agents/skills</code>",
          title="Pensieve MCP server for VS Code: mcp.json setup",
          desc="Add Pensieve to VS Code agent mode as an MCP server in the user mcp.json file. Local code search, "
-              "context cards and who knows what for GitHub Copilot and other agents."),
+              "threads and who knows what for GitHub Copilot and other agents."),
 ]
 
 STD_JSON = '''{
@@ -78,7 +78,7 @@ args = ["mcp"]
 EXTRA = {
     "claude-code": f"""
 <h2 id="plugin">Or install the Claude Code plugin</h2>
-<p>The plugin gives Claude Code the MCP server, the three skills, the instructions block and the three recommended
+<p>The plugin gives Claude Code the MCP server, the four skills, the instructions block and the three recommended
 hooks. It does not change your settings files. Install Pensieve first, because the plugin starts
 <code>~/.local/bin/pensieve</code>. Then type these commands in Claude Code:</p>
 {pre('''/plugin marketplace add TedHaley/pensieve
@@ -93,8 +93,8 @@ hooks. It does not change your settings files. Install Pensieve first, because t
 <p><code>pensieve integrate recommended</code> adds three hooks to <code>~/.claude/settings.json</code>:</p>
 {table(["Hook", "Event", "What it does"], [
     ["<code>claude-hook</code>", "PostToolUse", "After each Edit or Write, it sends the changed path to Pensieve. The next search finds the new code. It adds about 50 ms to each edit."],
-    ["<code>claude-repo-check</code>", "SessionStart", "In a repo that Pensieve does not index, Claude asks you once whether to index it. Pensieve keeps your answer."],
-    ["<code>claude-prompt-search</code>", "UserPromptSubmit", "Pensieve adds what the prompt needs: a context card, your task list, who knows the code, past sessions, or the 5 best code matches. It adds about 300 ms and 400 to 1,500 tokens."],
+    ["<code>claude-repo-check</code>", "SessionStart", "In a repo that Pensieve does not index, Claude asks you once whether to index it. Pensieve keeps your answer. In a repo that Pensieve indexes, it adds one line: the number of loose ends and the thread closest to done. Claude then offers to close it at a natural pause."],
+    ["<code>claude-prompt-search</code>", "UserPromptSubmit", "Pensieve adds what the prompt needs: a thread, your list of threads, who knows the code, past sessions, or the 5 best code matches. It adds about 300 ms and 400 to 1,500 tokens."],
 ])}
 <p>Slash commands, prompts of 1 or 2 words, and repos that Pensieve does not index get nothing from the prompt hook.</p>
 
@@ -188,7 +188,7 @@ page("agents", "Connect your agent",
 For each agent, the command adds:</p>
 <ul>
   <li>Pensieve as an MCP server, for every project.</li>
-  <li>The “search before you grep” instructions block, where the agent has a global instructions file.</li>
+  <li>The instructions block, where the agent has a global instructions file. It says to search with Pensieve before grep, and to offer to close the thread closest to done.</li>
   <li>The <code>pensieve-search</code> skill.</li>
   <li>For Claude Code, three hooks (see <a href="/docs/agents/claude-code/#hooks">Claude Code</a>).</li>
 </ul>
@@ -219,10 +219,11 @@ from your other repos.</p>
 Settings → Agents → Agent add-ons, or with <code>pensieve integrate</code>.</p>
 {table(["Id", "What it does", "Recommended"], [
     ["<code>claude-mcp</code>, <code>codex-mcp</code>, <code>cursor-mcp</code>, <code>gemini-mcp</code>, <code>qwen-mcp</code>, <code>windsurf-mcp</code>, <code>claude-desktop-mcp</code>, <code>vscode-mcp</code>", "Pensieve as the agent's MCP server, for every project. In each settings file, Pensieve changes only its own entry.", "Yes"],
-    ["<code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>qwen</code>", f"The {INSTR_LINK} in the agent's global instructions file.", "Yes"],
+    ["<code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>qwen</code>", f"The {INSTR_LINK} in the agent's global instructions file. It tells the agent to call Pensieve <code>search</code> before Grep or Glob for each code lookup. It also tells the agent to call <code>threads</code> at the start of a session and at natural pauses, and to offer to close the thread closest to done.", "Yes"],
     ["<code>pensieve-search</code>", "A skill: query styles, when to use grep, similar code before new code, past sessions.", "Yes"],
     ["<code>pensieve-teammates</code>", "A skill: who knows an area, from git blame, and a draft question. It never sends a message.", "No"],
     ["<code>pensieve-plan</code>", "A skill: plans for new code list code to reuse, earlier attempts, people to ask and knowledge risks.", "No"],
+    ["<code>pensieve-wrap-up</code>", "A skill: gets the threads closest to done and does the steps that close them in git, GitHub and the tracker. It asks before a merge or a close.", "No"],
     ["<code>claude-hook</code>, <code>claude-repo-check</code>, <code>claude-prompt-search</code>", 'Claude Code hooks (see <a href="/docs/agents/claude-code/#hooks">Claude Code</a>).', "Yes"],
 ])}
 <p>Skills go once into <code>~/.agents/skills</code>, the user skills folder that many agents read. Claude Code reads

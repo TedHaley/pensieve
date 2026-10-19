@@ -14,9 +14,10 @@ reuse existing patterns and name the right people get built faster and reviewed 
    hits call `similar(id)` to find related implementations across the repo (and other indexed repos).
 2. **Earlier attempts.** `search` with `kind:session` for previous agent sessions on the topic: decisions, dead
    ends, and why they were abandoned.
-3. **Expertise.** `who_knows("<capability>", repo=...)` for the people who wrote the closest code; `team(repo)` to
-   check they're still active; `unexplored(repo)` for nearby areas the user hasn't worked in yet.
-4. **Risk.** `knowledge_gaps(repo)` flags areas the change touches whose authors have left.
+3. **Expertise.** `people(topic="<capability>", repo=...)` for the people who wrote the closest code;
+   `people(repo=...)` to make sure that they are still active; `repo(repo, part="unexplored")` for nearby areas
+   that the user has not worked in yet.
+4. **Risk.** `repo(repo, part="gaps")` shows the areas that the change touches whose authors have left.
 
 ## Put it in the plan
 

@@ -1,6 +1,6 @@
 """User settings in ~/.pensieve/settings.json, editable at runtime from the visualizer, the Mac app, or MCP.
 
-Command-line flags and env vars (--repos, --llm-url, ...) override the file for the current run only.
+Command-line flags and env vars (--repos, PENSIEVE_REPOS) override the file for the current run only.
 """
 import json
 import os
@@ -44,22 +44,9 @@ DEFAULTS = {
     "editor": "default",       # how code results open: default | vscode | cursor | zed
     "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
     "embed_model": "",         # the embedding model to index with (config.EMBED_MODELS); "" = the index's own
-    # What writes summaries, topic names and insights: auto (a local server if one is running; the UI asks) |
-    # builtin (Qwen 3.5 9B via MLX) | server (llm_url/llm_model/llm_key: local or hosted) | cli (cli_command) | none
-    "ai": "auto",
-    "builtin_model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-    "cli_command": "",         # an AI command-line tool, run once per job (templates: CLI_TEMPLATES)
-    "cli_privacy": "cloud",    # local | cloud: whether cli_command sends text off this Mac
-    "agent_model": "haiku",    # model of the engine `ai: claude` from before cli; it moves into cli_command
-    "ai_on_battery": False,    # run background AI work (summaries, insights) on battery power
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "auto_update_check": True,  # the Mac app checks GitHub Releases daily and offers updates (never installs by itself)
     "setup_done": False,       # the user has chosen what to index; until then nothing is indexed (see /api/setup)
-    "llm_url": "http://localhost:1234/v1",
-    "llm_model": "qwen/qwen3.5-9b",
-    "llm_key": "",             # API key for a hosted server; sent only to llm_url, never shown back in full
-    # Saved model servers to pick from: [{"name", "url", "model", "key"}]. Using one copies it into llm_url/llm_model/llm_key.
-    "llm_connections": [],
     # Connections (connections.py): MCP servers whose data Pensieve collects with read-only tools. Each one is off
     # until it is in `connections_on`. `mcp_servers` are the servers that Pensieve connects to itself:
     # {"name", "url", "headers": {}} or {"name", "command", "args": [], "env": {}}. Secret values stay in this file.
@@ -96,51 +83,16 @@ DESCRIPTIONS = {
     "appearance": "System, light or dark. System follows macOS.",
     "embed_model": "The model that turns text into vectors for search. Switching embeds the text already indexed "
                    "again with the new model, in the background; search keeps working meanwhile.",
-    "ai": "What writes summaries and insights: builtin, server, cli or agent (your agent over MCP; auto = not chosen "
-          "yet).",
-    "builtin_model": "The MLX model the built-in engine runs.",
-    "agent_model": "Model of the old Claude Code engine; cli_command holds it now.",
-    "cli_command": "The AI command-line tool that writes summaries and insights when ai is cli. It gets the prompt on "
-                   "stdin, or in place of {prompt}; {out} is a file it can write its answer to. It must answer without "
-                   "using tools.",
-    "cli_privacy": "Whether cli_command sends text off this Mac: local or cloud.",
-    "ai_on_battery": "Keep writing summaries and insights in the background while on battery power.",
     "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
     "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
     "setup_done": "Whether the sources to index were chosen. Pensieve indexes nothing until they are.",
-    "llm_url": "OpenAI-compatible endpoint, local (LM Studio, Ollama) or hosted, for summaries and insights.",
-    "llm_model": "Chat model used for summaries and insights.",
-    "llm_key": "API key for a hosted server (sent as a Bearer token to llm_url only). Empty for local servers.",
-    "llm_connections": "Saved model servers, each with a name, URL, model and optional API key (manage in Settings → Models).",
     "connections_on": "Connections switched on by hand (easier to change in Sources). A connection that Pensieve holds data from is on too, unless it is in disabled.",
-    "mcp_servers": "MCP servers that Pensieve connects to itself, with a URL and headers, or a command and environment. "
-                   "Use them when the insights engine has no MCP servers, for example the built-in engine.",
+    "mcp_servers": "MCP servers that Pensieve connects to itself, with a URL and headers, or a command and environment.",
     "connections_every_hours": "How often Pensieve collects from each connection that is on (0 = only when you ask).",
     "default_agent": "The coding agent that a new session from a thread starts in Terminal: claude, codex, qwen, gemini or cursor. Empty: the thread's own agent, else the first one installed.",
     "connections_days": "How many days back the first collection from a connection goes.",
     "projects_stale_days": "In Projects, a project with no activity for this many days goes under Show older.",
 }
-
-_NO_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit"
-# Commands that answer one prompt without using tools. The prompt goes on stdin unless the command has {prompt}; {out}
-# is a file the command writes its answer to.
-CLI_TEMPLATES = [
-    dict(id="claude", label="Claude Code", privacy="cloud",
-         command=f'claude -p --strict-mcp-config --tools "" --model haiku --output-format text --max-turns 1 --disallowedTools {_NO_TOOLS}'),
-    dict(id="codex", label="Codex", privacy="cloud",
-         command="codex exec --skip-git-repo-check --sandbox read-only --output-last-message {out} -"),
-    dict(id="qwen", label="Qwen Code", privacy="cloud", command="qwen --approval-mode plan --output-format text {prompt}"),
-    dict(id="gemini", label="Gemini CLI", privacy="cloud", command="gemini --output-format text --prompt {prompt}"),
-    dict(id="ollama", label="Ollama", privacy="local", command="ollama run llama3.2"),
-]
-
-
-def cli_template(id, model=None):
-    t = dict(next(x for x in CLI_TEMPLATES if x["id"] == id))
-    if model and id == "claude":
-        t["command"] = t["command"].replace("--model haiku", f"--model {model}")
-    return t
-
 
 _lock = threading.Lock()
 _data: dict | None = None
@@ -151,10 +103,6 @@ def _overrides():
     o = {}
     if os.environ.get("PENSIEVE_REPOS"):
         o["repos"] = [p for p in os.environ["PENSIEVE_REPOS"].split(os.pathsep) if p.strip()]
-    if os.environ.get("PENSIEVE_LLM_URL"):
-        o["llm_url"] = os.environ["PENSIEVE_LLM_URL"]
-    if os.environ.get("PENSIEVE_LLM_MODEL"):
-        o["llm_model"] = os.environ["PENSIEVE_LLM_MODEL"]
     return o
 
 
@@ -171,15 +119,6 @@ def load() -> dict:
             _data = {**DEFAULTS, **{k: v for k, v in saved.items() if k in DEFAULTS}}
             if saved and "setup_done" not in saved:  # set up by a version from before the setup step
                 _data["setup_done"] = True
-            if _data["ai"] in ("claude", "codex"):  # the engines before cli: the same CLI through its template
-                t = cli_template(_data["ai"], _data["agent_model"])
-                _data.update(ai="cli", cli_command=t["command"], cli_privacy=t["privacy"])
-            if _data["ai"] == "none":  # Off became Your agent: neither runs anything in the background
-                _data["ai"] = "agent"
-            c = _data["cli_command"]
-            if c.startswith("claude -p ") and "--strict-mcp-config" not in c:  # with tools to call (the user's MCP
-                # servers, newer built-in tools), the engine tried to act instead of answering and hit --max-turns 1
-                _data["cli_command"] = c.replace("claude -p ", 'claude -p --strict-mcp-config --tools "" ', 1)
             off = _data["disabled"]  # the two repo-discovery rules became one
             if "repos/sessions" in off or "repos/sweep" in off:
                 _data["disabled"] = [d for d in off if d not in ("repos/sessions", "repos/sweep")] + \
@@ -199,16 +138,7 @@ def update(changes: dict) -> dict:
         if k not in DEFAULTS:
             raise ValueError(f"unknown setting {k!r}; valid: {', '.join(DEFAULTS)}")
         d = DEFAULTS[k]
-        if k == "llm_connections":
-            if not isinstance(v, list) or not all(isinstance(c, dict) and c.get("name") and all(
-                    isinstance(c.get(f, ""), str) for f in ("name", "url", "model", "key")) for c in v):
-                raise ValueError("llm_connections must be a list of {name, url, model, key}")
-            if any(not c.get("url", "").startswith(("http://", "https://")) for c in v):
-                raise ValueError("each connection URL must start with http:// or https://")
-            keys = {c["name"]: c.get("key", "") for c in cur[k]}  # clients only ever see key_set
-            v = [{"name": c["name"], "url": c["url"], "model": c.get("model", ""),
-                  "key": c["key"] if "key" in c else keys.get(c["name"], "")} for c in v]
-        elif k == "mcp_servers":
+        if k == "mcp_servers":
             v = _mcp_servers(v, cur[k])
         elif isinstance(d, bool):
             if not isinstance(v, bool):
@@ -256,18 +186,6 @@ def update(changes: dict) -> dict:
             raise ValueError("chunk_chars must be between 200 and 20000")
         if k == "appearance" and v not in ("system", "light", "dark"):
             raise ValueError("appearance must be system, light or dark")
-        if k == "ai" and v in ("claude", "codex"):  # the engines before cli: the same CLI through its template
-            t = cli_template(v, cur["agent_model"])
-            clean.update(cli_command=t["command"], cli_privacy=t["privacy"])
-            v = "cli"
-        if k == "ai" and v == "none":
-            v = "agent"
-        if k == "ai" and v not in ("auto", "builtin", "server", "cli", "agent"):
-            raise ValueError("ai must be auto, builtin, server, cli or agent")
-        if k == "cli_privacy" and v not in ("local", "cloud"):
-            raise ValueError("cli_privacy must be local or cloud")
-        if k == "llm_url" and not v.startswith(("http://", "https://")):
-            raise ValueError("llm_url must start with http:// or https://, e.g. http://localhost:1234/v1")
         if k == "editor" and v not in ("default", "vscode", "cursor", "zed"):
             raise ValueError("editor must be default, vscode, cursor or zed")
         clean[k] = v
@@ -275,18 +193,17 @@ def update(changes: dict) -> dict:
     with _lock:
         _data = {**(_data or DEFAULTS), **clean}
         PATH.write_text(json.dumps(_data, indent=2))
-        os.chmod(PATH, 0o600)  # it can hold API keys and MCP server credentials
+        os.chmod(PATH, 0o600)  # it can hold MCP server credentials
     for fn in list(_listeners):
         fn(clean)
     return load()
 
 
 def public(s: dict) -> dict:
-    """Settings as the visualizer and agents see them: the API key is never sent back, only whether one is saved.
-    The same for MCP server headers and environment: their names are sent, with empty values."""
-    conns = [{**{k: v for k, v in c.items() if k != "key"}, "key_set": bool(c.get("key"))} for c in s.get("llm_connections", [])]
+    """Settings as the visualizer and agents see them: MCP server headers and environment are sent by name only,
+    with empty values."""
     mcp = [{**c, **{f: {n: "" for n in c[f]} for f in ("headers", "env") if f in c}} for c in s.get("mcp_servers", [])]
-    return {**s, "llm_key": "", "llm_key_set": bool(s.get("llm_key")), "llm_connections": conns, "mcp_servers": mcp}
+    return {**s, "mcp_servers": mcp}
 
 
 def _mcp_servers(v, cur: list) -> list:

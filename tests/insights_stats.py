@@ -202,22 +202,23 @@ def test_achievements():
 
 
 def test_week():
-    """Closes since Monday count; threads in progress come fewest steps first, with no known step last."""
+    """Closes since Monday count; open threads and loose ends come fewest steps first, with no known step last."""
     now = time.mktime((2026, 10, 21, 12, 0, 0, 0, 0, -1))  # a Wednesday
     monday = time.mktime((2026, 10, 19, 9, 0, 0, 0, 0, -1))
     step = lambda n: [dict(text=f"step {i}", how="agent") for i in range(n)]  # noqa: E731
     cards = [
-        ("a", "etched", monday, dict(title="A")),
-        ("b", "etched", monday + 86400, dict(title="B")),
-        ("c", "etched", monday - 3 * 86400, dict(title="C")),  # last week
-        ("d", "conscious", now - 60, dict(title="D", left=step(3))),
-        ("e", "conscious", now - 60, dict(title="E", left=step(1))),
-        ("f", "conscious", now - 60, dict(title="F")),
-        ("g", "subconscious", now - 60, dict(title="G", left=step(1))),
+        ("a", "complete", monday, dict(title="A")),
+        ("b", "complete", monday + 86400, dict(title="B")),
+        ("c", "complete", monday - 3 * 86400, dict(title="C")),  # last week
+        ("d", "open", now - 60, dict(title="D", left=step(3))),
+        ("e", "open", now - 60, dict(title="E", left=step(1))),
+        ("f", "open", now - 60, dict(title="F")),
+        ("g", "loose_ends", now - 120, dict(title="G", left=step(1))),
+        ("h", "todo", now - 60, dict(title="H", left=step(1))),
     ]
     w = ist.week(cards, now)
     assert w["closed"] == 2 and w["last_week"] == 1 and w["best_week"] == 2
-    assert [t["id"] for t in w["open"]] == ["e", "d", "f"] and w["n_open"] == 3
+    assert [t["id"] for t in w["open"]] == ["e", "g", "d", "f"] and w["n_open"] == 4
     assert w["per_day"][:3] == [1, 1, 0]
     assert {x["id"]: x["earned"] for x in w["achievements"]}["beat"]
 

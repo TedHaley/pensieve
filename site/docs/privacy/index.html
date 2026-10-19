@@ -36,7 +36,7 @@
   </nav>
 </header>
 <div class="layout">
-<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/context-cards/">Context cards</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/" aria-current="page">Privacy and data</a></li></ul></nav></details>
+<details class="side" open id="docnav"><summary>Docs menu</summary><nav aria-label="Docs"><h2>Start</h2><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/install/">Install</a></li><li><a href="/docs/faq/">FAQ</a></li></ul><h2>Agents</h2><ul><li><a href="/docs/agents/">Connect your agent</a><ul><li><a href="/docs/agents/claude-code/">Claude Code</a></li><li><a href="/docs/agents/codex/">Codex</a></li><li><a href="/docs/agents/cursor/">Cursor</a></li><li><a href="/docs/agents/gemini-cli/">Gemini CLI</a></li><li><a href="/docs/agents/qwen-code/">Qwen Code</a></li><li><a href="/docs/agents/windsurf/">Windsurf</a></li><li><a href="/docs/agents/claude-desktop/">Claude Desktop</a></li><li><a href="/docs/agents/vs-code/">VS Code</a></li></ul></li></ul><h2>Reference</h2><ul><li><a href="/docs/mcp-tools/">MCP tools</a></li><li><a href="/docs/threads/">Threads</a></li><li><a href="/docs/connections/">Connections</a></li></ul><h2>Evidence</h2><ul><li><a href="/docs/benchmark/">Benchmark</a></li><li><a href="/docs/privacy/" aria-current="page">Privacy and data</a></li></ul></nav></details>
 <main>
 <p class="crumb">Docs</p>
 <h1>Privacy and data</h1>
@@ -52,7 +52,7 @@
 </ul>
 
 <h2 id="network">When Pensieve uses the network</h2>
-<div class="tbl"><table><thead><tr><th>When</th><th>What goes over the network</th><th>To</th></tr></thead><tbody><tr><td>Install</td><td>The app download and the Python packages</td><td>GitHub Releases, the Python package index</td></tr><tr><td>First run, and when you switch models</td><td>Model downloads: the search model (550 MB), the media parts if you switch them on, and the built-in generation model (about 5 GB) if you choose it</td><td>Hugging Face</td></tr><tr><td>Update checks</td><td>A request for the latest release</td><td>GitHub</td></tr><tr><td>Every 30 minutes</td><td><code>git fetch</code> of the default branch of each indexed repo, to show how far your branch is behind. It does not change your working tree.</td><td>Each repo's own remote</td></tr><tr><td>When a card shows PRs</td><td><code>gh pr list</code> and <code>gh pr view</code>, if the GitHub CLI is installed, with your own login</td><td>GitHub</td></tr><tr><td>Connections that you switch on</td><td>Read calls to those MCP servers. For Claude Code's servers, Claude Code runs with the Haiku model, so the results go through Anthropic.</td><td>Each server, and Anthropic for Claude Code's servers</td></tr><tr><td>The generation model</td><td>The text of each job (a task note, a summary, an insight). Built-in and LM Studio stay local. A cloud command-line tool sends the text to its provider.</td><td>Your computer, or the provider that you chose</td></tr></tbody></table></div>
+<div class="tbl"><table><thead><tr><th>When</th><th>What goes over the network</th><th>To</th></tr></thead><tbody><tr><td>Install</td><td>The app download and the Python packages</td><td>GitHub Releases, the Python package index</td></tr><tr><td>First run, and when you switch models</td><td>Model downloads: the search model (550 MB), and the media parts if you switch them on</td><td>Hugging Face</td></tr><tr><td>Update checks</td><td>A request for the latest release</td><td>GitHub</td></tr><tr><td>Every 30 minutes</td><td><code>git fetch</code> of the default branch of each indexed repo, to show how far your branch is behind. It does not change your working tree.</td><td>Each repo's own remote</td></tr><tr><td>When a thread shows PRs</td><td><code>gh pr list</code> and <code>gh pr view</code>, if the GitHub CLI is installed, with your own login</td><td>GitHub</td></tr><tr><td>Connections that you switch on</td><td>Read calls to those MCP servers.</td><td>Each server</td></tr><tr><td>When your agent does Pensieve's pending work</td><td>The text of each job (a thread note, a summary, an insight) goes to your agent.</td><td>Your agent's model provider</td></tr></tbody></table></div>
 
 <h2 id="agents">Your agent</h2>
 <p>Pensieve is a tool that your agent calls. If you use a cloud agent, such as Claude Code or Codex, what the agent
@@ -60,15 +60,15 @@ reads from Pensieve goes to its provider, the same as a file that it reads with 
 agent until the agent calls a tool. The Claude Code prompt hook is the exception: it adds context to each prompt in
 an indexed repo.</p>
 
-<h2 id="sharing">Shared cards and feedback</h2>
+<h2 id="sharing">Shared threads and feedback</h2>
 <ul>
-  <li><strong>Shared cards:</strong> Pensieve saves a shared card as a file in Downloads. It does not send it. Before you save, you see the card and can edit it. A shared card has no local paths, session ids, resume command, secrets or private messages (see <a href="/docs/context-cards/#reach">What a shared card keeps</a>).</li>
+  <li><strong>Shared threads:</strong> Pensieve saves a shared thread as a file in Downloads. It does not send it. Before you save, you see the thread and can edit it. A shared thread has no local paths, session ids, resume command, secrets or private messages (see <a href="/docs/threads/#reach">What a shared thread keeps</a>).</li>
   <li><strong>Feedback:</strong> reports from you and from agents stay in <code>~/.pensieve/feedback.jsonl</code>. Settings → Feedback lists them. Send to GitHub opens an issue with the text filled in, and you read it before you post it.</li>
 </ul>
 
 <h2 id="private-messages">Private messages</h2>
-<p>Items from direct messages, group messages and private channels are context for your own cards and agents only.
-A shared card leaves them out whole. See <a href="/docs/connections/#private">Connections</a>.</p>
+<p>Items from direct messages, group messages and private channels are context for your own threads and agents only.
+A shared thread leaves them out whole. See <a href="/docs/connections/#private">Connections</a>.</p>
 
 <h2 id="site">This website</h2>
 <p>pensieve.tools counts page views with <a href="https://www.goatcounter.com/">GoatCounter</a>, which sets no

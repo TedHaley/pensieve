@@ -12,14 +12,15 @@ Strong focus on your context. This is how we stay focused on individuals. Contex
 - **How this differs:** "company brain" products build one shared picture of the company for everyone. Pensieve
   builds one picture for each person, from that person's point of view.
 - **Tabs, in this order:**
-  1. **Context:** the context cards (D5). It is about you, and it stays as it is.
+  1. **Threads:** one thread for each goal of your work (D5), in the states To do, Open, Loose ends, Complete and
+     Forgotten. It is about you. Agents offer to close the thread closest to done.
   2. **Projects:** clusters of content and the project that each one belongs to (D8). It is about your team.
   3. **People:** the people you work closest with, as a graph (D9, D10).
   4. **Map:** stays, with a lower priority.
   5. **Insights**
   6. **Settings**
-- **Names:** "Context" and "Projects" are working names. One collection is about you, the other about your team.
-  Both names are open for discussion.
+- **Names:** "Threads" replaces "Context" and "context cards". "Projects" is a working name: one collection is
+  about you, the other about your team.
 - **Sources:** read-only connectors with your own access (E6).
 - **Reach:** a docs section, search ranking and MCP directory listings (F1–F3).
 
@@ -566,7 +567,7 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - the git branch of a session (from the Claude Code transcript), for feature branches only;
   - for work without a ticket: two sessions in one repo, at most 3 days apart, that edited 2 specific files in
     common, or one file that only they edited. A file that more than 3 sessions edited does not count.
-  Each task shows its data points newest first, and an AI note from the insights engine. The note is written again
+  Each task shows its data points newest first, and a note that the user's agent writes. The note is written again
   when the task's data points change. Coworkers: `git log --remotes` in the task's folders, by people who are not the
   user. Related: a search of the connections for the task's title.
 - **Comments:** keep comments in Pensieve first. Writing a comment back to Jira or Slack posts as the user, so each
@@ -821,6 +822,9 @@ each connection, and each hit shows its connection.
   item over time, with its changes, so it is searchable next to the code and sessions.
 - **Rule:** read-only. A tool is read-only if its name has a read verb and no write verb. A server's
   `readOnlyHint: false` or `destructiveHint: true` makes a tool a write tool. Pensieve never calls a write tool.
+- **Removed:** the generation model option is gone. Pensieve no longer runs Claude Code headless, so Claude Code's
+  own servers are not a connection source. The user's agent plans the calls for a server with no recipe, as a pending
+  job. The two items below describe the removed path.
 - **Built:**
   - Sources → Connections lists the MCP servers of the insights engine when it is Claude Code. Pensieve reads them
     from the startup event of `claude -p --output-format stream-json --verbose` (about 3 s). The process stops before

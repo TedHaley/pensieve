@@ -1,14 +1,13 @@
 """Connections: MCP servers whose data Pensieve collects, read-only, and indexes like a folder.
 
-There are three kinds of server. Pensieve finds the first two by itself, whatever the generation model is:
-- engine: the MCP servers of Claude Code, when it is on this Mac. This includes its config, its plugins and the
-  claude.ai connectors of the account. Pensieve reads the list from Claude Code's startup event. To collect, it runs
-  Claude Code headless with only the read tools of one server allowed.
-- agent: the servers in the MCP config of the other agents (Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude
-  Desktop, VS Code), with the credentials written there. A server that Claude Code also has is left to Claude Code.
+There are two kinds of server. Pensieve never starts an agent of its own to reach them:
+- agent: the servers in the MCP config of the agents (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf,
+  Claude Desktop, VS Code), with the credentials written there.
 - own: the servers in the `mcp_servers` setting, with the credentials given there.
-For agent and own servers, Pensieve connects itself, asks the generation model which read calls to make, and makes
-them.
+Pensieve connects to each one itself and makes the read calls of its connector profile. For a server with no profile,
+the user's agent plans the calls (a "collection plan" job, llm.complete), and Pensieve makes them.
+The MCP results that the user's agents got in their sessions (agent_sessions) cover the servers that only an agent can
+reach, such as the claude.ai connectors.
 
 Collected items are rows of the `documents` table of store.db (storage v2), with their people, their field changes
 over time and the agent sessions that saw them. The document indexer (pensieve/docindex.py) indexes them, and
@@ -20,8 +19,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
-import tempfile
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -155,28 +152,11 @@ def _update(fn):
         return st
 
 
-def claude_code() -> bool:
-    """Whether Claude Code is on this Mac. Its MCP servers are listed and collected from whatever the generation model
-    is: Pensieve runs it headless, with only the read-only tools of one server at a time."""
-    return bool(llm._exe("claude"))
-
-
-def _engine_model() -> str:
-    """The Claude model for collection: the one in the command-line template when that runs Claude Code, else Haiku."""
-    argv = llm._argv(settings.get("cli_command"))
-    if not argv or Path(argv[0]).name != "claude":
-        return "haiku"
-    return argv[argv.index("--model") + 1] if "--model" in argv[:-1] else "haiku"
-
-
 def servers() -> list[dict]:
     """Every known server: {id, name, origin, status, tools: [{name, read}], collected, items, error}."""
     st = _load()
-    out = []
-    if claude_code():
-        out += [{**r, "id": k, "origin": "engine"} for k, r in st.get("engine", {}).items() if k != "pensieve"]
-    seen = {r["id"] for r in out} | {slug(c["name"]) for c in settings.get("mcp_servers")}
-    out += [{**r, "id": k, "origin": "agent"} for k, r in st.get("agents", {}).items() if k not in seen]
+    seen = {slug(c["name"]) for c in settings.get("mcp_servers")}
+    out = [{**r, "id": k, "origin": "agent"} for k, r in st.get("agents", {}).items() if k not in seen]
     for c in settings.get("mcp_servers"):
         k = slug(c["name"])
         r = st.get("own", {}).get(k, {})
@@ -196,64 +176,6 @@ def servers() -> list[dict]:
 def _count(sid: str) -> int:
     """The number of items of a server: a count on the (source_id, key) index, cheap enough for every status poll."""
     return store_documents.count(v2.store_db(), sid)
-
-
-# Headless Claude Code starts before slow MCP servers connect, and lists them as pending with no tools; this makes it
-# wait for them.
-_WAIT_FOR_MCP = {**os.environ, "MCP_CONNECTION_NONBLOCKING": "false"}
-
-
-def _claude_init(timeout=90) -> dict:
-    """Claude Code's startup event in an empty folder: the MCP servers with their status, and every tool name. The
-    process stops at that event, before the model answers."""
-    exe = llm._exe("claude")
-    if not exe:
-        raise llm.Offline("Can't find claude")
-    with tempfile.TemporaryDirectory(prefix=llm.OWN_PREFIX) as tmp:
-        p = subprocess.Popen([exe, "-p", "--model", _engine_model(), "--output-format", "stream-json", "--verbose",
-                              "--tools", "", "--max-turns", "1"], cwd=tmp, stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=_WAIT_FOR_MCP)
-        timer = threading.Timer(timeout, p.kill)
-        timer.start()
-        try:
-            p.stdin.write("Reply ok")
-            p.stdin.close()
-            for line in p.stdout:
-                try:
-                    d = json.loads(line)
-                except ValueError:
-                    continue
-                if d.get("type") == "system" and d.get("subtype") == "init":
-                    return d
-        finally:
-            timer.cancel()
-            p.kill()
-            p.wait()
-    raise RuntimeError("Claude Code ended before its startup event")
-
-
-def discover_engine() -> list[dict]:
-    """Read Claude Code's MCP servers and tools. A server that is still connecting keeps the tools seen last time."""
-    if not claude_code():
-        return []
-    d = _claude_init()
-    tools = {}
-    for t in d.get("tools", []):
-        if t.startswith("mcp__"):
-            _, srv, name = t.split("__", 2)
-            tools.setdefault(srv, []).append(name)
-
-    def apply(st):
-        old = st.get("engine", {})
-        new = {}
-        for s in d.get("mcp_servers", []):
-            k = slug(s["name"])
-            names = tools.get(k) or [t["name"] for t in old.get(k, {}).get("tools", [])]
-            new[k] = dict(name=s["name"], status=s.get("status", "unknown"),
-                          tools=[dict(name=n, read=read_tool(s["name"], n)) for n in names], at=time.time())
-        st["engine"] = new
-    _update(apply)
-    return servers()
 
 
 @asynccontextmanager
@@ -361,7 +283,7 @@ def _server_cfg(c: dict) -> dict | None:
             headers["Authorization"] = "Bearer " + os.environ[token]
         return dict(url=url, headers=headers)
     if c.get("command"):  # the app's PATH misses ~/.local/bin, Homebrew and the like
-        return dict(command=llm._exe(c["command"]) or c["command"], args=[str(a) for a in c.get("args") or []],
+        return dict(command=config.find_exe(c["command"]) or c["command"], args=[str(a) for a in c.get("args") or []],
                     env={k: str(v) for k, v in (c.get("env") or {}).items()})
     return None
 
@@ -373,7 +295,7 @@ def agent_configs() -> dict[str, dict]:
     from pensieve import integrations
     out = {}
     for item, (label, f, key, _) in integrations.MCP.items():
-        if item == "claude-mcp" or not f.exists():  # Claude Code's servers come from its startup event
+        if not f.exists():
             continue
         try:
             text = f.read_text()
@@ -393,12 +315,9 @@ def agent_configs() -> dict[str, dict]:
 
 
 def discover_agents() -> list[dict]:
-    """Connect to each server in the other agents' configs that Claude Code does not have, and list its tools."""
-    skip = set(_load().get("engine", {})) if claude_code() else set()
+    """Connect to each server in the agents' configs, and list its tools."""
     found = {}
     for k, a in agent_configs().items():
-        if k in skip:
-            continue
         try:
             tools = asyncio.run(asyncio.wait_for(_own_tools(a["cfg"], a["name"]), 60))
             found[k] = dict(name=a["name"], agents=a["agents"], status="connected", tools=tools, error=None, at=time.time())
@@ -416,7 +335,7 @@ def _err(e: BaseException) -> str:
 
 def discover() -> list[dict]:
     errors = []
-    for fn in (discover_engine, discover_agents, discover_own, discover_gh):
+    for fn in (discover_agents, discover_own, discover_gh):
         try:
             fn()
         except Exception as e:
@@ -469,47 +388,6 @@ def _result_text(content) -> str:
     return text
 
 
-def _collect_engine(r: dict, calls: int, prompt: str | None = None, only=None) -> list[tuple]:
-    """Run Claude Code headless with only the read tools of one server (and of those, only the ones `only` keeps)."""
-    ok = [t for t in r["tools"] if t["read"] and (only is None or only(t["name"]))]
-    reads = [f"mcp__{r['id']}__{t['name']}" for t in ok]
-    if not reads:
-        raise RuntimeError("no read-only tools")
-    deny = [f"mcp__{r['id']}__{t['name']}" for t in r["tools"] if t not in ok]
-    deny += [f"mcp__{k}" for k in _load().get("engine", {}) if k != r["id"]]  # and every other server, whole
-    exe = llm._exe("claude")
-    if not exe:
-        raise llm.Offline("Can't find claude")
-    argv = [exe, "-p", "--model", _engine_model(), "--output-format", "stream-json", "--verbose", "--tools", "",
-            "--max-turns", str(calls + 2), "--allowedTools", ",".join(reads), "--disallowedTools", ",".join(deny)]
-    prompt = prompt or _prompt(r, calls)
-    with tempfile.TemporaryDirectory(prefix=llm.OWN_PREFIX) as tmp:
-        p = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=900, cwd=tmp, env=_WAIT_FOR_MCP)
-    uses, out = {}, []
-    for line in p.stdout.splitlines():
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        content = (d.get("message") or {}).get("content")
-        for b in content if isinstance(content, list) else []:
-            if b.get("type") == "tool_use":
-                uses[b["id"]] = (b["name"].split("__", 2)[-1], b.get("input") or {})
-            elif b.get("type") == "tool_result" and not b.get("is_error") and b.get("tool_use_id") in uses:
-                tool, args = uses[b["tool_use_id"]]
-                if any(t["name"] == tool for t in ok):
-                    out.append((tool, args, _result_text(b.get("content"))))
-        if d.get("type") == "result":
-            if d.get("is_error") and not out:
-                raise RuntimeError(str(d.get("result") or d.get("subtype"))[:300])
-            u = d.get("usage") or {}
-            r["_cost"] = dict(cost_usd=d.get("total_cost_usd"), tokens=sum(u.get(k) or 0 for k in (
-                "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")))
-    if p.returncode and not out:
-        raise RuntimeError((p.stderr or p.stdout).strip()[-300:] or f"claude exited {p.returncode}")
-    return out
-
-
 PLAN_SCHEMA = {"type": "object", "properties": {"calls": {"type": "array", "items": {
     "type": "object", "properties": {"tool": {"type": "string"}, "args_json": {"type": "string"}},
     "required": ["tool", "args_json"], "additionalProperties": False}}},
@@ -518,7 +396,7 @@ PLAN_SCHEMA = {"type": "object", "properties": {"calls": {"type": "array", "item
 
 async def _collect_own_async(cfg: dict, r: dict, calls: int) -> list[tuple]:
     """Collect from a server that Pensieve connects to itself. When the server's connector profile has a recipe whose
-    tools the server has, Pensieve makes those calls; else the generation model plans the calls. Then Pensieve
+    tools the server has, Pensieve makes those calls; else the user's agent plans the calls (a job that waits for it). Then Pensieve
     makes the follow-up call for each item found: the profile's (a Slack thread, a GitHub discussion), or the
     server's get tool."""
     out = []
@@ -610,9 +488,7 @@ def collect(sid: str, calls: int = 8) -> dict:
         raise ValueError(f"unknown connection {sid!r}")
     t0 = time.time()
     try:
-        if r["origin"] == "engine":
-            results = _collect_engine(r, calls)
-        elif r["origin"] == "cli":
+        if r["origin"] == "cli":
             results = connectors.collect_gh(_since(sid))
         elif r["origin"] == "agent":
             cfg = agent_configs()[sid]["cfg"]
@@ -621,7 +497,7 @@ def collect(sid: str, calls: int = 8) -> dict:
             cfg = next(c for c in settings.get("mcp_servers") if slug(c["name"]) == sid)
             results = asyncio.run(asyncio.wait_for(_collect_own_async(cfg, r, calls), 900))
         n = sum(store(sid, r["name"], tool, args, text) for tool, args, text in results)
-        run = dict(collected=t0, error=None, last_items=n, calls=len(results), **r.get("_cost", {}))
+        run = dict(collected=t0, error=None, last_items=n, calls=len(results))
     except Exception as e:
         run = dict(collected=_load().get("runs", {}).get(sid, {}).get("collected"), error=_err(e), failed=t0)
     _update(lambda st: st.setdefault("runs", {}).__setitem__(sid, run))
@@ -653,9 +529,6 @@ def lookup_users(sid: str, ids: list[str], calls: int = 30) -> list[tuple]:
     if not r:
         raise ValueError(f"unknown connection {sid!r}")
     ids = [i for i in ids if re.fullmatch(r"[A-Z0-9]{6,}", i)][:calls - 1]
-    if r["origin"] == "engine":
-        return _collect_engine(r, calls, LOOKUP.format(name=r["name"], ids=", ".join(ids) or "(none)", calls=calls),
-                               only=user_tool)
     cfg = agent_configs()[sid]["cfg"] if r["origin"] == "agent" else \
         next(c for c in settings.get("mcp_servers") if slug(c["name"]) == sid)
     return asyncio.run(asyncio.wait_for(_lookup_own(cfg, ids), 300))
@@ -686,13 +559,13 @@ async def _lookup_own(cfg: dict, ids: list[str]) -> list[tuple]:
     return out
 
 
-_PREFER = {"own": 0, "cli": 1, "agent": 2, "engine": 3}
+_PREFER = {"own": 0, "cli": 1, "agent": 2}
 
 
 def covered(found: list[dict] | None = None) -> dict[str, str]:
     """Switched-on servers that another switched-on server already collects for the same connector: {sid: keeper}.
-    One connector is collected once. The keeper is the server added here, then gh, then another agent's config, then
-    Claude Code, which costs a model run for each collection. Only a connected server can be the keeper."""
+    One connector is collected once. The keeper is the server added here, then gh, then an agent's config. Only a
+    connected server can be the keeper."""
     groups = {}
     for r in found if found is not None else servers():
         pid = connectors.match(r["name"], r["id"])
@@ -804,8 +677,7 @@ def _fname(key_name: str, key: str) -> str:
     return s if s and s == raw[:100] else f"{s[:80]}-{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
 
 
-_ORIGIN_KINDS = {"engine": (SourceKind.MCP, SourceOrigin.ENGINE), "agents": (SourceKind.MCP, SourceOrigin.AGENT),
-                 "own": (SourceKind.MCP, SourceOrigin.OWN)}
+_ORIGIN_KINDS = {"agents": (SourceKind.MCP, SourceOrigin.AGENT), "own": (SourceKind.MCP, SourceOrigin.OWN)}
 _STATUS = {"connected": SourceStatus.CONNECTED, "needs-auth": SourceStatus.NEEDS_AUTH, "failed": SourceStatus.FAILED}
 _sources_seen: set[str] = set()
 
@@ -823,7 +695,7 @@ def _source(sid: str, label: str):
         kind, origin = next((v for k, v in _ORIGIN_KINDS.items() if sid in st.get(k, {})),
                             (SourceKind.MCP, SourceOrigin.OWN if sid in {slug(c["name"]) for c in
                                                                          settings.get("mcp_servers")} else
-                             SourceOrigin.ENGINE))
+                             SourceOrigin.AGENT))
     store_sources.ensure(v2.store_db(), sid, kind, label, origin, connectors.match(label, sid))
     _sources_seen.add(sid)
 

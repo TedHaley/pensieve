@@ -26,12 +26,12 @@ import webbrowser
 def main():
     ap = argparse.ArgumentParser(prog="pensieve", description="One place for all your information, for context engineering: files, git repos, AI agent sessions, tickets and messages.")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "mcp", "integrate", "repo", "setup", "search", "open", "card"])
-    ap.add_argument("--json", action="store_true", help="card only: the card as JSON instead of an HTML page")
-    ap.add_argument("--agent", action="store_true", help="card only: the card for an agent (compact JSON)")
+                    choices=["serve", "mcp", "integrate", "repo", "setup", "search", "open", "thread"])
+    ap.add_argument("--json", action="store_true", help="thread only: the thread as JSON instead of an HTML page")
+    ap.add_argument("--agent", action="store_true", help="thread only: the thread for an agent (compact JSON)")
     ap.add_argument("--share", action="store_true",
-                    help="card only: the card to send (no local paths, session ids, resume command or secrets)")
-    ap.add_argument("-o", "--out", help="card only: the file to write (default: print it)")
+                    help="thread only: the thread to send (no local paths, session ids, resume command or secrets)")
+    ap.add_argument("-o", "--out", help="thread only: the file to write (default: print it)")
     ap.add_argument("--kind", help="search only: code, doc, session, folder, repo or person")
     ap.add_argument("--limit", type=int, default=8, help="search only: how many results")
     ap.add_argument("items", nargs="*", help="integrate: what to install (no items: show what's available); "
@@ -44,17 +44,14 @@ def main():
     ap.add_argument("--data", help="where the index lives (default ~/.pensieve)")
     ap.add_argument("--repos", nargs="+", metavar="PATH",
                     help="extra git repos to index, or folders to search for repos (adds to settings for this run)")
-    ap.add_argument("--llm-url", help="OpenAI-compatible endpoint (default http://localhost:1234/v1, LM Studio)")
-    ap.add_argument("--llm-model", help="chat model name (default qwen/qwen3.5-9b)")
     ap.add_argument("--no-open", action="store_true", help="don't open the browser")
     ap.add_argument("--scope", default="auto",
                     help="mcp only: the slice of the index this agent works within: a scope name, 'all', or 'auto' "
                          "(default: the repo the agent was started in, or a named scope that includes it)")
     a = ap.parse_args()
     os.environ["PENSIEVE_PORT"] = str(a.port)
-    for flag, env in [(a.data, "PENSIEVE_DATA"), (a.llm_url, "PENSIEVE_LLM_URL"), (a.llm_model, "PENSIEVE_LLM_MODEL")]:
-        if flag:
-            os.environ[env] = flag
+    if a.data:
+        os.environ["PENSIEVE_DATA"] = a.data
     if a.repos:
         os.environ["PENSIEVE_REPOS"] = os.pathsep.join(os.path.abspath(os.path.expanduser(p)) for p in a.repos)
     if a.command == "mcp":
@@ -67,8 +64,8 @@ def main():
         return setup(a.port, a.items)
     if a.command == "search":
         return search(a.port, " ".join(a.items), a.kind, a.limit, a.scope)
-    if a.command == "card":
-        return card(a.port, " ".join(a.items), "json" if a.json else "agent" if a.agent else "html", a.share, a.out)
+    if a.command == "thread":
+        return thread(a.port, " ".join(a.items), "json" if a.json else "agent" if a.agent else "html", a.share, a.out)
     if a.command == "open":  # names under .localhost reach this Mac in Chrome, Firefox and curl
         url = f"http://pensieve.localhost:{a.port}/"
         print(url)
@@ -79,11 +76,11 @@ def main():
     from pensieve import reembed
     reembed.finish()  # a switch to another embedding model whose vectors are ready
     import uvicorn
-    from pensieve import config, settings
+    from pensieve import config
     if done:
         print(f"Pensieve was reset ({'index and settings' if done == 'all' else 'index'}); indexing from scratch.", flush=True)
     url = f"http://localhost:{a.port}"
-    print(f"Pensieve → {url}  (MCP: {url}/mcp)\n  data: {config.DATA_DIR}\n  llm:  {settings.get('llm_model')} @ {settings.get('llm_url')}", flush=True)
+    print(f"Pensieve → {url}  (MCP: {url}/mcp)\n  data: {config.DATA_DIR}", flush=True)
     if not a.no_open and not os.environ.get("PENSIEVE_RESTARTED"):
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     # open streams (the app's live-update connection) would otherwise hold a graceful shutdown open indefinitely
@@ -290,15 +287,15 @@ def search(port, query, kind=None, limit=8, scope="auto"):
         sys.exit(1)
 
 
-def card(port, task_id, fmt="html", share=False, out=None):
-    """A task's context card as an HTML page, JSON or the agent's text, from the running server."""
+def thread(port, thread_id, fmt="html", share=False, out=None):
+    """A thread as an HTML page, JSON or the agent's text, from the running server."""
     import httpx
-    if not task_id.strip():
-        sys.exit("usage: pensieve card <task id> [--json | --agent] [--share] [-o card.html]   (task ids: the tasks MCP tool)")
+    if not thread_id.strip():
+        sys.exit("usage: pensieve thread <id> [--json | --agent] [--share] [-o thread.html]   (ids: the threads MCP tool)")
     base = f"http://127.0.0.1:{port}"
     _start_server(base, port)
     try:
-        r = httpx.get(f"{base}/api/work/card", params=dict(id=task_id, format=fmt, share=str(share).lower()), timeout=120)
+        r = httpx.get(f"{base}/api/thread", params=dict(id=thread_id, format=fmt, share=str(share).lower()), timeout=120)
     except httpx.HTTPError as e:
         sys.exit(f"Couldn't reach Pensieve ({e}). Open the Pensieve app, then try again.")
     if r.status_code >= 400:

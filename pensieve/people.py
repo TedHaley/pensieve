@@ -47,7 +47,7 @@ CHANNEL_MAX = 30
 HALF_LIFE_DAYS = 120
 AVATAR_TOP = 150       # pictures are fetched for this many people, nearest first
 KIND_WEIGHT = {"code": 1.0, "pr": 2.0, "task": 2.0, "thread": 1.5, "dm": 3.0, "channel": 0.3}
-KIND_LABEL = {"code": "edited the same files", "pr": "pull request reviews", "task": "shared tasks",
+KIND_LABEL = {"code": "edited the same files", "pr": "pull request reviews", "task": "shared threads",
               "thread": "Slack threads", "dm": "direct messages", "channel": "Slack channels"}
 
 _lock = threading.RLock()
@@ -1150,7 +1150,7 @@ def _profile_label(k: str, raw: dict) -> tuple[str, str]:
     if kind == "slack":
         return "Slack", "slack"
     if kind == "tasks":
-        return "your tasks (Context tab)", "tasks"
+        return "your threads (Threads tab)", "tasks"
     return _key_view(k), kind
 
 

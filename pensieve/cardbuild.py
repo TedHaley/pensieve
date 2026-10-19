@@ -31,7 +31,7 @@ DAYS = 30            # the window of the built cards; /api/work filters it for a
 FULL_SECONDS = 300   # a full build: the window moves, and gh gives the PR states
 COALESCE = 0.2       # events this close together make one build
 NOTE_QUIET = 20      # seconds without a change before a card gets a new note
-NOTE_STATES = ("conscious", "subconscious")
+NOTE_STATES = ("open", "loose_ends")
 
 SESSION, DOCUMENT, COMMIT, PR, STATE, NOTE, REFRESH = "session", "document", "commit", "pr", "state", "note", "refresh"
 

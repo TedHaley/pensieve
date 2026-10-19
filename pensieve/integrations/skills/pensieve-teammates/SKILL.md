@@ -10,10 +10,10 @@ one person understands. Use it to point the user to people, not to replace them.
 
 ## Who knows this?
 
-1. `who_knows("<topic in plain words>", repo="<repo>")`: people ranked by how much of the related code they
+1. `people(topic="<topic in plain words>", repo="<repo>")`: people ranked by how much of the related code they
    wrote, with the files involved.
-2. Prefer people still active in the repo (`team(repo)` lists recent committers and their areas). If the top
-   author has left, `knowledge_gaps(repo)` gives an `ask` list of who still knows it best.
+2. Prefer people still active in the repo (`people(repo="<repo>")` lists recent committers and their areas). If the
+   top author has left, `repo("<repo>", part="gaps")` gives an `ask` list of who still knows it best.
 3. Tell the user, briefly: who, why (the files or areas they wrote), and what to ask them.
 
 ## Draft the question, don't send it
@@ -28,8 +28,8 @@ Never message, tag or email anyone yourself unless the user explicitly asks you 
 
 ## When to bring it up unprompted
 
-- The change touches an area where `knowledge_gaps` shows a bus factor of 1, or the main authors are inactive:
+- The change touches an area where `repo(..., part="gaps")` shows a bus factor of 1, or the main authors are inactive:
   suggest documenting what you learn, or looping in the remaining expert.
 - The user has spent a while reverse-engineering code that an active teammate wrote: a five-minute conversation is
   often cheaper; say so once.
-- A plan or PR changes shared code: name one or two natural reviewers from `who_knows`.
+- A plan or PR changes shared code: name one or two natural reviewers from `people(topic=...)`.

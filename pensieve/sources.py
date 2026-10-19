@@ -64,7 +64,7 @@ def connection_items() -> list[dict]:
 
 
 def _via(r: dict) -> str:
-    return {"engine": "via Claude Code", "cli": "through the gh command line", "own": "added here"}.get(
+    return {"cli": "through the gh command line", "own": "added here"}.get(
         r["origin"]) or f"from the {' and '.join(r.get('agents') or [])} config"
 
 
@@ -116,8 +116,7 @@ def connections_note() -> str:
     when = f" Checked {_ago(st['discovered'])}." if st.get("discovered") else " Checking soon."
     if st.get("discover_error"):
         when += f" The last check failed: {st['discover_error']}"
-    agents = "Claude Code, Codex, Cursor, Gemini CLI and your other agents" if connections.claude_code() else \
-        "Codex, Cursor, Gemini CLI and your other agents"
+    agents = "Claude Code, Codex, Cursor, Gemini CLI and your other agents"
     return (f"Every MCP server that {agents} can use, found by itself, and the servers you add here. Pensieve calls "
             "only read-only tools." + when)
 

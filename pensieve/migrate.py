@@ -134,7 +134,8 @@ def read_person_overrides(v1: Path) -> list:
     return out
 
 
-V1_STATES = {"discarded": "forgotten"}  # task_states.RENAMED
+V1_STATES = {"discarded": "forgotten", "latent": "todo", "conscious": "open", "subconscious": "loose_ends",
+             "etched": "complete"}  # task_states.RENAMED
 
 
 def read_card_states(v1: Path) -> list:

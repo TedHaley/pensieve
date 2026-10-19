@@ -4,7 +4,7 @@
   --card:#ffffff;--card-edge:rgba(18,18,17,.08);
   --night:#121211;--night-2:#1c1c1a;--night-3:#272724;--night-ink:#f4f3ee;--night-ink-2:#a3a199;--night-line:rgba(244,243,238,.12);
   --c-context:#ff6a3d;--c-agents:#3d7bff;--c-share:#a35cff;--c-owners:#1fae6a;
-  --s-conscious:#34c759;--s-sub:#ff9f0a;--s-latent:#5e5ce6;--s-etched:#8e8e93;--s-forgotten:#ff453a;
+  --s-open:#34c759;--s-loose-ends:#ff9f0a;--s-todo:#5e5ce6;--s-complete:#8e8e93;--s-forgotten:#ff453a;
   --link:#2f62d9;
   --r:16px;--gut:max(16px,3vw);
   --sans:"Inter Tight",-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;
@@ -80,7 +80,7 @@ main li::marker{color:var(--ink-3)}
 main strong{font-weight:600}
 .muted{color:var(--ink-2)}
 .note{margin:18px 0;padding:14px 16px;border-radius:12px;background:color-mix(in srgb,var(--c-agents) 9%,transparent);border:1px solid color-mix(in srgb,var(--c-agents) 22%,transparent);font-size:15.5px}
-.note.warn{background:color-mix(in srgb,var(--s-sub) 11%,transparent);border-color:color-mix(in srgb,var(--s-sub) 30%,transparent)}
+.note.warn{background:color-mix(in srgb,var(--s-loose-ends) 11%,transparent);border-color:color-mix(in srgb,var(--s-loose-ends) 30%,transparent)}
 .note p{margin:0}.note p+p{margin-top:8px}
 pre{margin:14px 0;padding:14px 16px;border-radius:12px;background:var(--night);color:#e7e5dd;font-family:var(--mono);font-size:13.5px;line-height:1.65;overflow-x:auto;white-space:pre}
 pre .c{color:#8d8b84}
