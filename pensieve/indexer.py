@@ -678,8 +678,12 @@ class Store:
         info = {r[0]: r[1:] for r in self.db.execute("SELECT id, title, tags, summary FROM sessions")}
         ids = sorted(by)
         docs = [" ".join(f"{info[s][0]} {info[s][1] or ''} {info[s][2] or ''}" for s in by[c] if s in info) for c in ids]
+        from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+        # words that every agent session has (its turns are labelled User, Assistant and Memory), so they name no topic
+        stop = list(ENGLISH_STOP_WORDS | {"memory", "memories", "user", "assistant", "session", "sessions", "agent",
+                                          "claude", "codex", "conversation", "chat", "file", "files"})
         try:
-            vec = TfidfVectorizer(stop_words="english", max_features=4000, token_pattern=r"[A-Za-z][A-Za-z_\-]{2,}")
+            vec = TfidfVectorizer(stop_words=stop, max_features=4000, token_pattern=r"[A-Za-z][A-Za-z_\-]{2,}")
             M = vec.fit_transform(docs)
             terms = np.array(vec.get_feature_names_out())
             return {c: ", ".join(terms[np.argsort(-M[i].toarray()[0])[:5]]) for i, c in enumerate(ids)}
