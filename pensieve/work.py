@@ -46,26 +46,46 @@ def _not_users(project: str) -> bool:
     return p.startswith(_TEMP) or p.startswith(str(Path.home() / "Library") + "/")
 
 
-def _branch(path: str) -> str:
-    """The last git branch that a Claude Code transcript records."""
+_GIT_BRANCH = re.compile(rb'"gitBranch":"([^"]*)"')
+_LINE_CWD = re.compile(rb'"cwd":"([^"]*)"')
+_LINE_TS = re.compile(rb'"timestamp":"([^"]*)"')
+
+
+def _branches(path: str) -> dict[tuple[str, str], float]:
+    """Every git branch that a Claude Code transcript records, by (cwd, branch), with the time of its last message.
+    "HEAD" is left out: Claude Code records it during some git operations, so it is not the branch the work is on."""
     try:
-        m = Path(path).stat().st_mtime
+        size = Path(path).stat().st_size
     except OSError:
-        return ""
+        return {}
     hit = _branch_cache.get(path)
-    if hit and hit[0] == m:
+    if hit and hit[0] == size:
         return hit[1]
-    b = ""
+    start, out = (hit[0], dict(hit[1])) if hit and hit[0] < size else (0, {})  # a transcript only grows: read the end
     try:
-        data = Path(path).read_bytes()
-        i = data.rfind(b'"gitBranch":"')
-        if i >= 0:
-            j = data.find(b'"', i + 13)
-            b = data[i + 13:j].decode(errors="replace")
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read()
     except OSError:
-        pass
-    _branch_cache[path] = (m, b)
-    return b
+        return out
+    end = data.rfind(b"\n") + 1  # whole lines only: the last one can be half written
+    for line in data[:end].splitlines():
+        b = _GIT_BRANCH.search(line)
+        if not b or b.group(1) in (b"", b"HEAD"):
+            continue
+        c, t = _LINE_CWD.search(line), _LINE_TS.search(line)
+        k = ((c.group(1) if c else b"").decode(errors="replace"), b.group(1).decode(errors="replace"))
+        out[k] = max(out.get(k, 0), _ts(t.group(1).decode()) if t else 0)
+    _branch_cache[path] = (start + end, out)
+    return out
+
+
+def _branch(path: str, cwd: str = "") -> str:
+    """The branch a Claude Code session works on now: its newest recorded branch, in its own folder when one is
+    given."""
+    bs = _branches(path)
+    mine = {k: v for k, v in bs.items() if not cwd or k[0] == cwd or k[0].startswith(cwd + "/")} or bs
+    return max(mine, key=mine.get)[1] if mine else ""
 
 
 def _ts(s) -> float:
@@ -333,15 +353,23 @@ def group(inp: Inputs) -> list[dict]:
 
     # ticket keys count only with a known project prefix: from collected tickets and branch names
     prefixes = {KEY.fullmatch(i["key"]).group(1) for i in items if i["key"]}
-    S = {}
+    S, worked_of = {}, {}
     for sid, project, title, summary, updated, started, path in sorted(inp.sessions.values(), key=lambda r: r[4] or "",
                                                                        reverse=True):
         if _not_users(project or ""):
             continue
         repo, wt_branch = repo_of(project or "")
-        branch = wt_branch or (_branch(path) if sid.startswith("claude:") else "")
+        branch = wt_branch or (_branch(path, project or "") if sid.startswith("claude:") else "")
+        # every branch the session worked on, by repo: a long session can move between branches and worktrees
+        worked = {}
+        if sid.startswith("claude:") and until is None:
+            for (cwd, b), at in _branches(path).items():
+                r, wb = repo_of(cwd)
+                if r and b not in DEFAULT_BRANCHES:
+                    worked[(r, wb or b)] = max(worked.get((r, wb or b), 0), at)
         S[sid] = dict(id=sid, title=title or "", summary=summary or "", updated=min(_ts(updated), until or 9e18), started=_ts(started),
                       project=project or "", repo=repo, branch=branch, edited=inp.edits.get(sid, set()), path=path)
+        worked_of[sid] = worked  # apart from S: its keys are tuples, and S goes into the card builder's JSON
         prefixes |= {m.group(1) for m in KEY.finditer(branch)}
     # ticket links in the sessions' text teach each project prefix and its site, so a key alone becomes a link
     sites = {}
@@ -506,6 +534,16 @@ def group(inp: Inputs) -> list[dict]:
                            project=s["project"], artifacts=_artifacts(s, facts[s["id"]]["links"])) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
+    # A session that also worked on a card's branch, without being one of its sessions, is shared with the card: a
+    # long session moves between branches, and joining it to every branch would merge their cards into one.
+    for t in out:
+        feat = {(b["repo"], b["branch"]) for b in t["branches"]}
+        own = {s["id"] for s in t["_sessions"]}
+        t["_shared"] = [(dict(id=s["id"], title=s["title"], path=s["path"]),
+                         max(at for k, at in worked_of[s["id"]].items() if k in feat)) for s in S.values()
+                        if s["id"] not in own and feat & worked_of[s["id"]].keys()] if feat else []
+        t["shared_sessions"] = [dict(id=s["id"], title=s["title"], at=at)
+                                for s, at in sorted(t["_shared"], key=lambda x: -x[1])[:5]]
     return out
 
 
@@ -526,6 +564,7 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
         _attention(t)
         task_states.apply(t, have.get(t["id"], {}), manual.get(t["id"]))
         t.pop("_sessions")
+        t.pop("_shared", None)
         t.pop("_named", None)
     out.sort(key=_order)
     return out
@@ -581,6 +620,9 @@ def _attention(task: dict):
     # only waits (to check CI again later, say) touches its file without doing work
     active = any(s["path"] and now - _mtime(s["path"]) < ACTIVE_MINUTES * 60 and now - s["updated"] < ACTIVE_TURN_MINUTES * 60
                  for s in task["_sessions"])
+    # ... or a shared session that is running and worked on this card's branch in the last half hour
+    active = active or any(s["path"] and now - _mtime(s["path"]) < ACTIVE_MINUTES * 60 and now - at < ACTIVE_TURN_MINUTES * 60
+                           for s, at in task.get("_shared", []))
     reasons = []
     for p in task["prs"]:
         if p["state"] in ("open", "draft"):
@@ -1105,12 +1147,16 @@ def _pickup(task: dict, wts: dict):
             p["branch"] = used or head  # the branch the task's sessions used here
             if used and head and head != used:
                 p["head"] = head  # the checkout is on another branch now
-            p["changed"] = len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
+            # uncommitted files belong to the branch that is open: none for the task when another branch is open
+            p["changed"] = 0 if p.get("head") else \
+                len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
             p["worktree"] = root in wts
-            ab = _git(root, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
+            # ahead and behind of the task's branch, not of the branch that is open in the checkout now
+            ref = p["branch"] if p.get("head") else "HEAD"
+            ab = _git(root, "rev-list", "--left-right", "--count", f"{ref}@{{upstream}}...{ref}").split()
             if len(ab) == 2 and ab[0].isdigit():  # commits behind and ahead of the branch's upstream
                 p["behind"], p["ahead"], p["upstream"] = int(ab[0]), int(ab[1]), True
-                p["pushed"] = _git(root, "rev-parse", "--short", "@{upstream}")  # moves on a push: history saves the card
+                p["pushed"] = _git(root, "rev-parse", "--short", f"{ref}@{{upstream}}")  # moves on a push: history saves the card
             p["repo"] = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600) or root).parent.name
             web = web_url(_git(root, "remote", "get-url", "origin", ttl=3600))
             if web and p["branch"] not in DEFAULT_BRANCHES and _git(root, "rev-parse", "--verify", "--quiet",
