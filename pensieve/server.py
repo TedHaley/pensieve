@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -881,17 +881,17 @@ _gaps = {"value": {}, "building": set(), "lock": threading.Lock()}
 
 
 @app.get("/api/insights/stats")
-def insights_stats_api(fresh: bool = False, repos: str = ""):
+def insights_stats_api(fresh: bool = False, names: str = Query("", alias="repos")):
     """Token use, the value score, deployed lines, peers and momentum (insights_stats.py), for all repos or the
     comma-separated `repos`. No AI. An answer older than STATS_TTL is returned, and made again in the background.
     A sync endpoint: it runs on the request thread pool, not behind the indexing jobs of the loop's executor."""
     from pensieve import insights_stats, people, store as v2
-    sel = sorted({r for r in repos.split(",") if r})
+    sel = sorted({r for r in names.split(",") if r})
     key = ",".join(sel)
 
     def make():
         v = insights_stats.stats(v2.index_db(), v2.store_db(), people.graph(), repos=sel or None,
-                                 deployed_fn=globals()["repos"].deployed)
+                                 deployed_fn=repos.deployed)
         _stats["value"][key] = (time.time(), v)
         return v
 
@@ -912,7 +912,7 @@ def insights_stats_api(fresh: bool = False, repos: str = ""):
 
 
 @app.get("/api/insights/gaps")
-def insights_gaps_api(stale_days: int = 90, inactive_days: int = 180, repos: str = ""):
+def insights_gaps_api(stale_days: int = 90, inactive_days: int = 180, names: str = Query("", alias="repos")):
     """Knowledge gaps over every indexed repo, or the comma-separated `repos`. The first build reads all blame rows,
     so it runs in the background: the answer has `building` until it is done, and the last result while a new one
     builds. A result stays until a repo's head moves."""
@@ -922,7 +922,7 @@ def insights_gaps_api(stale_days: int = 90, inactive_days: int = 180, repos: str
     key = f"insights:gaps:v6:{stale_days}:{inactive_days}"
     idx = v2.index_db()
     heads = [[r, h] for r, h, _ in q.repo_heads(idx)]
-    sel = {r for r in repos.split(",") if r}
+    sel = {r for r in names.split(",") if r}
 
     def only(res):
         return insights_stats.gaps_for(res, sel) if sel else res
@@ -936,9 +936,9 @@ def insights_gaps_api(stale_days: int = 90, inactive_days: int = 180, repos: str
 
             def build():
                 try:
-                    names = [n for _r, n, _rm in q.repos(idx)]
+                    every = [n for _r, n, _rm in q.repos(idx)]
                     t0 = time.perf_counter()
-                    res = insights_stats.gaps(repos, names, stale_days, inactive_days)
+                    res = insights_stats.gaps(repos, every, stale_days, inactive_days)
                     res["ms"] = round((time.perf_counter() - t0) * 1000)
                     v = {"heads": heads, "result": res}
                     cache_db.put_json(idx, key, v, 30 * 86400)
