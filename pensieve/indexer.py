@@ -373,8 +373,9 @@ class Store:
         self.progress = None  # sessions being indexed now: {name: agent, root, done, total=None}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
         self.db = Conn(self.v2)
-        from pensieve.search import code_words, repo_token
-        self.db.create_function("code_words", 1, code_words, deterministic=True)  # used by the code keyword index
+        from pensieve.search import code_tokens, code_words, repo_token
+        self.db.create_function("code_tokens", 1, code_tokens, deterministic=True)  # used by the code word index
+        self.db.create_function("code_words", 1, code_words, deterministic=True)  # its triggers before words-v4
         self.db.create_function("repo_token", 1, repo_token, deterministic=True)
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions(

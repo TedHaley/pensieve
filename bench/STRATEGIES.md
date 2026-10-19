@@ -276,6 +276,41 @@ the original):
   - the README's start and the dependencies say what the repo is
   - two folder levels let the agent check the notes against the code
 
+## Full-text indexes: words instead of trigrams (storage v2, phase 5)
+
+Before this change, three trigram FTS5 indexes found exact text (code, documents, sessions). A word index of code
+gave the keyword score. Now all full-text indexes hold words, and the trigram index of code is removed. A search
+for a text gets candidates from the word index: the words of the text, in that order. Then it reads each candidate's
+text, so the result is the same as grep (`search.contains`). The code index now also holds one-letter parts and
+numbers (`code_tokens`), so that "s3a", "404" and dates have index words. A name typed in lowercase ("textarea")
+also matches its camelCase form (TextArea).
+
+Measured on a copy of one index: 325,732 code chunks in five repos, the largest with 188,497 chunks. Both servers
+ran with indexing stopped. Each query went to the two servers in turn, so that both saw the same load. Other
+benchmarks ran on the machine at the same time, so the times are higher than in the tables above.
+
+| | trigram (before) | words (after) |
+|---|---:|---:|
+| test @1 / @3 / @8 (1,302 queries) | 65.0 / 84.6 / 90.0 | 65.0 / 84.9 / 90.2 |
+| all @1 / @3 / @8 (2,377 queries) | 64.9 / 83.4 / 89.5 | 65.0 / 83.7 / 89.7 |
+| MCP search, ms p50 / p95 | 182 / 771 | 115 / 609 |
+| one text lookup as `_code` makes it, ms p50 / p95 / p99 (3,860 lookups) | 25 / 88 / 133 | 2.9 / 22 / 78 |
+| size of the full-text indexes | 1,344 MB (code trigram 1,223) | 101 MB (code words 98) |
+| full build of the code index | 117 s trigram, plus the word index | 83 s |
+
+- **Accuracy is level.** On the test split, @1 is the same, and @3 and @8 are 0.2–0.3 points higher. By kind:
+  names +1.0 and ambiguous strings +1.0 @1, questions −0.6 (2 queries), the others the same.
+- **The lookups give the same chunks as trigrams in 3,548 of 3,597 cases.** In the other 49 cases, the text starts
+  inside a longer word: "onError" in "ValidationError", "date_col" in "update_col". The
+  word index does not find these. They are matches that grep finds and that a reader does not want.
+- **Each lookup is about 8 times faster at the median.** The slowest lookups are common names with thousands of
+  matches (`user_id`), because each candidate's text is read.
+- **What did not work at first:** a phrase that ends in a 1- or 2-letter prefix ("k3s", "lastVisitedA") made FTS5
+  read thousands of words (up to 2.7 s). The phrase now leaves out such a last word, a first word of one letter, and
+  all but the 8 longest words in a row of a long text. The text check finds the exact matches.
+- **The removed trigram index leaves free pages** (1.25 GB) in `pensieve.db` until a VACUUM. Storage v2 starts a new
+  `index.db`, which does not have them.
+
 ## Suggestions for agentic use
 
 These are the changes that we expect to save an agent the most calls, in order:
