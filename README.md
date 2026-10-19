@@ -9,14 +9,14 @@
 
 One place for all your information, for context engineering: your files, repositories, agent sessions, tickets and messages, so that you and your agents get the right context for each goal. Your context is your own: Pensieve reads only what you can access, it only reads, and it keeps everything on your Mac.
 
-- **Find anything:** press **Control+Shift** anywhere on your Mac and search your documents, folders, code and past agent sessions by meaning or by exact words.
+- **Find anything:** press **Control+Shift** anywhere on your Mac and search your documents, folders, code and past agent sessions by meaning or by exact words. Narrow a search to a time (`since:3d`, `until:2026-10-01`) or to one project's sessions (`project:my-app`).
 - **Superpowers for your agents:** agents connect over MCP and get the few most relevant files and passages instead of grepping your disk, which saves time and tokens. Each agent is scoped to what it's working on (by default, the repo it runs in).
 - **Bring in your other tools:** connections collect your tickets, threads and pages from MCP servers (Jira, Slack, Linear and others) with read-only tools, and keep each change over time.
 - **Pick work back up, and close it out:** the Threads tab has a thread for each goal of your work, in five states: To do, Open, Loose ends, Complete and Forgotten. Each thread has its sessions, PRs, tickets, folder, the steps left to close it, and a button that resumes the last session. Your agents get the same threads over MCP, and offer to close the one closest to done.
 - **Know who to ask:** git blame shows who owns what and who has the most domain knowledge, plus what each teammate has been working on.
 - **Find knowledge gaps:** areas where most of the code was written by people no longer active in the repo, how many active people still know it, and who to ask now.
 
-Everything runs on your Mac. Text is embedded with `Qwen3-Embedding-0.6B` and stored in SQLite (with a trigram full-text index for exact matches) plus [turbovec](https://pypi.org/project/turbovec/) vector indexes. Pensieve has no text model of its own. Your agent writes the summaries, notes and insights, with its own model, through Pensieve's MCP tools.
+Everything runs on your Mac. Text is embedded with `Qwen3-Embedding-0.6B` and stored in SQLite (with a word full-text index for exact matches) plus [turbovec](https://pypi.org/project/turbovec/) vector indexes. Pensieve has no text model of its own. Your agent writes the summaries, notes and insights, with its own model, through Pensieve's MCP tools.
 
 ## Install
 
@@ -89,6 +89,9 @@ Pensieve starts at login by default. To stop this, turn off **Launch at Login** 
 | `by:sam terraform` | only what that person wrote (code by git blame, documents by author) |
 | `ext:pdf` | one file type |
 | `in:my-app` | path or repo contains this |
+| `since:3d` / `until:2026-10-01` | only what changed in that time: a session by its last activity, code by its last commit, a file by its last change. Takes a date, a time back (`12h`, `3d`, `2w`, `1m`), `today` or `yesterday`; `until:` includes that day |
+| `project:my-app` | agent sessions of that project only |
+| `kind:session since:yesterday` | with no words: the matching sessions, newest first |
 
 A plain search also puts a folder first when its path names every word (`person build`). Under an empty field, **Options** lists all of these.
 

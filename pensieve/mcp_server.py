@@ -108,7 +108,8 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     """Find code (or docs, past agent sessions) in one call; use before Grep/Glob. Best query: what the code does plus
     names you'd guess it uses ("retry failed webhook delivery with backoff retryWebhook"); a bare name or an error
     string also works. "quotes" = exact, -word excludes, ext:py, in:<path>, by:<person>, person:<name>,
-    kind:code|doc|session|folder|repo|person. One line per hit, best first: path:line  enclosing definition ▸ the
+    kind:code|doc|session|folder|repo|person, since:/until: (2026-10-01, 3d, 2w, yesterday), project:<name>
+    (sessions of that project). kind:session since:yesterday alone lists those sessions, newest first. One line per hit, best first: path:line  enclosing definition ▸ the
     line that matched  [id for read/similar]. If those lines show what you need, use the hit: no grep to confirm."""
     sc = _scope()
     r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc)

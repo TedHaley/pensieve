@@ -22,7 +22,8 @@ descriptions, and agents using it solve more lookups with ~40% fewer tool calls 
    Grep. Don't run more than two searches for the same thing.
 
 Filters: `kind:code` (just code), `kind:file` (documents), `kind:session` (agent history), `in:<repo or folder>`,
-`ext:<extension>`, `-word` to exclude, `"exact phrase"` to require text.
+`ext:<extension>`, `-word` to exclude, `"exact phrase"` to require text, `since:3d` and `until:2026-10-01` (a date,
+`12h`, `3d`, `2w`, `1m`, `today` or `yesterday`), and `project:<name>` (agent sessions of that project).
 
 ## Use Grep for
 
@@ -37,4 +38,6 @@ helpers and conventions; mention near-duplicates you found rather than adding an
 ## Recall earlier work
 
 `search` with `kind:session` finds earlier agent sessions on a topic; `read(id)` shows the transcript and summary.
+Add `since:`, `until:` or `project:` for "last week's sessions in this repo". With no topic words
+(`kind:session since:2d`), the result is the matching sessions, newest first.
 Use it when the user says "like we did before" or "what did we decide about …".

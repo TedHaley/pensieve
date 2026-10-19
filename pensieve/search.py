@@ -38,7 +38,27 @@ def repo_token(root):
     "these words AND this repo" rather than scoring every repo's matches. Letters only, so FTS5 keeps it whole."""
     return "zzrepo" + "".join(chr(97 + int(c, 16)) for c in hashlib.sha1(str(root).encode()).hexdigest()[:12])
 _TOKEN = re.compile(r'(-?)"([^"]*)"?|(\S+)')
-_FILTER = re.compile(r"^(kind|ext|in|by|person):(.+)$", re.I)
+_FILTER = re.compile(r"^(kind|ext|in|by|person|since|until|project):(.+)$", re.I)
+_AGO = re.compile(r"^(\d+)([hdwmy])$")
+_UNIT = {"h": 3600, "d": 86400, "w": 7 * 86400, "m": 30 * 86400, "y": 365 * 86400}
+
+
+def when(val: str, end: bool = False) -> float:
+    """since:/until: as epoch seconds: a date (2026-10-01; with end, the end of that day), a time back (3d, 2w, 1m,
+    12h) or today / yesterday. Raises ValueError for anything else."""
+    import time
+    from datetime import date, datetime, timedelta
+    v = val.strip().lower()
+    m = _AGO.match(v)
+    if m:
+        return time.time() - int(m.group(1)) * _UNIT[m.group(2)]
+    days = {"today": 0, "yesterday": 1}.get(v)
+    try:
+        d = date.today() - timedelta(days=days) if days is not None else date.fromisoformat(v)
+    except ValueError:
+        raise ValueError(f"{val!r}: since: and until: take a date (2026-10-01), a time back (3d, 2w, 1m, 12h), "
+                         "today or yesterday") from None
+    return datetime.combine(d + timedelta(days=1) if end else d, datetime.min.time()).timestamp()
 _KINDS = {"file": "file", "files": "file", "doc": "doc", "docs": "doc", "document": "doc", "documents": "doc",
           "code": "code", "session": "session", "sessions": "session", "chat": "session", "agent": "session",
           "folder": "folder", "folders": "folder", "dir": "folder", "dirs": "folder", "directory": "folder",
@@ -76,6 +96,9 @@ def parse(q: str) -> dict:
         m = _FILTER.match(word)
         if m:
             key, val = m.group(1).lower(), m.group(2).lower().lstrip(".")
+            if key in ("since", "until"):
+                filters[key] = when(val, end=key == "until")
+                continue
             if key == "person":  # person:sam = kind:person sam
                 filters["kind"] = "person"
                 words.append(m.group(2))
@@ -372,6 +395,9 @@ class Searcher:
         kinds = [k for k in (kinds or CORPORA) if k in CORPORA and (not kf or k in _KIND_CORPORA.get(kf, [kf]))]
         if f.get("ext"):
             kinds = [k for k in kinds if k != "session"]
+        lo, hi, project = f.get("since"), f.get("until"), f.get("project")
+        if project:  # project:<name> = the agent sessions of that project
+            kinds, docs_too = [k for k in kinds if k == "session"], False
         by = f.get("by")
         if by:  # what that person wrote: code by blame, documents by author, sessions by agent
             kinds = [k for k in kinds if k != "session" or any(by in a for a in ("claude", "codex", "qwen"))]
@@ -390,6 +416,15 @@ class Searcher:
             allow = scopes.allowlist(scope, kind, self.store, self.repos, self._index(kind)) if scope else None
             if allow is not None and not len(allow):
                 continue
+            if kind == "session" and (lo or hi or project):  # sessions are chosen by time and project before ranking
+                ids = self._session_chunks(lo, hi, project)
+                allow = ids if allow is None else np.intersect1d(allow, ids)
+                if not len(allow):
+                    continue
+                if not pq["semantic"] and not pq["exact"]:  # the filters alone: the newest sessions that match
+                    for n, cid in enumerate(self._session_chunks(lo, hi, project, newest=True, allow=allow)[:limit]):
+                        hits[(kind, int(cid))] = dict(exact=False, bm25=0, sem=1 - n / 1000)
+                    continue
             allowed = set(allow.tolist()) if allow is not None and pq["exact"] else None
             if pq["exact"]:
                 with self.lock:
@@ -412,8 +447,8 @@ class Searcher:
                     allow = self._by_allow(by, allow)
                     if not len(allow):
                         continue
-                for cid, sc in self._code(pq["semantic"], allow, roots=scope.repos if scope is not None else None,
-                                          qv=code_qv).items():
+                for cid, sc in self._code(pq["semantic"], allow, k=2000 if lo or hi else 400,
+                                          roots=scope.repos if scope is not None else None, qv=code_qv).items():
                     hits[(kind, cid)] = dict(exact=False, bm25=0, sem=sc)
                     code_ranked[(kind, cid)] = sc
             elif qv is not None:
@@ -421,7 +456,7 @@ class Searcher:
                 with self.lock:
                     has = self.db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
                     if has:
-                        k = max(60, limit * 4)
+                        k = max(60, limit * 4, 2000 if (lo or hi) and kind != "session" else 0)  # dates filter later
                         sc, ids = (idx.search(qv[None, :], k=min(k, len(allow)), allowlist=allow) if allow is not None
                                    else idx.search(qv[None, :], k=k))
                         for s, cid in zip(sc[0], ids[0]):
@@ -461,6 +496,8 @@ class Searcher:
         if docs_too:
             out += self._docs(pq, qv, scope, limit, rows, words)
             lap("docs")
+        if lo or hi:  # a session by its last activity, code by its last commit, a file by when it changed
+            out = [x for x in out if (not lo or _ts(x["mtime"]) >= lo) and (not hi or _ts(x["mtime"]) < hi)]
         out.sort(key=lambda x: (-x["score"], -_ts(x["mtime"])))
         best, seen = [], set()
         for x in out:  # best chunk per file / session (code ids are per chunk, so dedupe code by file)
@@ -639,6 +676,32 @@ class Searcher:
                 seen.add(f)
                 res.append(f)
         return res, holes
+
+    def _session_chunks(self, lo, hi, project, newest=False, allow=None) -> np.ndarray:
+        """The chunk ids of the sessions with their last activity in [lo, hi) (epoch seconds, either can be None)
+        whose project has `project` in its name or folder. newest=True: the first chunk of each session, the newest
+        session first, within `allow`."""
+        from datetime import datetime, timezone
+        iso = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
+        where, args = ["1"], []
+        if lo:
+            where.append("s.updated >= ?")
+            args.append(iso(lo))
+        if hi:
+            where.append("s.updated < ?")
+            args.append(iso(hi))
+        if project:
+            where.append("(instr(lower(s.project_name), ?) > 0 OR instr(lower(s.project), ?) > 0)")
+            args += [project, project]
+        sql = (f"SELECT {'MIN(c.id)' if newest else 'c.id'} FROM chunks c JOIN sessions s ON s.id = c.session_id "
+               f"WHERE {' AND '.join(where)}" + (" GROUP BY s.id ORDER BY MAX(s.updated) DESC" if newest else ""))
+        with self.lock:
+            rows = [r[0] for r in self.db.execute(sql, args)]
+        if newest:
+            ids = np.asarray(rows, dtype=np.uint64)
+            return ids[np.isin(ids, allow)] if allow is not None else ids
+        idx = self._index("session")  # the vector index's allowlist takes only ids that it holds (as scopes does)
+        return np.asarray([i for i in rows if idx.contains(i)], dtype=np.uint64)
 
     def _code(self, q, allow, k=400, roots=None, qv=None):
         """Code search tuned on bench/ (agent-style queries: descriptions, names, error strings, mixes of these).
