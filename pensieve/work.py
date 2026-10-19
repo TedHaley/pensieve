@@ -1590,7 +1590,8 @@ def resume_command(store, session_id: str) -> str | None:
     row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
     if not row or not row[0] or not Path(row[0]).is_dir():
         return None
-    cmd = {"claude": f"claude --resume {sid}", "codex": f"codex resume {sid}"}.get(source)
+    from pensieve import agents
+    cmd = agents.resume(source, sid)  # only the agent that wrote a session can resume it
     return f"cd {shlex.quote(row[0])} && {cmd}" if cmd else None
 
 

@@ -2882,6 +2882,9 @@ async function renderSettings() {
       <div class="cmd-l">JSON config (Cursor, Claude Desktop, …)</div>${cmd(JSON.stringify({mcpServers: {pensieve: {command: 'pensieve', args: ['mcp']}}}))}
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
     </div>
+    <div class="set-card" id="set-New-sessions"><h3>New sessions</h3>
+      <p class="sc-p">The agent that "New session" on a thread starts in Terminal. "Resume last session" always uses the agent that wrote the session.</p>
+      <div id="agentpick"><div class="spinner" style="margin:8px 0"></div></div></div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
   else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. A generation model writes notes and insights. MCP servers bring in tickets and messages.') + `
     <div class="set-card mdl" id="set-Embedding-model">
@@ -2914,7 +2917,7 @@ async function renderSettings() {
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
   if (tab === 'ai') { bindAISettings($('#setmain')); renderModels(); renderContent(); }
-  if (tab === 'agents') loadIntegrations();
+  if (tab === 'agents') { loadIntegrations(); renderAgentPick(); }
   if (tab === 'sources') renderPlaces();
   if (tab === 'general') { bindGeneral(); $('#set-Setup [data-open-setup]')?.addEventListener('click', openSetup); }
   if (tab === 'usage') bindUsage();
@@ -4192,10 +4195,35 @@ const WK_IC = {
 };
 const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
 // The bar at the foot of a card: resume the last session, and see coworkers and related work
+// The coding agents Pensieve can start (/api/agents): a session resumes only in the agent that wrote it
+const wkAgentName = sid => S.agents?.agents.find(a => a.id === sid.split(':')[0])?.name || sid.split(':')[0];
+const wkAgentMissing = sid => {
+  const a = S.agents?.agents.find(x => x.id === sid.split(':')[0]);
+  return !S.agents ? '' : !a ? `Pensieve can't resume a ${sid.split(':')[0]} session` : a.installed ? ''
+    : `${a.name} is not installed here: start a new session, or copy the prompt`;
+};
+async function renderAgentPick() {
+  await loadAgents();
+  const box = $('#agentpick'); if (!box || !S.agents) return;
+  const opt = (v, l, dis) => `<option value="${esc(v)}" ${S.agents.default === v ? 'selected' : ''} ${dis ? 'disabled' : ''}>${esc(l)}</option>`;
+  box.innerHTML = `<select id="agentsel" class="set-in">${opt('', "Automatic: the thread's own agent, else the first installed")}${
+    S.agents.agents.map(a => opt(a.id, a.name + (a.installed ? '' : ' (not installed)'), !a.installed)).join('')}</select>`;
+  $('#agentsel').onchange = async e => {
+    await api('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({default_agent: e.target.value})});
+    S.agents = null; await loadAgents(); toast(e.target.value ? `New sessions start in ${S.agents?.startName}` : 'New sessions pick their agent');
+  };
+}
+async function loadAgents() {
+  try {
+    const d = await api('/api/agents');
+    const by = d.agents.find(a => a.id === d.default && a.installed) || d.agents.find(a => a.installed);
+    S.agents = {...d, startName: by?.name};
+  } catch {}
+}
 function wkActions(t) {
-  const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}”">${WK_IC.play}Resume last session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
+  const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume last session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
-  const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new agent session that reads this card first">${WK_IC.spark}New session from card</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this card in it" title="Copy a prompt with this card in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
+  const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}New session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this card in it" title="Copy a prompt with this card in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
   return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
@@ -4388,6 +4416,7 @@ function wkSections(t) {
     sec(sess.length > 1 ? 'Sessions' : 'Session', sessions) + activity;
 }
 async function loadWork(first = false) {
+  if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
   try { S.work.data = await api(`/api/work?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
   if (first) S.work.asked.clear();
   askNotes();

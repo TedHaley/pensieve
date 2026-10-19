@@ -1973,6 +1973,14 @@ class ReviveReq(BaseModel):
     thread: str = ""  # or a thread's saved card (history), save n (default the last)
     n: int = -1
     run: bool = True  # false: only the prompt with the card in it, to paste into any agent
+    agent: str = ""  # the agent to start (agents.AGENTS); "" = the user's default agent
+
+
+@app.get("/api/agents")
+def list_agents():
+    """The coding agents Pensieve can start: each with whether it is installed, and the user's default."""
+    from pensieve import agents
+    return {"agents": agents.listing(settings.get("default_agent")), "default": settings.get("default_agent") or ""}
 
 
 @app.post("/api/work/revive")
@@ -1989,7 +1997,7 @@ def revive_card(req: ReviveReq):
         card = _local_card(req.id, req.days)
     if not req.run:
         return {"ok": True, "prompt": cards.revive_prompt(card)}
-    cmd = cards.revive_command(card, config.V2_DIR / "revive")
+    cmd = cards.revive_command(card, config.V2_DIR / "revive", req.agent)
     _terminal(cmd)
     return {"ok": True, "command": cmd}
 

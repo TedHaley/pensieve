@@ -371,9 +371,10 @@ def revive_prompt(card: dict) -> str:
     return REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy="its copy below") + "\n\n" + render_agent(card)
 
 
-def revive_command(card: dict, folder) -> str:
+def revive_command(card: dict, folder, agent: str = "") -> str:
     """The shell command that starts a new agent session on a thread: the agent reads the live thread with Pensieve's
-    `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder (this Mac's checkout, or the home folder when it is
+    `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder. `agent`: the
+    agent to start (agents.AGENTS); by default the user's default agent, else one that worked on the thread (this Mac's checkout, or the home folder when it is
     gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
     import shlex
     from pathlib import Path
@@ -388,10 +389,11 @@ def revive_command(card: dict, folder) -> str:
     path.write_text(render_agent(card))
     where = next((r["ref"]["path"] for r in card.get("resources", []) if r["kind"] == "folder"
                   and Path(r.get("ref", {}).get("path", "")).is_dir()), str(Path.home()))
-    agents = [r.get("ref", {}).get("session", "").split(":", 1)[0] for r in card.get("resources", []) if r["kind"] == "session"]
-    agent = next((a for a in agents if a in ("claude", "codex")), "claude")
+    from pensieve import agents, settings
+    worked = [r.get("ref", {}).get("session", "").split(":", 1)[0] for r in card.get("resources", []) if r["kind"] == "session"]
+    agent = agent if agent in agents.AGENTS else agents.choose(settings.get("default_agent"), worked)
     prompt = REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=f"its copy in {path}")
-    return f"cd {shlex.quote(where)} && {agent} {shlex.quote(prompt)}"
+    return f"cd {shlex.quote(where)} && {agents.start(agent, prompt)}"
 
 
 def save(card: dict, folder) -> str:
