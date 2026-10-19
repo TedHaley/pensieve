@@ -504,7 +504,10 @@ after a stop adds nothing twice.
 | `pensieve.db` `chunks`, `code_chunks`, `file_chunks` | `embed_cache` | `embed_cache`, by `embedcache.fill_from_v1` (phase 6) |
 
 v2 does not import these v1 data: the manager-title and team counts of the org evidence, notes of older formats,
-card states set by an agent, the thread history in `threads/`, the agent job queue, and the caches.
+card states set by an agent, the agent job queue, and the caches.
+
+v2 does not import the thread history in `threads/`, by decision. The v1 threads, events and saved cards are lost
+when `delete_v1` removes `threads/`. The v2 thread tables start empty.
 
 Progress. `/api/status` has `migration`: the phase (`importing`, `indexing`, `cleanup`, `done`, `none`, `dry_run`
 or `error`), the step that runs, the steps done of the total, the result of each step, and `first_index`. During
