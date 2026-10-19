@@ -7,7 +7,7 @@ def tools(rows):
 
 DEFAULT = [
     ("search", "<code>query</code>, <code>limit</code> = 8, <code>kind</code>",
-     "One line per hit, best first: <code>path:line</code>, the enclosing definition, the line that matched, and an id for <code>read</code> and <code>similar</code>. The top hits also show a few numbered lines. Query syntax: <code>\"exact\"</code>, <code>-word</code>, <code>ext:py</code>, <code>in:&lt;path&gt;</code>, <code>by:&lt;person&gt;</code>, <code>kind:code|doc|session|folder|repo|person</code>."),
+     "One line per hit, best first: <code>path:line</code>, the enclosing definition, the line that matched, and an id for <code>read</code> and <code>similar</code>. The top hits also show a few numbered lines. Query syntax: <code>\"exact\"</code>, <code>-word</code>, <code>ext:py</code>, <code>in:&lt;path&gt;</code>, <code>by:&lt;person&gt;</code>, <code>kind:code|doc|session|folder|repo|person</code>, <code>since:3d</code>, <code>until:2026-10-01</code>, <code>project:&lt;name&gt;</code> (sessions)."),
     ("read", "<code>id</code> (one id, or up to 8 ids separated by spaces), <code>max_chars</code> = 12000",
      "The full text of a result. For code, also the repo, branch, lines, owners from git blame, recent commits and the agent sessions that touched it."),
     ("similar", "<code>id</code>, <code>limit</code> = 8",

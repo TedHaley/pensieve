@@ -79,6 +79,9 @@ press <kbd>Control</kbd>+<kbd>Shift</kbd> to open the search panel.</p>
     ["<code>by:sam terraform</code>", "Only what that person wrote (code by git blame, documents by author)"],
     ["<code>ext:pdf</code>", "One file type"],
     ["<code>in:my-app</code>", "The path or the repo contains this text"],
+    ["<code>since:3d</code>, <code>until:2026-10-01</code>", "Only what changed in that time: a session by its last activity, code by its last commit, a file by its last change. Use a date, a time back (<code>12h</code>, <code>3d</code>, <code>2w</code>, <code>1m</code>), <code>today</code> or <code>yesterday</code>. <code>until:</code> includes that day."],
+    ["<code>project:my-app</code>", "Agent sessions of that project only"],
+    ["<code>kind:session since:yesterday</code>", "With no other words: the sessions that match, newest first"],
 ])}
 
 <h3 id="who-knows">Who knows what</h3>

@@ -19,7 +19,7 @@ Pensieve indexes nothing until setup is done. Until then, every MCP connection g
 
 ## MCP tools
 
-- `search`: find code, documents or past agent sessions. Write what the code does plus the names you expect it to use. `kind:code`, `kind:session`, `in:<folder>` and `ext:py` narrow the search.
+- `search`: find code, documents or past agent sessions. Write what the code does plus the names you expect it to use. `kind:code`, `kind:session`, `in:<folder>`, `ext:py`, `since:3d`, `until:2026-10-01` and `project:<name>` (sessions of one project) narrow the search. `kind:session since:yesterday` alone lists those sessions, newest first.
 - `read`: the full text of a search result.
 - `similar`: code that is similar to a result. Use it before you write new code.
 - `repo`: where things are in a repo, the areas whose authors left (`gaps`), and the areas the user has not worked in (`unexplored`).
