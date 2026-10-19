@@ -6,13 +6,13 @@
 <title>Pensieve: never lose the thread · MCP server for AI agents</title>
 <meta name="description" content="Pensieve MCP server for AI coding agents: context for Claude Code, Codex and Cursor in one search. Local, free and open source. Mac app for developers.">
 <meta name="robots" content="index,follow,max-image-preview:large">
-<meta name="keywords" content="Pensieve, Pensieve MCP, Pensieve MCP server, Pensieve AI, Pensieve Claude Code, MCP server, Claude Code, Codex, Cursor, AI coding agents, context engineering, context cards, semantic code search, git blame ownership, Mac">
+<meta name="keywords" content="Pensieve, Pensieve MCP, Pensieve MCP server, Pensieve AI, Pensieve Claude Code, MCP server, Claude Code, Codex, Cursor, AI coding agents, context engineering, threads, semantic code search, git blame ownership, Mac">
 <link rel="canonical" href="https://pensieve.tools/">
 <meta name="theme-color" content="#121211">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Pensieve">
 <meta property="og:title" content="Pensieve: never lose the thread · MCP server for AI agents">
-<meta property="og:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A context card for every task. Free and open source, for Mac.">
+<meta property="og:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A thread for every goal. Free and open source, for Mac.">
 <meta property="og:url" content="https://pensieve.tools/">
 <meta property="og:image" content="https://pensieve.tools/og.png">
 <meta property="og:image:width" content="1200">
@@ -20,7 +20,7 @@
 <meta property="og:image:alt" content="Pensieve for Mac">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Pensieve: never lose the thread · MCP server for AI agents">
-<meta name="twitter:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A context card for every task. Free and open source, for Mac.">
+<meta name="twitter:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A thread for every goal. Free and open source, for Mac.">
 <meta name="twitter:image" content="https://pensieve.tools/og.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23121211'/%3E%3Cpath fill='%23f4f3ee' fill-rule='evenodd' d='M6.39 6.5a2.42 2.42 0 1 0 4.84 0a2.42 2.42 0 1 0-4.84 0ZM6.39 17.5a2.42 2.42 0 1 0 4.84 0a2.42 2.42 0 1 0-4.84 0ZM7.93 8.92a4.84 4.84 0 1 0 9.68 0a4.84 4.84 0 1 0-9.68 0Z'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -48,16 +48,16 @@
    "applicationCategory": "DeveloperApplication",
    "applicationSubCategory": "MCP server",
    "operatingSystem": "macOS 14 or later (Apple Silicon)",
-   "description": "Pensieve is a local MCP server and Mac app for developers and their AI coding agents (Claude Code, Codex, Cursor, Gemini CLI and others). A context card for every task, joined across agent sessions, branches, pull requests, tickets and messages. The MCP server helps coding agents find the right code in fewer tool calls: in a benchmark, it solved as many tasks as grep with 47% fewer tool calls and 23% lower cost per lookup. Context cards that you share as one HTML file. Code ownership and knowledge gaps from git blame. Everything runs on the Mac. Free and open source.",
-   "keywords": "MCP server, Claude Code, Codex, Cursor, AI coding agents, context engineering, context cards, semantic code search, local, open source",
+   "description": "Pensieve is a local MCP server and Mac app for developers and their AI coding agents (Claude Code, Codex, Cursor, Gemini CLI and others). A thread for every goal, joined across agent sessions, branches, pull requests, tickets and messages. The MCP server helps coding agents find the right code in fewer tool calls: in a benchmark, it solved as many tasks as grep with 47% fewer tool calls and 23% lower cost per lookup. Threads that you share as one HTML file. Code ownership and knowledge gaps from git blame. Everything runs on the Mac. Free and open source.",
+   "keywords": "MCP server, Claude Code, Codex, Cursor, AI coding agents, context engineering, threads, semantic code search, local, open source",
    "featureList": [
-    "Context cards: one card per task with its sessions, branch, worktree, pull requests, tickets and messages, a state and an AI note",
+    "Threads: one thread per goal with its sessions, branch, worktree, pull requests, tickets and messages, a state and an AI note",
     "MCP server that points coding agents to the most relevant passages, scoped to the repo they work in",
-    "Shared context cards: one HTML page with the card's JSON inside, for a teammate or their agent",
+    "Shared threads: one HTML page with the thread's JSON inside, for a teammate or their agent",
     "Who knows what: code ownership and domain knowledge from git blame",
     "Knowledge gaps: code mostly written by people no longer active in the repo",
     "Local semantic and exact search over files, repos and agent sessions, on Control+Shift",
-    "Runs entirely on your Mac; AI notes optional"
+    "Runs entirely on your Mac; your own agent writes the notes"
    ],
    "url": "https://pensieve.tools/",
    "installUrl": "https://pensieve.tools/install.sh",
@@ -81,7 +81,7 @@
   --night:#121211;--night-2:#1c1c1a;--night-3:#272724;--night-ink:#f4f3ee;--night-ink-2:#a3a199;--night-line:rgba(244,243,238,.12);
   --c-context:#ff6a3d;--c-agents:#3d7bff;--c-share:#a35cff;--c-owners:#1fae6a;
   /* the app's state colors, from pensieve/task_states.py */
-  --s-conscious:#34c759;--s-sub:#ff9f0a;--s-latent:#5e5ce6;--s-etched:#8e8e93;--s-forgotten:#ff453a;
+  --s-open:#34c759;--s-loose-ends:#ff9f0a;--s-todo:#5e5ce6;--s-complete:#8e8e93;--s-forgotten:#ff453a;
   --shadow:0 40px 80px -30px rgba(18,18,17,.35),0 12px 30px -12px rgba(18,18,17,.18);
   --r:22px;--gut:max(16px,4vw);--max:1200px;
   --sans:"Inter Tight",-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;
@@ -168,20 +168,43 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
   .scroll-cue{display:none}
 }
 
-/* statement: the pieces gather */
-.gather{position:relative}
-.gather .stick{position:relative;height:100svh;min-height:560px;display:grid;place-items:center;overflow:hidden}
-.gather h2{position:relative;z-index:2;text-align:center;font-size:clamp(48px,9vw,148px);line-height:.92;letter-spacing:-.055em;font-weight:600}
-.gather h2 .soft{color:var(--ink-3)}
-.gather .sub{position:absolute;z-index:2;bottom:12vh;left:50%;transform:translateX(-50%);width:min(560px,calc(100% - 32px));text-align:center;color:var(--ink-2);font-size:clamp(16px,1.4vw,19px);opacity:calc((var(--p) - .55) * 4)}
-.piece{position:absolute;left:50%;top:50%;z-index:1;display:flex;align-items:center;gap:9px;padding:10px 15px 10px 11px;border-radius:14px;background:var(--card);border:1px solid var(--card-edge);box-shadow:0 14px 30px -14px rgba(18,18,17,.3);font-size:14px;font-weight:500;white-space:nowrap;
-  --e:calc(1 - var(--p));
-  transform:translate(-50%,-50%) translate(calc(var(--x) * var(--e) * 1vw),calc(var(--y) * var(--e) * 1vh)) rotate(calc(var(--r) * var(--e) * 1deg)) scale(calc(.55 + .45 * var(--e)));
-  opacity:calc((1 - var(--p)) * 5);will-change:transform,opacity}
-.piece .g{flex:none;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:#fff}
-.piece .g svg{width:17px;height:17px}
-.piece small{color:var(--ink-3);font-weight:400}
-.gather .dot{position:absolute;left:50%;top:50%;width:14px;height:14px;border-radius:50%;background:var(--ink);transform:translate(-50%,-50%) scale(calc(var(--p) * 1.6));opacity:calc(var(--p) * 1.4 - .3);z-index:1}
+/* the problem, then one thread: a tall section whose stage sticks while the notifications pile up and join */
+.pile{position:relative;height:380vh}
+.pile .stick{position:sticky;top:0;height:100svh;min-height:600px;overflow:hidden;display:flex;flex-direction:column;align-items:center;padding:clamp(56px,11vh,120px) var(--gut) 0}
+.pile .say{display:grid;text-align:center;position:relative;z-index:1;width:min(1000px,100%)}
+.pile .say>div{grid-area:1/1}
+.pile .say>.a{position:absolute;inset:0 0 auto}  /* the answer alone sets the height, so the thread sits under it */
+.pile.still .say>.a{position:static}
+.pile h2{font-size:clamp(40px,7.2vw,112px);line-height:.94;letter-spacing:-.05em;font-weight:600}
+.pile h2 .soft{color:var(--ink-3)}
+.pile .sub{margin:18px auto 0;max-width:600px;color:var(--ink-2);font-size:clamp(16px,1.4vw,19px)}
+.pile .b{opacity:0}
+.notes{position:absolute;inset:0;z-index:2;pointer-events:none}
+.note{position:absolute;left:50%;top:50%;width:300px;margin:-36px 0 0 -150px;display:grid;grid-template-columns:30px minmax(0,1fr);gap:1px 10px;padding:11px 14px 11px 12px;border-radius:16px;background:var(--card);border:1px solid var(--card-edge);box-shadow:0 18px 36px -16px rgba(18,18,17,.4);font-size:13px;line-height:1.3;opacity:0;will-change:transform,opacity}
+.note .ap{grid-row:1/4}
+.note .h{display:flex;justify-content:space-between;gap:8px;color:var(--ink-3);font-size:11.5px}
+.note b,.note p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note b{font-weight:600}
+.note p{color:var(--ink-2)}
+.ap{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#fff;font:700 15px/1 var(--sans);flex:none}
+.ap svg{width:17px;height:17px}
+.tcard{position:relative;z-index:3;margin-top:clamp(18px,3.5vh,36px);width:min(560px,100%);background:var(--card);border:1px solid var(--card-edge);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 20px 14px;text-align:left;opacity:0;transform-origin:50% 0}
+.tcard .hd{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
+.tcard .ttl{font-weight:600;font-size:17px;letter-spacing:-.01em}
+.tcard .where{color:var(--ink-3);font-size:13px}
+.tcard ol{list-style:none;position:relative}
+.tcard .tl{position:absolute;left:14px;top:18px;bottom:18px;width:2px;border-radius:2px;background:var(--c-context);transform-origin:top}
+.tcard li{position:relative;display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:12px;align-items:center;padding:5px 0;font-size:13.5px;line-height:1.3}
+.tcard li>span:nth-child(2){min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tcard li small{display:block;color:var(--ink-3);font-size:12px}
+.tcard .lk{font-size:11.5px;color:var(--c-context);font-weight:500}
+.tcard .nx{margin-top:8px;padding-top:10px;border-top:1px solid var(--line);font-size:13.5px;color:var(--ink-2)}
+.tcard .nx b{color:var(--ink);font-weight:600}
+@media (max-width:640px){.note{width:236px;margin-left:-118px;padding:9px 11px}.tcard li:nth-child(n+7){display:none}.tcard .lk{display:none}}
+.pile.still{height:auto}
+.pile.still .stick{position:relative;height:auto;min-height:0;padding:120px var(--gut)}
+.pile.still .notes,.pile.still .a{display:none}
+.pile.still .b,.pile.still .tcard,.pile.still li{opacity:1}
 
 /* word stack: one word per feature */
 .words{padding:clamp(80px,14vh,160px) var(--gut);display:flex;flex-direction:column;align-items:center;gap:clamp(4px,1vw,14px)}
@@ -215,7 +238,7 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
 .rv.in{opacity:1;transform:none}
 .rv.d1{transition-delay:.08s}.rv.d2{transition-delay:.16s}.rv.d3{transition-delay:.24s}
 
-/* the context card mock */
+/* the thread mock */
 .ccard{background:var(--card);border:1px solid var(--card-edge);border-radius:var(--r);box-shadow:var(--shadow);padding:clamp(20px,2.4vw,30px);font-size:15px;max-width:620px;margin-left:auto;transform:perspective(1400px) rotateX(calc((1 - var(--p,1)) * 14deg)) translateY(calc((1 - var(--p,1)) * 40px))}
 .ccard .hd{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
 .ccard .ttl{font-size:clamp(20px,2vw,24px);font-weight:600;letter-spacing:-.025em;line-height:1.2}
@@ -233,7 +256,7 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
 .ccard .links{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
 .tag{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:10px;border:1px solid var(--line);font-size:13px;color:var(--ink-2);white-space:nowrap}
 .tag b{color:var(--ink);font-weight:600}
-.tag .ok{width:7px;height:7px;border-radius:50%;background:var(--s-etched)}
+.tag .ok{width:7px;height:7px;border-radius:50%;background:var(--s-complete)}
 .states-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
 .states-row .state{transition:transform .3s}
 .states-row .state:hover{transform:translateY(-2px)}
@@ -386,9 +409,6 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
 
 @media (prefers-reduced-motion:reduce){
   .rv,.words a.rv{opacity:1;transform:none;transition:none}
-  .gather{height:auto}.gather .stick{position:relative;height:auto;padding:120px 0}
-  .piece,.gather .dot{display:none}
-  .gather .sub{position:static;transform:none;opacity:1;margin:28px auto 0}
   .pulse{animation:none}
 }
 </style>
@@ -412,6 +432,10 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
   <symbol id="g-hash" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M9.5 4 8 20M16 4l-1.5 16M4.5 9h15M4 15h15"/></g></symbol>
   <symbol id="g-branch" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><circle cx="6.5" cy="5.5" r="2.2"/><circle cx="6.5" cy="18.5" r="2.2"/><circle cx="17.5" cy="7.5" r="2.2"/><path d="M6.5 7.7v8.6M17.5 9.7c0 4-4.5 3.8-9.6 7"/></g></symbol>
   <symbol id="g-code" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M14 3.5H7.5A2 2 0 0 0 5.5 5.5v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8Z"/><path d="M14 3.5V8h4.5M10.5 12.5 9 14.5l1.5 2M13.5 12.5l1.5 2-1.5 2"/></g></symbol>
+  <symbol id="g-grid" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><rect x="4.5" y="4.5" width="15" height="15" rx="2"/><path d="M4.5 9.5h15M4.5 14.5h15M10 9.5v10"/></g></symbol>
+  <symbol id="g-mail" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="m4.5 7 7.5 6 7.5-6"/></g></symbol>
+  <symbol id="g-bell" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15Z"/><path d="M10 20.5h4"/></g></symbol>
+  <symbol id="g-cal" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><rect x="4" y="5.5" width="16" height="14" rx="2.5"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></g></symbol>
   <symbol id="g-doc" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M14 3.5H7.5A2 2 0 0 0 5.5 5.5v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8Z"/><path d="M14 3.5V8h4.5M9 13h6M9 16.5h4"/></g></symbol>
   <symbol id="i-card" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7.5 10h9M7.5 14h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6L13 3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
@@ -448,7 +472,7 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
       <p class="what">Pensieve for developers: a local MCP server that gives AI agents like Claude Code, Codex and Cursor the right context.</p>
     </div>
     <div class="side">
-      <p><b>Pensieve keeps every task, file and agent session in one place</b>, so you and your coding agents always pick up with the right context.</p>
+      <p><b>Pensieve keeps every thread, file and agent session in one place</b>, so you and your coding agents always pick up with the right context.</p>
       <div class="ctas">
         <a class="btn light" href="#get">Install for Mac</a>
         <a class="btn ghost" href="#context">See how</a>
@@ -458,19 +482,37 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
   </div>
 </section>
 
-<!-- STATEMENT: the pieces gather -->
-<section class="gather" data-scroll aria-label="All your context in one place">
+<!-- THE PROBLEM, THEN ONE THREAD: notifications from every tool pile up; the related ones join into one thread -->
+<section class="pile" aria-label="Your context is scattered. Pensieve links it into one thread.">
   <div class="stick">
-    <div class="piece" style="--x:-34;--y:-30;--r:-8"><span class="g" style="background:var(--c-agents)"><svg><use href="#g-pr"/></svg></span>#412 Retry declined cards <small>open</small></div>
-    <div class="piece" style="--x:30;--y:-34;--r:6"><span class="g" style="background:var(--c-context)"><svg><use href="#g-ticket"/></svg></span>PAY-142 <small>in progress</small></div>
-    <div class="piece" style="--x:-40;--y:4;--r:4"><span class="g" style="background:#2a2a27;box-shadow:inset 0 0 0 1px rgba(244,243,238,.18)"><svg><use href="#g-term"/></svg></span>Claude Code session <small>20 min ago</small></div>
-    <div class="piece" style="--x:38;--y:2;--r:-5"><span class="g" style="background:var(--c-share)"><svg><use href="#g-hash"/></svg></span>#payments thread <small>Slack</small></div>
-    <div class="piece" style="--x:-28;--y:32;--r:7"><span class="g" style="background:var(--c-owners)"><svg><use href="#g-branch"/></svg></span>fix-card-retries <small>2 ahead</small></div>
-    <div class="piece" style="--x:26;--y:30;--r:-7"><span class="g" style="background:#3776ab"><svg><use href="#g-code"/></svg></span>payments/retry.py <small>uncommitted</small></div>
-    <div class="piece" style="--x:4;--y:-40;--r:-3"><span class="g" style="background:#e5484d"><svg><use href="#g-doc"/></svg></span>Incident review.pdf</div>
-    <div class="piece" style="--x:-2;--y:40;--r:3"><span class="g" style="background:#2a2a27;box-shadow:inset 0 0 0 1px rgba(244,243,238,.18)"><svg><use href="#g-term"/></svg></span>Codex session <small>yesterday</small></div>
-    <h2>All your context.<br><span class="soft">One place.</span></h2>
-    <p class="sub">Sessions, branches, PRs, tickets, threads and files: scattered across a dozen tools. Pensieve gathers them on your Mac and keeps them current.</p>
+    <div class="say">
+      <div class="a">
+        <h2>So much context.<br><span class="soft">Scattered everywhere.</span></h2>
+        <p class="sub">Slack threads, Jira tickets, Notion docs, spreadsheets, PRs and agent sessions. Every tool adds more, and soon you can't tell where anything came from.</p>
+      </div>
+      <div class="b">
+        <h2>All your context.<br><span class="soft">One place.</span></h2>
+        <p class="sub">Pensieve links related information into a single thread.</p>
+      </div>
+    </div>
+    <div class="notes" aria-hidden="true"></div>
+    <article class="tcard" aria-label="Example thread">
+      <div class="hd">
+        <div><div class="ttl">Retry declined card payments</div><div class="where">acme-app · fix-card-retries</div></div>
+        <span class="state" style="--sc:var(--s-open)">Open</span>
+      </div>
+      <ol>
+        <i class="tl"></i>
+        <li><span class="ap" style="background:#4a154b"><svg><use href="#g-hash"/></svg></span><span><b>#payments</b> Renewals failing for EU cards again?<small>Slack · 3 replies</small></span><span class="lk">linked</span></li>
+        <li><span class="ap" style="background:#2684ff"><svg><use href="#g-ticket"/></svg></span><span><b>PAY-142</b> Retry soft declines<small>Jira · In progress</small></span><span class="lk">linked</span></li>
+        <li><span class="ap" style="background:#191919">N</span><span><b>Payments retry spec</b><small>Notion · edited Tuesday</small></span><span class="lk">linked</span></li>
+        <li><span class="ap" style="background:#0f9d58"><svg><use href="#g-grid"/></svg></span><span><b>Decline codes by issuer</b><small>Google Sheets</small></span><span class="lk">linked</span></li>
+        <li><span class="ap" style="background:#24292f"><svg><use href="#g-pr"/></svg></span><span><b>PR #412</b> Retry declined cards<small>GitHub · checks pass</small></span><span class="lk">linked</span></li>
+        <li><span class="ap" style="background:#d97757"><svg><use href="#g-term"/></svg></span><span><b>Add backoff to retry.py</b><small>Claude Code session · 20 min ago</small></span><span class="lk">linked</span></li>
+        <li><span class="ap" style="background:#ea4335"><svg><use href="#g-mail"/></svg></span><span><b>Soft decline rate up 12%</b><small>Gmail · from Stripe</small></span><span class="lk">linked</span></li>
+      </ol>
+      <div class="nx"><b>Next:</b> get a review on #412, then close PAY-142.</div>
+    </article>
   </div>
 </section>
 
@@ -487,25 +529,25 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
   <div class="wrap">
     <div class="grid2">
       <div>
-        <div class="num rv"><b>01</b>Context cards</div>
-        <h2 class="rv">One task.<br><em>One card.</em></h2>
-        <p class="lede rv d1">Pensieve joins your agent sessions, branch, PRs, tickets and messages into <b>one card per task</b>: the problem, the goal, where it stands, and what's next. Resume the last session in one click.</p>
+        <div class="num rv"><b>01</b>Threads</div>
+        <h2 class="rv">One task.<br><em>One thread.</em></h2>
+        <p class="lede rv d1">Pensieve joins your agent sessions, branch, PRs, tickets and messages into <b>one thread per goal</b>: the problem, the goal, where it stands, and what's left to close it. Resume the last session in one click.</p>
         <div class="states-row rv d2">
-          <span class="state" style="--sc:var(--s-conscious)">Conscious</span>
-          <span class="state" style="--sc:var(--s-sub)">Subconscious</span>
-          <span class="state" style="--sc:var(--s-latent)">Latent</span>
-          <span class="state" style="--sc:var(--s-etched)">Etched</span>
+          <span class="state" style="--sc:var(--s-todo)">To do</span>
+          <span class="state" style="--sc:var(--s-open)">Open</span>
+          <span class="state" style="--sc:var(--s-loose-ends)">Loose ends</span>
+          <span class="state" style="--sc:var(--s-complete)">Complete</span>
           <span class="state" style="--sc:var(--s-forgotten)">Forgotten</span>
         </div>
       </div>
       <div class="stage" data-scroll data-scroll-end=".55">
-        <article class="ccard" aria-label="Example context card">
+        <article class="ccard" aria-label="Example thread">
           <div class="hd">
             <div>
               <div class="ttl">Retry declined card payments</div>
               <div class="where">acme-app · fix-card-retries · 3 files changed</div>
             </div>
-            <span class="state" style="--sc:var(--s-conscious)">Conscious</span>
+            <span class="state" style="--sc:var(--s-open)">Open</span>
           </div>
           <dl class="core">
             <div><dt>Problem</dt><dd>Card payments aren't retried after a soft decline, so renewals fail.</dd></div>
@@ -525,9 +567,9 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
       </div>
     </div>
     <div class="points">
-      <div class="rv"><h3>Sorts itself</h3><p>Each card's state comes from its sessions, PRs and tickets. Quiet work drifts down, so you see what to revisit.</p></div>
+      <div class="rv"><h3>Sorts itself</h3><p>Each thread's state comes from its sessions, PRs and tickets. Quiet work becomes a loose end, so you see what to close.</p></div>
       <div class="rv d1"><h3>Reads your other tools</h3><p>Tickets and threads from Jira, Linear or Slack, through the MCP servers you already use. Read-only.</p></div>
-      <div class="rv d2"><h3>Remembers over time</h3><p>Each card belongs to a thread: one goal, followed across days. Start a new agent session from any card.</p></div>
+      <div class="rv d2"><h3>Remembers over time</h3><p>Each thread follows one goal across days, with a saved version at each change. Start a new agent session from any thread.</p></div>
     </div>
   </div>
 </section>
@@ -592,20 +634,20 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
       <div>
         <div class="num rv"><b>03</b>Share context</div>
         <h2 class="rv">Hand off the work, <em>not a wall of text.</em></h2>
-        <p class="lede rv d1">Share any card as <b>one open HTML file</b>: the whole context of a task, ready to pass on or keep a project on track. Your teammate reads the page; their agent reads the card inside it. Pensieve links what they can open, summarizes what they can't, and leaves out your paths and secrets.</p>
+        <p class="lede rv d1">Share any thread as <b>one open HTML file</b>: the whole context of a goal, ready to pass on or keep a project on track. Your teammate reads the page; their agent reads the thread inside it. Pensieve links what they can open, summarizes what they can't, and leaves out your paths and secrets.</p>
         <div class="recall rv d2">
-          <div class="bar"><span>With a shared card</span><span class="t"><i style="--w:85%"></i></span><b>85%</b></div>
-          <div class="bar muted"><span>With no card</span><span class="t"><i style="--w:11%"></i></span><b>11%</b></div>
+          <div class="bar"><span>With a shared thread</span><span class="t"><i style="--w:85%"></i></span><b>85%</b></div>
+          <div class="bar muted"><span>With no thread</span><span class="t"><i style="--w:11%"></i></span><b>11%</b></div>
           <p class="cap">Facts a teammate's agent recalled in a fresh clone, with no wrong claims.</p>
         </div>
       </div>
       <div class="stage rv d1">
-        <div class="window" aria-label="Example shared card page">
-          <div class="chrome"><i></i><i></i><i></i><div class="url">~/Downloads/retry-declined-card-payments.html</div></div>
+        <div class="window" aria-label="Example shared thread page">
+          <div class="chrome"><i></i><i></i><i></i><div class="url">~/Downloads/retry-declined-card-payments.thread.html</div></div>
           <div class="body">
             <div class="sc-hd">
               <div><div class="sc-ttl">Retry declined card payments</div><div class="sc-by">Shared from Pensieve · Oct 17</div></div>
-              <span class="state" style="--sc:var(--s-conscious)">Conscious</span>
+              <span class="state" style="--sc:var(--s-open)">Open</span>
             </div>
             <dl class="sc-core">
               <div><dt>Goal</dt><dd>Retry soft declines with backoff, so renewals go through.</dd></div>
@@ -623,9 +665,9 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
       </div>
     </div>
     <div class="points">
-      <div class="rv"><h3>Open by default</h3><p>No account and no server. A page anyone can open, with the card's JSON inside for any agent.</p></div>
+      <div class="rv"><h3>Open by default</h3><p>No account and no server. A page anyone can open, with the thread's JSON inside for any agent.</p></div>
       <div class="rv d1"><h3>You approve it</h3><p>Preview before you share: edit the summaries and untick anything that doesn't belong.</p></div>
-      <div class="rv d2"><h3>Agents can share too</h3><p>Your agent hands off with <code>share_card</code>; the next one picks up from the file.</p></div>
+      <div class="rv d2"><h3>Agents can share too</h3><p>Your agent hands off with <code>share_thread</code>. The next one picks up from the file.</p></div>
     </div>
   </div>
 </section>
@@ -664,7 +706,7 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
     <div class="tiles">
       <div class="tile rv"><div class="g"><kbd>⌃</kbd><kbd>⇧</kbd></div><h3>Search from anywhere</h3><p>Files, code and past agent sessions, by meaning or by exact words. Tap Control+Shift.</p></div>
       <div class="tile rv d1"><div class="g"><span class="pulse"></span></div><h3>Always current</h3><p>Edit a file and search it seconds later. Uncommitted changes and every worktree count.</p></div>
-      <div class="tile rv d2"><div class="g"><svg width="40" height="40" style="color:var(--ink)"><use href="#mark"/></svg></div><h3>Stays on your Mac</h3><p>A local model and a local index. No account, no cloud. AI notes are optional.</p></div>
+      <div class="tile rv d2"><div class="g"><svg width="40" height="40" style="color:var(--ink)"><use href="#mark"/></svg></div><h3>Stays on your Mac</h3><p>A local search model and a local index. No account, no cloud. Your own agent writes the notes.</p></div>
     </div>
   </div>
 </section>
@@ -697,7 +739,7 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
     <h2>Questions.</h2>
     <details><summary>What does Pensieve index?</summary><p>Your files and folders, your git repos with uncommitted changes and worktrees, and your agent sessions. With MCP connections, also information such as tickets from Jira or Linear and posts from Slack. You choose each source. Pensieve doesn't expose private messages.</p></details>
     <details><summary>Does anything leave my Mac?</summary><p>Your files, code and sessions don't. Indexing and search run on your Mac. Pensieve downloads its models and checks GitHub for updates. Pensieve is a tool that your own agent drives. If you use a cloud agent with Pensieve, what that agent reads goes to its provider.</p></details>
-    <details><summary>Do I need an AI model?</summary><p>No. Search, agent context, ownership and knowledge gaps all work without one. AI notes on cards are optional.</p></details>
+    <details><summary>Do I need an AI model?</summary><p>No. Pensieve has no text model of its own. Your agent writes the notes on threads, with its own model. Search, agent context, ownership and knowledge gaps work without it.</p></details>
     <details><summary>How do I get my agent to use it instead of grep?</summary><p><code>pensieve integrate recommended</code> adds Pensieve as an MCP server to each agent on your Mac, plus a short “search before you grep” block and skills. In the benchmark, the agent used Pensieve in 143 or more of 144 runs.</p></details>
     <details><summary>Does it work on Intel Macs or Linux?</summary><p>The app needs Apple Silicon. On Linux and Intel Macs, the same install command installs the backend and the browser app.</p></details>
     <details><summary>Is it free?</summary><p>Yes. Pensieve is free and open source under the MIT license. The code is on <a href="https://github.com/TedHaley/pensieve">GitHub</a>.</p></details>
@@ -781,17 +823,116 @@ document.addEventListener('click', e => {
     raf = 0;
     for (const e of els) {
       const r = e.getBoundingClientRect();
-      let p;
-      // the pieces start moving as the section enters the viewport and land as it fills it; the page never stops.
-      // They stay fully visible until 80% of the way, and are gone when the section's top reaches the top of the screen.
-      if (e.classList.contains('gather')) p = (innerHeight - r.top) / innerHeight;
-      else p = (innerHeight - r.top) / (innerHeight * (+e.dataset.scrollEnd || .7));
+      const p = (innerHeight - r.top) / (innerHeight * (+e.dataset.scrollEnd || .7));
       e.style.setProperty('--p', Math.min(1, Math.max(0, p)).toFixed(3));
     }
   };
   addEventListener('scroll', () => raf || (raf = requestAnimationFrame(tick)), {passive: true});
   addEventListener('resize', tick);
   tick();
+})();
+
+// the problem, then one thread. While the stage sticks, scroll progress p runs from 0 to 1:
+//   0 to .46   notifications from every tool fly in and pile up, later ones higher, until they cover the headline
+//   .48 to .68 the unrelated ones fall away; the related ones (rel) pull into one point and are gone
+//   .5 to .63  the headline changes to the answer
+//   .66 to .92 the thread comes out below the text; its rows link in one by one along the line
+(() => {
+  const sec = document.querySelector('.pile');
+  if (!sec) return;
+  if (reduce) return sec.classList.add('still');
+  const stick = sec.querySelector('.stick'), layer = sec.querySelector('.notes'), card = sec.querySelector('.tcard');
+  const A = sec.querySelector('.a'), B = sec.querySelector('.b'), line = card.querySelector('.tl'), rows = [...card.querySelectorAll('li')];
+  const APP = {  // name, badge color, glyph (an icon id, or a letter)
+    slack: ['Slack', '#4a154b', '#g-hash'], jira: ['Jira', '#2684ff', '#g-ticket'], notion: ['Notion', '#191919', 'N'],
+    sheets: ['Google Sheets', '#0f9d58', '#g-grid'], gh: ['GitHub', '#24292f', '#g-pr'], gmail: ['Gmail', '#ea4335', '#g-mail'],
+    cal: ['Calendar', '#4285f4', '#g-cal'], figma: ['Figma', '#a259ff', 'F'], linear: ['Linear', '#5e6ad2', 'L'],
+    dd: ['Datadog', '#632ca6', '#g-bell'], claude: ['Claude Code', '#d97757', '#g-term'], conf: ['Confluence', '#1868db', 'C'],
+    drive: ['Google Docs', '#4285f4', '#g-doc'], pd: ['PagerDuty', '#06ac38', '#g-bell'],
+  };
+  // [app, title, body, related to the thread, time]; the related ones are the thread's rows, in the same words
+  const N = [
+    ['slack', '#general', 'Who took the last oat milk?', 0, 'now'], ['jira', 'PLAT-77', 'Upgrade Node to 22', 0, '2m'],
+    ['slack', '#payments', 'Renewals failing for EU cards again?', 1, '4m'], ['cal', 'Sprint review', 'Today 15:00 · 8 guests', 0, '5m'],
+    ['notion', 'Q4 planning', 'Draft · 14 comments', 0, '6m'], ['gh', 'PR #398', 'Bump lodash from 4.17.20', 0, '7m'],
+    ['dd', 'p95 latency high', 'checkout-api · 1.2 s', 0, '8m'], ['jira', 'PAY-142', 'Retry soft declines · In progress', 1, '9m'],
+    ['gmail', 'Weekly digest', '27 updates in your workspace', 0, '10m'], ['figma', 'Checkout v3', 'Maya left 4 comments', 0, '11m'],
+    ['sheets', 'Hiring plan', 'Edited by Sam', 0, '12m'], ['notion', 'Payments retry spec', 'Edited Tuesday', 1, '13m'],
+    ['slack', 'DM · Priya', 'Can you look at this today?', 0, '14m'], ['linear', 'ENG-512', 'Flaky test in CI', 0, '15m'],
+    ['conf', 'Onboarding guide', 'Updated by Alex', 0, '16m'], ['sheets', 'Decline codes by issuer', '2 tabs · shared with you', 1, '17m'],
+    ['pd', 'Incident #88', 'Acknowledged', 0, '18m'], ['slack', '#eng', '@here deploy freeze at 17:00', 0, '19m'],
+    ['gh', 'PR #412', 'Retry declined cards · checks pass', 1, '20m'], ['drive', 'Offsite agenda', 'You were added', 0, '21m'],
+    ['jira', 'PAY-139', 'Refund webhook times out', 0, '22m'], ['claude', 'Session', 'Add backoff to retry.py', 1, '23m'],
+    ['gmail', 'Invoice #4471', 'Your invoice is ready', 0, '24m'], ['slack', '#random', '3 new messages', 0, '25m'],
+    ['cal', '1:1 with Jordan', 'Moved to Thursday', 0, '26m'], ['gmail', 'Stripe', 'Soft decline rate up 12%', 1, '27m'],
+    ['notion', 'Team rituals', 'You were mentioned', 0, '28m'], ['dd', 'Error rate', 'billing-worker · 4.1%', 0, '29m'],
+    ['linear', 'ENG-498', 'Move cron to queue', 0, '30m'], ['slack', '#payments', 'Is #412 ready for review?', 0, '31m'],
+    ['figma', 'Settings page', 'New version', 0, '32m'], ['jira', 'OPS-21', 'Rotate API keys', 0, '33m'],
+    ['gh', 'Issue #77', 'Docs: typo in README', 0, '34m'], ['sheets', 'Q4 budget', '5 new comments', 0, '35m'],
+  ];
+  const small = matchMedia('(max-width:640px)').matches;
+  const list = small ? N.filter((n, i) => n[3] || i % 2) : N;
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const items = list.map(([app, title, body, rel, ago], i) => {
+    const [name, color, glyph] = APP[app];
+    const el = document.createElement('div');
+    el.className = 'note';
+    el.style.zIndex = i;
+    el.innerHTML = `<span class="ap" style="background:${color}">${glyph[0] === '#' ? `<svg><use href="${glyph}"/></svg>` : glyph}</span>`
+      + `<span class="h"><span>${name}</span><span>${ago}</span></span><b>${esc(title)}</b><p>${esc(body)}</p>`;
+    layer.append(el);
+    const k = i / list.length;
+    return {el, rel, k, s: .02 + k * .42, from: rnd() * Math.PI * 2, x: rnd() - .5, y: rnd(), rot: (rnd() - .5) * 38, fall: rnd() - .5};
+  });
+  const clamp = t => Math.min(1, Math.max(0, t)), ease = t => 1 - (1 - t) ** 3;
+  const back = t => 1 + 2.4 * (t - 1) ** 3 + 1.4 * (t - 1) ** 2;  // lands with a small overshoot
+  let W, H, focus, raf = 0;
+  const measure = () => {
+    W = stick.offsetWidth; H = stick.offsetHeight;
+    focus = card.offsetTop + card.offsetHeight * .3 - H / 2;  // where the related ones join: the thread's top part
+  };
+  const frame = () => {
+    raf = 0;
+    const r = sec.getBoundingClientRect(), p = clamp(-r.top / (r.height - innerHeight));
+    const b = clamp((p - .48) / .2), spread = Math.min(W * .86, 1100);
+    for (const it of items) {
+      const a = clamp((p - it.s) / .07);
+      // the pile: early ones low, later ones higher, so it grows over the headline
+      const px = it.x * spread * (1 - .35 * it.k), py = H * (.32 - it.y * .2 - it.k * .42);
+      const fx = Math.cos(it.from) * Math.max(W, H) * .8, fy = Math.sin(it.from) * Math.max(W, H) * .8 - H * .25;
+      let x = fx + (px - fx) * back(a), y = fy + (py - fy) * back(a), rot = it.rot * (.4 + .6 * a), sc = 1, op = a > 0 ? 1 : 0;
+      if (b > 0) {
+        const e = ease(b);
+        if (it.rel) {
+          x += (0 - x) * e; y += (focus - y) * e; rot *= 1 - e; sc = 1 - .7 * e; op = 1 - clamp((b - .7) / .3);
+        } else {
+          x += it.fall * W * .6 * e; y += H * 1.1 * e * e; rot += it.fall * 90 * e; op = 1 - clamp(b * 1.4);
+        }
+      }
+      it.el.style.opacity = op;
+      it.el.style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px) rotate(${rot.toFixed(1)}deg) scale(${sc.toFixed(3)})`;
+    }
+    const out = clamp((p - .5) / .05), swap = clamp((p - .56) / .07);  // the problem goes before the answer comes
+    A.style.opacity = 1 - out;
+    A.style.transform = `translateY(${(-out * 24).toFixed(1)}px)`;
+    B.style.opacity = swap;
+    B.style.transform = `translateY(${((1 - swap) * 24).toFixed(1)}px)`;
+    const c = ease(clamp((p - .66) / .12));
+    card.style.opacity = c;
+    card.style.transform = `translateY(${((1 - c) * 70).toFixed(1)}px) scale(${(.92 + .08 * c).toFixed(3)})`;
+    line.style.transform = `scaleY(${clamp((p - .7) / .2).toFixed(3)})`;
+    rows.forEach((row, k) => {
+      const t = clamp((p - .71 - k * .025) / .05);
+      row.style.opacity = t;
+      row.style.transform = `translateX(${((1 - t) * -14).toFixed(1)}px)`;
+    });
+  };
+  measure();
+  addEventListener('resize', () => { measure(); frame(); });
+  addEventListener('scroll', () => raf || (raf = requestAnimationFrame(frame)), {passive: true});
+  frame();
 })();
 
 // reveal on scroll
