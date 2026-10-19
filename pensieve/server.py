@@ -1749,7 +1749,7 @@ def get_people(limit: int = 200, refresh: bool = False):
 
 @app.get("/api/people/org")
 def get_people_org():
-    """The People tab's Org view, all inferred: teams, each person's function, seniority and team with confidence and
+    """The People tab's Org view, all inferred: teams, each person's function, role and team with confidence and
     evidence, and manager -> report edges where there is evidence for them."""
     from pensieve import people
     people.rebuild(store, _repo_rows)

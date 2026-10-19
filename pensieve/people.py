@@ -1482,7 +1482,7 @@ def relations(pid: str) -> dict | None:
 
 
 def org_chart() -> dict:
-    """GET /api/people/org: inferred teams, each person's function, seniority and team with confidence and
+    """GET /api/people/org: inferred teams, each person's function, role and team with confidence and
     evidence, and inferred manager -> report edges. Each node has what the UI needs to draw it."""
     g = graph()
     if not g or not g.get("org"):

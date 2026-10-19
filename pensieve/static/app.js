@@ -3679,8 +3679,8 @@ async function loadOrg() {
   try { S.people.org = await api('/api/people/org'); } catch (e) { S.people.org = {error: e.message}; }
 }
 const ppPeople = n => n === 1 ? '1 person' : `${n.toLocaleString()} people`;
-const PP_LEVEL = {'IC': 0, 'senior IC': 1, 'lead': 2, 'manager': 3, 'director+': 4};
-const PP_LEVEL_NAME = {'IC': 'IC', 'senior IC': 'Senior IC', 'lead': 'Lead', 'manager': 'Manager', 'director+': 'Director+'};
+const PP_LEVEL = {'contributor': 0, 'domain expert': 1, 'lead': 2};
+const PP_LEVEL_NAME = {'contributor': 'Contributor', 'domain expert': 'Domain expert', 'lead': 'Lead'};
 function ppEvidenceLine(ev) {
   if (!ev || !ev.builds) return '';
   const bits = [plural(ev.prs || 0, 'pull request'), plural(ev.titles || 0, 'title'), ev.first_commits ? plural(ev.first_commits, 'first commit') : ''].filter(Boolean);
@@ -3695,7 +3695,7 @@ function ppOrgHtml() {
   const rank = id => ppl[id]?.me ? -1 : (ppl[id]?.rank ?? 1e9);
   const node = (id, cls = '') => {
     const p = ppl[id]; if (!p) return '';
-    const lv = p.level ? `<span class="pp-lvl l${PP_LEVEL[p.level] ?? 0}" title="Seniority, inferred (${Math.round(p.level_confidence * 100)}% confidence)">${esc(p.level)}</span>` : '';
+    const lv = p.level ? `<span class="pp-lvl l${PP_LEVEL[p.level] ?? 0}" title="Role, inferred from the depth and breadth of their work (${Math.round(p.level_confidence * 100)}% confidence)">${esc(PP_LEVEL_NAME[p.level] || p.level)}</span>` : '';
     return `<button class="pp-onode ${cls} ${p.me ? 'me' : ''} ${P.sel === id ? 'sel' : ''}" data-pp-onode="${esc(id)}" title="${esc(p.name)}${p.function ? ' · ' + esc(p.function) : ''}">${ppAv({...p, id}, cls === 'mgr' ? 40 : 32)}<span class="nm">${esc(p.me ? 'You' : ppShort(p.name))}</span>${lv}</button>`;
   };
   const why = (items, label = 'Why this group') => items?.length ? `<details class="pp-why"><summary>${esc(label)}</summary><ul>${items.map(e => `<li>${esc(e)}</li>`).join('')}</ul></details>` : '';
@@ -4056,9 +4056,9 @@ function ppCardHtml(p) {
   const lead = p.me ? 'This is you. Pensieve joins these identities into one person.'
     : kinds.length ? `<b>#${r.rank}</b> nearest to you. You share ${kinds.map(k => `${esc(k.label)} <span class="muted">(${k.n.toLocaleString()})</span>`).join(', ')}.`
     : r?.closeness ? `<b>#${r.rank}</b> near you, through the people you work with.` : 'Pensieve has not seen you work with them yet.';
-  // the header: their domain and their seniority, e.g. "Backend engineering · Senior IC (inferred)"
+  // the header: their domain and their role, e.g. "Backend engineering · Domain expert (inferred)"
   const lv = p.seniority?.level;
-  const fn = p.function || lv ? `<div class="pp-fn">${p.function ? `<span title="${p.function_inferred ? 'Domain, inferred from the kinds of files in their commits' : 'Their Slack title'}">${esc(p.function)}</span>` : ''}${p.function && lv ? ' · ' : ''}${lv ? `<span class="pp-sen" title="Seniority, inferred: ${Math.round((p.seniority.confidence || 0) * 100)}% confidence, from ${p.seniority.source === 'title' ? 'a Slack title' : 'work signals'}">${esc(PP_LEVEL_NAME[lv] || lv)} <i>(inferred)</i></span>` : ''}${p.function_inferred && p.function && !lv ? ' <i>(inferred)</i>' : ''}</div>` : '';
+  const fn = p.function || lv ? `<div class="pp-fn">${p.function ? `<span title="${p.function_inferred ? 'Domain, inferred from the kinds of files in their commits' : 'Their Slack title'}">${esc(p.function)}</span>` : ''}${p.function && lv ? ' · ' : ''}${lv ? `<span class="pp-sen" title="Role, inferred from the depth and breadth of their work: ${Math.round((p.seniority.confidence || 0) * 100)}% confidence">${esc(PP_LEVEL_NAME[lv] || lv)} <i>(inferred)</i></span>` : ''}${p.function_inferred && p.function && !lv ? ' <i>(inferred)</i>' : ''}</div>` : '';
   const rels = r ? [
     r.shared_areas?.length ? `<div class="h4">Areas you both work in</div><div class="chips">${r.shared_areas.map(a => `<span class="chip">${esc(a)}</span>`).join('')}</div>` : '',
     r.tasks?.length ? `<div class="h4">Your tasks they are part of</div><div class="list">${r.tasks.map(t => `<button class="item" data-pp-task="${esc(t.id || '')}"><div class="t"><span class="grow">${esc(t.t || 'Task')}</span>${when(t.ts)}</div></button>`).join('')}</div>` : '',
@@ -4074,7 +4074,7 @@ function ppCardHtml(p) {
   const pct = c => `<span class="muted">· ${Math.round((c || 0) * 100)}% confidence</span>`;
   const sen = p.seniority, team = p.team;
   const org = sen?.level || team || p.managers?.length || p.reports?.length ? `<div class="h4">Org <span class="muted">· inferred</span></div><div class="pp-orgrows">
-      ${sen?.level ? `<div class="pp-orgrow"><span class="k">Seniority (inferred)</span><span class="v">${esc(sen.level)} ${pct(sen.confidence)}</span></div>${why(sen.evidence)}` : ''}
+      ${sen?.level ? `<div class="pp-orgrow"><span class="k">Role (inferred)</span><span class="v">${esc(PP_LEVEL_NAME[sen.level] || sen.level)} <span class="muted">· depth ${sen.depth ?? 0}, breadth ${sen.breadth ?? 0}</span></span></div>${why(sen.evidence)}` : ''}
       ${team ? `<div class="pp-orgrow"><span class="k">Team (inferred)</span><span class="v"><button class="linkbtn" data-pp-orgteam="${esc(team.id)}" title="Show this team in the Org view">${esc(team.name)}</button> <span class="muted">· ${ppPeople(team.size)}</span> ${pct(team.confidence)}</span></div>${why(team.evidence)}` : ''}
       ${(p.managers || []).map(m => `<div class="pp-orgrow"><span class="k">Reports to ${m.set_by_user ? '(set by you)' : '(inferred)'}</span><span class="v"><button class="linkbtn" data-pp-open="${esc(m.id)}">${esc(m.name)}</button> ${m.set_by_user ? '' : pct(m.confidence)}</span></div>${m.set_by_user ? '' : why(m.evidence)}`).join('')}
       ${p.reports?.length ? `<div class="pp-orgrow"><span class="k">Manages (inferred)</span><span class="v">${p.reports.map(x => `<button class="chip" data-pp-open="${esc(x.id)}">${esc(x.name)}</button>`).join(' ')}</span></div>` : ''}
