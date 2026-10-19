@@ -3149,6 +3149,7 @@ async function route() {
   if (h === 'settings') return setView('settings');
   if (['context', 'currents', 'tasks', 'work'].includes(h)) return setView('work');
   if (h === 'people') return setView('people');
+  if (h === 'insights') return setView('insights');
   if (h === 'projects') return setView('work');  // the Projects tab is removed for now
   if (h === 'map' || h === 'mind') return setView(dataType());
   if (h === 'setup') return openSetup();
@@ -4883,8 +4884,7 @@ function renderInsights() {
   if (aiOn && S.insights?.key !== scopeKey()) loadInsights().then(() => S.view === 'insights' && renderInsights());
   const openAI = el.querySelector('#is-ai')?.open;
   el.innerHTML = `<div class="ins-wrap">
-    <div class="ins-head"><div><div class="muted" style="font-size:12px">Your work on this Mac · rolling 7-day windows · no AI needed</div>
-      <h1>Squeeze more value from every token</h1></div>
+    <div class="ins-head"><h1>Insights</h1>
       <button class="btn" id="is-refresh" title="Count again now">Refresh</button></div>
     <div class="is-filter" role="group" aria-label="Repos"><span class="muted">Repos</span>
       <button class="chip ${IST.repos.size ? '' : 'on'}" data-isrepo="" aria-pressed="${!IST.repos.size}">All</button>
@@ -5328,7 +5328,8 @@ const reloadFilesSoon = debounce(async () => {
 const pollStatus = debounce(async () => { try { Object.assign(S.status, await api('/api/status')); renderStatus(); renderSyncing(); } catch {} }, 300);
 
 async function init() {
-  if (location.hash.length <= 1) await setView('work');  // first, so the map never shows before it
+  // first, so the map never shows before it: Threads, or the page tab that the link names
+  await setView({people: 'people', insights: 'insights', settings: 'settings'}[location.hash.slice(1)] || 'work');
   try {
     await Promise.all([loadSessions(), loadInsights(), loadData(), api('/api/status').then(s => Object.assign(S.status, s))]);
   } catch (e) { $('#loadingtext').textContent = 'Could not reach the Pensieve server.'; return; }
