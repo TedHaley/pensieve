@@ -2936,137 +2936,169 @@ async function saveSettings() {
   if (S.view === 'settings') renderSettings();
 }
 
-// `far`: the "Further away" band is open. `sel`, `card`: the project in the panel.
-S.proj = {data: null, err: null, q: store.get('projQ', ''), sel: null, card: null, far: store.get('projFar', false), stale: true};
-const PJ_ROLE = {lead: 'You lead this', contributor: 'You work on this', occasional: 'You touched this', none: ''};
+// The Projects tab: groups of tickets with the branches and pull requests tied to them (project_model.py).
+// `open`: the ids of the expanded cards; `older`: the projects with no recent activity are shown; `all`: the cards
+// whose done tickets are all listed.
+S.proj = {data: null, err: null, q: store.get('projQ', ''), open: new Set(store.get('projOpen', [])), older: false, all: new Set(), stale: true};
+const PJ_STATE = {done: 'done', close: 'close to done', progress: 'in progress', todo: 'to do'};
+const PJ_PR = {merged: 'merged', review: 'in review', draft: 'draft', open: 'open', closed: 'closed'};
+const PJ_ROLE = {author: 'author', assignee: 'assignee', reviewer: 'reviewer', committer: 'committer', context: 'in your sessions'};
+const PJ_KIND = {parent: 'Epic', linear: 'Linear project', component: 'Component', milestone: 'Milestone', linked: 'Linked tickets', ticket: 'Ticket', pr: 'No ticket'};
+const PJ_DONE_SHOWN = 6;
 async function loadProjects(refresh = false) {
   try { S.proj.data = await api(`/api/projects${refresh ? '?refresh=true' : ''}`); S.proj.err = null; S.proj.stale = false; }
   catch (e) { S.proj.err = e.message; }
-  if (S.view !== 'projects') return;
-  renderProjects();
-  const ps = S.proj.data?.projects || [];
-  if (S.proj.sel && ps.some(p => p.id === S.proj.sel)) openProject(S.proj.sel, {quiet: true});
-  else if (!S.proj.sel && ps.length && innerWidth >= 860) openProject(ps[0].id, {quiet: true});
+  if (S.view === 'projects') renderProjects();
 }
 function pjMatch(p, q) {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const t = [p.name, p.description, p.keywords, ...p.areas, ...p.repos, ...p.prefixes, ...p.members.map(m => m.name)].join(' ').toLowerCase();
+  const t = [p.name, p.ref, ...p.members.map(m => m.name), ...p.tickets.map(x => `${x.key} ${x.title}`),
+    ...p.prs.map(x => `${x.title} ${x.repo} ${x.head}`)].join(' ').toLowerCase();
   return words.every(w => t.includes(w));
 }
-function pjWhy(p) {
+function pjStatusLine(p) {
+  const c = p.counts, bits = [];
+  if (c.tickets) bits.push(plural(c.tickets, 'ticket'));
+  if (c.review) bits.push(`${c.review} PR${c.review === 1 ? '' : 's'} in review`);
+  if (c.open) bits.push(`${c.open} PR${c.open === 1 ? '' : 's'} open`);
+  if (c.draft) bits.push(`${c.draft} draft${c.draft === 1 ? '' : 's'}`);
+  if (c.merged) bits.push(`${c.merged} merged`);
+  if (!bits.length && c.prs) bits.push(plural(c.prs, 'PR'));
+  return bits.join(' · ');
+}
+function pjProgress(p) {
+  const c = p.counts;
+  if (c.tickets) return {done: c.done / c.tickets, close: c.close / c.tickets, prog: c.progress / c.tickets,
+    label: `${c.done} of ${c.tickets} tickets done${c.close ? `, ${c.close} close to done` : ''}${c.progress ? `, ${c.progress} in progress` : ''}`};
+  const n = c.prs - c.closed;
+  return {done: n ? c.merged / n : 0, close: n ? c.review / n : 0, prog: n ? (c.open + c.draft) / n : 0, label: `${c.merged} of ${n} pull requests merged`};
+}
+function pjAvs(ms, n = 5) {
+  return `<span class="pj-avs">${ms.slice(0, n).map(m => ppAv(m, 22)).join('')}${ms.length > n ? `<span class="pj-more">+${ms.length - n}</span>` : ''}</span>`;
+}
+function pjRole(p) {
+  if (p.my_roles.length) return 'You: ' + p.my_roles.map(r => PJ_ROLE[r]).join(', ');
   const near = p.members.filter(m => !m.me && m.closeness >= 0.25).slice(0, 2).map(m => esc(ppShort(m.name)));
-  const role = PJ_ROLE[p.role];
-  return [role, near.length ? `with ${near.join(', ')}` : ''].filter(Boolean).join(' ') || (p.counts.people ? (p.counts.people === 1 ? '1 person works here' : `${p.counts.people.toLocaleString()} people work here`) : '');
+  return near.length ? `With ${near.join(', ')}` : '';
 }
 function pjCard(p) {
-  const c = p.counts, bits = [c.code && plural(c.code, 'file'), c.docs && plural(c.docs, 'document'), c.sessions && plural(c.sessions, 'session'),
-    c.prs && plural(c.prs, 'PR'), c.tickets && plural(c.tickets, 'ticket')].filter(Boolean).slice(0, 4).join(' · ');
-  const others = p.members.filter(m => !m.me).slice(0, 5);
-  return `<button class="pj-card ${S.proj.sel === p.id ? 'sel' : ''}" data-pj="${esc(p.id)}" style="--rel:${Math.max(0.04, p.relevance)}">
-    <div class="pj-top"><b class="pj-name">${esc(p.name)}</b><span class="pj-when">${p.last ? rel(p.last * 1000) : ''}</span></div>
-    <div class="pj-desc">${esc(p.description || p.areas.slice(0, 2).join(' · ') || p.keywords)}</div>
-    <div class="pj-foot"><span class="pj-avs">${others.map(m => ppAv(m, 22)).join('')}${c.people > others.length ? `<span class="pj-more">+${c.people - others.length}</span>` : ''}</span>
-      <span class="pj-why">${pjWhy(p)}</span></div>
-    <div class="pj-meta">${esc(bits)}${p.prefixes.length ? ` · ${p.prefixes.map(esc).join(', ')}` : ''}</div>
-    <i class="pj-bar"></i></button>`;
+  const open = S.proj.open.has(p.id), pr = pjProgress(p), id = esc(p.id);
+  const others = p.members.filter(m => !m.me);
+  return `<article class="pj-card${open ? ' open' : ''}${p.likely_done ? ' done' : ''}" data-pj="${id}">
+    <button class="pj-head" aria-expanded="${open}" aria-controls="pjb-${id}">
+      <span class="pj-top"><b class="pj-name">${esc(p.name)}</b>${p.likely_done ? '<span class="pj-badge">Likely done</span>' : ''}
+        <span class="pj-when">${p.last ? rel(p.last * 1000) : ''}</span><i class="pj-chev" aria-hidden="true"></i></span>
+      <span class="pj-status"><span class="pj-kind">${esc(PJ_KIND[p.kind] || '')}</span>${esc(pjStatusLine(p))}</span>
+      <span class="pj-prog" title="${esc(pr.label)}" role="img" aria-label="${esc(pr.label)}"><i class="d" style="width:${Math.round(pr.done * 100)}%"></i><i class="c" style="width:${Math.round(pr.close * 100)}%"></i><i class="p" style="width:${Math.round(pr.prog * 100)}%"></i></span>
+      <span class="pj-foot">${pjAvs(others)}<span class="pj-why">${pjRole(p)}</span></span>
+    </button>
+    <div class="pj-bodywrap" id="pjb-${id}"><div class="pj-bodyin">${open ? pjBody(p) : ''}</div></div>
+  </article>`;
+}
+function pjWho(m) {
+  return `<button class="pj-who" data-pj-person="${esc(m.id)}" title="${esc(`${m.me ? 'You' : m.name}: ${m.roles.map(r => PJ_ROLE[r]).join(', ')}`)}">${ppAv(m, 18)}<span>${esc(m.me ? 'You' : ppShort(m.name))}</span></button>`;
+}
+const PJ_ORDER = {close: 0, progress: 1, todo: 2, done: 3};
+function pjBody(p) {
+  const prs = new Map(p.prs.map(x => [x.url, x])), people = new Map(p.members.map(m => [m.id, m]));
+  const why = new Map(p.ties.map(t => [`${t.ticket} ${t.ref}`, t.why]));
+  const when = ts => ts ? `<span class="pj-when">${rel(ts * 1000)}</span>` : '';
+  const prChip = (x, key) => {
+    const w = key && why.get(`${key} ${x.url}`);
+    return `<a class="pj-pr" href="${esc(x.url)}" target="_blank" rel="noopener" title="${esc([x.title, w ? `Tied because ${w}` : ''].filter(Boolean).join('\n'))}">
+      <span class="pj-st pr-${x.state}">${PJ_PR[x.state]}${x.state === 'review' && x.review ? ` · ${esc(x.review)}` : ''}</span><span class="pj-num">${esc(x.repo)}#${x.number}</span>${x.head ? `<code>${esc(x.head)}</code>` : ''}</a>`;
+  };
+  let rows;
+  if (p.kind === 'pr') {
+    rows = [...p.prs].sort((a, b) => (a.state === 'merged' || a.state === 'closed') - (b.state === 'merged' || b.state === 'closed') || b.updated - a.updated)
+      .map(x => ({done: x.state === 'merged' || x.state === 'closed', html: `<li class="pj-t">
+        <div class="pj-tl"><span class="pj-st pr-${x.state}">${PJ_PR[x.state]}</span><a class="pj-tt" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>${when(x.updated)}</div>
+        <div class="pj-prs"><span class="pj-num">${esc(x.repo)}#${x.number}</span>${x.head ? `<code>${esc(x.head)}</code>` : ''}${x.state === 'review' && x.review ? `<span class="pj-num">${esc(x.review)}</span>` : ''}</div>
+        <div class="pj-ppl">${[x.author, ...x.reviewers].map(id => people.get(id)).filter(Boolean).map(pjWho).join('')}</div></li>`}));
+  } else {
+    rows = [...p.tickets].sort((a, b) => PJ_ORDER[a.state] - PJ_ORDER[b.state] || b.updated - a.updated).map(t => {
+      const tprs = t.prs.map(u => prs.get(u)).filter(Boolean);
+      const brs = t.branches.filter(b => !tprs.some(x => x.head && b.endsWith('@' + x.head)));
+      return {done: t.state === 'done', html: `<li class="pj-t">
+        <div class="pj-tl"><span class="pj-st t-${t.state}" title="${esc(`${PJ_STATE[t.state]}: ${t.why}`)}">${PJ_STATE[t.state]}</span>
+          ${t.url ? `<a class="pj-key" href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.key)}</a>` : `<span class="pj-key">${esc(t.key)}</span>`}
+          <span class="pj-tt">${esc(t.title === t.key ? '' : t.title)}</span>${when(t.updated)}</div>
+        ${tprs.length || brs.length ? `<div class="pj-prs">${tprs.map(x => prChip(x, t.key)).join('')}${brs.map(b => `<span class="pj-br" title="${esc(why.get(`${t.key} ${b}`) ? `Tied because ${why.get(`${t.key} ${b}`)}` : '')}">branch <code>${esc(b.split('@').slice(1).join('@'))}</code></span>`).join('')}</div>` : ''}
+        ${t.people.length ? `<div class="pj-ppl">${t.people.map(pjWho).join('')}</div>` : ''}</li>`};
+    });
+  }
+  const live = rows.filter(r => !r.done), done = rows.filter(r => r.done), all = S.proj.all.has(p.id);
+  const shown = all ? done : done.slice(0, Math.max(0, PJ_DONE_SHOWN - Math.min(live.length, PJ_DONE_SHOWN - 2)));
+  const team = p.members.map(m => `<button class="pj-mem" data-pj-person="${esc(m.id)}" title="Open their card in People">${ppAv(m, 26)}<span class="nm">${esc(m.me ? 'You' : m.name)}</span><small>${m.roles.map(r => PJ_ROLE[r]).join(', ')}</small></button>`).join('');
+  return `<div class="pj-body">
+    ${team ? `<div class="pj-h4">Who is on it</div><div class="pj-team">${team}</div>` : ''}
+    <div class="pj-h4">${p.kind === 'pr' ? 'Pull requests with no ticket' : 'Tickets'}</div>
+    <ul class="pj-ts">${live.map(r => r.html).join('')}${shown.map(r => r.html).join('')}</ul>
+    ${done.length > shown.length ? `<button class="wk-btn pj-moreb" data-pj-all="${esc(p.id)}">Show ${done.length - shown.length} more ${p.kind === 'pr' ? 'merged or closed' : 'done'}</button>` : ''}
+    ${p.url && p.kind !== 'ticket' ? `<a class="pj-src" href="${esc(p.url)}" target="_blank" rel="noopener">Open ${esc(p.kind === 'parent' ? p.ref : p.name)} ↗</a>` : ''}</div>`;
 }
 function renderProjects() {
   const el = $('#projects'); if (!el) return;
-  const P = S.proj, d = P.data, all = d?.projects || [];
-  const ps = P.q.trim() ? all.filter(p => pjMatch(p, P.q)) : all;
-  const near = ps.filter(p => p.near), far = ps.filter(p => !p.near);
+  const P = S.proj, d = P.data, all = d?.projects || [], q = P.q.trim();
+  const ps = q ? all.filter(p => pjMatch(p, q)) : all;
+  const vis = ps.filter(p => q || P.older || !p.stale), hidden = ps.length - vis.length;
+  const mine = vis.filter(p => p.section === 'mine'), around = vis.filter(p => p.section !== 'mine');
+  const group = (title, acc, list, note) => list.length ? `<div class="wk-group" style="--acc:${acc}">${title} <span>${list.length}</span></div>${note ? `<p class="pj-sub">${note}</p>` : ''}<div class="pj-col">${list.map(pjCard).join('')}</div>` : '';
+  const c = d?.counts || {};
   const list = !d ? (P.err ? `<div class="empty">Could not load projects: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
-    : !all.length ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Finding the projects around you…' : d.error ? 'Could not build the projects: ' + esc(d.error) : 'No projects yet. Pensieve finds them in the code, documents and sessions that changed in the last four months.'}</div>`
+    : !all.length ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Tying branches and pull requests to tickets…' : d.error ? 'Could not build the projects: ' + esc(d.error) : 'No projects yet. Pensieve builds them from the tickets your connections collect, and the branches and pull requests that name them.'}</div>`
     : !ps.length ? `<div class="empty">No project matches “${esc(P.q)}”.</div>`
-    : `${near.length ? `<div class="wk-group" style="--acc:var(--accent)">Near you <span>${near.length}</span></div><div class="pj-grid">${near.map(pjCard).join('')}</div>` : ''}
-       ${far.length ? `<details class="pj-far" ${P.far || !near.length || P.q.trim() ? 'open' : ''}><summary class="wk-group">Further away <span>${far.length}</span></summary><div class="pj-grid">${far.map(pjCard).join('')}</div></details>` : ''}
-       <div class="pj-note">${d.building ? 'Updating · ' : ''}From ${plural(d.items || 0, 'item')} changed in the last four months${d.built ? ' · ' + rel(d.built * 1000) : ''}</div>`;
+    : `${group('Your projects', 'var(--c-context)', mine, '')}
+       ${group('Around you', 'var(--c-agents)', around, mine.length ? 'Projects of the people you work with, nearest and newest first.' : '')}
+       ${!mine.length && !around.length ? `<div class="empty">Nothing changed in the last ${d.stale_days} days.</div>` : ''}
+       ${hidden || P.older ? `<button class="wk-btn pj-older" data-pj-older>${P.older ? 'Hide older projects' : `Show older (${hidden})`}</button>` : ''}
+       <div class="pj-note">${d.building ? 'Updating · ' : ''}${plural(c.tickets || 0, 'ticket')}, ${plural(c.prs || 0, 'pull request')} and ${plural(c.branches || 0, 'branch')}${d.built ? ' · built ' + rel(d.built * 1000) : ''}. A project is an epic or parent issue, or tickets that share links, pull requests or a title prefix.</div>`;
   el.innerHTML = `<div class="wk-head pp-head"><h2>Projects</h2>
       <div class="wk-ctl"><div class="pp-find"><input id="pjq" type="search" placeholder="Filter projects" aria-label="Filter projects" autocomplete="off" spellcheck="false" value="${esc(P.q)}"></div>
         <button class="wk-btn icon" data-pj-refresh title="Build again now" aria-label="Build again now"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
-    <div class="pp-body pj-body">
-      <div class="pj-list" id="pjlist">${list}</div>
-      <aside class="pp-card" id="pjcard">${P.card ? pjPanelHtml(P.card) : '<div class="empty">Click a project to see who works on it and what is in it.</div>'}</aside>
-    </div>`;
+    <div class="pj-list" id="pjlist">${list}</div>`;
   bindProjects(el);
-  bindProjectPanel();
+}
+function pjToggle(card) {
+  const P = S.proj, id = card.dataset.pj, p = P.data?.projects.find(x => x.id === id); if (!p) return;
+  const open = !P.open.has(id), inner = $('.pj-bodyin', card);
+  if (open) { P.open.add(id); inner.innerHTML = pjBody(p); } else P.open.delete(id);
+  store.set('projOpen', [...P.open].slice(-40));
+  $('.pj-head', card).setAttribute('aria-expanded', open);
+  requestAnimationFrame(() => card.classList.toggle('open', open));
 }
 function bindProjects(el) {
   const P = S.proj;
-  $('[data-pj-refresh]', el)?.addEventListener('click', () => { toast('Finding the projects again…'); loadProjects(true); });
   const q = $('#pjq', el);
   q.oninput = debounce(() => {
     P.q = q.value; store.set('projQ', P.q);
     const pos = q.selectionStart; renderProjects(); const n = $('#pjq'); n.focus(); n.setSelectionRange(pos, pos);
   }, 150);
-  $('.pj-far', el)?.addEventListener('toggle', e => { if (!P.q.trim()) { P.far = e.target.open; store.set('projFar', P.far); } });
-  $$('[data-pj]', el).forEach(b => b.onclick = () => openProject(b.dataset.pj));
+  el.onclick = async e => {
+    const t = e.target.closest('[data-pj-person],[data-pj-all],[data-pj-older],[data-pj-refresh],.pj-head');
+    if (!t || !el.contains(t)) return;
+    if (t.dataset.pjPerson) { S.people.sel = t.dataset.pjPerson; await setView('people'); return openPeopleCard(t.dataset.pjPerson); }
+    if (t.dataset.pjAll) {
+      P.all.add(t.dataset.pjAll);
+      const card = t.closest('.pj-card'), p = P.data.projects.find(x => x.id === t.dataset.pjAll);
+      if (card && p) $('.pj-bodyin', card).innerHTML = pjBody(p);
+      return;
+    }
+    if (t.hasAttribute('data-pj-older')) { P.older = !P.older; return renderProjects(); }
+    if (t.hasAttribute('data-pj-refresh')) { toast('Building the projects again…'); return loadProjects(true); }
+    pjToggle(t.closest('.pj-card'));
+  };
 }
-async function openProject(id, {quiet = false} = {}) {
-  const P = S.proj;
-  P.sel = id;
-  $$('#pjlist [data-pj]').forEach(b => b.classList.toggle('sel', b.dataset.pj === id));
-  let card;
-  try { card = await api('/api/projects/' + enc(id)); } catch { if (!quiet) toast('That project is no longer there. The list was built again.'); P.sel = null; return; }
-  if (P.sel !== id) return;  // another project was clicked while this one loaded
-  P.card = card;
-  if (S.view !== 'projects') return;
-  const box = $('#pjcard'); if (!box) return renderProjects();
-  box.innerHTML = pjPanelHtml(card); box.scrollTop = 0; bindProjectPanel();
-  if (!quiet && innerWidth < 860) box.scrollIntoView({behavior: 'smooth', block: 'start'});
-}
-function pjPanelHtml(p) {
-  const when = ts => ts ? `<span class="muted">${rel(ts * 1000)}</span>` : '';
-  const link = (u, t, extra = '', attrs = '') => u ? `<a class="item" href="${esc(u)}" target="_blank" rel="noopener"><div class="t"><span class="grow">${esc(t)}</span>${extra}</div></a>`
-    : `<button class="item" ${attrs}><div class="t"><span class="grow">${esc(t)}</span>${extra}</div></button>`;
-  const c = p.counts, role = PJ_ROLE[p.role];
-  const lead = `<b>#${p.rank}</b> ${p.near ? 'near you' : 'further away'}. ${role ? role + `: ${Math.round(p.me_share * 100)}% of the recent activity is yours.` : 'You have no recent work here.'}`;
-  const members = p.members.slice(0, 12);
-  return `<div class="meta"><span class="badge">Project</span>${p.repos.map(esc).join(' · ')}</div>
-    <h2 class="pj-h">${esc(p.name)}</h2>
-    ${p.description ? `<p class="pp-lead" style="margin-top:6px">${esc(p.description)}</p>` : ''}
-    <p class="pp-lead">${lead}</p>
-    <div class="kpis pp-kpis"><div class="kpi"><div class="l">Near you</div><div class="v">${Math.round(p.relevance * 100)}%</div></div>
-      <div class="kpi"><div class="l">People</div><div class="v">${c.people}</div></div>
-      <div class="kpi"><div class="l">Last active</div><div class="v sm">${p.last ? rel(p.last * 1000) : '–'}</div></div></div>
-    ${members.length ? `<div class="h4">Who works on it</div><div class="list">${members.map(m => `<button class="item pj-mem" data-pj-person="${esc(m.id)}" title="Open their card in People"><div class="t">${ppAv(m, 24)}<span class="grow">${esc(m.me ? 'You' : m.name)}</span><span class="muted">${Math.round(m.weight * 100)}%${m.last ? ' · ' + rel(m.last * 1000) : ''}</span></div><div class="hbar"><i style="width:${Math.max(2, Math.round(m.weight * 100))}%"></i></div></button>`).join('')}</div>` : ''}
-    ${p.tasks.length ? `<div class="h4">Your context cards</div><div class="list">${p.tasks.map(t => `<button class="item" data-pj-task="${esc(t.id)}"><div class="t"><span class="grow">${esc(t.title || 'Task')}</span>${when(t.ts)}</div>${t.keys.length || t.state ? `<div class="s">${esc([t.state, ...t.keys].filter(Boolean).join(' · '))}</div>` : ''}</button>`).join('')}</div>` : ''}
-    ${p.prs.length ? `<div class="h4">Pull requests</div><div class="list">${p.prs.map(x => link(x.url, x.title || x.url.replace(/^https:\/\/[^/]+\//, ''), `${x.state ? `<span class="pp-st ${esc(x.state.toLowerCase())}">${esc(x.state)}</span>` : ''}${when(x.ts)}`)).join('')}</div>` : ''}
-    ${p.tickets.length ? `<div class="h4">Tickets</div><div class="list">${p.tickets.map(x => link(x.url, [x.key, x.title].filter(Boolean).join(' '), `${x.status ? `<span class="pp-st">${esc(x.status)}</span>` : ''}${when(x.ts)}`, `data-pj-file="${esc(x.path || '')}"`)).join('')}</div>` : ''}
-    ${p.sessions.length ? `<div class="h4">Agent sessions</div><div class="list">${p.sessions.map(s => `<button class="item" data-pj-open="session:${esc(s.id)}"><div class="t"><span class="grow">${esc(s.title)}</span>${when(s.ts)}</div>${s.repo ? `<div class="s">${esc(s.repo)}</div>` : ''}</button>`).join('')}</div>` : ''}
-    ${p.files.length ? `<div class="h4">Recently changed</div><div class="list">${p.files.map(f => `<button class="item" data-pj-open="${esc(f.open)}"><div class="t"><span class="grow">${esc(f.title)}</span>${when(f.ts)}</div><div class="s">${esc(f.display.replace(/\/[^/]*$/, ''))}</div></button>`).join('')}</div>` : ''}
-    ${p.commits.length ? `<div class="h4">Recent commits</div><div class="list">${p.commits.slice(0, 6).map(x => `<div class="item"><div class="t"><span class="grow">${esc(x.subject)}</span>${when(x.ts)}</div><div class="s">${esc(x.author)} · ${esc(x.repo)}</div></div>`).join('')}</div>` : ''}
-    ${p.areas.length ? `<div class="h4">Where it lives</div><div class="chips">${p.areas.map(a => `<span class="chip">${esc(a)}</span>`).join('')}</div>` : ''}
-    ${p.keywords ? `<div class="h4">Distinctive words</div><div class="chips">${p.keywords.split(',').map(w => `<span class="chip">${esc(w.trim())}</span>`).join('')}</div>` : ''}
-    <div class="actions">${p.topic != null ? '<button class="btn" data-pj-map>Show its topic on the map</button>' : ''}</div>`;
-}
-function bindProjectPanel() {
-  const box = $('#pjcard'), p = S.proj.card; if (!box || !p) return;
-  $$('[data-pj-person]', box).forEach(b => b.onclick = async () => { S.people.sel = b.dataset.pjPerson; await setView('people'); openPeopleCard(b.dataset.pjPerson); });
-  $$('[data-pj-open]', box).forEach(b => b.onclick = () => openItem(b.dataset.pjOpen));
-  $$('[data-pj-file]', box).forEach(b => b.onclick = () => b.dataset.pjFile ? openFile(b.dataset.pjFile) : null);
-  $$('[data-pj-task]', box).forEach(b => b.onclick = async () => {
-    const id = b.dataset.pjTask;
-    await setView('work');
-    if (!S.work.data) await loadWork();
-    const t = S.work.data?.tasks.find(x => x.id === id);
-    if (!t) return toast('That card is not in the Context tab now.');
-    S.work.q = ''; S.work.hits = null; S.work.flash = {id, state: t.state, until: Date.now() + 6000}; renderWork();
-  });
-  $('[data-pj-map]', box)?.addEventListener('click', async () => {
-    await setView('data');
-    if (dataTopics().has(p.topic)) selectLabel('topic', p.topic); else toast('That topic is not on the map now.');
-  });
-}
-// Items that changed before the projects' window are in no project.
+// A topic's project: the project whose context cards hold most of the topic's agent sessions.
 async function openTopicAsProject(ids) {
   let r;
   try { r = await api('/api/projects/match', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids: [...ids].slice(0, 5000)})}); }
   catch (e) { return toast('Could not find its project: ' + e.message); }
   const best = r.projects[0];
-  if (!best) return toast('None of this topic changed recently, so it is in no project.');
-  S.proj.sel = best.id; S.proj.q = ''; store.set('projQ', '');
+  if (!best) return toast('No project holds the agent sessions of this topic.');
+  S.proj.open.add(best.id); S.proj.q = ''; S.proj.older = true; store.set('projQ', '');
   await setView('projects');
+  requestAnimationFrame(() => $(`#projects [data-pj="${CSS.escape(best.id)}"]`)?.scrollIntoView({block: 'center'}));
 }
 
 /* ============================== deep links (#open=, #view=, #settings) ============================== */
