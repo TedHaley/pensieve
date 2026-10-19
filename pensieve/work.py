@@ -606,6 +606,18 @@ def group(inp: Inputs) -> list[dict]:
                            project=s["project"], artifacts=_artifacts(s, facts[s["id"]]["links"])) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
+    # What the card's sessions read through MCP (Slack threads, tickets, pages): shown on the card, not joined to it,
+    # so that a session that read many items does not merge their cards. v2: the documents that document_sessions
+    # links to the card's sessions.
+    seen_by = _seen_by([s for t in out for s in (x["id"] for x in t["_sessions"])], until)
+    for t in out:
+        have = {i["path"] for i in t["items"]} | {k["path"] for k in t["tickets"] if k.get("path")}
+        keys = set(t["keys"])
+        cand = {i["path"]: i for s in t["_sessions"] for i in seen_by.get(s["id"], []) if i["path"] not in have}
+        ranked = [x for x in (_seen_row(i) for i in cand.values()) if x]
+        ranked.sort(key=lambda x: (not (keys and any(k in x[1]["text"] for k in keys)), -x[1]["updated"]))
+        t["seen"] = [row for row, _ in ranked[:10]]
+        t["seen_more"] = max(0, len(ranked) - 10)
     # A session that also worked on a card's branch, without being one of its sessions, is shared with the card: a
     # long session moves between branches, and joining it to every branch would merge their cards into one.
     for t in out:
@@ -1286,6 +1298,66 @@ def _events(ss, its, cs) -> list[dict]:
                         detail=_server_label(i["server"]), url=i["url"], ref=i["path"], private=i.get("private", False))
                    for c in chs]
     return sorted(ev, key=lambda e: -e["ts"])[:80]
+
+
+_seen_cache: dict[int, tuple[str, dict]] = {}  # doc id -> (hash, item with via): a card build reads each once
+
+
+def _seen_by(sids, until=None) -> dict[str, list[dict]]:
+    """session id -> the documents of switched-on sources that the session saw, as items with `via`."""
+    from pensieve import store as v2
+    from pensieve.store import documents
+    db, srcs, out, pairs = v2.store_db(), set(connections.indexed()), defaultdict(list), []
+    sids = list(dict.fromkeys(sids))
+    for i in range(0, len(sids), 500):
+        part = sids[i:i + 500]
+        pairs += db.query(f"SELECT ds.session_id, d.id, d.hash FROM document_sessions ds JOIN documents d ON "
+                          f"d.id = ds.doc_id WHERE ds.session_id IN ({','.join('?' * len(part))})", part)
+    need = [d for _, d, h in pairs if _seen_cache.get(d, ("",))[0] != h]
+    for i in range(0, len(need), 500):
+        docs = documents.get_many(db, need[i:i + 500])
+        for d, ppl in zip(docs, _assignees(db, [d.id for d in docs])):
+            try:
+                tool = json.loads(d.raw or "{}").get("_tool") or ""
+            except ValueError:
+                tool = ""
+            _seen_cache[d.id] = (d.hash, {**_item(d, ppl), "via": _via(tool, d.source_id)})
+    for sid, d, _ in pairs:
+        it = _seen_cache.get(d, (None, None))[1]
+        if it and it["server"] in srcs and (not until or it["updated"] <= until):
+            out[sid].append(it)
+    return out
+
+
+_TOOL_TITLE = re.compile(r"^[\w.-]+\.[\w-]+ \{")  # the title store() gives a result without one: "<server>.<tool> {args}"
+_LINE = re.compile(r"^(Title|URL):\s*(.+)$", re.M)
+
+
+def _seen_row(i: dict):
+    """A card's row for an item that its sessions read, with the item: its own title and link, else the "Title:" and
+    "URL:" lines of the content (as browser page reads give them). None when it has neither."""
+    title, url = i["title"], i["url"]
+    if _TOOL_TITLE.match(title):
+        found = dict(_LINE.findall(i["text"][:4000]))
+        title, url = found.get("Title", "").strip(), url or found.get("URL", "").strip()
+        if not title and not url:
+            return None
+    row = dict(title=title or url, url=url, via=i["via"], path=i["path"], updated=i["updated"], key=i["key"],
+               private=i["private"])
+    return row, i
+
+
+def _via(tool: str, server: str) -> str:
+    """The service an item came from (Slack, Jira…), from the MCP tool that read it, else from its source."""
+    from pensieve import connectors
+    pid = connectors.match(tool, server)
+    if pid:
+        return connectors.PROFILES[pid]["label"]
+    for word, label in (("jira", "Jira"), ("confluence", "Confluence"), ("chrome", "Web page"), ("browser", "Web page")):
+        if word in tool.lower():
+            return label
+    srv = tool.split(".", 1)[0] if "." in tool else ""  # tools of agent sessions are "<server>.<tool>"
+    return _server_label(srv or server)
 
 
 def _server_label(sid: str) -> str:

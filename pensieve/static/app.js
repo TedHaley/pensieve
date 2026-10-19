@@ -4354,6 +4354,12 @@ function wkSections(t) {
   const tickets = wkTickets(t).map(k => `<div class="wk-row">
       <a class="nm" href="${esc(k.url || '#')}" target="_blank" rel="noopener">${esc(k.key)}</a><span class="ttl" title="${esc(k.title || '')}">${esc(k.ref ? 'Named in its sessions' : k.title || '')}</span>
       ${k.ref ? wkSt('mentioned') : k.status ? wkSt(k.status, /done|closed|resolved/i.test(k.status) ? 'ok' : '') : wkSt('status unknown')}${k.assignee ? `<span class="who">${esc(k.assignee)}</span>` : ''}</div>`).join('');
+  // what the card's sessions read through MCP: Slack threads, tickets, pages; each links to the original
+  const seen = (t.seen || []).map(i => `<div class="wk-row">${wkSt(i.via || 'item')}
+      ${i.url ? `<a class="ttl" href="${esc(i.url)}" target="_blank" rel="noopener" title="${esc(i.title)}">${esc(i.title)}</a>`
+        : `<button class="ttl linkbtn subtle" data-wk-openfile="${esc(i.path)}" title="${esc(i.title)}">${esc(i.title)}</button>`}
+      <span class="when">${i.updated ? wkDate(i.updated) : ''}</span></div>`).join('')
+    + (t.seen_more ? `<div class="wk-row muted">and ${plural(t.seen_more, 'more item')} that its sessions read</div>` : '');
   const sess = t.events.filter(e => e.source === 'session'), other = t.events.filter(e => e.source !== 'session');
   const openS = S.work.open.has(t.id + ':s'), openA = S.work.open.has(t.id + ':a');
   const arts = new Map(t.sessions.map(s => [s.id, s.artifacts || []]));
@@ -4372,7 +4378,8 @@ function wkSections(t) {
   const activity = other.length ? `<button class="wk-more" data-wk-open="${esc(t.id)}:a">${openA ? 'Hide activity' : `All activity (${other.length})`}</button>
       ${openA ? `<ol class="wk-tl">${other.map(wkEvent).join('')}</ol>` : ''}` : '';
   return sec('Working in', places) + sec(t.prs.length > 1 ? 'Pull requests' : 'Pull request', prs) +
-    sec(wkTickets(t).length > 1 ? 'Tickets' : 'Ticket', tickets) + sec(sess.length > 1 ? 'Sessions' : 'Session', sessions) + activity;
+    sec(wkTickets(t).length > 1 ? 'Tickets' : 'Ticket', tickets) + sec('Messages and pages', seen) +
+    sec(sess.length > 1 ? 'Sessions' : 'Session', sessions) + activity;
 }
 async function loadWork(first = false) {
   try { S.work.data = await api(`/api/work?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
