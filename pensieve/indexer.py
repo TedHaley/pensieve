@@ -321,8 +321,9 @@ class Store:
         # than every commit (still crash-safe; a power cut can lose only the last few commits, which re-index)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
-        from pensieve.search import code_words, repo_token
-        self.db.create_function("code_words", 1, code_words, deterministic=True)  # used by the code keyword index
+        from pensieve.search import code_tokens, code_words, repo_token
+        self.db.create_function("code_tokens", 1, code_tokens, deterministic=True)  # used by the code word index
+        self.db.create_function("code_words", 1, code_words, deterministic=True)  # its triggers before words-v4
         self.db.create_function("repo_token", 1, repo_token, deterministic=True)
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS sessions(
