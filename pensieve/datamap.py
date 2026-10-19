@@ -1,7 +1,8 @@
-"""One map of everything: documents, code files and agent sessions laid out together by meaning.
+"""One map of everything: documents, code files, agent sessions and the items collected from connections, laid out
+together by meaning.
 
 Each point is a file-like item: a document, a file in a git repo (the main checkout; worktree versions sit with it
-in search, not on the map), or an agent session. Positions come from one joint UMAP over item centroids, kept in
+in search, not on the map), an agent session, or a collected item (a ticket, a page, a thread…). Positions come from one joint UMAP over item centroids, kept in
 `data_points` and refit when the set grows; new items are placed beside their nearest neighbours in between.
 
 Topics are KMeans clusters of the same centroids (kept in `data_points.cluster`). Each gets keyword names at once and,
@@ -17,7 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import settings, vectors
+from pensieve import config, settings, vectors
+from pensieve import store as v2
 from pensieve.indexer import LAYOUT_VERSION
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 
@@ -74,15 +76,37 @@ class DataMap:
             keys, C = vectors.centroids(groups, index)
             ids += keys
             parts.append(C)
+        keys, C = self._doc_vectors(on)
+        ids += keys
+        parts.append(C)
         if not ids:
             return [], np.zeros((0, self.store.index.dim), np.float32)
         return ids, np.concatenate(parts)
+
+    def _doc_vectors(self, on):
+        """The collected documents of connections (docindex.py): 'doc:<id>' -> the unit mean of its chunk vectors,
+        which doc_chunks keeps as float16. Only the documents of sources that are on the map."""
+        src = dict(v2.store_db().query("SELECT id, source_id FROM documents"))
+        sums, n = {}, Counter()
+        for doc_id, blob in self.db.execute("SELECT doc_id, vec FROM doc_chunks"):
+            if doc_id not in src or not on(f"connections/{src[doc_id]}"):
+                continue
+            v = np.frombuffer(blob, np.float16).astype(np.float32)
+            sums[doc_id] = sums[doc_id] + v if doc_id in sums else v
+            n[doc_id] += 1
+        if not sums:
+            return [], np.zeros((0, self.store.index.dim), np.float32)
+        keys = list(sums)
+        C = np.stack([sums[k] for k in keys])
+        C /= np.linalg.norm(C, axis=1, keepdims=True) + 1e-12  # the direction of the mean
+        return [f"doc:{k}" for k in keys], C
 
     def fingerprint(self):
         row = self.db.execute(
             "SELECT (SELECT COUNT(*) FROM file_chunks), (SELECT MAX(id) FROM file_chunks), "
             "(SELECT COUNT(*) FROM code_chunks WHERE wt=''), (SELECT MAX(id) FROM code_chunks), "
-            "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks)").fetchone()
+            "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks), "
+            "(SELECT COUNT(*) FROM doc_chunks), (SELECT MAX(id) FROM doc_chunks)").fetchone()
         return (*row, self.files.map_sig())
 
     def needs_layout(self):
@@ -186,6 +210,8 @@ class DataMap:
     def _text(self, p):
         home = str(Path.home())
         bits = [p.get("title") or "", (p.get("path") or "").replace(home, ""), p.get("repo") or "", p.get("summary") or ""]
+        if p.get("author_source") == "connection":  # its path is the same few folders for every item of a source
+            bits = [p.get("title") or ""]
         t = " ".join(bits)
         t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)  # camelCase -> camel Case
         return re.sub(r"[_\-./\\]+", " ", t).lower()
@@ -421,6 +447,18 @@ class DataMap:
                             display=(cwd or "").replace(home, "~", 1), repo=sc.get("project") if sc.get("root") else None,
                             repo_root=sc.get("root"), mtime=upd, chunks=n, summary=summary, author=AGENT.get(src, src),
                             author_source="agent", p=pos[k][:3], cluster=pos[k][3]))
+        # collected documents sit where v1 kept them as files (~/.pensieve/connections/<source>/), so the folder tree
+        # and the Connections source group find them
+        names = dict(v2.store_db().query("SELECT id, name FROM sources"))
+        for doc_id, src, kind, title, url, upd, seen in v2.store_db().query(
+                "SELECT id, source_id, kind, title, url, updated_at, seen_at FROM documents"):
+            k = f"doc:{doc_id}"
+            if k not in pos:
+                continue
+            leaf = title.replace("/", "∕")  # a slash in a title would make a folder in the tree
+            out.append(dict(id=k, type="doc", open=k, title=title, path=f"{config.DATA_DIR}/connections/{src}/{leaf}",
+                            display=f"{names.get(src, src)} · {kind}", ext="", kind=kind, url=url, mtime=upd or seen,
+                            author=names.get(src, src), author_source="connection", p=pos[k][:3], cluster=pos[k][3]))
         rev = hashlib.sha1(json.dumps(fp).encode()).hexdigest()[:12]  # names this list for index-based requests
         res = dict(points=out, repos=[dict(root=r, name=nm) for r, nm in repo_names.items()], home=home, rev=rev)
         self._cache = (fp, res)
