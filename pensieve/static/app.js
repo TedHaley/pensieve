@@ -4906,12 +4906,12 @@ function renderInsights() {
     ${valueCards(st)}
     ${statsKpis(st)}
     ${weekCard(st)}
+    ${peersCard(st)}
     <div class="grid2">
       <div class="card"><h3>Activity by repo</h3><p class="cap">Agent sessions per ${actBinLabel(ss)}, by the repo they ran in. Click a bar to filter the map to that period.</p><div class="legend-row" id="actleg"></div><svg id="actchart" class="chart" height="200"></svg></div>
       <div class="card"><h3>When you work</h3><p class="cap">Sessions started by weekday and hour (local time).</p><svg id="heat" class="chart" height="200"></svg></div>
     </div>
     ${tokenCard(st)}
-    ${peersCard(st)}
     <div class="ins-sec"><div><h2>Momentum and stalls</h2><p>Threads by their events per week (sessions, tickets, commits, merges).</p></div></div>
     ${momentumCard(st)}
     ${gapsCard()}
