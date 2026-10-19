@@ -138,7 +138,8 @@ def _items() -> list[dict]:
                             connections._render(raw.get("assignee")) if raw.get("assignee") else "",
                             updated=_ts(raw.get("_updated") or raw.get("updated") or raw.get("updated_at") or raw.get("_seen_at")
                                         or md.stat().st_mtime), text=text,
-                            private=private, owners=owners - {""}))
+                            private=private, owners=owners - {""}, seen_in=raw.get("_seen_in") or [],
+                            via=_via(tool, d.name)))
     return out
 
 
@@ -468,6 +469,20 @@ def _tasks(store, days, until: float | None = None):
         for t in out:
             t["places"] = []
     _own_prs(out)
+    # What the card's sessions read through MCP (Slack threads, tickets, pages): shown on the card, not joined to it,
+    # so that a session that read many items does not merge their cards.
+    seen_by = defaultdict(list)
+    for it in items:
+        for sid in it["seen_in"]:
+            seen_by[sid].append(it)
+    for t in out:
+        have = {i["path"] for i in t["items"]} | {k["path"] for k in t["tickets"] if k.get("path")}
+        keys = set(t["keys"])
+        cand = {i["path"]: i for s in t["_sessions"] for i in seen_by.get(s["id"], []) if i["path"] not in have}
+        ranked = [x for x in (_seen_row(i) for i in cand.values()) if x]
+        ranked.sort(key=lambda x: (not (keys and any(k in x[1]["text"] for k in keys)), -x[1]["updated"]))
+        t["seen"] = [row for row, _ in ranked[:10]]
+        t["seen_more"] = max(0, len(ranked) - 10)
     # A session that also worked on a card's branch, without being one of its sessions, is shared with the card: a
     # long session moves between branches, and joining it to every branch would merge their cards into one.
     for t in out:
@@ -1144,6 +1159,37 @@ def _events(ss, its, cs) -> list[dict]:
         except (OSError, ValueError, KeyError):
             pass
     return sorted(ev, key=lambda e: -e["ts"])[:80]
+
+
+_TOOL_TITLE = re.compile(r"^[\w.-]+\.[\w-]+ \{")  # the title store() gives a result without one: "<server>.<tool> {args}"
+_LINE = re.compile(r"^(Title|URL):\s*(.+)$", re.M)
+
+
+def _seen_row(i: dict):
+    """A card's row for an item that its sessions read, with the item: its own title and link, else the "Title:" and
+    "URL:" lines of the content (as browser page reads give them). None when it has neither."""
+    title, url = i["title"], i["url"]
+    if _TOOL_TITLE.match(title):
+        found = dict(_LINE.findall(i["text"][:4000]))
+        title, url = found.get("Title", "").strip(), url or found.get("URL", "").strip()
+        if not title and not url:
+            return None
+    row = dict(title=title or url, url=url, via=i["via"], path=i["path"], updated=i["updated"], key=i["key"],
+               private=i["private"])
+    return row, i
+
+
+def _via(tool: str, server: str) -> str:
+    """The service an item came from (Slack, Jira…), from the MCP tool that read it, else from its source."""
+    from pensieve import connectors
+    pid = connectors.match(tool, server)
+    if pid:
+        return connectors.PROFILES[pid]["label"]
+    for word, label in (("jira", "Jira"), ("confluence", "Confluence"), ("chrome", "Web page"), ("browser", "Web page")):
+        if word in tool.lower():
+            return label
+    srv = tool.split(".", 1)[0] if "." in tool else ""  # tools of agent sessions are "<server>.<tool>"
+    return _server_label(srv or server)
 
 
 def _server_label(sid: str) -> str:
