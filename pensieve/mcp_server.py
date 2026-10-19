@@ -11,7 +11,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from pensieve import actions, onboarding, scopes, settings, sources, usage
+from pensieve import actions, migrate, onboarding, scopes, settings, sources, usage
 
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
@@ -242,10 +242,11 @@ def _lines(results):
 def read(id: str, max_chars: int = 12000) -> dict:
     """Full text of a search result id: code with its owners and recent commits, a document, or a session. Several
     ids, separated by spaces, are read in one call ("code:12 code:40 session:…"), sharing max_chars."""
-    ids = [i for i in id.replace(",", " ").split() if i]
+    ids = [migrate.compat_id(i) for i in id.replace(",", " ").split() if i]  # old file ids of connection items too
     if len(ids) <= 1:
-        _check(id.strip())
-        return actions.read(id.strip(), max_chars)
+        id = ids[0] if ids else id.strip()
+        _check(id)
+        return actions.read(id, max_chars)
     each = max(2000, max_chars // len(ids))
     out = []
     for i in ids[:8]:
@@ -378,6 +379,7 @@ def similar(id: str, limit: int = 8) -> str:
 
 
 def _similar(id, limit):
+    id = migrate.compat_id(id)  # an old file id of a connection item: its doc:<id>
     _check(id)
     kind, _, ref = id.partition(":")
     sc, st, rp = _scope(), _c()["store"], _c()["repos"]

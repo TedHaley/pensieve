@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, connections, content, llm, mcp_server, onboarding, places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, task_states, usage, work
+from pensieve import actions, config, connections, content, llm, mcp_server, migrate, onboarding,places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, task_states, usage, work
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -141,12 +141,15 @@ async def watcher():
                 on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
             if n:
                 broadcast({"type": "updated", "sessions": n})
+            if not store.behind:  # every session is indexed
+                await _run(migrate.mark_indexed, "sessions")
             if d["full_files"] or time.time() - last_full > FULL_SWEEP_SECONDS:
                 last_full = time.time()
                 status.update(indexing=True, message="indexing files")
                 broadcast({"type": "status", **status})
                 if await _run(lambda: files.sync(force=True, on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "files"}))):
                     broadcast({"type": "files"})
+                await _run(migrate.mark_indexed, "files")
                 watch.configure(repos.checkouts())
             elif d["files"]:
                 changed, retry = await _run(files.sync_paths, d["files"])
@@ -207,6 +210,7 @@ async def repo_watcher():
                 if full:
                     last_full = time.time()
                     n = await _run(lambda: repos.sync(force=True))
+                    await _run(migrate.mark_indexed, "repos")
                 else:
                     n = await _run(lambda: repos.refresh(d_repos, wait=3600)) or 0
                     if repos.unsaved:  # this pass's edits, or ones a search indexed first
@@ -493,6 +497,8 @@ async def lifespan(app):
     files.requeue = watch.requeue_files
     if settings.get("ai") == "builtin":
         llm.start_download()
+    migrate.listeners.append(lambda: loop.call_soon_threadsafe(broadcast, {"type": "status", **status}))
+    migrate.start()  # v1 data here: import what v2 keeps, in the background; delete v1 after the first full index
     loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
     loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
@@ -559,7 +565,8 @@ def _status():
             "topics": db.execute("SELECT COUNT(*) FROM topics").fetchone()[0],
             "code_chunks": db.execute("SELECT COUNT(*) FROM code_chunks").fetchone()[0],
             "llm": settings.get("llm_model"), "llm_url": settings.get("llm_url"), "embed": config.EMBED_MODEL,
-            "ai": settings.get("ai"), "setup_done": settings.get("setup_done"), "syncing": _syncing()}
+            "ai": settings.get("ai"), "setup_done": settings.get("setup_done"), "syncing": _syncing(),
+            "migration": migrate.view()}
 
 
 @app.get("/api/usage")
@@ -576,7 +583,7 @@ def get_syncing():
 
 def _syncing() -> list[dict]:
     """What is being indexed right now, with progress where the total is known."""
-    out = []
+    out = [j for j in [migrate.job()] if j]
     for kind, src in (("sessions", store), ("files", files), ("repo", repos)):
         p = getattr(src, "progress", None)
         if p:
@@ -1948,6 +1955,7 @@ async def connections_worker():
                     await asyncio.to_thread(connections.collect, sid)
                     wake_files.set()
                     broadcast({"type": "repos"})
+                await asyncio.to_thread(migrate.mark_indexed, "documents")  # each connection that is due was collected
         except Exception:
             import traceback
             traceback.print_exc()

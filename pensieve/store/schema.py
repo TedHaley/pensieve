@@ -264,6 +264,21 @@ CREATE TABLE IF NOT EXISTS feedback (
   status  TEXT NOT NULL CHECK (status IN ('new', 'sent', 'dismissed'))
 ) STRICT;
 """,
+    "migration": """
+CREATE TABLE IF NOT EXISTS migration_steps (
+  step    TEXT PRIMARY KEY,
+  status  TEXT NOT NULL CHECK (status IN ('done', 'failed', 'skipped')),
+  count   INTEGER NOT NULL,
+  error   TEXT,
+  tries   INTEGER NOT NULL,
+  at      INTEGER NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS v1_doc_paths (
+  path       TEXT PRIMARY KEY,
+  source_id  TEXT NOT NULL,
+  key        TEXT NOT NULL
+) STRICT;
+""",
 }
 
 INDEX = {
