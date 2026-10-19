@@ -20,7 +20,7 @@ from pensieve.indexer import CODE_QUERY, LAYOUT_VERSION, embed, embed_images, yi
 from pensieve.layout import fit3d, place_new, unit
 from pensieve.projects import project_root
 
-CODE_INDEX_PATH = config.DATA_DIR / "code.tv"
+CODE_INDEX_PATH = config.VECTORS_DIR / "code.tv"
 commit_listeners = []  # fn(repo root) after a repo's commits or worktrees changed (the card builder)
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf", ".zip", ".gz", ".lock", ".woff", ".woff2",
             ".ttf", ".mp4", ".mov", ".parquet", ".pkl", ".csv", ".ipynb", ".map", ".snap"}
@@ -207,7 +207,7 @@ def locked(fn):
 
     @functools.wraps(fn)
     def wrap(self, *a, **k):
-        with self.lock:
+        with self.writing:
             return fn(self, *a, **k)
     return wrap
 
@@ -288,7 +288,7 @@ def worktree_list(root):
     return out
 
 
-SHADOW_DIR = config.DATA_DIR / "git"
+SHADOW_DIR = config.V2_DIR / "git"
 
 
 def shadow_dir(root) -> Path:
@@ -359,7 +359,7 @@ class Repos:
     def __init__(self, store):
         self.store = store
         self.db = store.db
-        self.lock = store.lock
+        self.writing = store.writing
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS repos(root TEXT PRIMARY KEY, name TEXT, remote TEXT, head TEXT, indexed REAL);
         CREATE TABLE IF NOT EXISTS code_files(repo TEXT, path TEXT, blob TEXT, PRIMARY KEY(repo, path));
@@ -404,6 +404,7 @@ class Repos:
         self.reused = 0  # chunks whose vector was copied from an identical chunk, not embedded (since start)
         self._last = 0
         self._layout_due = None  # repos whose code changed since the last reproject; None: all (the first one)
+        self._due_lock = threading.Lock()
         self._scope = (None, None)
         self._team = {}
 
@@ -490,11 +491,10 @@ class Repos:
     def session_scope(self):
         """sid -> {project, folder, dirs}: the canonical repo a session belongs to and the repo directories it
         touched (as 'repo/dir/sub' keys). Cached until sessions or touched files change."""
-        with self.lock:
-            fp = self.db.execute("SELECT (SELECT COUNT(*) FROM sessions), (SELECT MAX(mtime) FROM sessions), "
-                                 "(SELECT COUNT(*) FROM session_files)").fetchone()
-            file_rows = self.db.execute("SELECT session_id, path FROM session_files WHERE path!=''").fetchall()
-            sess_rows = self.db.execute("SELECT id, project, project_name FROM sessions").fetchall()
+        fp = self.db.execute("SELECT (SELECT COUNT(*) FROM sessions), (SELECT MAX(mtime) FROM sessions), "
+                             "(SELECT COUNT(*) FROM session_files)").fetchone()
+        file_rows = self.db.execute("SELECT session_id, path FROM session_files WHERE path!=''").fetchall()
+        sess_rows = self.db.execute("SELECT id, project, project_name FROM sessions").fetchall()
         if self._scope[0] == fp and time.time() - getattr(self, "_scope_t", 0) < 120:
             return self._scope[1]
         files = defaultdict(list)
@@ -549,8 +549,7 @@ class Repos:
             return None
         self._refreshing = True
         try:
-            with self.lock:
-                remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
+            remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
             n = 0
             for r in roots & remotes.keys():
                 if self.switched_off(r):
@@ -570,7 +569,7 @@ class Repos:
         `force` (a sync after many removes rewrites the whole file). The map catches up later (server.map_worker), so
         new code is searchable without waiting for a layout."""
         self.unsaved = False
-        with self.lock:
+        with self.writing:
             self.index.save(force)
 
     def _sync(self, log, force, only):
@@ -584,7 +583,7 @@ class Repos:
         self.found = found
         if only is None:  # repos gone from disk, or no longer found while discovery is on: remove them
             keep = {r for r, _ in found}
-            with self.lock:
+            with self.writing:
                 stale = [r for (r,) in self.db.execute("SELECT root FROM repos")
                          if r not in keep and (not Path(r).is_dir() or not self.switched_off(r))]
             for r in stale:
@@ -615,8 +614,7 @@ class Repos:
         return touched
 
     def _place_rows(self):
-        with self.lock:
-            return self.db.execute(places.ROWS).fetchall()
+        return self.db.execute(places.ROWS).fetchall()
 
     @staticmethod
     def switched_off(root):
@@ -662,8 +660,7 @@ class Repos:
                 if self.store.meta(f"tree:{current}") != sig:
                     n += self._index_checkout(current, "", state, None, log)
                     self.store.meta(f"tree:{current}", sig)
-            with self.lock:
-                remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
+            remotes = dict(self.db.execute("SELECT root, remote FROM repos").fetchall())
             for r in roots - {current}:
                 if r in remotes and not self.switched_off(r):
                     try:
@@ -676,16 +673,14 @@ class Repos:
 
     def checkouts(self):
         """Every checkout path we index -> canonical repo root (main checkouts and their linked worktrees)."""
-        with self.lock:
-            out = {r[0]: r[0] for r in self.db.execute("SELECT root FROM repos")}
-            out.update({r[0]: r[1] for r in self.db.execute("SELECT path, repo FROM worktrees")})
+        out = {r[0]: r[0] for r in self.db.execute("SELECT root FROM repos")}
+        out.update({r[0]: r[1] for r in self.db.execute("SELECT path, repo FROM worktrees")})
         return out
 
     def check_upstream(self, fetch=True) -> dict:
         """Fetch origin's default branch of every indexed repo (and once a day its protected branches), then record
         how far each local one is behind."""
-        with self.lock:
-            roots = [r[0] for r in self.db.execute("SELECT root FROM repos")]
+        roots = [r[0] for r in self.db.execute("SELECT root FROM repos")]
         out = {}
         for root in roots:
             if not Path(root).is_dir():
@@ -707,7 +702,7 @@ class Repos:
     def _sync_repo(self, root, remote, log):
         name = Path(root).name
         head = git(root, "rev-parse", "HEAD").strip()
-        with self.lock:
+        with self.writing:
             row = self.db.execute("SELECT head FROM repos WHERE root=?", (root,)).fetchone()
             if not row:
                 self.db.execute("INSERT OR REPLACE INTO repos VALUES(?,?,?,?,?)", (root, name, remote, None, time.time()))
@@ -732,7 +727,7 @@ class Repos:
             if self.store.meta(f"tree:{wt}") != sig:
                 n += self._index_checkout(root, wt, ws, state, log, branch)
                 self.store.meta(f"tree:{wt}", sig)
-        with self.lock:
+        with self.writing:
             gone = [r[0] for r in self.db.execute("SELECT path FROM worktrees WHERE repo=?", (root,)) if r[0] not in live]
             for wt in gone:  # worktree removed: its branch-only chunks go too
                 for (path,) in self.db.execute("SELECT path FROM checkout_files WHERE repo=? AND wt=?", (root, wt)).fetchall():
@@ -763,18 +758,16 @@ class Repos:
         """(path, text) -> the stored vector of each chunk of these files already in this repo's index, from the
         main checkout or any worktree."""
         paths = list(paths)
-        with self.lock:
-            return {(p, t): v for p, t, v in self.db.execute(
-                f"SELECT path, text, vec FROM code_chunks WHERE repo=? AND path IN ({','.join('?' * len(paths))})",
-                (root, *paths))}
+        return {(p, t): v for p, t, v in self.db.execute(
+            f"SELECT path, text, vec FROM code_chunks WHERE repo=? AND path IN ({','.join('?' * len(paths))})",
+            (root, *paths))}
 
     def estimate_chunks(self, root) -> dict:
         """What indexing the main checkout of `root` still has to do, from file sizes (only the start of a file not yet
         indexed is read, to leave out binary files):
         {files (tracked), indexed (files already indexed with their current content), chunks (still to embed)}."""
         state = tree_state(root)
-        with self.lock:
-            have = dict(self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=''", (root,)))
+        have = dict(self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=''", (root,)))
         secrets, chunks = settings.get("exclude_files"), 0
         for path, blob in state.items():
             p = Path(path)
@@ -800,8 +793,7 @@ class Repos:
         imgs = images_on()
         if not imgs:  # images indexed while the switch was on are dropped below, as changed files
             target = {p: b for p, b in target.items() if Path(p).suffix.lower() not in READ_IMAGE_EXT}
-        with self.lock:
-            have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
+        have = {r[0]: r[1] for r in self.db.execute("SELECT path, blob FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
         changed = [p for p in have if target.get(p) != have[p]]
         # an edited file keeps most of its chunks: their vectors, before the old version is dropped
         prior = self._known_vectors(root, changed) if changed and len(changed) <= 500 else {}
@@ -858,14 +850,14 @@ class Repos:
                     au = Counter(bl[i][0] if i in bl else f"{me[0]} <{me[1]}>" for i in range(s, e + 1))
                     ts = max((bl[i][1] if i in bl else now for i in range(s, e + 1)), default=0)
                     rows.append((root, path, d, s, e, text, vecs[k + j].astype(np.float16).tobytes(), json.dumps(au), ts, wt))
-                with self.lock:  # one file at a time, so a search waits for a few inserts at most
+                with self.writing:  # one file at a time, so a search waits for a few inserts at most
                     ids = [self.db.execute("INSERT INTO code_chunks(repo,path,dir,start,end,text,vec,authors,last_ts,wt) "
                                            "VALUES(?,?,?,?,?,?,?,?,?,?)", r).lastrowid for r in rows]
                     self.index.add_with_ids(vecs[k:k + len(ids)], np.array(ids, dtype=np.uint64))
                     self.db.execute("INSERT OR REPLACE INTO checkout_files VALUES(?,?,?,?)", (root, wt, path, blob))
                     self._changed(root)
                 k += len(ids)
-            with self.lock:
+            with self.writing:
                 self.db.commit()
             for _ in group:
                 n_new += 1
@@ -944,11 +936,12 @@ class Repos:
 
     def _changed(self, root):
         """The code of `root` changed: its map layout is due (reproject). Called with the lock held."""
-        if self._layout_due is not None:
-            self._layout_due.add(root)
+        with self._due_lock:
+            if self._layout_due is not None:
+                self._layout_due.add(root)
 
     def purge(self, root):
-        with self.lock:
+        with self.writing:
             self._changed(root)
             for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=?", (root,)).fetchall():
                 try:
@@ -964,7 +957,7 @@ class Repos:
         shutil.rmtree(shadow_dir(root), ignore_errors=True)
 
     def _drop_file(self, root, path, wt=""):
-        with self.lock:
+        with self.writing:
             self._changed(root)
             for (cid,) in self.db.execute("SELECT id FROM code_chunks WHERE repo=? AND path=? AND wt=?", (root, path, wt)).fetchall():
                 try:
@@ -977,7 +970,7 @@ class Repos:
     def _load_commits(self, root):
         out = git(root, "log", "--format=%H%x1f%at%x1f%ae%x1f%s", "-n", "5000")  # outside the lock: git is slow
         rows = [l.split("\x1f") for l in out.strip().split("\n") if l]
-        with self.lock:
+        with self.writing:
             self.db.executemany("INSERT OR REPLACE INTO commits VALUES(?,?,?,?,?)",
                                 [(root, r[0], int(r[1]), r[2], r[3]) for r in rows if len(r) == 4])
             self.db.commit()
@@ -1003,9 +996,9 @@ class Repos:
         """Per-repo UMAP plus one joint layout across repos. A layout is refit when new or grown >15%;
         otherwise new chunks are placed next to their nearest neighbours."""
         changed = False
-        with self.lock:
-            roots = [r[0] for r in self.db.execute("SELECT root FROM repos").fetchall()]
-            multi = self.db.execute("SELECT COUNT(DISTINCT repo) FROM code_chunks").fetchone()[0] > 1
+        roots = [r[0] for r in self.db.execute("SELECT root FROM repos").fetchall()]
+        multi = self.db.execute("SELECT COUNT(DISTINCT repo) FROM code_chunks").fetchone()[0] > 1
+        with self._due_lock:
             due, self._layout_due = self._layout_due, set()
         if not force and due is not None:  # a layout reads every row of its repo: only the repos that changed
             roots = [r for r in roots if r in due]
@@ -1017,7 +1010,7 @@ class Repos:
             if multi:
                 changed |= self._layout(ALL, "", (), ("gx", "gy", "gz"), force)
         except Exception:  # the next pass tries these repos again
-            with self.lock:
+            with self._due_lock:
                 self._layout_due = None if due is None else self._layout_due | due
             raise
         return changed
@@ -1036,7 +1029,7 @@ class Repos:
         placed next to their nearest main-checkout code instead (usually the same file on the main branch)."""
         cx, cy, cz = cols
         version = LAYOUT_VERSION + "+mainfit"
-        with self.lock:
+        with self.writing:
             rows = self.db.execute(f"SELECT id, NULL, {cx}, {cy}, {cz}, wt FROM code_chunks {where}", args).fetchall()
             fit_n = int(self.store.meta(f"code_fit_n:{key}") or 0)
             ok = self.store.meta(f"code_layout:{key}") == version
@@ -1056,7 +1049,7 @@ class Repos:
             P[main] = fit3d(X[main], n_neighbors=20, min_dist=0.08)
             P[~main] = place_new(X[main], P[main], X[~main], k=3, jitter=0.01) if (~main).any() else P[~main]
             todo = np.ones(len(rows), bool)
-            with self.lock:
+            with self.writing:
                 self.store.meta(f"code_fit_n:{key}", n_main)
                 self.store.meta(f"code_layout:{key}", version)
         elif not have.all():
@@ -1068,7 +1061,7 @@ class Repos:
                 P[todo] = place_new(X[have], P[have], X[todo])
         else:
             return False
-        with self.lock:
+        with self.writing:
             self.db.executemany(f"UPDATE code_chunks SET {cx}=?, {cy}=?, {cz}=? WHERE id=?",
                                 [(*map(float, P[i]), int(ids[i])) for i in np.flatnonzero(todo)])
             self.db.commit()
@@ -1077,7 +1070,7 @@ class Repos:
 
     # ---- queries -----------------------------------------------------------
     def list(self):
-        with self.lock:
+        with self.writing:
             return self._list()
 
     def _list(self):
@@ -1091,7 +1084,7 @@ class Repos:
     def _sel(self, name, cols, extra=""):
         """Rows for one repo, or for every repo when name == ALL. `cols` must start with path; under ALL the
         path comes back prefixed with the repo name ('my-app/docs/x.md') so trees and areas span repos."""
-        with self.lock:
+        with self.writing:
             if name == ALL:
                 names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
                 rows = self.db.execute(f"SELECT repo, {cols} FROM code_chunks WHERE 1=1 {extra}").fetchall()
@@ -1102,8 +1095,7 @@ class Repos:
     def _root(self, name):
         if name == ALL:
             return ALL
-        with self.lock:
-            r = self.db.execute("SELECT root FROM repos WHERE name=? OR root=?", (name, name)).fetchone()
+        r = self.db.execute("SELECT root FROM repos WHERE name=? OR root=?", (name, name)).fetchone()
         return r[0] if r else None
 
     @locked
@@ -1201,8 +1193,7 @@ class Repos:
         key = ("areas", root)
         if key in self._cache:
             return self._cache[key]
-        with self.lock:
-            rows = self.db.execute("SELECT path, id, authors, last_ts FROM code_chunks WHERE repo=?", (root,)).fetchall()
+        rows = self.db.execute("SELECT path, id, authors, last_ts FROM code_chunks WHERE repo=?", (root,)).fetchall()
         found, V = self.index.take([r[1] for r in rows])
         rows = [(r[0], v, r[2], r[3]) for r, v in zip([r for r, f in zip(rows, found) if f], V)]
         dirs = [r[0].rsplit("/", 1)[0] if "/" in r[0] else "." for r in rows]
@@ -1334,8 +1325,7 @@ class Repos:
         return owners, ppl
 
     def _rows_for_root(self, root, cols):
-        with self.lock:
-            return self.db.execute(f"SELECT {cols} FROM code_chunks WHERE repo=?", (root,)).fetchall()
+        return self.db.execute(f"SELECT {cols} FROM code_chunks WHERE repo=?", (root,)).fetchall()
 
     def knowledge_gaps(self, name, inactive_days=180, min_lines=150):
         """Areas whose knowledge left with their authors: most of the code (by git blame) was written by people who
@@ -1345,10 +1335,9 @@ class Repos:
         root = self._root(name)
         if not root or root == ALL:
             return None
-        with self.lock:
-            rows = self.db.execute("SELECT path, authors FROM code_chunks WHERE repo=? AND wt=''", (root,)).fetchall()
-            last_by_email = dict(self.db.execute("SELECT lower(author), MAX(ts) FROM commits WHERE repo=? GROUP BY lower(author)", (root,)).fetchall())
-            ref = self.db.execute("SELECT MAX(ts) FROM commits WHERE repo=?", (root,)).fetchone()[0] or 0
+        rows = self.db.execute("SELECT path, authors FROM code_chunks WHERE repo=? AND wt=''", (root,)).fetchall()
+        last_by_email = dict(self.db.execute("SELECT lower(author), MAX(ts) FROM commits WHERE repo=? GROUP BY lower(author)", (root,)).fetchall())
+        ref = self.db.execute("SELECT MAX(ts) FROM commits WHERE repo=?", (root,)).fetchone()[0] or 0
         cutoff = ref - inactive_days * 86400
 
         def who(a):  # "Name <email>" -> (name, email)
@@ -1439,7 +1428,7 @@ class Repos:
         if not paths:
             return None
         allowed = set(int(x) for x in allow) if allow is not None else None
-        with self.lock:
+        with self.writing:
             root = self._root(repo) if repo and repo != ALL else None
             rows = []
             for p in paths[:4]:
@@ -1486,7 +1475,7 @@ class Repos:
         qv = vec.reshape(1, -1).astype(np.float32)
         if allow is not None and not len(allow):
             return dict(chunks=[], experts=[], hit_ids=[])
-        with self.lock:  # DB rows are inserted before the index add; hold the lock so we only allow indexed ids
+        with self.writing:  # DB rows are inserted before the index add; hold the lock so we only allow indexed ids
             if repo and repo != ALL:
                 root = self._root(repo)
                 ids = [r[0] for r in self.db.execute("SELECT id FROM code_chunks WHERE repo=?", (root,))

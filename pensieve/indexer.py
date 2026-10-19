@@ -213,6 +213,9 @@ def embed(texts, query=False, titles=None, model=None) -> np.ndarray:
                 return np.asarray(m.encode(texts, **kw), dtype=np.float32)
         finally:
             queries_waiting.add(-1)
+    from pensieve import migrate
+    if migrate.started and not migrate.cache_ready.is_set():  # the first start of v2: v1's vectors fill the cache
+        migrate.cache_ready.wait(migrate.CACHE_WAIT)
     texts = model_texts(texts, query, titles, name, m)
     out = np.zeros((len(texts), config.EMBED_MODELS[name]["dim"] if name in config.EMBED_MODELS else config.EMBED_DIM),
                    np.float32)
@@ -324,42 +327,44 @@ def in_temp(path: str) -> bool:
     calls through the Claude Code CLI, scripts, tests), not the user's work."""
     return bool(path) and bool(_TEMP.match(path)) and settings.get("skip_temp_sessions")
 
-class _HeldLock:
-    """With PENSIEVE_LOCK_DEBUG=1: the v1 store lock, and the place of each hold longer than a second, printed. For
-    finding what makes the indexers wait for each other."""
+class WriteHold:
+    """`with store.writing:` runs the block with index.db's writer connection on this thread (Db.hold): the block's
+    statements commit together when it ends. Reads need no hold: they run on the thread's own connection and never
+    wait. Nested blocks on one thread are one hold. With PENSIEVE_LOCK_DEBUG=1, a hold longer than a second prints
+    where it was taken."""
 
-    def __init__(self):
-        self._lock, self._local = threading.RLock(), threading.local()
+    def __init__(self, db):
+        self.db, self._local = db, threading.local()
+        self.debug = bool(os.environ.get("PENSIEVE_LOCK_DEBUG"))
 
     def __enter__(self):
-        self.acquire()
+        import time
+        stack = getattr(self._local, "stack", None)
+        if stack is None:
+            stack = self._local.stack = []
+        cm = self.db.hold()
+        cm.__enter__()
+        if not stack:
+            self._local.at = time.monotonic()
+        stack.append(cm)
         return self
 
     def __exit__(self, *exc):
-        self.release()
-
-    def acquire(self, blocking=True, timeout=-1):
         import time
-        got = self._lock.acquire(blocking, timeout)
-        if got:
-            depth = getattr(self._local, "depth", 0)
-            if not depth:
-                self._local.at = time.monotonic()
-            self._local.depth = depth + 1
-        return got
-
-    def release(self):
-        import time
-        import traceback
-        self._local.depth -= 1
-        if not self._local.depth and (held := time.monotonic() - self._local.at) > 1:
-            print(f"store lock held {held:.1f} s by:\n" + "".join(traceback.format_stack(limit=8)[:-2]), flush=True)
-        self._lock.release()
+        cm = self._local.stack.pop()
+        if not self._local.stack and self.debug and (held := time.monotonic() - self._local.at) > 1:
+            import traceback
+            print(f"index.db writer held {held:.1f} s by:\n" + "".join(traceback.format_stack(limit=8)[:-2]),
+                  flush=True)
+        return cm.__exit__(*exc)
 
 
 class Store:
     def __init__(self):
-        self.lock = _HeldLock() if os.environ.get("PENSIEVE_LOCK_DEBUG") else threading.RLock()
+        from pensieve import store as v2
+        from pensieve.store.db import Conn
+        self.v2 = v2.index_db()  # the sessions, files and code tables are in v2's index.db (docs/design/storage.md)
+        self.writing = WriteHold(self.v2)
         self._indexed_at = {}
         self.behind = False  # the last sync_files ran out of time with sessions left to index
         self.deferred = False  # ... or left a growing transcript for ACTIVE_SECONDS
@@ -367,12 +372,7 @@ class Store:
         self.waiting: set[str] = set()  # transcripts that sync_paths left for ACTIVE_SECONDS
         self.progress = None  # sessions being indexed now: {name: agent, root, done, total=None}
         self._ignored = {}  # transcript path -> (mtime, size) of files that are not the user's sessions
-        self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
-        # write-ahead log: a commit appends instead of rewriting a journal, and NORMAL syncs at checkpoints rather
-        # than every commit (still crash-safe; a power cut can lose only the last few commits, which re-index)
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=NORMAL")
-        self._readers = threading.local()  # a read-only connection per thread: reads that need no lock (see read)
+        self.db = Conn(self.v2)
         from pensieve.search import code_words, repo_token
         self.db.create_function("code_words", 1, code_words, deterministic=True)  # used by the code keyword index
         self.db.create_function("repo_token", 1, repo_token, deterministic=True)
@@ -409,8 +409,7 @@ class Store:
         end = time.monotonic() + budget if budget else None
         self.behind = self.deferred = False
         touched = self._purge_disabled(log) + self._purge_own(log) + self._purge_memories(log)
-        with self.lock:
-            known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
+        known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM sessions")}
         for source, path in parsers.discover():
             if end and time.monotonic() > end:
                 self.behind = True
@@ -468,8 +467,7 @@ class Store:
             if not hit or "subagents" in path.parts or not path.is_file():
                 continue
             st = path.stat()
-            with self.lock:
-                row = self.db.execute("SELECT mtime, size FROM sessions WHERE path=?", (p,)).fetchone()
+            row = self.db.execute("SELECT mtime, size FROM sessions WHERE path=?", (p,)).fetchone()
             if row is not None and tuple(row) == (st.st_mtime, st.st_size):
                 continue
             if row is not None and time.time() - self._indexed_at.get(p, 0) < ACTIVE_SECONDS:
@@ -487,7 +485,7 @@ class Store:
         for sid, name, root, _ in config.session_sources():
             if settings.enabled(sid):
                 roots[name].append(str(root) + "/")
-        with self.lock:
+        with self.writing:
             off = [s for (s,) in self.db.execute("SELECT DISTINCT source FROM sessions") if not settings.enabled(f"agents/{s}")]
             n = 0
             for src in off:
@@ -502,7 +500,7 @@ class Store:
 
     def _purge_own(self, log):
         """Drop sessions that ran in temp folders (e.g. Pensieve's own AI calls through the Claude Code CLI)."""
-        with self.lock:
+        with self.writing:
             own = [sid for sid, proj in self.db.execute(
                 "SELECT id, project FROM sessions WHERE project LIKE '/tmp/%' OR project LIKE '/private/%' "
                 "OR project LIKE '/var/folders/%'") if in_temp(proj)]
@@ -514,16 +512,15 @@ class Store:
     def _purge_memories(self, log):
         """Drop memory files that were deleted. Transcripts stay after their file goes, but a deleted memory was
         usually wrong or out of date."""
-        with self.lock:
-            gone = [sid for sid, path in self.db.execute("SELECT id, path FROM sessions WHERE id LIKE 'claude:memory/%'")
-                    if not Path(path).exists()]
+        gone = [sid for sid, path in self.db.execute("SELECT id, path FROM sessions WHERE id LIKE 'claude:memory/%'")
+                if not Path(path).exists()]
         n = self._delete_sessions(gone)
         if n:
             log(f"removed {n} deleted memory files")
         return n
 
     def _delete_sessions(self, sids):
-        with self.lock:
+        with self.writing:
             for i in range(0, len(sids), 500):
                 part = sids[i:i + 500]
                 q = ",".join("?" * len(part))
@@ -540,7 +537,7 @@ class Store:
         return len(sids)
 
     def save_session_files(self, sid, touched: dict):
-        with self.lock:
+        with self.writing:
             self.db.execute("DELETE FROM session_files WHERE session_id=?", (sid,))
             rows = [(sid, p, int(e)) for p, e in touched.items()] or [(sid, "", 0)]
             self.db.executemany("INSERT OR REPLACE INTO session_files VALUES(?,?,?)", rows)
@@ -564,14 +561,13 @@ class Store:
             connections.from_session(s.id, s.mcp[mcp_done:], s.updated or s.started)
         chunks = chunk_session(s.turns)
         hashes = [hashlib.sha1(c.encode()).hexdigest() for c in chunks]
-        with self.lock:
-            old = {(r[1], r[2]): r[0] for r in self.db.execute(
-                "SELECT id, idx, hash FROM chunks WHERE session_id=?", (s.id,))}
-            keep = {(i, h) for i, h in enumerate(hashes)}
-            stale = [cid for k, cid in old.items() if k not in keep]
-            new = [i for i, h in enumerate(hashes) if (i, h) not in old]
+        old = {(r[1], r[2]): r[0] for r in self.db.execute(
+            "SELECT id, idx, hash FROM chunks WHERE session_id=?", (s.id,))}
+        keep = {(i, h) for i, h in enumerate(hashes)}
+        stale = [cid for k, cid in old.items() if k not in keep]
+        new = [i for i, h in enumerate(hashes) if (i, h) not in old]
         vecs = embed([chunks[i] for i in new]) if new else np.zeros((0, config.EMBED_DIM), np.float32)
-        with self.lock:
+        with self.writing:
             for cid in stale:
                 self.index.remove(cid)
                 self.db.execute("DELETE FROM chunks WHERE id=?", (cid,))
@@ -599,36 +595,31 @@ class Store:
 
     def save(self, force=False):
         """Write the session vector index to its file: at most every vectors.SAVE_SECONDS, unless `force`."""
-        with self.lock:
+        with self.writing:
             return self.index.save(force)
 
     # ---- projection + topics -------------------------------------------
     def read(self):
-        """This thread's read-only connection. In WAL mode a reader sees the last commit and never waits for a writer,
-        so a read through it does not take `self.lock` (which indexing can hold for seconds)."""
-        c = getattr(self._readers, "db", None)
-        if c is None:
-            c = self._readers.db = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True, check_same_thread=False)
-        return c
+        """This thread's read connection: in WAL mode it sees the last commit and never waits for the writer."""
+        return self.v2.conn
 
     def meta(self, key, value=None):
         if value is None:
             r = self.read().execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
             return r[0] if r else None
-        with self.lock:
+        with self.writing:
             # Commit at once: some callers never commit after it. A caller that wrote rows before this marker
             # commits them here too, which is safe because the marker comes after the rows it describes.
             self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(value)))
             self.db.commit()
 
     def needs_layout(self):
-        with self.lock:
-            return bool(self.db.execute("SELECT 1 FROM chunks WHERE x IS NULL LIMIT 1").fetchone())
+        return bool(self.db.execute("SELECT 1 FROM chunks WHERE x IS NULL LIMIT 1").fetchone())
 
     def reproject(self, force=False):
         """UMAP refit and new topics when the corpus grew or shrank meaningfully (or on first run); otherwise place
         new points by neighbours. Shrinking counts too: after a big removal the old topics describe what's gone."""
-        with self.lock:
+        with self.writing:
             rows = self.db.execute("SELECT id, session_id, x, y, z FROM chunks").fetchall()
             fit_n = int(self.meta("session_fit_n") or 0)
             version_ok = self.meta("layout") == LAYOUT_VERSION
@@ -648,7 +639,7 @@ class Store:
             P = fit3d(X, n_neighbors=15, min_dist=0.1)
             SP = fit3d(C, n_neighbors=10, min_dist=0.35)
             lab = cluster(C)
-            with self.lock:
+            with self.writing:
                 self.db.executemany("UPDATE chunks SET x=?, y=?, z=? WHERE id=?",
                                     [(*map(float, p), int(i)) for p, i in zip(P, cid)])
                 self.db.executemany("UPDATE sessions SET x=?, y=?, z=?, cluster=? WHERE id=?",
@@ -661,10 +652,10 @@ class Store:
         if not have.all():
             P_old = np.array([[r[3], r[4], r[5]] for r in rows if r[3] is not None], dtype=np.float32)
             P_new = place_new(X[have], P_old, X[~have])
-            with self.lock:
+            with self.writing:
                 self.db.executemany("UPDATE chunks SET x=?, y=?, z=? WHERE id=?",
                                     [(*map(float, p), int(i)) for p, i in zip(P_new, cid[~have])])
-        with self.lock:
+        with self.writing:
             placed = {r[0]: (r[1], r[2], r[3], r[4]) for r in self.db.execute(
                 "SELECT id, x, y, z, cluster FROM sessions WHERE x IS NOT NULL")}
             missing = [i for i, s in enumerate(sessions) if s not in placed]
@@ -707,7 +698,7 @@ class Store:
         by = defaultdict(list)
         for s, c in zip(sub, lab):
             by[int(c)].append(s)
-        with self.lock:
+        with self.writing:
             kw = self._keywords(by)
             out = []
             for c in sorted(by):
@@ -739,27 +730,25 @@ class Store:
 
     # ---- queries -----------------------------------------------------------
     def topics(self):
-        with self.lock:
-            rows = self.db.execute("SELECT id, name, description, keywords, members FROM topics ORDER BY id").fetchall()
+        rows = self.db.execute("SELECT id, name, description, keywords, members FROM topics ORDER BY id").fetchall()
         return [dict(id=r[0], name=r[1] or (r[3] or "").split(",")[0].strip().title() or f"Topic {r[0] + 1}",
                      named=bool(r[1]), description=r[2] or "", keywords=r[3] or "", sessions=json.loads(r[4] or "[]"))
                 for r in rows]
 
     def points(self, level="session"):
-        with self.lock:
-            if level == "chunk":
-                rows = self.db.execute(
-                    "SELECT c.id, c.session_id, s.title, s.source, s.cluster, c.x, c.y, c.z, s.project_name, c.summary, "
-                    "s.started, c.idx FROM chunks c JOIN sessions s ON s.id=c.session_id WHERE c.x IS NOT NULL").fetchall()
-                return {"level": level, "points": [
-                    dict(id=r[0], session=r[1], title=r[2], source=r[3], cluster=r[4], p=r[5:8], project=r[8],
-                         summary=r[9], started=r[10], idx=r[11]) for r in rows]}
+        if level == "chunk":
             rows = self.db.execute(
-                "SELECT id, title, source, project_name, cluster, started, updated, n_chunks, x, y, z, summary, tags "
-                "FROM sessions WHERE x IS NOT NULL AND n_chunks>0").fetchall()
+                "SELECT c.id, c.session_id, s.title, s.source, s.cluster, c.x, c.y, c.z, s.project_name, c.summary, "
+                "s.started, c.idx FROM chunks c JOIN sessions s ON s.id=c.session_id WHERE c.x IS NOT NULL").fetchall()
             return {"level": level, "points": [
-                dict(id=r[0], session=r[0], title=r[1], source=r[2], project=r[3], cluster=r[4], started=r[5],
-                     updated=r[6], n=r[7], p=r[8:11], summary=r[11], tags=r[12]) for r in rows]}
+                dict(id=r[0], session=r[1], title=r[2], source=r[3], cluster=r[4], p=r[5:8], project=r[8],
+                     summary=r[9], started=r[10], idx=r[11]) for r in rows]}
+        rows = self.db.execute(
+            "SELECT id, title, source, project_name, cluster, started, updated, n_chunks, x, y, z, summary, tags "
+            "FROM sessions WHERE x IS NOT NULL AND n_chunks>0").fetchall()
+        return {"level": level, "points": [
+            dict(id=r[0], session=r[0], title=r[1], source=r[2], project=r[3], cluster=r[4], started=r[5],
+                 updated=r[6], n=r[7], p=r[8:11], summary=r[11], tags=r[12]) for r in rows]}
 
     def _allow(self, session_id=None, projects=None, sources=None, since=None, until=None, session_ids=None):
         if not (session_id or projects or sources or since or until or session_ids is not None):
@@ -781,7 +770,7 @@ class Store:
 
     def search(self, query, k=8, session_id=None, projects=None, sources=None, since=None, until=None, session_ids=None):
         q = embed([query], query=True)
-        with self.lock:
+        with self.writing:
             allow = self._allow(session_id, projects, sources, since, until, session_ids)
             if allow is not None and not len(allow):
                 return []
@@ -799,8 +788,7 @@ class Store:
             return out
 
     def centroids(self):
-        with self.lock:
-            rows = self.db.execute("SELECT id, session_id FROM chunks").fetchall()
+        rows = self.db.execute("SELECT id, session_id FROM chunks").fetchall()
         by = {}
         for cid, s in rows:
             by.setdefault(s, []).append(cid)
@@ -813,17 +801,15 @@ class Store:
         sims = C @ C[ids.index(sid)]
         out = []
         for j in np.argsort(-sims)[1:k + 1]:
-            with self.lock:
-                r = self.db.execute("SELECT title, project_name, source, started, summary FROM sessions WHERE id=?",
-                                    (ids[j],)).fetchone()
+            r = self.db.execute("SELECT title, project_name, source, started, summary FROM sessions WHERE id=?",
+                                (ids[j],)).fetchone()
             if r:
                 out.append(dict(id=ids[j], title=r[0], project=r[1], source=r[2], started=r[3], summary=r[4], score=float(sims[j])))
         return out
 
     def session(self, sid):
-        with self.lock:
-            r = self.db.execute("SELECT id,source,project_name,title,path,started,updated,summary,tags,cluster,project "
-                                "FROM sessions WHERE id=?", (sid,)).fetchone()
+        r = self.db.execute("SELECT id,source,project_name,title,path,started,updated,summary,tags,cluster,project "
+                            "FROM sessions WHERE id=?", (sid,)).fetchone()
         if not r:
             return None
         s = parsers.parse(r[1], Path(r[4]))

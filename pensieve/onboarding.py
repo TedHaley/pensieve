@@ -175,9 +175,8 @@ def _repos(s, on):
 
 def _indexed_sessions(root) -> int:
     store = actions.ctx["store"]
-    with store.lock:
-        return store.db.execute("SELECT COUNT(*) FROM sessions WHERE n_chunks>0 AND path LIKE ?",
-                                (str(root) + "/%",)).fetchone()[0]
+    return store.db.execute("SELECT COUNT(*) FROM sessions WHERE n_chunks>0 AND path LIKE ?",
+                            (str(root) + "/%",)).fetchone()[0]
 
 
 def _seconds(chunks) -> int:

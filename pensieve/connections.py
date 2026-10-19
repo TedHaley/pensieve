@@ -33,8 +33,8 @@ from pensieve import store as v2
 from pensieve.models import DocKind, PersonRole, SourceKind, SourceOrigin, SourceStatus
 from pensieve.store import documents as store_documents, sources as store_sources
 
-DIR = config.DATA_DIR / "connections"
-STATE = DIR / "state.json"
+STATE = config.V2_DIR / "connections.json"  # status of each connection (v1: connections/state.json)
+_V1_STATE = config.DATA_DIR / "connections" / "state.json"
 SESSIONS = "agent_sessions"  # the source of MCP results found in agent transcripts
 GH = "github_cli"  # GitHub issues and pull requests that involve the user, read with the gh command line
 _lock = threading.Lock()
@@ -135,6 +135,11 @@ def _load() -> dict:
     try:
         return json.loads(STATE.read_text())
     except (OSError, ValueError):
+        pass
+    try:  # the first start of v2: v1's connection status, without its collection runs (v2 collects again)
+        st = json.loads(_V1_STATE.read_text())
+        return {k: v for k, v in st.items() if k not in ("runs", "sessions_backfilled2")}
+    except (OSError, ValueError, AttributeError):
         return {}
 
 

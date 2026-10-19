@@ -17,7 +17,7 @@ _open: dict[str, Db] = {}
 
 
 def root() -> Path:
-    return config.DATA_DIR / "v2"
+    return config.V2_DIR
 
 
 def store_path() -> Path:
@@ -29,7 +29,7 @@ def index_path() -> Path:
 
 
 def vectors_dir() -> Path:
-    return root() / "vectors"
+    return config.VECTORS_DIR
 
 
 def avatars_dir() -> Path:

@@ -335,21 +335,19 @@ class Inputs:
             sql += f" AND id IN ({','.join('?' * len(ids))})"
             args += ids
         db = store.db
-        with store.lock:
-            rows = db.execute(sql + " ORDER BY updated DESC", args).fetchall() if ids is None or ids else []
+        rows = db.execute(sql + " ORDER BY updated DESC", args).fetchall() if ids is None or ids else []
         got = [r[0] for r in rows]
         texts, edits = defaultdict(list), defaultdict(set)
-        for i in range(0, len(got), 50):  # the lock for 50 sessions at a time: the indexers go on in between
+        for i in range(0, len(got), 50):  # 50 sessions at a time
             part = got[i:i + 50]
             q = ",".join("?" * len(part))
-            with store.lock:
-                for sid, t in db.execute(f"SELECT session_id, text FROM chunks WHERE session_id IN ({q}) "
-                                         "ORDER BY session_id, idx", part).fetchall():
-                    texts[sid].append(t)
-                for sid, p in db.execute(f"SELECT session_id, path FROM session_files WHERE edited=1 AND session_id "
-                                         f"IN ({q})", part).fetchall():
-                    if not p.startswith(_TEMP):  # scratch files are not the work
-                        edits[sid].add(p)
+            for sid, t in db.execute(f"SELECT session_id, text FROM chunks WHERE session_id IN ({q}) "
+                                     "ORDER BY session_id, idx", part).fetchall():
+                texts[sid].append(t)
+            for sid, p in db.execute(f"SELECT session_id, path FROM session_files WHERE edited=1 AND session_id "
+                                     f"IN ({q})", part).fetchall():
+                if not p.startswith(_TEMP):  # scratch files are not the work
+                    edits[sid].add(p)
         for sid in ids or []:
             self.sessions.pop(sid, None)
             self.facts.pop(sid, None)
@@ -361,12 +359,11 @@ class Inputs:
 
     def load_repos(self, store):
         """The repos, worktrees and commits of the window."""
-        with store.lock:
-            db = store.db
-            self.roots = [r[0] for r in db.execute("SELECT root FROM repos").fetchall()]
-            self.wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
-            self.commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
-                                      (self.since, self.end)).fetchall()
+        db = store.db
+        self.roots = [r[0] for r in db.execute("SELECT root FROM repos").fetchall()]
+        self.wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
+        self.commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
+                                  (self.since, self.end)).fetchall()
 
     def load_items(self, ids):
         """The collected items `ids` again: a changed one is replaced, one that left the window or the switched-on
@@ -1474,8 +1471,7 @@ def resume_command(store, session_id: str) -> str | None:
     source, _, sid = session_id.partition(":")
     if not re.fullmatch(r"[A-Za-z0-9-]{8,80}", sid or ""):
         return None
-    with store.lock:
-        row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
+    row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
     if not row or not row[0] or not Path(row[0]).is_dir():
         return None
     cmd = {"claude": f"claude --resume {sid}", "codex": f"codex resume {sid}"}.get(source)

@@ -8,6 +8,10 @@
 - The writer runs each job in its own savepoint, and commits the jobs that are queued together (up to 50 ms of
   them) in one transaction. A job that fails rolls back only its own changes.
 - `after_commit` callbacks get the results of each committed batch on the writer thread (the card events use this).
+- `hold()` lends the writer's connection to the calling thread for a block of statements, as one job: the code that
+  indexes sessions, files and code writes this way (`Conn`). Other writes wait until the block ends, and reads never
+  wait. Inside the block, `conn`, `read` and `write` on this thread use the lent connection, so the block sees its own
+  writes.
 
 Another process (the MCP command) can open the same file with its own Db: WAL lets it read while this one writes,
 and `busy_timeout` makes its writes wait for this one's commit."""
@@ -16,6 +20,7 @@ import sqlite3
 import threading
 import time
 from concurrent.futures import Future
+from contextlib import contextmanager
 from pathlib import Path
 
 BATCH_SECONDS = 0.05
@@ -78,9 +83,65 @@ class Db:
         finally:
             c.close()
 
+    def add_function(self, name: str, fn):
+        """A SQL function on every connection of this file, now and later (triggers on the writer use them)."""
+        self.functions[name] = fn
+        with self._conns_lock:
+            for c in self._conns:
+                c.create_function(name, 1, fn, deterministic=True)
+
+    def held(self) -> sqlite3.Connection | None:
+        """The writer's connection when this thread holds it (`hold`) or is the writer thread, else None."""
+        if threading.current_thread() is self._writer:
+            return self._wconn
+        return getattr(self._local, "held", None)
+
+    @contextmanager
+    def hold(self):
+        """Run the block with the writer's connection on this thread, as one write job: its statements commit
+        together after the block, and roll back when the block raises. Yields the connection. Nested holds on one
+        thread are one hold. Do no slow work inside: other writes to this file wait for the block."""
+        c = self.held()
+        if c is not None:
+            yield c
+            return
+        if self._closed:
+            raise RuntimeError(f"{self.path.name} is closed")
+        self._start()
+        lent, back, out = threading.Event(), threading.Event(), {}
+
+        def job(c):
+            lent.set()
+            back.wait()
+            if out.get("error") is not None:
+                raise out["error"]
+
+        f = Future()
+        self._q.put((job, f))
+        while not lent.wait(0.5):
+            if f.done():  # the batch failed before the job ran (BEGIN failed)
+                f.result()
+        self._local.held = self._wconn
+        try:
+            yield self._wconn
+        except BaseException as e:
+            out["error"] = e
+            raise
+        finally:
+            self._local.held = None
+            back.set()
+            try:
+                f.result()
+            except BaseException:
+                if out.get("error") is None:
+                    raise
+
     @property
     def conn(self) -> sqlite3.Connection:
-        """This thread's read connection."""
+        """This thread's read connection (the writer's, while this thread holds it)."""
+        held = self.held()
+        if held is not None:
+            return held
         c = getattr(self._local, "conn", None)
         if c is None:
             if self._closed:
@@ -103,8 +164,9 @@ class Db:
         (or raises fn's error); else returns a Future of it."""
         if self._closed:
             raise RuntimeError(f"{self.path.name} is closed")
-        if threading.current_thread() is self._writer:  # a job that writes more: run it in the same batch
-            return fn(self._wconn) if wait else _done(fn(self._wconn))
+        held = self.held()
+        if held is not None:  # a job (or a hold) that writes more: run it in the same batch
+            return fn(held) if wait else _done(fn(held))
         self._start()
         f = Future()
         self._q.put((fn, f))
@@ -198,6 +260,75 @@ class Db:
             self._conns.clear()
 
 
+_READ = ("SELECT", "WITH", "EXPLAIN", "VALUES")
+_IGNORED_PRAGMAS = ("JOURNAL_MODE", "SYNCHRONOUS", "BUSY_TIMEOUT", "FOREIGN_KEYS")
+
+
+class _Ran:
+    """The result of a statement that ran on the writer thread: its rows, rowcount and lastrowid."""
+
+    def __init__(self, cur):
+        self.rows = cur.fetchall() if cur.description else []
+        self.rowcount, self.lastrowid = cur.rowcount, cur.lastrowid
+        self.description = cur.description
+
+    def fetchall(self):
+        return self.rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class Conn:
+    """A sqlite3.Connection look-alike over a Db, for the code that indexes sessions, files and code (indexer.py,
+    files.py, repos.py), which was written for one shared connection and a process lock.
+
+    - In a `db.hold()` block (and on the writer thread), every statement runs on the writer's connection.
+    - Outside one, a read runs on this thread's read connection and never waits; a write runs as its own job.
+    - `commit` does nothing: a hold commits when its block ends, and a single write commits at once."""
+
+    def __init__(self, db: Db):
+        self.db = db
+
+    def execute(self, sql: str, args=()):
+        c = self.db.held()
+        if c is not None:
+            return c.execute(sql, args)
+        head = sql.lstrip().split(None, 2)
+        verb = head[0].upper() if head else ""
+        if verb == "PRAGMA" and len(head) > 1 and head[1].split("=")[0].strip().upper() in _IGNORED_PRAGMAS:
+            return _Ran(self.db.conn.execute("SELECT 1 WHERE 0"))
+        if verb in _READ or (verb == "PRAGMA" and "=" not in sql):
+            return self.db.conn.execute(sql, args)
+        return self.db.write(lambda c: _Ran(c.execute(sql, args)))
+
+    def executemany(self, sql: str, rows):
+        c = self.db.held()
+        if c is not None:
+            return c.executemany(sql, rows)
+        rows = list(rows)
+        return self.db.write(lambda c: _Ran(c.executemany(sql, rows)))
+
+    def executescript(self, sql: str):
+        """DDL: each statement of the script, in one job."""
+        def run(c):
+            for stmt in _statements(sql):
+                c.execute(stmt)
+        self.db.write(run)
+
+    def create_function(self, name, n, fn, deterministic=True):
+        self.db.add_function(name, fn)
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
+
+
 def _done(value) -> Future:
     f = Future()
     f.set_result(value)
@@ -207,12 +338,13 @@ def _done(value) -> Future:
 def _statements(script: str) -> list[str]:
     """The statements of a schema script, split where sqlite3 says a statement is complete."""
     out, cur = [], ""
-    for line in script.splitlines(keepends=True):
-        cur += line
+    for part in script.split(";"):  # a statement ends at a ";" where sqlite3 says it is complete (not inside a trigger)
+        cur += part + ";"
         if sqlite3.complete_statement(cur):
             if cur.strip():
                 out.append(cur.strip())
             cur = ""
-    if cur.strip():
-        out.append(cur.strip())
+    cur = cur[:-1].strip()  # the ";" added after the last part
+    if cur:
+        out.append(cur)
     return out

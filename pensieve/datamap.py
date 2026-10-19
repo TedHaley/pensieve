@@ -35,8 +35,8 @@ AGENT = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
 class DataMap:
     def __init__(self, store, repos, files):
         self.store, self.repos, self.files = store, repos, files
-        self.db, self.lock = store.db, store.lock
-        with self.lock:
+        self.db, self.writing = store.db, store.writing
+        with self.writing:
             self.db.execute("CREATE TABLE IF NOT EXISTS data_points(id TEXT PRIMARY KEY, x REAL, y REAL, z REAL, cluster INTEGER)")
             self.db.execute("CREATE TABLE IF NOT EXISTS data_topics(id INTEGER PRIMARY KEY, sig TEXT, name TEXT, description TEXT, "
                             "keywords TEXT, reps TEXT)")
@@ -58,18 +58,17 @@ class DataMap:
             if sid not in shown:
                 shown[sid] = settings.on_map(sid)
             return shown[sid]
-        with self.lock:
-            for path, root, cid in self.db.execute("SELECT c.path, f.root, c.id FROM file_chunks c JOIN files f ON f.path=c.path "
-                                                   "WHERE f.kind!='folder'"):
-                if file_ok(path, root):
-                    files.setdefault(f"file:{path}", []).append(cid)
-            for repo, path, cid in self.db.execute("SELECT repo, path, id FROM code_chunks WHERE wt=''"):
-                if on(f"repos/{repo}"):
-                    code.setdefault(f"code:{repo}:{path}", []).append(cid)
-            for sid, src, cid in self.db.execute("SELECT c.session_id, s.source, c.id FROM chunks c "
-                                                 "JOIN sessions s ON s.id=c.session_id"):
-                if on(f"agents/{src}"):
-                    sessions.setdefault(f"session:{sid}", []).append(cid)
+        for path, root, cid in self.db.execute("SELECT c.path, f.root, c.id FROM file_chunks c JOIN files f ON f.path=c.path "
+                                               "WHERE f.kind!='folder'"):
+            if file_ok(path, root):
+                files.setdefault(f"file:{path}", []).append(cid)
+        for repo, path, cid in self.db.execute("SELECT repo, path, id FROM code_chunks WHERE wt=''"):
+            if on(f"repos/{repo}"):
+                code.setdefault(f"code:{repo}:{path}", []).append(cid)
+        for sid, src, cid in self.db.execute("SELECT c.session_id, s.source, c.id FROM chunks c "
+                                             "JOIN sessions s ON s.id=c.session_id"):
+            if on(f"agents/{src}"):
+                sessions.setdefault(f"session:{sid}", []).append(cid)
         ids, parts = [], []
         for groups, index in ((files, self.files.index), (code, self.repos.index), (sessions, self.store.index)):
             keys, C = vectors.centroids(groups, index)
@@ -80,19 +79,17 @@ class DataMap:
         return ids, np.concatenate(parts)
 
     def fingerprint(self):
-        with self.lock:
-            row = self.db.execute(
-                "SELECT (SELECT COUNT(*) FROM file_chunks), (SELECT MAX(id) FROM file_chunks), "
-                "(SELECT COUNT(*) FROM code_chunks WHERE wt=''), (SELECT MAX(id) FROM code_chunks), "
-                "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks)").fetchone()
+        row = self.db.execute(
+            "SELECT (SELECT COUNT(*) FROM file_chunks), (SELECT MAX(id) FROM file_chunks), "
+            "(SELECT COUNT(*) FROM code_chunks WHERE wt=''), (SELECT MAX(id) FROM code_chunks), "
+            "(SELECT COUNT(*) FROM chunks), (SELECT MAX(id) FROM chunks)").fetchone()
         return (*row, self.files.map_sig())
 
     def needs_layout(self):
         """Changed since the last layout, or the set has drifted far from what the layout (and its topics) were fit
         on, e.g. after a big source was switched off."""
         fit_n = int(self.store.meta("data_fit_n") or 0)
-        with self.lock:
-            n = self.db.execute("SELECT COUNT(*) FROM data_points").fetchone()[0]
+        n = self.db.execute("SELECT COUNT(*) FROM data_points").fetchone()[0]
         return (self.store.meta("data_layout_fp") != json.dumps(self.fingerprint())
                 or self.store.meta("data_topic_v") != TOPIC_VERSION
                 or (fit_n and abs(n - fit_n) > max(100, 0.15 * fit_n)))
@@ -103,13 +100,13 @@ class DataMap:
         fp = json.dumps(self.fingerprint())
         ids, C = self._vectors()
         if len(ids) < 4:  # too few to lay out: show none rather than keep points that left the map
-            with self.lock:
+            with self.writing:
                 gone = self.db.execute("DELETE FROM data_points").rowcount
                 self.store.meta("data_layout_fp", fp)
                 self.db.commit()
             self._cache = (None, None)
             return gone > 0
-        with self.lock:
+        with self.writing:
             placed = {r[0]: r[1:] for r in self.db.execute("SELECT id, x, y, z, cluster FROM data_points")}
             fit_n = int(self.store.meta("data_fit_n") or 0)
             ok = self.store.meta("data_layout") == VERSION
@@ -118,7 +115,7 @@ class DataMap:
             P = fit3d(C, n_neighbors=20, min_dist=0.1)
             lab = self._cluster(C)
             rows = [(i, *map(float, p), int(c)) for i, p, c in zip(ids, P, lab)]
-            with self.lock:
+            with self.writing:
                 self.db.execute("DELETE FROM data_points")
                 self.db.executemany("INSERT INTO data_points VALUES(?,?,?,?,?)", rows)
                 self.store.meta("data_fit_n", n)
@@ -127,12 +124,12 @@ class DataMap:
         elif self.store.meta("data_topic_v") != TOPIC_VERSION or not self._has_topics():  # topics changed, positions kept
             self._place(ids, C, placed)
             lab = self._cluster(C)
-            with self.lock:
+            with self.writing:
                 self.db.executemany("UPDATE data_points SET cluster=? WHERE id=?", [(int(c), i) for i, c in zip(ids, lab)])
             self._save_topics(ids, C, lab)
         else:
             self._place(ids, C, placed)
-        with self.lock:
+        with self.writing:
             self.store.meta("data_layout_fp", fp)
             self.db.commit()
         self._cache = (None, None)
@@ -151,7 +148,7 @@ class DataMap:
             Pn = place_new(C[Kk], Pk, C[[idx[i] for i in new]], k=3, jitter=0.03)
             near = nearest(C[[idx[i] for i in new]], C[Kk])
             rows = [(i, *map(float, p), placed[known[j]][3]) for i, p, j in zip(new, Pn, near)]
-        with self.lock:
+        with self.writing:
             self.db.executemany("INSERT OR REPLACE INTO data_points VALUES(?,?,?,?,?)", rows)
             self.db.executemany("DELETE FROM data_points WHERE id=?", [(i,) for i in gone])
 
@@ -163,8 +160,7 @@ class DataMap:
         return cluster(C, kmin=k, kmax=k) if k > 1 else np.zeros(len(C), int)
 
     def _has_topics(self):
-        with self.lock:
-            return self.db.execute("SELECT 1 FROM data_topics LIMIT 1").fetchone() is not None
+        return self.db.execute("SELECT 1 FROM data_topics LIMIT 1").fetchone() is not None
 
     def _save_topics(self, ids, C, lab):
         """Keywords and representative items per topic; written names are cleared since the members changed."""
@@ -181,7 +177,7 @@ class DataMap:
             reps = [ids[ks[j]] for j in np.argsort(-(C[ks] @ cen))[:24]]
             sig = hashlib.sha1(("|".join(sorted(ids[k] for k in ks[:500])) + TOPIC_VERSION).encode()).hexdigest()[:16]
             rows.append((c, sig, None, None, kw.get(c, ""), json.dumps(reps)))
-        with self.lock:
+        with self.writing:
             self.db.execute("DELETE FROM data_topics")
             self.db.executemany("INSERT INTO data_topics VALUES(?,?,?,?,?,?)", rows)
             self.store.meta("data_topic_v", TOPIC_VERSION)
@@ -212,8 +208,7 @@ class DataMap:
             return {c: "" for c in ids}
 
     def topics(self):
-        with self.lock:
-            rows = self.db.execute("SELECT id, sig, name, description, keywords, reps FROM data_topics ORDER BY id").fetchall()
+        rows = self.db.execute("SELECT id, sig, name, description, keywords, reps FROM data_topics ORDER BY id").fetchall()
         return [dict(id=c, sig=sig, named=bool(name), keywords=kw or "", reps=json.loads(reps or "[]"),
                      name=name or self._kw_name(kw or "", c),
                      description=desc or "") for c, sig, name, desc, kw, reps in rows]
@@ -321,7 +316,7 @@ class DataMap:
         return out
 
     def set_scoped_name(self, topic, name, description):
-        with self.lock:
+        with self.writing:
             self.store.meta(topic["key"], json.dumps(dict(name=name.strip()[:48], description=description.strip())))
             self.db.commit()
 
@@ -329,7 +324,7 @@ class DataMap:
         return [t for t in self.topics() if not t["named"]]
 
     def set_topic_name(self, topic, name, description):
-        with self.lock:  # only if the topic hasn't been reclustered while the AI was writing
+        with self.writing:  # only if the topic hasn't been reclustered while the AI was writing
             self.db.execute("UPDATE data_topics SET name=?, description=? WHERE id=? AND sig=?",
                             (name.strip()[:48], description.strip(), topic["id"], topic["sig"]))
             self.db.commit()
@@ -374,15 +369,14 @@ class DataMap:
         if self._cache[0] == fp and not fresh:
             return self._cache[1]
         home = str(Path.home())
-        with self.lock:
-            pos = {r[0]: r[1:] for r in self.db.execute("SELECT id, x, y, z, cluster FROM data_points")}
-            files = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, author, author_source FROM files "
-                                    "WHERE kind!='folder'").fetchall()
-            repo_names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
-            code = self.db.execute("SELECT repo, path, MIN(id), MAX(last_ts), COUNT(*), GROUP_CONCAT(authors, '\x1f') "
-                                   "FROM code_chunks WHERE wt='' GROUP BY repo, path").fetchall()
-            sess = self.db.execute("SELECT id, title, source, project, project_name, updated, n_chunks, summary "
-                                   "FROM sessions WHERE n_chunks>0").fetchall()
+        pos = {r[0]: r[1:] for r in self.db.execute("SELECT id, x, y, z, cluster FROM data_points")}
+        files = self.db.execute("SELECT path, root, name, ext, kind, mtime, size, author, author_source FROM files "
+                                "WHERE kind!='folder'").fetchall()
+        repo_names = dict(self.db.execute("SELECT root, name FROM repos").fetchall())
+        code = self.db.execute("SELECT repo, path, MIN(id), MAX(last_ts), COUNT(*), GROUP_CONCAT(authors, '\x1f') "
+                               "FROM code_chunks WHERE wt='' GROUP BY repo, path").fetchall()
+        sess = self.db.execute("SELECT id, title, source, project, project_name, updated, n_chunks, summary "
+                               "FROM sessions WHERE n_chunks>0").fetchall()
         out = []
         for path, root, name, ext, kind, mtime, size, author, src in files:
             k = f"file:{path}"

@@ -113,8 +113,7 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc)
     cwd = (agent_cwd.get() or "").rstrip("/")
     s = _c()["searcher"]
-    with s.lock:
-        wts = [p for (p,) in s.db.execute("SELECT path FROM worktrees")]
+    wts = [p for (p,) in s.db.execute("SELECT path FROM worktrees")]
 
     def elsewhere(x):  # a linked worktree's copy (another branch) that the agent isn't working in: ranked last
         if " @ " not in (x.get("subtitle") or ""):
@@ -143,9 +142,8 @@ def _without_live_sessions(results, searcher, cwd):
     sids = [x["id"][8:] for x in results if str(x.get("id", "")).startswith("session:")]
     if not cwd or not sids:
         return results
-    with searcher.lock:
-        rows = searcher.db.execute(f"SELECT id, project, path FROM sessions WHERE id IN ({','.join('?' * len(sids))})",
-                                   sids).fetchall()
+    rows = searcher.db.execute(f"SELECT id, project, path FROM sessions WHERE id IN ({','.join('?' * len(sids))})",
+                               sids).fetchall()
     now, live = time.time(), set()
     for sid, project, path in rows:
         p = (project or "").rstrip("/")
@@ -163,13 +161,12 @@ def _to_own_checkout(results, searcher, cwd):
     that copy is the same: the index holds a worktree's files only where they differ from the main checkout."""
     if not cwd:
         return
-    with searcher.lock:
-        row = next(((w, repo) for w, repo in searcher.db.execute("SELECT path, repo FROM worktrees")
-                    if cwd == w or cwd.startswith(w + "/")), None)
-        if not row:
-            return
-        wt, root = row
-        changed = {p for (p,) in searcher.db.execute("SELECT path FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
+    row = next(((w, repo) for w, repo in searcher.db.execute("SELECT path, repo FROM worktrees")
+                if cwd == w or cwd.startswith(w + "/")), None)
+    if not row:
+        return
+    wt, root = row
+    changed = {p for (p,) in searcher.db.execute("SELECT path FROM checkout_files WHERE repo=? AND wt=?", (root, wt))}
     for x in results:
         path = x.get("path") or ""
         if str(x.get("id", "")).startswith("code:") and path.startswith(root + "/"):
@@ -191,8 +188,7 @@ def _mark_near_copies(results, searcher):
     if len(code) < 2:
         return
     ids = [int(x["id"][5:]) for x in code]
-    with searcher.lock:
-        text = dict(searcher.db.execute(f"SELECT id, text FROM code_chunks WHERE id IN ({','.join('?' * len(ids))})", ids))
+    text = dict(searcher.db.execute(f"SELECT id, text FROM code_chunks WHERE id IN ({','.join('?' * len(ids))})", ids))
     for j, b in enumerate(code):
         tb = text.get(ids[j]) or ""
         for i in range(j):
@@ -484,11 +480,11 @@ def overview(repo: str | None = None) -> str:
     out.append("largest files: " + ", ".join(f"{rel(p)} ({p['chunks']} chunks)" for p in big))
     s = _c()["searcher"]
     first = {}
-    with s.lock:  # what it is and what it's built with, from the index (the README's start, the manifests' dependencies)
-        for path, text in s.db.execute(
-                "SELECT path, text FROM code_chunks WHERE repo=? AND wt='' AND path IN (?,?,?,?,?,?) ORDER BY path, start",
-                (root, "README.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "Gemfile")):
-            first[path] = first.get(path, "") + text + "\n"
+    # what it is and what it's built with, from the index (the README's start, the manifests' dependencies)
+    for path, text in s.db.execute(
+            "SELECT path, text FROM code_chunks WHERE repo=? AND wt='' AND path IN (?,?,?,?,?,?) ORDER BY path, start",
+            (root, "README.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "Gemfile")):
+        first[path] = first.get(path, "") + text + "\n"
     if first.get("README.md"):
         out.append("README starts: " + " ".join(first["README.md"].split())[:600])
     deps = _dependencies(first)
@@ -819,13 +815,12 @@ def show_search(query: str = "") -> dict:
 @tool()
 def status() -> dict:
     """Index size (files, repos, code chunks, sessions) and whether indexing is running."""
-    with _c()["store"].lock:
-        db = _c()["store"].db
-        n = lambda q: db.execute(q).fetchone()[0]
-        return {**{k: v for k, v in _c()["status"].items()},
-                "files": n("SELECT COUNT(*) FROM files"), "repos": n("SELECT COUNT(*) FROM repos"),
-                "code_chunks": n("SELECT COUNT(*) FROM code_chunks"),
-                "sessions": n("SELECT COUNT(*) FROM sessions WHERE n_chunks>0")}
+    db = _c()["store"].db
+    n = lambda q: db.execute(q).fetchone()[0]
+    return {**{k: v for k, v in _c()["status"].items()},
+            "files": n("SELECT COUNT(*) FROM files"), "repos": n("SELECT COUNT(*) FROM repos"),
+            "code_chunks": n("SELECT COUNT(*) FROM code_chunks"),
+            "sessions": n("SELECT COUNT(*) FROM sessions WHERE n_chunks>0")}
 
 
 @tool()

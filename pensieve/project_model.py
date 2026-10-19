@@ -36,7 +36,7 @@ from pathlib import Path
 
 from pensieve import config, work
 
-DIR = config.DATA_DIR / "projects"
+DIR = config.V2_DIR / "projects"
 CACHE = DIR / "cache"
 
 ACTIVE_DAYS = 120          # tickets, pull requests and branches older than this are in no project
@@ -497,12 +497,11 @@ def build(store, fetch: bool = True, stale_days: int = STALE_DAYS, now: float | 
     # A card with no agent session is only a collected ticket: it says nothing about the user's own work.
     cards = [c for c in cards if c.get("sessions") or c.get("shared_sessions")]
     lap("cards")
-    with store.lock:  # a few short reads; nothing slow runs while the lock is held
-        repo_rows = store.db.execute("SELECT root, name, remote FROM repos").fetchall()
-        commits = store.db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ?", (since,)).fetchall()
-        seen = sorted({s for t in tickets.values() for s in t.seen_in})
-        seen_at = {sid: int(work._ts(u)) for sid, u in store.db.execute(
-            f"SELECT id, updated FROM sessions WHERE id IN ({','.join('?' * len(seen))})", seen).fetchall()} if seen else {}
+    repo_rows = store.db.execute("SELECT root, name, remote FROM repos").fetchall()
+    commits = store.db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ?", (since,)).fetchall()
+    seen = sorted({s for t in tickets.values() for s in t.seen_in})
+    seen_at = {sid: int(work._ts(u)) for sid, u in store.db.execute(
+        f"SELECT id, updated FROM sessions WHERE id IN ({','.join('?' * len(seen))})", seen).fetchall()} if seen else {}
     # A session that read many tickets ran a search or a list: it does not make the user part of each ticket.
     n_seen = Counter(s for t in tickets.values() for s in t.seen_in)
     for t in tickets.values():

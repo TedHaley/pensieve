@@ -66,7 +66,7 @@ def summarize_session(store, sid):
         return
     d = llm.complete(_transcript([(t["role"], t["text"]) for t in s["turns"]]), SESSION_SYS, max_tokens=300,
                      schema=SESSION_SCHEMA, kind="session summary")
-    with store.lock:
+    with store.writing:
         store.db.execute("UPDATE sessions SET summary=?, tags=? WHERE id=?",
                          (d["summary"].strip(), ",".join(t.strip().lower() for t in d["tags"][:6]), sid))
         store.db.commit()
@@ -74,21 +74,20 @@ def summarize_session(store, sid):
 
 def summarize_chunk(store, cid, text):
     out = llm.complete(text[:3000], CHUNK_SYS, max_tokens=60, kind="moment summary").split("\n")[0].strip()
-    with store.lock:
+    with store.writing:
         store.db.execute("UPDATE chunks SET summary=? WHERE id=?", (out, cid))
         store.db.commit()
 
 
 def name_topic(store, topic, key=None):
     """Name a topic. With `key`, the result is cached in meta (scoped topics) instead of the topics table."""
-    with store.lock:
-        rows = store.db.execute(
-            f"SELECT title, summary, project_name FROM sessions WHERE id IN ({','.join('?' * len(topic['sessions']))}) "
-            "ORDER BY updated DESC LIMIT 15", topic["sessions"]).fetchall()
+    rows = store.db.execute(
+        f"SELECT title, summary, project_name FROM sessions WHERE id IN ({','.join('?' * len(topic['sessions']))}) "
+        "ORDER BY updated DESC LIMIT 15", topic["sessions"]).fetchall()
     body = f"Keywords: {topic['keywords']}\n\nSessions:\n" + "\n".join(
         f"- [{p}] {t}: {(s or '')[:220]}" for t, s, p in rows)
     d = llm.complete(body, TOPIC_SYS, max_tokens=150, temperature=0.3, schema=TOPIC_SCHEMA, kind="topic name")
-    with store.lock:
+    with store.writing:
         if key:
             store.meta(key, json.dumps(dict(name=d["name"].strip()[:48], description=d["description"].strip())))
         else:
@@ -129,10 +128,9 @@ def insight_key(scope=None):
 
 def insight_rows(store, sids=None):
     """The sessions insights are written from: the newest 120 with a summary (within `sids`)."""
-    with store.lock:
-        rows = store.db.execute(
-            "SELECT id, title, summary, project_name, cluster, substr(started,1,10) FROM sessions "
-            "WHERE n_chunks>0 AND summary IS NOT NULL ORDER BY updated DESC").fetchall()
+    rows = store.db.execute(
+        "SELECT id, title, summary, project_name, cluster, substr(started,1,10) FROM sessions "
+        "WHERE n_chunks>0 AND summary IS NOT NULL ORDER BY updated DESC").fetchall()
     if sids is not None:
         rows = [r for r in rows if r[0] in sids]
     return rows[:120]
@@ -208,7 +206,7 @@ def generate_insights(store, scope=None, sids=None, topics=None, codebase=""):
     d["scope"] = scope
     d["n_sessions"] = len(rows)
     d["basis"] = dict(sessions=[r[0] for r in rows], topics=topic_sig(topics))  # to tell when they're out of date
-    with store.lock:
+    with store.writing:
         store.meta(insight_key(scope), json.dumps(d))
         store.db.commit()
     return d
@@ -229,17 +227,16 @@ def summarize_team(store, team, key, top=10):
     ids = {f"P{i + 1}": p["email"] for i, p in enumerate(ppl)}
     out = {ids[x["id"].strip()]: dict(focus=x["focus"].strip(), summary=x["summary"].strip())
            for x in d.get("people", []) if x.get("id", "").strip() in ids}
-    with store.lock:
+    with store.writing:
         store.meta(key, json.dumps(out))
         store.db.commit()
     return out
 
 
 def pending(store):
-    with store.lock:
-        sess = [r[0] for r in store.db.execute(
-            "SELECT id FROM sessions WHERE summary IS NULL AND n_chunks>0 ORDER BY updated DESC")]
-        chunks = store.db.execute(
-            "SELECT id, text FROM chunks WHERE summary IS NULL ORDER BY id DESC LIMIT 64").fetchall()
+    sess = [r[0] for r in store.db.execute(
+        "SELECT id FROM sessions WHERE summary IS NULL AND n_chunks>0 ORDER BY updated DESC")]
+    chunks = store.db.execute(
+        "SELECT id, text FROM chunks WHERE summary IS NULL ORDER BY id DESC LIMIT 64").fetchall()
     topics = [t for t in store.topics() if not t["named"]] if not sess else []
     return sess, topics, chunks

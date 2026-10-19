@@ -119,7 +119,7 @@ async def watcher():
     status.update(message="building exact-match index")
     broadcast({"type": "status", **status})
     try:
-        await _run(search_mod.ensure_fts, store.db, store.lock, store.meta)
+        await _run(search_mod.ensure_fts, store.db, store.writing, store.meta)
     except Exception:
         import traceback
         traceback.print_exc()
@@ -644,8 +644,7 @@ def static(name: str):
 
 @app.get("/api/status")
 def get_status():
-    with store.lock:
-        return _status()
+    return _status()
 
 
 def _status():
@@ -713,8 +712,7 @@ async def model_switcher():
 @app.get("/api/embed_models")
 def embed_models():
     """The models the index can use: the index's own, the one chosen, and how long switching takes on this Mac."""
-    with store.lock:
-        n = sum(store.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in reembed.TABLES)
+    n = sum(store.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in reembed.TABLES)
     return {"current": config.EMBED_MODEL, "wanted": reembed.wanted(), "chunks": n, "progress": reembed.progress,
             "models": [dict(id=k, label=m["label"], about=m["about"], dim=m["dim"],
                             switch_seconds=round(n / repos.embed_rate(k))) for k, m in config.EMBED_MODELS.items()]}
@@ -756,8 +754,7 @@ def session_projects():
     """The session map's projects: canonical repos (clones and worktrees merged); non-repo folders stay as-is."""
     scope = repos.session_scope()
     by = {}
-    with store.lock:
-        rows = store.db.execute("SELECT id, n_chunks, updated, project FROM sessions WHERE n_chunks>0").fetchall()
+    rows = store.db.execute("SELECT id, n_chunks, updated, project FROM sessions WHERE n_chunks>0").fetchall()
     home = str(Path.home())
     for sid, n, upd, cwd in rows:
         v = scope.get(sid)
@@ -1189,8 +1186,7 @@ async def ai_cli_test(req: CliTestReq):
 
 
 def _repo_check(cwd: str) -> dict:
-    with store.lock:
-        indexed = dict(store.db.execute("SELECT root, remote FROM repos").fetchall())
+    indexed = dict(store.db.execute("SELECT root, remote FROM repos").fetchall())
     return repo_check(cwd, indexed)
 
 
@@ -1220,8 +1216,7 @@ def get_places(fresh: bool = False):
 
 
 def _place_rows():
-    with store.lock:
-        return store.db.execute(places_mod.ROWS).fetchall()
+    return store.db.execute(places_mod.ROWS).fetchall()
 
 
 class PlaceReq(BaseModel):
@@ -1458,8 +1453,7 @@ def remove_repos(path: str):
     the folder (the sweep removes the repos in it that nothing else finds)."""
     root = str(Path(path).expanduser())
     settings.update({"repos": [r for r in settings.get("repos") if r != path]})
-    with store.lock:
-        indexed = store.db.execute("SELECT 1 FROM repos WHERE root=?", (root,)).fetchone()
+    indexed = store.db.execute("SELECT 1 FROM repos WHERE root=?", (root,)).fetchone()
     if indexed:
         sources.set_source(f"repos/{root}", False)
         threading.Thread(target=repos.remove, args=(root,), daemon=True).start()
@@ -1659,8 +1653,7 @@ def draft_work_card(req: CardDraftReq):
 
 
 def _repo_rows():
-    with repos.lock:
-        return repos.db.execute("SELECT root, name, remote FROM repos").fetchall()
+    return repos.db.execute("SELECT root, name, remote FROM repos").fetchall()
 
 
 @app.get("/api/people")

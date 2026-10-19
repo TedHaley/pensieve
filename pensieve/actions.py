@@ -63,8 +63,7 @@ def resolve(id: str) -> dict:
 
 def _code_rows(where, args):
     repos = ctx["repos"]
-    with repos.lock:
-        return repos.db.execute(f"SELECT repo, path, authors, last_ts FROM code_chunks WHERE wt='' AND {where}", args).fetchall()
+    return repos.db.execute(f"SELECT repo, path, authors, last_ts FROM code_chunks WHERE wt='' AND {where}", args).fetchall()
 
 
 def _folder(path, max_files=60):

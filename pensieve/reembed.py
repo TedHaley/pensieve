@@ -14,7 +14,7 @@ from pensieve import config, settings
 
 COLUMN = "vec_next"
 TABLES = ("chunks", "code_chunks", "file_chunks")
-INDEX_FILES = ("index.tv", "code.tv", "files.tv")
+INDEX_FILES = ("sessions.tv", "code.tv", "files.tv")  # in config.VECTORS_DIR
 LAYOUT_KEYS = ("layout", "files_layout", "data_layout")  # and code_layout:<repo>: every map refits on new vectors
 BATCH = 64
 
@@ -65,8 +65,7 @@ def _fill(db, lock, target, model, stop=lambda: False, on_batch=lambda n: None):
         while True:
             if stop():
                 return False
-            with lock:
-                rows = _rows(db, table, BATCH)
+            rows = _rows(db, table, BATCH)
             if not rows:
                 break
             vecs = embed([r[1] or "" for r in rows], titles=[r[2] for r in rows], model=model)
@@ -92,7 +91,7 @@ def switch_empty(store, corpora) -> bool:
     target = wanted()
     if target == config.EMBED_MODEL:
         return False
-    with store.lock:
+    with store.writing:
         if any(store.db.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone() for t in TABLES):
             return False
         from pensieve import vectors
@@ -109,7 +108,7 @@ def run(store, notify=lambda: None):
     Returns early when the choice goes back to the index's model."""
     global progress
     target = wanted()
-    db, lock = store.db, store.lock
+    db, lock = store.db, store.writing
     with lock:
         _columns(db)
         db.commit()
@@ -133,8 +132,7 @@ def run(store, notify=lambda: None):
         nonlocal done, total, batches
         done, batches = done + n, batches + 1
         if batches % 20 == 0:  # indexing goes on meanwhile: what it adds needs new vectors too
-            with lock:
-                total = done + _left(db)
+            total = done + _left(db)
         total = max(total, done)
         rate = (done - start) / max(time.time() - t0, 1e-3)
         progress.update(done=done, total=total, seconds_left=round((total - done) / rate) if rate else None)
@@ -191,6 +189,6 @@ def finish(log=lambda m: print(m, flush=True)):
     db.commit()
     db.close()
     for f in INDEX_FILES:
-        (config.DATA_DIR / f).unlink(missing_ok=True)
+        (config.VECTORS_DIR / f).unlink(missing_ok=True)
     config.use_model(target)
     return True

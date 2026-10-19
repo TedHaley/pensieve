@@ -250,23 +250,21 @@ def unused_repo(root: str, listed: list[dict], sessions, n_chunks: int, history_
 def from_store(store, days: int = DAYS, roots=None, fresh=False) -> list[dict]:
     """report() for the indexed repos (or `roots`), with the sessions and chunk counts from the index."""
     from collections import defaultdict
-    with store.lock:
-        db = store.db
-        roots = roots or [r for (r,) in db.execute("SELECT root FROM repos")]
-        sessions = db.execute("SELECT project, updated FROM sessions WHERE n_chunks>0").fetchall()
-        first = db.execute("SELECT MIN(updated) FROM sessions WHERE n_chunks>0").fetchone()[0]
-        chunks, totals = defaultdict(dict), defaultdict(int)
-        for repo, wt, n in db.execute("SELECT repo, wt, COUNT(*) FROM code_chunks GROUP BY 1, 2"):
-            totals[repo] += n
-            if wt:
-                chunks[repo][wt] = n
+    db = store.db
+    roots = roots or [r for (r,) in db.execute("SELECT root FROM repos")]
+    sessions = db.execute("SELECT project, updated FROM sessions WHERE n_chunks>0").fetchall()
+    first = db.execute("SELECT MIN(updated) FROM sessions WHERE n_chunks>0").fetchone()[0]
+    chunks, totals = defaultdict(dict), defaultdict(int)
+    for repo, wt, n in db.execute("SELECT repo, wt, COUNT(*) FROM code_chunks GROUP BY 1, 2"):
+        totals[repo] += n
+        if wt:
+            chunks[repo][wt] = n
 
     def touched(paths):
         """The last session that read or edited a file below one of `paths`."""
-        with store.lock:
-            return max((u for p in paths for (u,) in store.db.execute(
-                "SELECT MAX(s.updated) FROM session_files f JOIN sessions s ON s.id=f.session_id "
-                "WHERE f.path>=? AND f.path<?", (p + "/", p + "0")) if u), default=None)
+        return max((u for p in paths for (u,) in store.db.execute(
+            "SELECT MAX(s.updated) FROM session_files f JOIN sessions s ON s.id=f.session_id "
+            "WHERE f.path>=? AND f.path<?", (p + "/", p + "0")) if u), default=None)
     return report(roots, sessions, chunks, days, fresh, totals, _age_days(first), touched)
 
 

@@ -105,16 +105,10 @@ def test_delete():
         migration.set_meta(store.index_db(), f"first_index:{part}", str(NOW))
     assert migrate.first_index_done()
     plan = migrate.plan_delete(DATA, migrate.pending_steps(s))
-    kept = {k["path"]: k["why"] for k in plan["keep"]}
-    assert "v1 code" in kept["index.tv"]  # config.INDEX_PATH still names it
-    live = migrate._live_paths
-    migrate._live_paths = lambda: set()
+    assert not plan["keep"], plan  # no v2 code uses a v1 path
     # a step that is not done keeps its v1 files
     s.write(lambda c: c.execute("UPDATE migration_steps SET status = 'skipped' WHERE step = 'embed_cache'"))
-    try:
-        r = migrate.delete_v1(DATA, s)
-    finally:
-        migrate._live_paths = live
+    r = migrate.delete_v1(DATA, s)
     assert r["status"] == "partly done" and {k["path"] for k in r["keep"]} == {"pensieve.db"}, r
     for n in ("code.tv", "index.tv", "people", "projects", "threads", "git", "work_notes.json", "work_done.json",
               "index.db"):
@@ -124,11 +118,7 @@ def test_delete():
     assert not (DATA / "connections" / "claude_ai_Example").exists()
     assert not (DATA / "v2" / migrate.DELETED_MARK).exists()
     s.write(lambda c: c.execute("UPDATE migration_steps SET status = 'done' WHERE status = 'skipped'"))
-    migrate._live_paths = lambda: set()
-    try:
-        r = migrate.delete_v1(DATA, s)
-    finally:
-        migrate._live_paths = live
+    r = migrate.delete_v1(DATA, s)
     assert r["status"] == "done" and not (DATA / "pensieve.db").exists(), r
     assert (DATA / "v2" / migrate.DELETED_MARK).exists() and not migrate.v1_detected()
     assert migrate.delete_v1(DATA, s)["status"] == "already done"

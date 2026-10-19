@@ -21,8 +21,8 @@ MIN_ROWS = 1024
 
 class Index:
     """Has the methods of turbovec's IdMapIndex that Pensieve uses (add_with_ids, remove, contains, search, len),
-    and `take` / `matrix` for the vectors. The callers hold their own lock (Store.lock) for the turbovec index, as
-    before; the arrays have their own lock, so that a reader does not need the store's."""
+    and `take` / `matrix` for the vectors. turbovec is not safe for a write during a search, so each turbovec call
+    takes `_tv`. The arrays have their own lock."""
 
     def __init__(self, path, dim, bit_width=4, fresh=False):
         """`fresh`: an empty index, whatever the file holds (a switch to a model with other dimensions)."""
@@ -34,6 +34,7 @@ class Index:
             self.tv = IdMapIndex(dim=dim, bit_width=bit_width)
         self._bit_width = bit_width
         self._lock = threading.Lock()
+        self._tv = threading.RLock()
         self._ids = np.zeros(MIN_ROWS, np.int64)
         self._V = np.zeros((MIN_ROWS, dim), np.float16)
         self.n = 0
@@ -61,13 +62,14 @@ class Index:
             self._ids, self._V, self.n = ids, V, k
             self._pos = {int(i): j for j, i in enumerate(ids[:k])}
             self.version += 1
-        missing = [j for j in range(k) if not self.tv.contains(int(ids[j]))]
-        fixed = len(missing)
-        if missing:
-            m = np.array(missing)
-            self.tv.add_with_ids(V[m].astype(np.float32), ids[m].astype(np.uint64))
-        if len(self.tv) != k:  # ids of rows that are gone (removed after the last save): build it again
-            fixed += abs(len(self.tv) - k)
+        with self._tv:
+            missing = [j for j in range(k) if not self.tv.contains(int(ids[j]))]
+            fixed = len(missing)
+            if missing:
+                m = np.array(missing)
+                self.tv.add_with_ids(V[m].astype(np.float32), ids[m].astype(np.uint64))
+        if len(self) != k:  # ids of rows that are gone (removed after the last save): build it again
+            fixed += abs(len(self) - k)
             self.rebuild()
         if fixed:
             self.dirty = True
@@ -82,13 +84,15 @@ class Index:
             for a in range(0, self.n, 50_000):  # in slices: one float32 copy of every vector is 1 GB at 300k
                 b = min(a + 50_000, self.n)
                 tv.add_with_ids(self._V[a:b].astype(np.float32), self._ids[a:b].astype(np.uint64))
-        self.tv = tv
+        with self._tv:
+            self.tv = tv
         self.dirty = True
 
     def add_with_ids(self, vecs, ids):
         vecs = np.asarray(vecs)
         ids = np.asarray(ids, dtype=np.uint64)
-        self.tv.add_with_ids(vecs.astype(np.float32, copy=False), ids)
+        with self._tv:
+            self.tv.add_with_ids(vecs.astype(np.float32, copy=False), ids)
         with self._lock:
             need = self.n + len(ids)
             if need > len(self._ids):
@@ -106,7 +110,8 @@ class Index:
         self.dirty = True
 
     def remove(self, cid) -> bool:
-        found = self.tv.remove(int(cid))
+        with self._tv:
+            found = self.tv.remove(int(cid))
         with self._lock:
             j = self._pos.pop(int(cid), None)
             if j is not None:  # the last row moves into its place
@@ -121,13 +126,16 @@ class Index:
         return found
 
     def contains(self, cid) -> bool:
-        return self.tv.contains(int(cid))
+        with self._tv:
+            return self.tv.contains(int(cid))
 
     def search(self, q, k, allowlist=None):
-        return self.tv.search(q, k=k, allowlist=allowlist) if allowlist is not None else self.tv.search(q, k=k)
+        with self._tv:
+            return self.tv.search(q, k=k, allowlist=allowlist) if allowlist is not None else self.tv.search(q, k=k)
 
     def __len__(self):
-        return len(self.tv)
+        with self._tv:
+            return len(self.tv)
 
     def save(self, force=False) -> bool:
         """Write the turbovec index to its file when it changed, and SAVE_SECONDS have gone by since the last save
@@ -135,11 +143,13 @@ class Index:
         if not self.dirty or (not force and time.monotonic() - self.saved_at < SAVE_SECONDS):
             return False
         self.dirty = False
-        try:
-            self.tv.sync(str(self.path))
-        except OSError as e:  # the file changed after our last sync (seen in the field): write it whole, atomically
-            print(f"vector index {self.path.name}: {e}; writing it whole", flush=True)
-            self.tv.write(str(self.path))
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._tv:
+            try:
+                self.tv.sync(str(self.path))
+            except OSError as e:  # the file changed after our last sync (seen in the field): write it whole
+                print(f"vector index {self.path.name}: {e}; writing it whole", flush=True)
+                self.tv.write(str(self.path))
         self.saved_at = time.monotonic()
         return True
 

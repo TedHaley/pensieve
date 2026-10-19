@@ -8,6 +8,7 @@
     person:sam                    -> the same as kind:person sam
 """
 import bisect
+import contextlib
 import hashlib
 import json
 import os
@@ -154,12 +155,12 @@ class _TimedLock:
 
     def __enter__(self):
         t = time.perf_counter()
-        self._lock.acquire()
+        self._lock.__enter__()
         _lock_wait.ms = getattr(_lock_wait, "ms", 0.0) + (time.perf_counter() - t) * 1000
         return self
 
     def __exit__(self, *exc):
-        self._lock.release()
+        return self._lock.__exit__(*exc)
 
 
 class _Laps:
@@ -216,7 +217,8 @@ def _fts_query(phrases):
 class Searcher:
     def __init__(self, store, repos, files):
         self.store, self.repos, self.files = store, repos, files
-        self.db, self.lock = store.db, _TimedLock(store.lock)
+        # reads only: each runs on the thread's own connection and never waits for a writer (no lock)
+        self.db, self.lock = store.db, _TimedLock(contextlib.nullcontext())
         self._fbuilding = False
 
     def _index(self, kind):

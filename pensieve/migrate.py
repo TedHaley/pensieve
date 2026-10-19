@@ -29,11 +29,12 @@ DELETED_MARK = "v1-deleted.json"  # in DATA_DIR/v2: delete_v1 ran, and runs no m
 # What delete_v1 removes from the v1 data folder: exactly these names (and the *.tv files at its top level).
 DELETE = ("pensieve.db", "pensieve.db-wal", "pensieve.db-shm", "index.tv", "code.tv", "files.tv", "connections",
           "people", "projects", "threads", "git", "work_notes.json", "work_done.json", "usage.db", "usage.db-wal",
-          "usage.db-shm", "agent_jobs.db", "agent_jobs.db-wal", "agent_jobs.db-shm", "index.db")
+          "usage.db-shm", "agent_jobs.db", "agent_jobs.db-wal", "agent_jobs.db-shm", "index.db", "feedback.jsonl",
+          "embed_model")
 KEEP_IN_CONNECTIONS = {".oauth"}  # sign-in tokens of the user's own MCP connections (mcp_oauth.py)
 # The v1 files that a step reads: kept until the step is done or given up.
 PROTECTS = {"person_overrides": ("people",), "org_evidence": ("people",), "card_states": ("pensieve.db",),
-            "embed_cache": ("pensieve.db",), "card_notes": ("work_notes.json",), "card_done": ("work_done.json",),
+            "embed_cache": ("pensieve.db", "embed_model"), "feedback": ("feedback.jsonl",), "card_notes": ("work_notes.json",), "card_done": ("work_done.json",),
             "usage": ("usage.db",), "doc_paths": ("connections",)}
 # Paths that v1 code in this process still uses: delete_v1 keeps them, so it never removes a live index.
 LIVE = (("pensieve.config", "DB_PATH"), ("pensieve.config", "INDEX_PATH"), ("pensieve.repos", "CODE_INDEX_PATH"),
@@ -44,6 +45,11 @@ LIVE = (("pensieve.config", "DB_PATH"), ("pensieve.config", "INDEX_PATH"), ("pen
 
 _lock = threading.Lock()
 _deleting = threading.Lock()
+# Set when the embed cache holds what v1 can give it (or there is nothing to give). indexer.embed waits for it, up to
+# CACHE_WAIT seconds, once `start` ran: the first index then embeds only the text that v1 did not have.
+cache_ready = threading.Event()
+started = False
+CACHE_WAIT = 1800
 _marked: set[str] = set()
 progress: dict = {"phase": "unknown"}  # for /api/status; see view()
 listeners: list = []  # fn() after each change of progress
@@ -358,7 +364,9 @@ def _write_doc_paths(store, objs) -> int:
     return migration.put_all(store, objs, ("path",))
 
 
-STEPS = [
+STEPS = [  # the embed cache first: indexing waits for it (cache_ready)
+    Step("embed_cache", "vectors of v1 chunks, by the hash of their text", lambda v1: [], write=_write_embed,
+         available=lambda: _embedcache() is not None),
     Step("person_overrides", "person merges, splits and 'This is me'", read_person_overrides, ("action", "a", "b")),
     Step("card_states", "card states set by the user", read_card_states, ("card_id", "state", "at")),
     Step("feedback", "bug reports and ideas", read_feedback, ("id",)),
@@ -367,8 +375,6 @@ STEPS = [
     Step("org_evidence", "org chart evidence", read_org_evidence, write=_write_org),
     Step("usage", "MCP tool call history", read_usage, write=_write_usage, available=lambda: _usage_model() is not None),
     Step("doc_paths", "old file ids of connection items", read_doc_paths, write=_write_doc_paths),
-    Step("embed_cache", "vectors of v1 chunks, by the hash of their text", lambda v1: [], write=_write_embed,
-         available=lambda: _embedcache() is not None),
 ]
 
 
@@ -411,6 +417,8 @@ def import_v1(v1: Path, store, dry: bool | None = None) -> dict[str, dict]:
         log(f"{s.name}: {r['status']}, {r.get('count')} rows" + (f" of {r['read']} read" if r.get("read") else "")
             + (f" ({r['error']})" if r.get("error") else "") + f" in {time.time() - t:.1f} s")
         _set(done=len(STEPS) - len(todo) + i + 1, steps=out)
+        if s.name == "embed_cache":
+            cache_ready.set()
     return out
 
 
@@ -584,6 +592,8 @@ def run():
     with _lock:
         v1 = v1_dir()
         try:
+            if not v1_detected(v1) or "embed_cache" not in pending_steps_safe():
+                cache_ready.set()
             if not v1_detected(v1):
                 _set(phase="done" if (v1 / "v2" / DELETED_MARK).exists() else "none")
                 return
@@ -602,9 +612,24 @@ def run():
         except Exception as e:
             traceback.print_exc()
             _set(phase="error", error=repr(e)[:300])
+        finally:
+            cache_ready.set()
+
+
+def pending_steps_safe() -> list[str]:
+    """pending_steps of this data folder's store.db; every step when it can not be read (or in a dry run)."""
+    if dry_run():
+        return [s.name for s in STEPS]
+    try:
+        from pensieve import store as st
+        return pending_steps(st.store_db())
+    except Exception:
+        return [s.name for s in STEPS]
 
 
 def start():
+    global started
+    started = True
     threading.Thread(target=run, daemon=True, name="migrate").start()
 
 

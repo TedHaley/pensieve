@@ -128,20 +128,18 @@ def _home(p) -> str:
 
 def catalog(store, repos, files) -> list[dict]:
     on = settings.enabled
-    with store.lock:
-        db = store.db
-        per_root = dict(db.execute("SELECT root, COUNT(*) FROM files GROUP BY root").fetchall())
-        per_repo = dict(db.execute("SELECT repo, COUNT(DISTINCT path) FROM code_chunks GROUP BY repo").fetchall())
-        repo_rows = db.execute("SELECT root, name FROM repos ORDER BY name").fetchall()
-        wt_rows = db.execute("SELECT path, repo, branch FROM worktrees ORDER BY path").fetchall()
-        per_wt = dict(db.execute("SELECT wt, COUNT(*) FROM checkout_files WHERE wt!='' GROUP BY wt").fetchall())
+    db = store.db
+    per_root = dict(db.execute("SELECT root, COUNT(*) FROM files GROUP BY root").fetchall())
+    per_repo = dict(db.execute("SELECT repo, COUNT(DISTINCT path) FROM code_chunks GROUP BY repo").fetchall())
+    repo_rows = db.execute("SELECT root, name FROM repos ORDER BY name").fetchall()
+    wt_rows = db.execute("SELECT path, repo, branch FROM worktrees ORDER BY path").fetchall()
+    per_wt = dict(db.execute("SELECT wt, COUNT(*) FROM checkout_files WHERE wt!='' GROUP BY wt").fetchall())
 
     agents = []
     for sid, k, root, _ in config.session_sources():
         extra = "@" in sid
-        with store.lock:
-            n = store.db.execute("SELECT COUNT(*) FROM sessions WHERE n_chunks>0 AND source=? AND path LIKE ?",
-                                 (k, str(root) + "/%")).fetchone()[0]
+        n = store.db.execute("SELECT COUNT(*) FROM sessions WHERE n_chunks>0 AND source=? AND path LIKE ?",
+                             (k, str(root) + "/%")).fetchone()[0]
         where = root.parent.name if root.name in ("projects", "sessions") else root.name
         agents.append(dict(id=sid, label=AGENTS.get(k, k) + (f" · {where}" if extra else ""), detail=_home(root),
                            available=root.is_dir(), enabled=on(sid), count=n, unit="sessions",

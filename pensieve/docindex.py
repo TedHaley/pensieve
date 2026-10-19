@@ -131,7 +131,7 @@ def resolve_path(path: str) -> int | None:
     kept from before storage v2."""
     from pathlib import Path
     p = Path(path)
-    if p.suffix != ".md" or p.parent.parent != connections.DIR:
+    if p.suffix != ".md" or p.parent.parent != config.DATA_DIR / "connections":
         return None
     sid, stem = p.parent.name, p.stem
     db = v2.store_db()
