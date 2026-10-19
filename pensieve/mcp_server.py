@@ -72,7 +72,7 @@ def _check_repo(repo):
 
 def tool(name=None):
     """Register an MCP tool; bad input (ValueError, unknown id) reaches the agent as a readable error. Every call is
-    logged to usage.db (see usage.py)."""
+    logged to store.db (see usage.py)."""
     def deco(fn):
         @functools.wraps(fn)
         def wrap(*a, **k):

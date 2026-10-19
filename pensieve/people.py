@@ -5,7 +5,8 @@ Each person is one record built from several identities:
 - GitHub logins, from the pull requests that `gh` can read, and from noreply emails (123+login@users.noreply.github.com);
 - Slack users, from the items that Pensieve collected from a Slack MCP server (connections/<server>/.raw/).
 Identities join on the same email, then on a GitHub login, then on the same full name (two words or more). The user can
-merge or split people by hand; these overrides stay in ~/.pensieve/people/overrides.json.
+merge or split people by hand; these overrides stay in store.db (person_overrides), with the identities, the person
+ids and their keys (pensieve/store/people.py). The graph's edges and views are in index.db.
 
 Edges between people come from what this Mac can see: files edited by both (git), pull requests that one wrote and the
 other reviewed, the user's tasks (the Context tab), and Slack threads, channels and direct messages. Closeness to the
@@ -26,16 +27,12 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from pensieve import config, connections, identity, org, orgstore, repos as repos_mod, settings, work
+from pensieve import connections, identity, org, orgstore, repos as repos_mod, settings, store as v2, work
+from pensieve.models import Avatar, Identity, Person, PersonAlias, PersonKey
+from pensieve.store import cache as cache_db, people as people_db
 
-DIR = config.DATA_DIR / "people"
-RAW = DIR / "raw.json"            # identities and interactions, by identity key (the slow part)
-GRAPH = DIR / "graph.json"        # people, edges and profiles (resolved from RAW and the overrides)
-OVERRIDES = DIR / "overrides.json"
-ORG_EVIDENCE = DIR / "org_evidence.json"  # org evidence over all builds (orgstore.py)
-PROFILES = DIR / "slack_profiles.json"
-AVATARS = DIR / "avatars"
-CACHE = DIR / "cache"
+AVATARS = v2.avatars_dir()
+GIT_TTL = 30 * 86400   # a repo's git cache is checked against its HEAD; the row expires only for the purge
 
 REBUILD_SECONDS = 1800
 GIT_DAYS = 365
@@ -109,18 +106,13 @@ def _decay(ts: float, now: float) -> float:
     return 0.5 ** (max(0.0, now - ts) / 86400 / HALF_LIFE_DAYS) if ts else 0.25
 
 
-def _read(p: Path, default):
-    try:
-        return json.loads(p.read_text())
-    except (OSError, ValueError):
-        return default
+def cache_get(key: str, default=None):
+    """A cached answer of gh or git (index.db `cache`), expired or not: the caller checks its `at` or `head`."""
+    return cache_db.get_json(v2.index_db(), key, default)
 
 
-def _write(p: Path, data):
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data))
-    tmp.replace(p)
+def cache_put(key: str, data, ttl: float):
+    cache_db.put_json(v2.index_db(), key, data, ttl)
 
 
 class _Raw:
@@ -197,7 +189,7 @@ def _me_git(roots) -> tuple[dict, dict]:
 
 def _gh_accounts() -> list[dict]:
     """Every GitHub account that `gh` is logged in to (gh auth status, read only): [{login, host, active}]."""
-    hit = _read(CACHE / "gh-accounts.json", {})
+    hit = cache_get("gh:accounts", {})
     if hit.get("at", 0) > time.time() - 86400:
         return hit.get("accounts", [])
     out = []
@@ -215,12 +207,12 @@ def _gh_accounts() -> list[dict]:
                 out.append(cur)
             elif cur and re.search(r"Active account:\s*true", ln):
                 cur["active"] = True
-    _write(CACHE / "gh-accounts.json", {"at": time.time(), "accounts": out})
+    cache_put("gh:accounts", {"at": time.time(), "accounts": out}, 86400)
     return out
 
 
 def _gh_login() -> str:
-    hit = _read(CACHE / "gh-user.json", {})
+    hit = cache_get("gh:user", {})
     if hit.get("at", 0) > time.time() - 86400:
         return hit.get("login", "")
     login = ""
@@ -230,7 +222,7 @@ def _gh_login() -> str:
                                    timeout=15).stdout.strip()
         except (OSError, subprocess.TimeoutExpired):
             pass
-    _write(CACHE / "gh-user.json", {"at": time.time(), "login": login})
+    cache_put("gh:user", {"at": time.time(), "login": login}, 86400)
     return login
 
 
@@ -257,8 +249,8 @@ def _git_repo(root: str, name: str) -> dict | None:
     head = repos_mod.git(root, "rev-parse", "HEAD").strip()
     if not head:
         return None
-    cf = CACHE / f"git-{_hash(root)}.json"
-    hit = _read(cf, {})
+    cf = "people:git:" + root
+    hit = cache_get(cf, {})
     if hit.get("head") == head and hit.get("v") == 2:
         return hit
     out = repos_mod.git(root, "log", f"--since={GIT_DAYS}.days", "--no-merges", "-n", "5000", "--name-only",
@@ -319,7 +311,7 @@ def _git_repo(root: str, name: str) -> dict | None:
                         for e, a in authors.items()},
                coauthors={e: {"name": c["name"], "with": dict(c["with"]), "last": c["last"]} for e, c in coauthors.items()},
                pairs=[[x, y, p[0], p[1], [a for a, _ in p[2].most_common(3)]] for (x, y), p in pairs.items()])
-    _write(cf, res)
+    cache_put(cf, res, GIT_TTL)
     return res
 
 
@@ -375,8 +367,8 @@ def _gh_slug(remote: str) -> str:
 def _gh_repo(slug: str) -> list[dict]:
     """The last PR_LIMIT pull requests of a GitHub repo through `gh` (read only): author, reviewers and commit
     authors. Cached for GH_TTL."""
-    cf = CACHE / f"gh-{_hash(slug)}.json"
-    hit = _read(cf, {})
+    cf = "gh:prs:" + slug
+    hit = cache_get(cf, {})
     if hit.get("at", 0) > time.time() - GH_TTL and hit.get("v") == 2:
         return hit.get("prs", [])
     def gh(limit, fields):
@@ -403,7 +395,7 @@ def _gh_repo(slug: str) -> list[dict]:
                     for cm in authors.get(p.get("number"), []) for c in cm.get("authors") or []}.values())))
     except (OSError, subprocess.TimeoutExpired, ValueError):
         prs = hit.get("prs", [])  # kept, and not asked again before GH_TTL
-    _write(cf, {"at": time.time(), "prs": prs, "v": 2})
+    cache_put(cf, {"at": time.time(), "prs": prs, "v": 2}, GH_TTL)
     return prs
 
 
@@ -413,7 +405,7 @@ def _collect_github(raw: _Raw, repo_rows, my_emails: set[str]):
     since = time.time() - 180 * 86400
 
     def mine(root):  # the user's commits in a repo over the last 180 days: the repos they work in come first
-        g = _read(CACHE / f"git-{_hash(root)}.json", {})
+        g = cache_get("people:git:" + root, {})
         return sum(a["commits"] for e, a in g.get("authors", {}).items() if e in my_emails and a["last"] > since)
     rows = [(root, name, _gh_slug(remote)) for root, name, remote in repo_rows]
     rows = sorted([r for r in rows if r[2]], key=lambda r: -mine(r[0]))[:MAX_PR_REPOS]
@@ -546,7 +538,7 @@ def _slack_items():
 def _collect_slack(raw: _Raw) -> dict:
     """Slack people, and who talked with whom in the threads, channels and direct messages that the user can see.
     Returns item path -> the identity keys of the people in it (for tasks that hold Slack items)."""
-    prof = _read(PROFILES, {})
+    prof = people_db.slack_users(v2.store_db())
     users = {u["id"]: dict(u) for u in prof.get("users", {}).values() if u.get("id")}
     threads = defaultdict(lambda: {"people": set(), "last": 0, "channel": "", "url": "", "dm": False})
     channels = defaultdict(lambda: {"people": Counter(), "last": 0, "name": ""})
@@ -679,7 +671,6 @@ def _collect_tasks(raw: _Raw, store, slack_by_item: dict):
 
 def collect(store, repo_rows) -> dict:
     """Run every collector and save the raw identities and interactions. `repo_rows`: (root, name, remote)."""
-    CACHE.mkdir(parents=True, exist_ok=True)
     raw = _Raw()
     emails, names = _me_git([r[0] for r in repo_rows])
     for e, where in emails.items():
@@ -704,8 +695,30 @@ def collect(store, repo_rows) -> dict:
     _collect_owners(raw, repo_rows)
     _collect_blame(raw, repo_rows)
     d = raw.dump()
-    _write(RAW, d)
+    people_db.put_identities(v2.store_db(), _identities(d["ids"], int(d["built"])))
+    people_db.set_raw(v2.index_db(), d)
     return d
+
+
+_SRC_RANK = {"slack": 0, "github": 1, "directory": 2, "git": 3, "task": 4}
+
+
+def _identities(obs: list[dict], at: int) -> list[Identity]:
+    """One row per identity key of a build: the name, title and picture of its best source (Slack, then GitHub)."""
+    best = {}
+    for ob in sorted(obs, key=lambda ob: _SRC_RANK.get(ob["src"], 9)):
+        for k in ob["keys"]:
+            kind = people_db.key_kind(k)
+            if not kind:
+                continue
+            cur = best.get(k)
+            if cur is None:
+                best[k] = dict(kind=kind, name=ob["name"], title=ob["title"], avatar=ob["avatar"], src=ob["src"])
+            else:
+                for f in ("name", "title", "avatar"):
+                    cur[f] = cur[f] or ob[f]
+    return [Identity(k, b["kind"], b["name"] or None, b["title"] or None, b["avatar"] or None, b["src"], at, at)
+            for k, b in best.items()]
 
 
 blame_fn = None   # the server sets it: repo name -> [{author: 'Name <email>', share, lines, dirs}] (git blame)
@@ -727,9 +740,9 @@ def _collect_blame(raw: _Raw, repo_rows):
 
 
 def _collect_directory(raw: _Raw):
-    """The people that Find a person found and kept (directory.json): more evidence of which identities are one
+    """The people that Find a person found and kept (store.db): more evidence of which identities are one
     person (a Slack profile's emails, a GitHub login). Records that join no one are not people of the graph."""
-    for r in _read(DIR / "directory.json", {}).get("people", []):
+    for r in people_db.directory(v2.store_db()):
         common = dict(name=r.get("name", ""), login=r.get("login", ""), slack=r.get("slack", ""),
                       avatar=r.get("avatar_url", ""), title=r.get("title", ""))
         for e in (r.get("emails") or [""])[:4]:
@@ -781,8 +794,8 @@ def _collect_owners(raw: _Raw, repo_rows):
 
 def _gh_team(slug: str) -> dict | None:
     """A GitHub team ('org/team'): its name, parent team, members and maintainers. Read only; cached for a day."""
-    cf = CACHE / f"gh-team-{_hash(slug)}.json"
-    hit = _read(cf, {})
+    cf = "gh:team:" + slug
+    hit = cache_get(cf, {})
     if hit.get("at", 0) > time.time() - 86400:
         return hit.get("team")
     org_, _, team = slug.partition("/")
@@ -801,20 +814,19 @@ def _gh_team(slug: str) -> dict | None:
                    maintainers=sorted({m["login"].lower() for m in maint or [] if m.get("login")}))
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
         res = hit.get("team")
-    _write(cf, {"at": time.time(), "team": res})
+    cache_put(cf, {"at": time.time(), "team": res}, 86400)
     return res
 
 
 def overrides() -> dict:
-    o = _read(OVERRIDES, {})
-    return {"merge": o.get("merge", []), "split": o.get("split", []), "me": o.get("me", [])}
+    return people_db.overrides(v2.store_db())
 
 
 def _set_overrides(fn):
     with _lock:
         o = overrides()
         fn(o)
-        _write(OVERRIDES, o)
+        people_db.set_overrides(v2.store_db(), o)
 
 
 def _stems(raw: dict) -> list[str]:
@@ -966,11 +978,11 @@ def resolve(raw: dict, ovr: dict, prev: dict | None = None) -> dict:
     for pid, p in people.items():
         p["last"] = profiles[pid]["last"]
         p["function"] = profiles[pid]["function"]
-    ev = orgstore.load(ORG_EVIDENCE)
+    ev = orgstore.load()
     new_build = orgstore.merge(ev, raw, now, org.is_manager_title)
     chart = org.infer(people, profiles, work_of, edges, raw, ev)
     orgstore.add_teams(ev, chart["teams"], lambda q: people[q]["keys"][0] if people[q]["keys"] else "", now, new_build)
-    orgstore.save(ORG_EVIDENCE, ev)
+    orgstore.save(ev)
     chart["evidence"] = orgstore.summary(ev)
     for pid, pr in profiles.items():
         pr["joined_because"] = [_join_view(j) for j in people[pid]["joins"]]
@@ -989,7 +1001,8 @@ def resolve(raw: dict, ovr: dict, prev: dict | None = None) -> dict:
                 edges=[{"a": e["a"], "b": e["b"], "w": e["w"], "kinds": dict(e["kinds"]), "last": e["last"]}
                        for e in sorted(edges.values(), key=lambda e: -e["w"])[:5000]],
                 me_edges={(e["b"] if e["a"] == me_id else e["a"]): {k: v[:8] for k, v in e["refs"].items()}
-                          for e in edges.values() if me_id in (e["a"], e["b"])})
+                          for e in edges.values() if me_id in (e["a"], e["b"])},
+                edge_rows=[r for e in edges.values() for r in people_db.edge_rows(e, KIND_WEIGHT, _decay(e["last"], now))])
 
 
 def _merge_work(keys, work_by_key) -> dict:
@@ -1162,20 +1175,40 @@ def _via_for(pid: str, via: dict, me: dict, raw: dict) -> list[dict]:
     return sorted(out, key=lambda x: -sum(y["n"] for y in x["kinds"]))
 
 
-_avatar_index: tuple[float, dict[str, Path]] = (-1.0, {})
+_avatars = {"of": None}   # hash -> Avatar row: the `avatars` table, read once per process
+_avatars_lock = threading.Lock()
+
+
+def _avatar_index() -> dict:
+    """The pictures in the avatars folder, by hash. An empty table (a new index.db) is filled from the folder once."""
+    if _avatars["of"] is None:
+        with _avatars_lock:
+            if _avatars["of"] is None:
+                idx = v2.index_db()
+                of = cache_db.avatars(idx)
+                if not of and AVATARS.is_dir():
+                    found = [Avatar(f.stem, None if f.suffix == ".none" else f.suffix[1:], int(f.stat().st_mtime))
+                             for f in AVATARS.iterdir() if len(f.stem) == 16 and f.suffix]
+                    of = {a.hash: a for a in sorted(found, key=lambda a: a.ext is not None)}
+                    cache_db.put_avatars(idx, list(of.values()))
+                _avatars["of"] = of
+    return _avatars["of"]
+
+
+def _set_avatar(a: Avatar):
+    _avatar_index()[a.hash] = a
+    cache_db.put_avatar(v2.index_db(), a)
+
+
+def avatar_by_hash(h: str) -> Path | None:
+    """The picture file for the hash of its address, or None."""
+    a = _avatar_index().get(h)
+    f = AVATARS / f"{h}.{a.ext}" if a and a.ext else None
+    return f if f and f.is_file() else None
 
 
 def _avatar_file(url: str) -> Path | None:
-    """The downloaded picture of a URL, or None. The folder is listed once and again only when it changes: a glob
-    for each person made a Projects build spend 15 s here."""
-    global _avatar_index
-    try:
-        m = AVATARS.stat().st_mtime
-    except OSError:
-        return None
-    if _avatar_index[0] != m:
-        _avatar_index = (m, {f.stem: f for f in AVATARS.iterdir() if f.suffix != ".none"})
-    return _avatar_index[1].get(_hash(url, 16))
+    return avatar_by_hash(_hash(url, 16))
 
 
 def _fetch_avatar(url: str) -> Path | None:
@@ -1185,8 +1218,9 @@ def _fetch_avatar(url: str) -> Path | None:
     if hit:
         return hit
     AVATARS.mkdir(parents=True, exist_ok=True)
-    miss = AVATARS / (_hash(url, 16) + ".none")
-    if miss.exists() and time.time() - miss.stat().st_mtime < 7 * 86400:
+    h = _hash(url, 16)
+    a = _avatar_index().get(h)
+    if a and not a.ext and time.time() - a.at < 7 * 86400:
         return None
     tries = [re.sub(r"_original\.(\w+)$", r"_192.\1", url), url] if "_original." in url else [url]
     for u in tries:
@@ -1197,10 +1231,11 @@ def _fetch_avatar(url: str) -> Path | None:
         ct = r.headers.get("content-type", "").split(";")[0]
         if r.status_code == 200 and ct.startswith("image/") and len(r.content) < 3_000_000:
             ext = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(ct, "img")
-            f = AVATARS / f"{_hash(url, 16)}.{ext}"
+            f = AVATARS / f"{h}.{ext}"
             f.write_bytes(r.content)
+            _set_avatar(Avatar(h, ext, int(time.time())))
             return f
-    miss.touch()
+    _set_avatar(Avatar(h, None, int(time.time())))
     return None
 
 
@@ -1216,16 +1251,55 @@ def avatar(pid: str) -> Path | None:
 
 
 def graph() -> dict | None:
+    """The last build: the view in index.db's meta, with the edges from `person_edges`. Read once per process."""
     with _lock:
         if _state["graph"] is None:
-            _state["graph"] = _read(GRAPH, None)
+            idx = v2.index_db()
+            g = people_db.graph_view(idx)
+            if g is not None:
+                g["edges"] = people_db.edges_view(idx)
+            _state["graph"] = g
         return _state["graph"]
 
 
+def _prev() -> dict | None:
+    """The last build's person ids, keys and aliases (store.db), so that ids stay the same."""
+    p = people_db.previous(v2.store_db())
+    return p if p["people"] else graph()
+
+
+def _save_people(g: dict):
+    """The persons, their keys (with why each key joined) and older ids of a build, in store.db."""
+    t = int(time.time())
+    persons, keys, aliases, idents = [], [], [], []
+    ids = set(g["people"])
+    for pid, p in g["people"].items():
+        persons.append(Person(pid, p["name"], bool(p["me"]), int(p.get("since") or t)))
+        why = {j["b"]: j for j in p.get("joins", [])}
+        for k in p["keys"]:
+            kind = people_db.key_kind(k)
+            if not kind:
+                continue
+            j = why.get(k)
+            keys.append(PersonKey(k, pid, people_db.key_reason(j["kind"]) if j else people_db.key_reason("fact"),
+                                  j["score"] if j else None,
+                                  json.dumps({"with": j["a"], "reason": j["reason"], "evidence": j["evidence"]})
+                                  if j else None))
+            idents.append(Identity(k, kind, None, None, None, "build", t, t))
+        aliases += [PersonAlias(a, pid) for a in p.get("aliases", []) if a not in ids]
+    people_db.save_persons(v2.store_db(), persons, keys, aliases, idents)
+
+
 def _publish(g: dict):
+    """Keep a build: persons in store.db; edges and the view in index.db; the graph in memory."""
+    edge_rows = g.pop("edge_rows", None)
+    _save_people(g)
+    idx = v2.index_db()
+    if edge_rows is not None:
+        people_db.save_edges(idx, edge_rows)
+    people_db.set_graph_view(idx, {k: v for k, v in g.items() if k != "edges"})
     with _lock:
         _state["graph"] = g
-        _write(GRAPH, g)
 
 
 def rebuild(store, repo_rows_fn, force=False) -> bool:
@@ -1240,7 +1314,7 @@ def rebuild(store, repo_rows_fn, force=False) -> bool:
 
     def run():
         try:
-            g = resolve(collect(store, repo_rows_fn()), overrides(), graph())
+            g = resolve(collect(store, repo_rows_fn()), overrides(), _prev())
             _publish(g)
             _state["error"] = None
             _fetch_avatars(g)
@@ -1258,9 +1332,9 @@ def rebuild(store, repo_rows_fn, force=False) -> bool:
 
 def re_resolve():
     """Apply the overrides again to the saved raw data (fast: no git, gh or Slack)."""
-    raw = _read(RAW, None)
+    raw = people_db.raw(v2.index_db())
     if raw:
-        _publish(resolve(raw, overrides(), graph()))
+        _publish(resolve(raw, overrides(), _prev()))
 
 
 def summary(limit: int = 200) -> dict:
@@ -1485,7 +1559,7 @@ def set_me(pid: str):
 
 
 def reset_overrides():
-    _write(OVERRIDES, {"merge": [], "split": [], "me": []})
+    people_db.set_overrides(v2.store_db(), {"merge": [], "split": [], "me": []})
     re_resolve()
 
 
@@ -1506,8 +1580,7 @@ def missing_profiles(limit: int = 25) -> list[str]:
 
 def add_profiles(results: list[tuple]) -> int:
     """Keep the Slack users that a profile lookup returned. A profile call with no user id gives the user's own."""
-    d = _read(PROFILES, {})
-    users = d.setdefault("users", {})
+    users, me = {}, None
     n = 0
     for tool, args, text in results:
         try:
@@ -1522,9 +1595,8 @@ def add_profiles(results: list[tuple]) -> int:
             n += 1
         own = not any(isinstance(v, str) and _UID.fullmatch(v) for v in (args or {}).values())
         if found and own and "profile" in connections.words(tool):
-            d["me"] = found[0]["id"]
-    d["at"] = time.time()
-    _write(PROFILES, d)
+            me = found[0]["id"]
+    people_db.put_slack_users(v2.store_db(), list(users.values()), me)
     return n
 
 

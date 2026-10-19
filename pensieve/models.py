@@ -483,12 +483,16 @@ class ThreadSnapshotReason:
 @dataclass(frozen=True)
 class Feedback:
     __table__ = "feedback"
-    id: int | None
+    id: str  # 10 hex characters: the app and the MCP tool name a report by it
     at: int
     by: FeedbackBy
     kind: FeedbackKind
-    text: str
+    text: str  # the one-line summary
     status: FeedbackStatus
+    details: str
+    source: str  # "user", or the MCP client name of the agent that filed it
+    version: str  # Pensieve's version when it was filed
+    context: str  # JSON object: where the agent was (cwd)
 
 
 @dataclass(frozen=True)
@@ -544,11 +548,147 @@ class Meta:
     value: str
 
 
+@dataclass(frozen=True)
+class SlackUser:
+    """A Slack user that a profile lookup or a collected message showed."""
+    __table__ = "slack_users"
+    id: str  # U012ABC
+    name: str
+    title: str
+    email: str
+    avatar_url: str
+    display: str
+    bot: bool
+    is_me: bool
+    seen_at: int
+
+
+@dataclass(frozen=True)
+class DirectoryPerson:
+    """A person that Find a person found in the user's services and kept."""
+    __table__ = "directory_people"
+    id: str  # "d" + 10 hex characters
+    name: str
+    login: str
+    slack: str
+    title: str
+    avatar_url: str
+    found_at: int
+    seen_at: int
+
+
+@dataclass(frozen=True)
+class DirectoryEmail:
+    __table__ = "directory_emails"
+    person_id: str
+    email: str
+
+
+@dataclass(frozen=True)
+class DirectorySource:
+    __table__ = "directory_sources"
+    person_id: str
+    idx: int
+    source: str  # the connector that found them: slack, github, ...
+
+
+@dataclass(frozen=True)
+class OrgTeamPair:
+    """How often two people (by an identity key, a < b) were in the same inferred team, decayed over builds."""
+    __table__ = "org_team_pairs"
+    a_key: str
+    b_key: str
+    weight: float
+    updated_at: int  # when the build that last changed the weight ran
+
+
+@dataclass(frozen=True)
+class OrgManagerTitle:
+    """A title with a manager word, as org_titles counts it (manager-title sightings)."""
+    __table__ = "org_manager_titles"
+    key: str
+    title: str
+    first_seen: int
+    last_seen: int
+    builds: int
+
+
+@dataclass(frozen=True)
+class OrgState:
+    """The one row of org evidence counts: the first and last build, and when the team counts last decayed."""
+    __table__ = "org_state"
+    id: int  # always 1
+    since: int
+    updated: int
+    builds: int
+    last_build: int
+    teams_at: int
+
+
+@dataclass(frozen=True)
+class UsageCall:
+    """One MCP tool call (v1: usage.db)."""
+    __table__ = "usage_calls"
+    id: int | None
+    at: int
+    source: str | None  # mcp or hook
+    tool: str
+    client: str | None
+    conn: str | None
+    cwd: str | None
+    scope: str | None
+    args: str | None  # JSON
+    ms: float | None
+    ok: bool | None
+    error: str | None
+    n_results: int | None
+    results: str | None  # JSON: [[id, path], ...]
+    laps: str | None  # JSON: per-phase times
+    out_chars: int | None
+
+
+@dataclass(frozen=True)
+class AgentJob:
+    """A completion that waits for the user's agent (v1: agent_jobs.db)."""
+    __table__ = "agent_jobs"
+    id: str  # sha1 of system, prompt and schema
+    kind: str
+    system: str
+    prompt: str
+    schema: str | None  # JSON schema of the answer
+    max_tokens: int
+    asked_at: int
+    answer: str | None
+    answered_at: int | None
+    claimed_at: int | None
+    claimer: str | None
+
+
+@dataclass(frozen=True)
+class AgentSession:
+    """An agent session that answered jobs."""
+    __table__ = "agent_sessions"
+    conn: str
+    client: str | None
+    at: int
+    answers: int
+
+
+@dataclass(frozen=True)
+class Avatar:
+    """A picture in v2/avatars: <hash>.<ext>. No ext: the download failed at `at`."""
+    __table__ = "avatars"
+    hash: str  # sha1 of the picture's address, 16 hex characters
+    ext: str | None
+    at: int
+
+
 STORE_MODELS = (Source, Document, DocumentPerson, DocumentChange, DocumentSession, Identity, Person, PersonKey,
                 PersonAlias, PersonOverride, OrgPullRequest, OrgReview, OrgTitle, OrgFirstCommit, Card, CardMember,
                 CardNote, CardStateSet, CardDone, CardDoneCheck, Thread, ThreadMember, ThreadRepo, ThreadCard, ThreadEventRow,
-                ThreadSnapshot, ThreadSnapshotReason, Feedback)
-INDEX_MODELS = (DocChunk, DocIndexState, EmbedCache, PersonEdge, CacheEntry, Meta)
+                ThreadSnapshot, ThreadSnapshotReason, Feedback, SlackUser, DirectoryPerson, DirectoryEmail,
+                DirectorySource, OrgTeamPair, OrgManagerTitle, OrgState, UsageCall, AgentJob, AgentSession)
+INDEX_MODELS = (DocChunk, DocIndexState, EmbedCache, PersonEdge, CacheEntry, Meta, Avatar)
 
 
 @cache

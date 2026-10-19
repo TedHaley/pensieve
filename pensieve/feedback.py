@@ -1,22 +1,20 @@
 """Bug reports and ideas about Pensieve, from agents (the report_feedback MCP tool) and from the user (the app).
-They stay in DATA_DIR/feedback.jsonl on this Mac. Nothing is sent: the app shows each report, and the user can open
-it as a pre-filled GitHub issue to send it, or dismiss it. An agent's report can hold code or paths from the user's
-work, so a person reads it before it leaves the Mac."""
-import json
+They stay in the `feedback` table of store.db on this Mac. Nothing is sent: the app shows each report, and the user
+can open it as a pre-filled GitHub issue to send it, or dismiss it. An agent's report can hold code or paths from the
+user's work, so a person reads it before it leaves the Mac."""
 import platform
-import threading
 import time
 import uuid
 from urllib.parse import urlencode
 
-from pensieve import config
+from pensieve import store
+from pensieve.models import FeedbackStatus
+from pensieve.store import misc
 
-PATH = config.DATA_DIR / "feedback.jsonl"
 KINDS = ("bug", "idea")
 STATUSES = ("new", "sent", "dismissed")
 REPO = "https://github.com/TedHaley/pensieve"
 MAX_DETAILS = 4000  # characters: a report, not a log dump
-_lock = threading.Lock()
 
 
 def _version() -> str:
@@ -27,24 +25,6 @@ def _version() -> str:
         return "dev"
 
 
-def _all() -> list[dict]:
-    if not PATH.exists():
-        return []
-    out = []
-    for line in PATH.read_text(errors="replace").splitlines():
-        try:
-            out.append(json.loads(line))
-        except ValueError:
-            continue
-    return out
-
-
-def _write(items):
-    tmp = PATH.with_suffix(".tmp")
-    tmp.write_text("".join(json.dumps(x) + "\n" for x in items))
-    tmp.replace(PATH)
-
-
 def add(kind: str, summary: str, details: str = "", source: str = "user", context: dict | None = None) -> dict:
     """Record a report. `source`: the agent that filed it (its MCP client name), or "user"."""
     kind = (kind or "").strip().lower()
@@ -53,31 +33,25 @@ def add(kind: str, summary: str, details: str = "", source: str = "user", contex
     summary = " ".join((summary or "").split())
     if not summary:
         raise ValueError("summary is empty: say in one line what went wrong or what would be better")
-    item = dict(id=uuid.uuid4().hex[:10], ts=time.time(), kind=kind, summary=summary[:200],
+    item = dict(id=uuid.uuid4().hex[:10], ts=int(time.time()), kind=kind, summary=summary[:200],
                 details=(details or "").strip()[:MAX_DETAILS], source=source or "user", status="new",
                 version=_version(), context={k: v for k, v in (context or {}).items() if v})
-    with _lock:
-        with open(PATH, "a") as f:
-            f.write(json.dumps(item) + "\n")
-    return item
+    return misc.add_feedback(store.store_db(), item)
 
 
 def items(status: str | None = None) -> list[dict]:
     """Newest first, each with the GitHub link that sends it."""
-    out = [dict(x, issue_url=issue_url(x)) for x in _all() if status is None or x.get("status") == status]
+    out = [dict(x, issue_url=issue_url(x)) for x in misc.feedback(store.store_db())
+           if status is None or x.get("status") == status]
     return sorted(out, key=lambda x: -x.get("ts", 0))
 
 
 def set_status(id: str, status: str) -> dict:
     if status not in STATUSES:
         raise ValueError(f"status must be one of: {', '.join(STATUSES)}")
-    with _lock:
-        all_ = _all()
-        hit = next((x for x in all_ if x.get("id") == id), None)
-        if not hit:
-            raise KeyError(id)
-        hit["status"] = status
-        _write(all_)
+    hit = misc.set_feedback_status(store.store_db(), id, FeedbackStatus(status))
+    if not hit:
+        raise KeyError(id)
     return hit
 
 

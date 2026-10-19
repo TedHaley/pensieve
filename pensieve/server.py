@@ -646,7 +646,7 @@ def _status():
 
 @app.get("/api/usage")
 def get_usage(days: float = 7, recent: int = 0):
-    """MCP tool calls over the last `days` (the log is ~/.pensieve/usage.db); `recent`: also the latest calls."""
+    """MCP tool calls over the last `days` (the log is in ~/.pensieve/v2/store.db); `recent`: also the latest calls."""
     return usage.summary(days, min(recent, 200))
 
 
@@ -1732,9 +1732,9 @@ async def search_people(q: str, remote: bool = True, deep: bool = False):
 def get_people_pic(h: str):
     """A picture from the picture folder, by the hash of its address (people found by a search)."""
     from pensieve import people
-    if len(h) != 16 or set(h) - set("0123456789abcdef") or not people.AVATARS.is_dir():
+    if len(h) != 16 or set(h) - set("0123456789abcdef"):
         raise HTTPException(404)
-    f = next((f for f in people.AVATARS.glob(h + ".*") if f.suffix != ".none"), None)
+    f = people.avatar_by_hash(h)
     if not f:
         raise HTTPException(404)
     return FileResponse(f, headers={"Cache-Control": "max-age=3600"})
@@ -1786,7 +1786,7 @@ class PeopleMeReq(BaseModel):
 
 @app.post("/api/people/merge")
 def merge_people(req: PeopleMergeReq):
-    """These people are one person (kept on this Mac, in people/overrides.json)."""
+    """These people are one person (kept on this Mac, in store.db)."""
     from pensieve import people
     try:
         return {"id": people.merge(req.ids)}

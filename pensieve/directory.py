@@ -8,9 +8,10 @@ only when they are there and switched on:
   server that it connects to itself (own or agent config) directly. A Claude Code server costs a headless model run,
   so it is asked only when the user asks for it (`deep`).
 
-Each person found in the user's own services is kept in people/directory.json (name, emails, GitHub login, Slack id,
-title, picture, source, found_at). Records join by the same rules as the graph: email, GitHub login, Slack id, then
-full name. Public GitHub users are not kept. Pictures go into the graph's picture folder."""
+Each person found in the user's own services is kept in store.db's directory tables (name, emails, GitHub login,
+Slack id, title, picture, source, found_at). Records join by the same rules as the graph: email, GitHub login, Slack
+id, then full name. Public GitHub users are not kept. Pictures go into the graph's picture folder. The answers of gh
+are cached in index.db."""
 import asyncio
 import json
 import re
@@ -22,9 +23,9 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
-from pensieve import connections, connectors, people, settings
+from pensieve import connections, connectors, people, settings, store
+from pensieve.store import people as people_db
 
-FILE = people.DIR / "directory.json"
 ORG_TTL = 86400            # the member list of an organization
 NAME_TTL = 14 * 86400      # one GitHub user's name and picture
 MAX_MEMBERS = 2000         # per organization
@@ -82,7 +83,7 @@ def _keys(r: dict) -> list[str]:
 
 
 def load() -> list[dict]:
-    return people._read(FILE, {}).get("people", [])
+    return [{**r, "keys": _keys(r)} for r in people_db.directory(store.store_db())]
 
 
 def merge(found: list[dict]) -> list[dict]:
@@ -115,7 +116,8 @@ def merge(found: list[dict]) -> list[dict]:
             hit["seen_at"] = now
             hit["keys"] = _keys(hit)
             out.append({**hit, "source": f.get("source", "")})
-        people._write(FILE, {"people": recs})
+        changed = {r["id"]: r for r in out}
+        people_db.put_directory(store.store_db(), [r for r in recs if r["id"] in changed])
         return out
 
 
@@ -212,23 +214,23 @@ def gh_on() -> bool:
 
 
 def _orgs() -> list[str]:
-    cf = people.CACHE / "gh-orgs.json"
-    hit = people._read(cf, {})
+    cf = "gh:orgs"
+    hit = people.cache_get(cf, {})
     if hit.get("at", 0) > time.time() - ORG_TTL:
         return hit.get("orgs", [])
     try:
         orgs = [o["login"] for o in _gh_get("user/orgs?per_page=100") or [] if o.get("login")]
     except (OSError, ValueError, subprocess.TimeoutExpired):
         orgs = hit.get("orgs", [])
-    people._write(cf, {"at": time.time(), "orgs": orgs})
+    people.cache_put(cf, {"at": time.time(), "orgs": orgs}, ORG_TTL)
     return orgs
 
 
 def _members(org: str) -> list[dict]:
     """The members of an organization that the user can see: [{login, name, avatar_url}], cached for ORG_TTL. Names
     come from each user's profile, cached for NAME_TTL and filled in the background."""
-    cf = people.CACHE / f"gh-org-{people._hash(org)}.json"
-    hit = people._read(cf, {})
+    cf = "gh:org:" + org
+    hit = people.cache_get(cf, {})
     if hit.get("at", 0) < time.time() - ORG_TTL:
         try:
             got = _gh_get(f"orgs/{quote(org)}/members?per_page=100", paginate=True, timeout=90) or []
@@ -238,7 +240,7 @@ def _members(org: str) -> list[dict]:
                 for m in got[:MAX_MEMBERS] if m.get("login") and m.get("type", "User") == "User"]}
         except (OSError, ValueError, subprocess.TimeoutExpired):
             hit = {**hit, "at": time.time()}
-        people._write(cf, hit)
+        people.cache_put(cf, hit, NAME_TTL)
     _fill_names(org, cf)
     return hit.get("members", [])
 
@@ -249,7 +251,7 @@ def _fill_names(org: str, cf):
     with _lock:
         if org in _filling:
             return
-        todo = [m for m in people._read(cf, {}).get("members", []) if m.get("named", 0) < time.time() - NAME_TTL]
+        todo = [m for m in people.cache_get(cf, {}).get("members", []) if m.get("named", 0) < time.time() - NAME_TTL]
         if not todo:
             return
         _filling.add(org)
@@ -267,9 +269,9 @@ def _fill_names(org: str, cf):
             with ThreadPoolExecutor(6) as pool:
                 done = {m["login"]: m for m in pool.map(one, todo)}
             with _lock:
-                d = people._read(cf, {})
+                d = people.cache_get(cf, {})
                 d["members"] = [done.get(m["login"], m) for m in d.get("members", [])]
-                people._write(cf, d)
+                people.cache_put(cf, d, NAME_TTL)
         finally:
             _filling.discard(org)
     threading.Thread(target=run, daemon=True, name="gh-names").start()
