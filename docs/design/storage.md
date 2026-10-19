@@ -103,7 +103,8 @@ CREATE TABLE documents (          -- one item from a source: a ticket, a pull re
   branch     TEXT,                                -- head branch of a pull request
   created_at INTEGER,
   updated_at INTEGER,                             -- the service's update time
-  seen_at    INTEGER,                             -- when an agent session last saw it; used when updated_at is NULL
+  seen_at    INTEGER,                             -- when an agent session last saw it, else when it was collected;
+                                                  -- used when updated_at is NULL
   private    INTEGER NOT NULL DEFAULT 0 CHECK (private IN (0, 1)),
   text       TEXT NOT NULL,                       -- the readable text that search indexes
   raw        TEXT NOT NULL CHECK (json_valid(raw)), -- the service's item, as it came
@@ -111,6 +112,7 @@ CREATE TABLE documents (          -- one item from a source: a ticket, a pull re
   UNIQUE (source_id, key)
 ) STRICT;
 CREATE INDEX documents_time ON documents (coalesce(updated_at, seen_at));
+CREATE INDEX documents_branch ON documents (branch) WHERE branch IS NOT NULL;
 
 CREATE TABLE document_people (    -- the people on a document, as identity keys
   doc_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -136,9 +138,15 @@ CREATE TABLE document_sessions (  -- the agent sessions that saw a document
   seen_at     INTEGER NOT NULL,
   PRIMARY KEY (doc_id, session_id)
 ) STRICT;
+CREATE INDEX document_sessions_session ON document_sessions (session_id);
+CREATE INDEX document_people_key ON document_people (key);
 ```
 
 The Markdown of a document is made from its row when an agent or a card asks for it. It is not stored.
+
+An upsert runs on the writer thread: it reads the stored row, merges the new copy into it, and writes only when the
+hash of the merged `raw` changed. The sessions that saw an item are rows of `document_sessions`, not part of `raw`, so
+a new session does not change the hash.
 
 ### People
 
@@ -216,14 +224,16 @@ CREATE TABLE org_first_commits (
 CREATE TABLE cards (              -- one piece of the user's work
   id          TEXT PRIMARY KEY,                   -- CardId
   kind        TEXT NOT NULL CHECK (kind IN ('ticket', 'branch', 'work', 'goal')),
-  goal_of     TEXT REFERENCES cards(id),          -- for a goal split from another card
+  goal_of     TEXT REFERENCES cards(id) ON DELETE CASCADE,  -- for a goal split from another card
   title       TEXT NOT NULL,
   state       TEXT NOT NULL CHECK (state IN ('latent', 'conscious', 'subconscious', 'etched', 'forgotten')),
   first_at    INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,                   -- the newest member's time
   built_at    INTEGER NOT NULL,                   -- when the builder last wrote this row
-  signature   TEXT NOT NULL                       -- of the members: a change marks the note stale
+  signature   TEXT NOT NULL,                      -- of the members: a change marks the note stale
+  view        TEXT NOT NULL CHECK (json_valid(view))  -- the whole card as the page and agents read it
 ) STRICT;
+CREATE INDEX cards_updated ON cards (updated_at);
 
 CREATE TABLE card_members (       -- what a card is made of
   card_id  TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
@@ -236,7 +246,7 @@ CREATE TABLE card_members (       -- what a card is made of
 CREATE INDEX card_members_ref ON card_members (kind, ref);
 
 CREATE TABLE card_notes (         -- the AI note of a card
-  card_id    TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE,
+  card_id    TEXT PRIMARY KEY,                    -- no foreign key: see below
   version    INTEGER NOT NULL,
   title      TEXT,
   problem    TEXT,
@@ -246,45 +256,93 @@ CREATE TABLE card_notes (         -- the AI note of a card
   question   TEXT,
   signature  TEXT NOT NULL,                       -- the card's signature when the note was written
   model      TEXT NOT NULL,
-  written_at INTEGER NOT NULL
+  written_at INTEGER NOT NULL,
+  extra      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(extra))  -- the rest of the model's answer
 ) STRICT;
 
 CREATE TABLE card_states (        -- states set by the user or an agent; the newest row wins
   id       INTEGER PRIMARY KEY,
   card_id  TEXT NOT NULL,
-  state    TEXT NOT NULL CHECK (state IN ('latent', 'conscious', 'subconscious', 'etched', 'forgotten')),
+  state    TEXT NOT NULL CHECK (state IN ('latent', 'conscious', 'subconscious', 'etched', 'forgotten', 'auto')),
   by       TEXT NOT NULL CHECK (by IN ('user', 'agent', 'auto')),
   reason   TEXT,
   at       INTEGER NOT NULL
 ) STRICT;
+CREATE INDEX card_states_card ON card_states (card_id, at);
 
-CREATE TABLE card_done (          -- items of a note that are done
+CREATE TABLE card_done (          -- items of a note that a later commit did
   card_id  TEXT NOT NULL,
   item     TEXT NOT NULL,
   at       INTEGER NOT NULL,
+  why      TEXT NOT NULL DEFAULT '',              -- "done in 1a2b3c4 (subject)"
   PRIMARY KEY (card_id, item)
 ) STRICT;
 
 CREATE TABLE threads (            -- one goal followed over time (docs/threads.md)
-  id          TEXT PRIMARY KEY,
-  goal        TEXT NOT NULL,
-  goal_vec    BLOB,                               -- float16 embedding of the goal
-  created_at  INTEGER NOT NULL,
-  ended_at    INTEGER
+  id           TEXT PRIMARY KEY,
+  goal         TEXT NOT NULL,
+  goal_vec     BLOB,                              -- float32 embedding of the goal
+  created_at   INTEGER NOT NULL,
+  ended_at     INTEGER,
+  updated_at   INTEGER NOT NULL,
+  parent       TEXT,                              -- the thread it forked or split from
+  merged_into  TEXT
+) STRICT;
+CREATE TABLE thread_members (     -- the linker's members of a thread and their weights (threads.members)
+  thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  member     TEXT NOT NULL,                       -- ticket:ABC-1, pr:<url>, branch:<repo>@<branch>, ...
+  weight     REAL NOT NULL,
+  PRIMARY KEY (thread_id, member)
+) STRICT;
+CREATE TABLE thread_repos (
+  thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  repo       TEXT NOT NULL,
+  PRIMARY KEY (thread_id, repo)
 ) STRICT;
 CREATE TABLE thread_cards (
   thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   card_id    TEXT NOT NULL,
   PRIMARY KEY (thread_id, card_id)
 ) STRICT;
+CREATE TABLE thread_events (
+  id         INTEGER PRIMARY KEY,
+  at         INTEGER NOT NULL,
+  event      TEXT NOT NULL CHECK (event IN ('start', 'continue', 'fork', 'split', 'merge', 'revive', 'suggest')),
+  thread_id  TEXT NOT NULL,
+  other      TEXT,
+  sim        REAL
+) STRICT;
 CREATE TABLE thread_snapshots (   -- a saved card, at one time
   id         INTEGER PRIMARY KEY,
   thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   at         INTEGER NOT NULL,
+  snapshot   TEXT NOT NULL,                       -- the snapshot id (a hash of the members)
+  state      TEXT NOT NULL CHECK (state IN ('latent', 'conscious', 'subconscious', 'etched', 'forgotten')),
+  structure  TEXT NOT NULL,                       -- a hash of the members other than files
+  pushed     TEXT NOT NULL,                       -- the remote commits of the card's folders, space-separated
+  goal_vec   BLOB,
   card       TEXT NOT NULL CHECK (json_valid(card))  -- context-card/1, a format for other programs
 ) STRICT;
 CREATE INDEX thread_snapshots_thread ON thread_snapshots (thread_id, at);
+CREATE TABLE thread_snapshot_reasons (
+  snapshot_id  INTEGER NOT NULL REFERENCES thread_snapshots(id) ON DELETE CASCADE,
+  reason       TEXT NOT NULL CHECK (reason IN ('start', 'fork', 'split', 'merge', 'revive', 'state', 'members',
+                                               'push', 'goal')),
+  PRIMARY KEY (snapshot_id, reason)
+) STRICT;
 ```
+
+Three exceptions to the rules above, and why:
+
+- `cards.view` is JSON that Pensieve writes. The view holds the card's folders, PR checks, events and sessions. Its
+  shape changes often, and Pensieve reads it only whole: the page, the MCP process and the history read it without a
+  build. The fields that SQL filters or joins on are columns (`state`, `updated_at`) or rows (`card_members`).
+- `card_notes.extra` is the rest of the model's answer (evidence, other goals) and the goals that Pensieve split from
+  it. It is outside data: what the model wrote.
+- `card_notes` has no foreign key to `cards`. A note outlives its card's row: a card leaves the 30-day window and
+  comes back, and a split goal's note is written before its card.
+
+The linker of `pensieve/threads.py` keeps each thread's members, weights, repos and events, so these are tables too.
 
 ### Other user data
 
@@ -309,7 +367,15 @@ CREATE TABLE doc_chunks (         -- documents, chunked for search
   doc_id  INTEGER NOT NULL,                       -- DocId in store.db
   idx     INTEGER NOT NULL,
   text    TEXT NOT NULL,
-  vec     BLOB NOT NULL                           -- float16
+  vec     BLOB NOT NULL,                          -- float16
+  hash    TEXT NOT NULL                           -- sha1 of the text: a chunk that did not change keeps its row
+) STRICT;
+CREATE INDEX doc_chunks_doc ON doc_chunks (doc_id, idx);
+
+CREATE TABLE doc_index_state (    -- the hash of each document when the indexer chunked it
+  doc_id  INTEGER PRIMARY KEY,
+  hash    TEXT NOT NULL,
+  at      INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE embed_cache (        -- a vector for each distinct text, so that the same text is embedded once
@@ -343,6 +409,15 @@ stays only for substring queries of 3 or more characters. `fts_docs`, `fts_files
 - One writer thread per file takes write jobs from a queue and commits them in batches of up to 50 ms.
 - The process-wide lock (`store.lock`) is removed. Search, cards and the MCP server read without a lock.
 - The MCP command-line process opens the same files. WAL allows a second process.
+
+The code: `pensieve/store/db.py` has the `Db` class of one file. `db.read(fn)`, `db.query(sql)` and `db.one(sql)` run
+on the calling thread's connection, which is `query_only`. `db.write(fn)` sends `fn(conn)` to the writer and waits
+for its commit; `db.write(fn, wait=False)` returns a future. Each job runs in its own savepoint, so a job that fails
+rolls back only its own changes. `db.after_commit` callbacks get the results of each committed batch.
+`pensieve/store/schema.py` has the schema of each file as one part for each aggregate, and a list of migrations for
+changes to tables that exist. `pensieve/store/rows.py` turns models into rows and back. There is one repository
+module for each aggregate (`sources.py`, `documents.py`, `cards.py`, ...). The tables `usage_calls`, `agent_jobs`
+and `projects` come in phase 4, with their modules.
 
 ## Cards within 2 seconds
 
