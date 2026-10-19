@@ -5064,8 +5064,15 @@ async function reloadAll(pulse = true) {
 }
 function connect() {
   const es = new EventSource('/api/events');
+  let lost = false;
   es.onmessage = e => handleEvent(JSON.parse(e.data)).catch(() => {});  // server restarts are transient
-  es.onerror = () => { $('#statuspill').className = 'menu-status off'; $('#gearbtn').dataset.state = 'off'; $('span', $('#statuspill')).textContent = 'Reconnecting…'; };
+  es.onerror = () => { lost = true; $('#statuspill').className = 'menu-status off'; $('#gearbtn').dataset.state = 'off'; $('span', $('#statuspill')).textContent = 'Reconnecting…'; };
+  // back after a server restart: events sent while the page was away are lost, so the open tab loads again
+  es.onopen = () => {
+    if (!lost) return;
+    lost = false; pollStatus();
+    ({work: loadWork, people: loadPeople, projects: loadProjects})[S.view]?.();
+  };
 }
 async function handleEvent(m) {
   {
