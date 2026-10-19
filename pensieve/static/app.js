@@ -3988,7 +3988,8 @@ function ppRelHtml() {
   const pct = x => `${Math.round((x || 0) * 100)}%`;
   const all = [...r.managers, ...r.peers, ...r.reports, ...r.collaborators];
   const node = n => {
-    const sub = n.relation === 'peer' ? `peer · same team · ${pct(n.confidence)}` : n.relation === 'collaborator' ? `${n.label} · ${pct(n.confidence)}` : n.label;
+    // managers and reports keep their reporting line; everyone else is described by their strongest tie
+    const sub = n.relation === 'manager' || n.relation === 'report' ? n.label : n.about?.[0] || (n.relation === 'peer' ? `peer · same team · ${pct(n.confidence)}` : `${n.label} · ${pct(n.confidence)}`);
     return `<button class="pr-node ${esc(n.relation)} ${n.me ? 'me' : ''}" data-pp-rel="${esc(n.id)}" data-pr-i="${all.indexOf(n)}" aria-label="${esc(n.name)}: ${esc(sub)}">${ppAv(n, 34)}<span class="nm">${esc(n.me ? 'You' : ppShort(n.name))}</span><span class="lb">${esc(sub)}</span></button>`;
   };
   // as many peers as fit on one line beside the person; the rest are in the Org view's team
@@ -4019,7 +4020,7 @@ function bindPeopleRel() {
   $('[data-pr-team]', box)?.addEventListener('click', e => ppShowTeam(e.currentTarget.dataset.prTeam));
   $$('[data-pp-rel]', box).forEach(b => {
     const n = all[+b.dataset.prI];
-    const html = () => `<b>${esc(n.name)}</b>${n.function ? `<br>${esc(n.function)}` : ''}<br>${esc(n.label)} · ${Math.round(n.confidence * 100)}% ${n.relation === 'collaborator' ? 'strength' : 'confidence'}${n.also ? `<br>${esc(n.also)}` : ''}${n.evidence?.length ? `<br><span class="muted">${n.evidence.slice(0, 6).map(esc).join('<br>')}</span>` : ''}`;
+    const html = () => `<b>${esc(n.name)}</b>${n.function ? `<br>${esc(n.function)}` : ''}<br>${esc(n.label)} · ${Math.round(n.confidence * 100)}% ${n.relation === 'collaborator' ? 'strength' : 'confidence'}${n.about?.length ? `<br>${n.about.map(esc).join('<br>')}` : n.also ? `<br>${esc(n.also)}` : ''}${n.last ? `<br>last together ${esc(rel(n.last * 1000))}` : ''}${n.evidence?.length ? `<br><span class="muted">${n.evidence.slice(0, 6).map(esc).join('<br>')}</span>` : ''}`;
     b.onmouseenter = e => { tip(html(), e.clientX, e.clientY); $(`#prlines [data-to="${CSS.escape(n.id)}"]`)?.classList.add('on'); };
     b.onmousemove = e => tip(tipEl.innerHTML, e.clientX, e.clientY);
     b.onmouseleave = () => { tip(null); $$('#prlines .on').forEach(l => l.classList.remove('on')); };

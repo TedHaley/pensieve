@@ -1412,10 +1412,35 @@ def relations(pid: str) -> dict | None:
 
     def node(q, relation, label, conf, evidence, **extra):
         p, o = ppl[q], ops.get(q, {})
+        e = edges.get(q) or {}
         return dict(id=q, name=p["name"], me=p["me"], function=p.get("function", ""), title=p["title"],
                     avatar=bool(p["avatar_url"] and _avatar_file(p["avatar_url"])), level=o.get("level"),
                     level_confidence=o.get("level_confidence", 0), relation=relation, label=label,
-                    confidence=round(conf or 0, 2), evidence=evidence, **extra)
+                    confidence=round(conf or 0, 2), evidence=evidence, about=about(q), last=e.get("last"),
+                    weight=e.get("w", 0), **extra)
+
+    def about(q):
+        """How the selected person and q work together, strongest first, in a few short phrases."""
+        e, out = edges.get(q) or {"kinds": {}}, []
+        theirs, mine = rv.get(q, {}).get(pid, 0), rv.get(pid, {}).get(q, 0)
+        if theirs:
+            out.append(f"reviews {first} PRs ({theirs})")
+        if mine:
+            out.append(f"{who} review{'' if pid == me else 's'} their PRs ({mine})")
+        k = e["kinds"]
+        if k.get("code"):
+            shared = (g["profiles"].get(q, {}).get("relation") or {}).get("shared_areas", []) if pid == me else []
+            out.append("work on the same files" + (" in " + ", ".join("/".join(a.split("/")[-2:]) for a in shared[:2])
+                                                   if shared else ""))
+        if k.get("task"):
+            out.append(f"{k['task']} shared thread{'s' if k['task'] != 1 else ''}")
+        if k.get("dm"):
+            out.append(f"{k['dm']:,} direct messages")
+        if k.get("thread"):
+            out.append(f"{k['thread']:,} replies in Slack threads")
+        if k.get("channel") and len(out) < 2:
+            out.append("in the same Slack channels")
+        return out
 
     edges = {}   # the other person -> the graph edge between them
     for e in g["edges"]:
