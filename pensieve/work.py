@@ -111,7 +111,7 @@ def _items(since: float = 0, until: float | None = None) -> list[dict]:
 
 def _older_items(items: list[dict], prefixes: set, S: dict, facts: dict, commits, until) -> list[dict]:
     """Items from before the window that the window's work names: tickets by their keys (in session titles, branches
-    and text, and commit subjects) and pull requests by their head branches. A ticket that last changed 40 days ago
+    and text, commit subjects, and the window's own tickets) and pull requests by their head branches. A ticket that last changed 40 days ago
     still gives its title and status to this week's session about it."""
     from pensieve import store as v2
     from pensieve.store import documents
@@ -121,6 +121,7 @@ def _older_items(items: list[dict], prefixes: set, S: dict, facts: dict, commits
     keys = {f"{a}-{b}" for s in S.values() for t in [s["title"], s["branch"]] for a, b in KEY.findall(t) if a in prefixes}
     keys |= {f"{a}-{b}" for s in S.values() for a, b in facts[s["id"]]["keys"] if a in prefixes}
     keys |= {f"{a}-{b}" for c in commits for a, b in KEY.findall(c[4]) if a in prefixes}
+    keys |= {i["key"] for i in items if i["key"]}  # older copies of a window's ticket (another tool's, with its people)
     branches = {s["branch"] for s in S.values() if s["branch"] not in DEFAULT_BRANCHES}
     docs = [d for d in documents.by_keys(db, keys, srcs) + documents.by_branches(db, branches, srcs)
             if d.id not in have and (not until or (d.time or 0) <= until)]
@@ -538,10 +539,10 @@ def group(inp: Inputs) -> list[dict]:
                 u.join(node, f"b:{k[0]}@{k[1]}")
         if it["key"]:
             u.join(node, f"t:{it['key']}")
-        ks = set(keys_in(it["text"])) - {it["key"]}
+        ks = [k for k in dict.fromkeys(keys_in(it["text"])) if k != it["key"]]  # in the order of the text
         if it["key"]:
             continue  # a ticket that mentions other tickets stays its own task
-        for key in list(ks)[:3]:
+        for key in ks[:3]:
             u.join(node, f"t:{key}")
         u.find(node)
     for s in S.values():
