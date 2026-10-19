@@ -95,10 +95,10 @@ def switch_empty(store, corpora) -> bool:
     with store.lock:
         if any(store.db.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone() for t in TABLES):
             return False
-        from turbovec import IdMapIndex
+        from pensieve import vectors
         config.use_model(target)
         for c in corpora:
-            c.index = IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
+            c.index = vectors.Index(c.index.path, config.EMBED_DIM, fresh=True)
         store.db.execute("DELETE FROM meta WHERE key IN ('next_model', 'next_ready')")
         store.db.commit()
     return True

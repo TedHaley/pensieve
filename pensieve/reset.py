@@ -12,7 +12,8 @@ import sys
 from pensieve import config
 
 MARK = config.DATA_DIR / "reset-pending"
-INDEX = ["pensieve.db", "pensieve.db-wal", "pensieve.db-shm", "index.tv", "files.tv", "code.tv", "embed_model"]
+INDEX = ["pensieve.db", "pensieve.db-wal", "pensieve.db-shm", "index.tv", "files.tv", "code.tv", "embed_model",
+         "embed_cache.db", "embed_cache.db-wal", "embed_cache.db-shm"]
 EXPORTS = "apps"  # copies of app content made for indexing
 
 

@@ -15,9 +15,9 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, config, connections, content, media, settings
-from pensieve.indexer import LAYOUT_VERSION, embed, embed_images, embed_media, reconcile
-from pensieve.layout import cluster, fit3d, nearest, place_new, unit
+from pensieve import apps, config, connections, content, media, settings, vectors
+from pensieve.indexer import LAYOUT_VERSION, embed, embed_images, embed_media
+from pensieve.layout import cluster, fit3d, nearest, place_new
 
 FILES_INDEX_PATH = config.DATA_DIR / "files.tv"
 TEXT_EXT = {".txt", ".md", ".markdown", ".rst", ".org", ".tex", ".csv", ".tsv", ".json", ".yaml", ".yml", ".toml",
@@ -259,7 +259,6 @@ def author_of(p: Path, kind: str):
 
 class Files:
     def __init__(self, store):
-        from turbovec import IdMapIndex
         self.store, self.db, self.lock = store, store.db, store.lock
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS files(
@@ -275,9 +274,8 @@ class Files:
                 self.db.execute(f"ALTER TABLE files ADD COLUMN {col}")
             except Exception:
                 pass
-        self.index = IdMapIndex.load(str(FILES_INDEX_PATH)) if FILES_INDEX_PATH.exists() else IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
-        if reconcile(self.index, self.db, "file_chunks"):
-            self.index.sync(str(FILES_INDEX_PATH))
+        self.index = vectors.Index(FILES_INDEX_PATH, config.EMBED_DIM)
+        self.index.load(self.db, "file_chunks")
         self._last = 0
         self.progress = {}
         self.sync_lock = threading.RLock()  # one indexing pass at a time: the watcher's, or a search catching up
@@ -319,11 +317,12 @@ class Files:
         finally:
             self.sync_lock.release()
 
-    def save(self):
-        """After `refresh`: write the vector index to disk. The map catches up later (server.map_worker)."""
+    def save(self, force=False):
+        """After `refresh` or a sweep: write the vector index to disk, at most every vectors.SAVE_SECONDS unless
+        `force`. The map catches up later (server.map_worker)."""
         self.unsaved = False
         with self.lock:
-            self.index.sync(str(FILES_INDEX_PATH))
+            self.index.save(force)
 
     def _sync(self, log, force, on_progress):
         if not force and time.time() - self._last < 30:
@@ -383,7 +382,7 @@ class Files:
                 if touched % 50 == 0 and touched:
                     log(f"files: {touched} indexed")
                     with self.lock:
-                        self.index.sync(str(FILES_INDEX_PATH))
+                        self.index.save()
                     if on_progress:
                         on_progress(touched)
         if stale:
@@ -589,15 +588,14 @@ class Files:
     # ---- layout ------------------------------------------------------------
     def centroids(self):
         with self.lock:
-            rows = self.db.execute("SELECT c.path, f.root, c.vec FROM file_chunks c JOIN files f ON f.path=c.path "
+            rows = self.db.execute("SELECT c.path, f.root, c.id FROM file_chunks c JOIN files f ON f.path=c.path "
                                    "WHERE f.kind!='folder'").fetchall()
         ok = self.map_filter()
         by = {}
-        for p, root, v in rows:
+        for p, root, cid in rows:
             if ok(p, root):
-                by.setdefault(p, []).append(np.frombuffer(v, np.float16).astype(np.float32))
-        paths = list(by)
-        return paths, (unit(np.stack([np.mean(by[p], axis=0) for p in paths])) if paths else np.zeros((0, config.EMBED_DIM)))
+                by.setdefault(p, []).append(cid)
+        return vectors.centroids(by, self.index)
 
     def needs_layout(self):
         if self.store.meta("files_map") != self.map_sig():

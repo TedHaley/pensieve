@@ -117,8 +117,8 @@ class Idx:
     def add_with_ids(self, *a, **k):
         return timed("ann_add", self.ix.add_with_ids)(*a, **k)
 
-    def sync(self, *a, **k):
-        return timed("ann_sync", self.ix.sync)(*a, **k)
+    def save(self, *a, **k):
+        return timed("ann_sync", self.ix.save)(*a, **k)
 
 
 def build():
@@ -158,7 +158,7 @@ def cmd_index(a):
         with store.lock:
             chunks = store.db.execute("SELECT COUNT(*) FROM code_chunks WHERE repo=?", (root,)).fetchone()[0]
         t2 = time.perf_counter()
-        repos.save()  # write code.tv
+        repos.save(force=True)  # write code.tv
         save = time.perf_counter() - t2
         t3 = time.perf_counter()
         repos.reproject()  # the map layout, which the app runs later, once indexing is quiet

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import settings
+from pensieve import settings, vectors
 from pensieve.indexer import LAYOUT_VERSION
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 
@@ -50,7 +50,7 @@ class DataMap:
     # ---- items + vectors -------------------------------------------------------
     def _vectors(self):
         """id -> (unit centroid). Ids: 'file:<abs>', 'code:<repo root>:<path>', 'session:<sid>'."""
-        by = {}
+        files, code, sessions = {}, {}, {}  # item id -> chunk ids
         file_ok = self.files.map_filter()
         shown = {}  # source id -> on the map (settings `off_map`)
 
@@ -59,22 +59,25 @@ class DataMap:
                 shown[sid] = settings.on_map(sid)
             return shown[sid]
         with self.lock:
-            for path, root, v in self.db.execute("SELECT c.path, f.root, c.vec FROM file_chunks c JOIN files f ON f.path=c.path "
-                                                 "WHERE f.kind!='folder'"):
+            for path, root, cid in self.db.execute("SELECT c.path, f.root, c.id FROM file_chunks c JOIN files f ON f.path=c.path "
+                                                   "WHERE f.kind!='folder'"):
                 if file_ok(path, root):
-                    by.setdefault(f"file:{path}", []).append(v)
-            for repo, path, v in self.db.execute("SELECT repo, path, vec FROM code_chunks WHERE wt=''"):
+                    files.setdefault(f"file:{path}", []).append(cid)
+            for repo, path, cid in self.db.execute("SELECT repo, path, id FROM code_chunks WHERE wt=''"):
                 if on(f"repos/{repo}"):
-                    by.setdefault(f"code:{repo}:{path}", []).append(v)
-            for sid, src, v in self.db.execute("SELECT c.session_id, s.source, c.vec FROM chunks c "
-                                               "JOIN sessions s ON s.id=c.session_id"):
+                    code.setdefault(f"code:{repo}:{path}", []).append(cid)
+            for sid, src, cid in self.db.execute("SELECT c.session_id, s.source, c.id FROM chunks c "
+                                                 "JOIN sessions s ON s.id=c.session_id"):
                 if on(f"agents/{src}"):
-                    by.setdefault(f"session:{sid}", []).append(v)
-        ids = list(by)
+                    sessions.setdefault(f"session:{sid}", []).append(cid)
+        ids, parts = [], []
+        for groups, index in ((files, self.files.index), (code, self.repos.index), (sessions, self.store.index)):
+            keys, C = vectors.centroids(groups, index)
+            ids += keys
+            parts.append(C)
         if not ids:
-            return [], np.zeros((0, 1024), np.float32)
-        C = np.stack([np.mean([np.frombuffer(b, np.float16).astype(np.float32) for b in by[i]], axis=0) for i in ids])
-        return ids, unit(C)
+            return [], np.zeros((0, self.store.index.dim), np.float32)
+        return ids, np.concatenate(parts)
 
     def fingerprint(self):
         with self.lock:
@@ -216,9 +219,11 @@ class DataMap:
                      description=desc or "") for c, sig, name, desc, kw, reps in rows]
 
     def _cached_vectors(self):
-        """All item centroids, refreshed at most every two minutes (building them reads every chunk vector)."""
+        """All item centroids, refreshed at most every two minutes (building them reads the ids of every chunk).
+        The key is the version of each vector index in memory, which changes with every add and remove: unlike
+        `fingerprint`, it does not scan the chunk tables."""
         import time
-        fp = self.fingerprint()
+        fp = (self.files.index.version, self.repos.index.version, self.store.index.version, self.files.map_sig())
         if self._vec[0] != fp and (self._vec[0] is None or time.time() - self._vec_at > 120):
             self._vec = (fp, *self._vectors())
             self._vec_at = time.time()
