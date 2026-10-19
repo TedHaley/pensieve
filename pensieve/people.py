@@ -37,7 +37,8 @@ GIT_TTL = 30 * 86400   # a repo's git cache is checked against its HEAD; the row
 REBUILD_SECONDS = 1800
 GIT_DAYS = 365
 GH_TTL = 6 * 3600
-PR_LIMIT = 60
+PR_LIMIT = 60  # the newest pull requests of a repo that the graph reads
+STATS_PRS = 200  # ... that gh lists and the cache keeps: Insights compares four weeks of output
 COMMIT_PRS = 20
 MAX_PR_REPOS = 15
 SHARED_FILE_MAX = 12   # a file with more authors than this is shared ground: no edges from it
@@ -369,7 +370,7 @@ def _gh_repo(slug: str) -> list[dict]:
     authors. Cached for GH_TTL."""
     cf = "gh:prs:" + slug
     hit = cache_get(cf, {})
-    if hit.get("at", 0) > time.time() - GH_TTL and hit.get("v") == 2:
+    if hit.get("at", 0) > time.time() - GH_TTL and hit.get("v") == 3:
         return hit.get("prs", [])
     def gh(limit, fields):
         r = subprocess.run(["gh", "pr", "list", "--repo", slug, "--state", "all", "--limit", str(limit), "--json",
@@ -381,11 +382,18 @@ def _gh_repo(slug: str) -> list[dict]:
     try:
         # commit authors tie logins to emails; GitHub caps that query's size, so only the newest pull requests
         authors = {p.get("number"): p.get("commits") or [] for p in gh(COMMIT_PRS, "number,commits")}
-        for p in gh(PR_LIMIT, "number,title,url,state,updatedAt,author,reviews"):
+        for p in gh(STATS_PRS, "number,title,url,state,updatedAt,createdAt,mergedAt,author,reviews"):
             au = p.get("author") or {}
+            first_review = {}  # login -> the time of their first review, for the Insights review turnaround
+            for rv in p.get("reviews") or []:
+                who, at = (rv.get("author") or {}).get("login", ""), work._ts(rv.get("submittedAt") or "")
+                if who and at and (who not in first_review or at < first_review[who]):
+                    first_review[who] = at
             prs.append(dict(
                 number=p.get("number"), title=p.get("title", ""), url=p.get("url", ""),
                 state=(p.get("state") or "").lower(), ts=work._ts(p.get("updatedAt") or ""),
+                created=work._ts(p.get("createdAt") or ""), merged=work._ts(p.get("mergedAt") or ""),
+                review_at=first_review,
                 author=dict(login=au.get("login", ""), name=au.get("name", ""), bot=bool(au.get("is_bot"))),
                 reviewers=sorted({(rv.get("author") or {}).get("login", "") for rv in p.get("reviews") or []} - {""}),
                 approvers=sorted({(rv.get("author") or {}).get("login", "") for rv in p.get("reviews") or []
@@ -395,8 +403,14 @@ def _gh_repo(slug: str) -> list[dict]:
                     for cm in authors.get(p.get("number"), []) for c in cm.get("authors") or []}.values())))
     except (OSError, subprocess.TimeoutExpired, ValueError):
         prs = hit.get("prs", [])  # kept, and not asked again before GH_TTL
-    cache_put(cf, {"at": time.time(), "prs": prs, "v": 2}, GH_TTL)
+    cache_put(cf, {"at": time.time(), "prs": prs, "v": 3}, GH_TTL)
     return prs
+
+
+def cached_prs(remote: str) -> list[dict]:
+    """The pull requests of a repo's GitHub remote as the last build fetched them (no gh call): for Insights."""
+    slug = _gh_slug(remote)
+    return cache_get("gh:prs:" + slug, {}).get("prs", []) if slug else []
 
 
 def _collect_github(raw: _Raw, repo_rows, my_emails: set[str]):
@@ -413,7 +427,7 @@ def _collect_github(raw: _Raw, repo_rows, my_emails: set[str]):
         results = list(pool.map(lambda r: (r[1], _gh_repo(r[2])), rows))
     log = raw.extra.setdefault("pr_log", [])  # each pull request's people, for the org evidence store (orgstore.py)
     for name, prs in results:
-        for p in prs:
+        for p in prs[:PR_LIMIT]:
             raw.stats["prs"] += 1
             a = p["author"]
             if not a["login"] or a["bot"] or is_bot(a["name"], login=a["login"]):

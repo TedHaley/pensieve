@@ -3182,11 +3182,10 @@ async function loadAI() {
 }
 function syncInsightsTab() {
   const b = $('#tabs [data-view=insights]'); if (!b) return;
-  const d = aiState.data, on = insightsOn(), prep = aiPreparing(d);
-  b.classList.toggle('off', !on);
-  b.title = on ? 'Insights (5)' : prep ? (d.detail || 'Preparing insights…') : 'Insights are off — click to turn them on (5)';
+  const d = aiState.data, prep = aiPreparing(d);  // the stats need no AI: the tab is always on
+  b.title = prep ? (d.detail || 'Preparing the AI notes…') : 'Insights (5)';
   const pct = prep && d.progress != null ? Math.round(d.progress * 100) : null;
-  b.innerHTML = `Insights${prep ? `<i class="tab-ring" style="--p:${pct ?? 25}" ${pct == null ? 'data-spin' : ''}></i>` : !on ? '<span class="tab-off">Off</span>' : ''}`;
+  b.innerHTML = `Insights${prep ? `<i class="tab-ring" style="--p:${pct ?? 25}" ${pct == null ? 'data-spin' : ''}></i>` : ''}`;
 }
 function refreshAIViews() {
   syncInsightsTab();
@@ -4683,81 +4682,254 @@ async function regenInsights() {
   S.insights = {...(S.insights || {}), running: true, running_scope: key || null};
   if (S.view === 'insights') renderInsights();
 }
-function insRepos() {
-  const repos = S.code.repos.filter(r => r.chunks && !r.all);
-  if (!S.scope) return repos.filter(r => r.sessions).sort((a, b) => b.sessions - a.sessions);
-  const ss = S.sessions.filter(matchProj);
-  return repos.map(r => ({...r, n: ss.filter(s => matchKey(s, r.name)).length})).filter(r => r.n).sort((a, b) => b.n - a.n);
+// The Insights tab: stats first (no AI needed), then the game, peers, momentum and knowledge gaps; the sessions
+// charts and the AI notes come last. The numbers come from /api/insights/stats and /api/insights/gaps.
+const IST = {stats: null, loading: false, err: null, at: 0, gaps: null, gapsLoading: false, gapsTimer: null, allGaps: false,
+  staleDays: 90, inactiveDays: 180, repos: new Set(), metric: 'score'};
+try {
+  const g = JSON.parse(localStorage.getItem('pensieve.gapDays') || 'null'); if (g) Object.assign(IST, {staleDays: g[0], inactiveDays: g[1]});
+  IST.repos = new Set(JSON.parse(localStorage.getItem('pensieve.insRepos') || '[]'));
+  IST.metric = localStorage.getItem('pensieve.insMetric') === 'lines' ? 'lines' : 'score';
+} catch {}
+const istRepoParam = () => IST.repos.size ? '&repos=' + enc([...IST.repos].join(',')) : '';
+function saveIst() { try { localStorage.setItem('pensieve.insRepos', JSON.stringify([...IST.repos])); localStorage.setItem('pensieve.insMetric', IST.metric); } catch {} }
+const fmtTok = n => n == null ? '—' : n >= 1e9 ? (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n));
+const fmtUsd = n => n == null ? '—' : '$' + (n >= 1000 ? Math.round(n).toLocaleString() : n.toFixed(n >= 100 ? 0 : 2));
+const fmtStat = (v, f) => v == null ? '—' : f === 'tok' ? fmtTok(v) : f === 'usd' ? fmtUsd(v) : f === 'pct' ? (v * 100).toFixed(1) + '%' : (Math.round(v * 10) / 10).toLocaleString();
+async function loadStats(force = false) {
+  if (IST.loading) return;
+  IST.loading = true;
+  const want = istRepoParam();
+  try { IST.stats = await api(`/api/insights/stats?fresh=${force ? 1 : 0}${want}`); IST.statsKey = want; IST.err = null; IST.at = Date.now(); }
+  catch (e) { IST.err = e.message; IST.statsKey = want; }
+  IST.loading = false;
+  if (want !== istRepoParam()) return loadStats();  // the filter changed while it loaded
+  if (S.view === 'insights') renderInsights();
 }
-async function loadCodebase() {
-  const repos = insRepos();
-  if (!repos.some(r => r.name === S.ins.repo)) S.ins.repo = repos[0]?.name || null;
-  const repo = S.ins.repo, key = repo + '|' + scopeKey();
-  if (!repo || S.ins.key === key || S.ins.loading === key) return;
-  S.ins.loading = key;
-  const body = JSON.stringify({session_ids: S.scope ? [...S.scope.sids] : [], scope: scopeKey() || null});
+async function loadGapsAll() {
+  clearTimeout(IST.gapsTimer);
+  IST.gapsLoading = true;
   try {
-    const [team, terr] = await Promise.all([api(`/api/team/${enc(repo)}`),
-      api(`/api/territory/${enc(repo)}`, {method: 'POST', headers: {'content-type': 'application/json'}, body}), loadGaps(repo)]);
-    if (S.ins.loading !== key) return;
-    Object.assign(S.ins, {team, terr, key});
-  } catch { S.ins.key = key; S.ins.team = S.ins.terr = null; }
-  finally { if (S.ins.loading === key) S.ins.loading = null; }
+    const g = await api(`/api/insights/gaps?stale_days=${IST.staleDays}&inactive_days=${IST.inactiveDays}${istRepoParam()}`);
+    IST.gaps = g;
+    if (g.building) IST.gapsTimer = setTimeout(() => S.view === 'insights' && loadGapsAll(), 2500);
+  } catch { IST.gaps = IST.gaps || {areas: [], counts: {}, error: true}; }
+  IST.gapsLoading = false;
+  if (S.view === 'insights') renderInsights();
 }
+// A small trend line: the de-emphasis ink, the newest point in the accent; null values leave a gap.
+function sparkSvg(vals, w = 84, h = 22, label = '') {
+  const xs = vals.map((v, i) => [i, v]).filter(([, v]) => v != null);
+  if (xs.length < 2) return '';
+  const max = Math.max(...xs.map(([, v]) => v)), min = Math.min(0, ...xs.map(([, v]) => v)), sx = (w - 6) / (vals.length - 1);
+  const y = v => h - 3 - (max === min ? 0 : (v - min) / (max - min) * (h - 6));
+  const pts = xs.map(([i, v]) => `${(3 + i * sx).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const [li, lv] = xs.at(-1);
+  return `<svg class="is-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(label)}"><polyline points="${pts}" fill="none" stroke="var(--text-3)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${3 + li * sx}" cy="${y(lv)}" r="3" fill="${pal().cat[0]}"/></svg>`;
+}
+const STATUS = {momentum: ['▲', 'Momentum', 'good'], stalled: ['■', 'Stalled', 'warn'], cooling: ['▽', 'Cooling', 'muted'], quiet: ['·', 'Quiet', 'muted']};
+const statusPill = s => { const [ic, l, c] = STATUS[s] || STATUS.quiet; return `<span class="is-st ${c}"><span aria-hidden="true">${ic}</span> ${l}</span>`; };
+function deltaHtml(k) {
+  if (k.delta == null) return `<span class="muted">no 4-week baseline</span>`;
+  const pct = Math.round(k.delta * 100), good = k.better === 'none' ? null : (k.better === 'up') === (pct > 0);
+  const cls = pct === 0 || good == null ? 'muted' : good ? 'good-t' : 'warn-t';
+  return `<span class="${cls}">${pct > 0 ? '▲' : pct < 0 ? '▼' : '•'} ${Math.abs(pct)}%</span> <span class="muted">vs 4-wk median ${esc(fmtStat(k.base, k.fmt))}</span>`;
+}
+function statsKpis(st) {
+  const tw = st.tokens.windows, gw = st.game.windows, rev = a => a.slice().reverse();
+  const per = kind => rev(gw.map(w => (w[kind] && w.wtok ? w.wtok / w[kind] : null)));
+  const trend = {tokens: rev(tw.map(w => w.total || null)), cost: rev(tw.map(w => w.cost || null)), cache: rev(tw.map(w => w.cache_share)),
+    per_pr: per('pr_merged'), per_commit: per('commit'), per_thread: per('thread_closed'), lines_per_m: rev(gw.map(w => w.lines_per_m))};
+  return `<div class="kpis is-kpis">${st.kpis.map(k => `<div class="kpi" title="${esc(k.hint || '')}"><div class="l">${esc(k.label)} · 7 days</div>
+    <div class="is-kv"><div class="v">${esc(fmtStat(k.value, k.fmt))}</div>${sparkSvg(trend[k.key] || [], 84, 22, `${k.label}, last 8 weeks`)}</div>
+    <div class="d">${deltaHtml(k)}</div></div>`).join('')}</div>`;
+}
+function tokenCard(st) {
+  const t = st.tokens, w = t.windows[0];
+  const parts = [['Cache reads', w.cache_read, 0], ['Cache writes', w.cache_write, 1], ['Output', w.output, 2], ['Input', w.input, 3]];
+  const tot = parts.reduce((a, p) => a + p[1], 0) || 1;
+  const comp = `<div class="is-comp" role="img" aria-label="Tokens of the last 7 days by kind">${parts.filter(p => p[1]).map(([l, v, s]) => `<i style="flex:${v / tot};background:${slotColor(s)}" data-tip="${esc(`<b>${l}</b><div class="m">${fmtTok(v)} tokens · ${(v / tot * 100).toFixed(1)}%</div>`)}"></i>`).join('')}</div>
+    <div class="legend-row">${parts.map(([l, v, s]) => `<span><i class="sw" style="background:${slotColor(s)}"></i>${l} <b>${fmtTok(v)}</b></span>`).join('')}</div>`;
+  const mx = Math.max(1, ...t.recent_models.map(m => m.total));
+  const models = t.recent_models.slice(0, 7).map(m => `<tr><td class="mono">${esc(m.model)}</td><td class="num">${fmtTok(m.total)}</td><td class="num">${m.cost == null ? '<span class="muted" title="No price for this model">—</span>' : fmtUsd(m.cost)}</td><td style="width:30%"><span class="is-hbar"><i style="width:${m.total / mx * 100}%"></i></span></td></tr>`).join('');
+  return `<div class="grid2">
+    <div class="card"><h3>Estimated cost per day</h3><p class="cap">Last 8 weeks, at Anthropic API list prices of ${esc(t.prices_as_of)}: an estimate, as a subscription bills differently. Hover a day for its tokens.</p><svg id="is-cost" class="chart" height="170"></svg>
+      <h3 style="margin-top:12px">Where the last 7 days’ tokens went</h3><p class="cap">A cache read costs a tenth of a fresh input token; output costs five times as much.</p>${comp}</div>
+    <div class="card"><h3>By model · last 4 weeks</h3><p class="cap">All time: ${fmtTok(t.all_total)} tokens, about ${fmtUsd(t.all_cost)}.</p>
+      <div style="overflow:auto"><table class="tbl"><tr><th>Model</th><th class="num">Tokens</th><th class="num">Est. cost</th><th></th></tr>${models || '<tr><td colspan="4" class="muted">No token use recorded yet.</td></tr>'}</table></div></div>
+  </div>`;
+}
+function drawCost(st) {
+  const svg = $('#is-cost'); if (!svg) return;
+  const days = st.tokens.days, W = svg.clientWidth || 600, H = 170, pl = 40, pb = 18, pt = 6, ih = H - pb - pt;
+  const max = Math.max(1, ...days.map(d => d.cost)), bw = (W - pl) / days.length, out = [];
+  const step = max > 200 ? 100 : max > 50 ? 25 : max > 10 ? 5 : 1;
+  for (let v = 0; v <= max; v += Math.max(step, Math.ceil(max / 3 / step) * step)) { const y = H - pb - v / max * ih; out.push(`<g class="grid"><line x1="${pl}" x2="${W}" y1="${y}" y2="${y}"/></g><text x="${pl - 6}" y="${y + 3}" text-anchor="end">$${v}</text>`); }
+  days.forEach((d, i) => {
+    const h = d.cost / max * ih, x = pl + i * bw + 1, w = Math.max(1, bw - 2);
+    if (h > 0) out.push(`<path d="M${x},${H - pb} v${-Math.max(0, h - 2)} q0,-2 2,-2 h${Math.max(0, w - 4)} q2,0 2,2 v${Math.max(0, h - 2)} z" fill="${pal().cat[0]}"/>`);
+    out.push(`<rect x="${x - 1}" y="${pt}" width="${bw}" height="${ih}" fill="transparent" data-i="${i}"/>`);
+  });
+  [[0, 'start', pl], [Math.floor(days.length / 2), 'middle', pl + Math.floor(days.length / 2) * bw + bw / 2], [days.length - 1, 'end', W]]
+    .forEach(([i, a, x]) => out.push(`<text x="${x}" y="${H - 4}" text-anchor="${a}">${fmtD(new Date(days[i].day + 'T12:00'))}</text>`));
+  svg.innerHTML = out.join('');
+  svg.onmousemove = e => { const i = e.target.dataset?.i; if (i == null) return tip(null); const d = days[+i];
+    tip(`<b>${fmtDY(new Date(d.day + 'T12:00'))}</b><div class="m">about ${fmtUsd(d.cost)}</div><table><tr><td>Cache reads</td><td>${fmtTok(d.cache_read)}</td></tr><tr><td>Cache writes</td><td>${fmtTok(d.cache_write)}</td></tr><tr><td>Output</td><td>${fmtTok(d.output)}</td></tr><tr><td>Input</td><td>${fmtTok(d.input)}</td></tr></table>`, e.clientX, e.clientY); };
+  svg.onmouseleave = () => tip(null);
+}
+const POINT_LABEL = {pr_merged: 'merged PRs', thread_closed: 'closed threads', ticket_done: 'done tickets', review: 'reviews given', commit: 'commits', item_closed: 'thread items done'};
+function gameCard(st) {
+  const g = st.game, cur = g.windows[0], L = g.lines, isLines = IST.metric === 'lines';
+  const formula = `<b>How the score works</b><p>${esc(g.formula)}</p>`, lformula = `<b>Deployed lines per M tokens</b><p>${esc(L.formula)}</p>`;
+  const val = w => isLines ? w.lines_per_m : w.score;
+  const sc = g.windows.slice().reverse(), smax = Math.max(1, ...sc.map(w => (w.counts ? val(w) : 0) || 0));
+  const bestAt = isLines ? L.best_window : g.best_window;
+  const bars = sc.map((w, i) => { const k = sc.length - 1 - i, v = val(w), h = v ? Math.min(100, Math.max(3, v / smax * 100)) : 0;
+    const head = `<b>${k === 0 ? 'Last 7 days' : `${k * 7 + 7}–${k * 7} days ago`}</b>`;
+    const t = isLines ? `${head}<div class="m">${v == null ? '—' : Math.round(v).toLocaleString()} lines / M tokens${w.counts ? '' : v != null ? ' (few tokens: not a best)' : ''}</div><p>${(w.lines || 0).toLocaleString()} deployed lines · ${fmtTok(w.wtok)} weighted tokens</p>`
+      : `${head}<div class="m">Score ${w.score ?? '—'}${w.counts ? '' : w.score != null ? ' (few tokens: not a best)' : ''}</div><p>${w.points} points from ${Object.keys(POINT_LABEL).filter(x => w[x]).map(x => `${w[x]} ${POINT_LABEL[x]}`).join(', ') || 'nothing shipped'} · ${fmtTok(w.wtok)} weighted tokens</p>`;
+    return `<div class="is-sb ${k === 0 ? 'cur' : ''} ${k === bestAt ? 'best' : ''} ${w.counts ? '' : 'few'}" data-tip="${esc(t)}"><i style="height:${h}%"></i></div>`; }).join('');
+  const dPct = (v, base) => base && v != null ? Math.round((v - base) / base * 100) : null;
+  const dHtml = (d, base, fmt) => d == null ? '<span class="muted">no 4-week baseline yet</span>' : `<span class="${d >= 0 ? 'good-t' : 'warn-t'}">${d >= 0 ? '▲' : '▼'} ${Math.abs(d)}%</span> <span class="muted">vs your 4-wk median ${fmt(base)}</span>`;
+  const lv = L.value == null ? '—' : Math.round(L.value).toLocaleString();
+  const seg = `<div class="seg is-seg" role="radiogroup" aria-label="Metric"><button data-ismetric="score" role="radio" aria-checked="${!isLines}" class="${isLines ? '' : 'on'}">Value score</button><button data-ismetric="lines" role="radio" aria-checked="${isLines}" class="${isLines ? 'on' : ''}">Deployed lines / M tokens</button></div>`;
+  const badge = b => `<div class="is-badge ${b.earned ? 'on' : ''}" data-tip="${esc(`<b>${esc(b.name)}</b><p>${esc(b.rule)}</p>${b.detail ? `<div class="m">${esc(b.detail)}</div>` : ''}`)}">
+      <div class="is-bh"><span class="is-bi" aria-hidden="true">${b.earned ? '✓' : '○'}</span><b>${esc(b.name)}</b><span class="muted">${b.earned ? 'Earned' : `${b.progress}/${b.goal}`}</span></div>
+      <p>${esc(b.rule)}</p><span class="is-meter" aria-label="${b.progress} of ${b.goal}"><i style="width:${b.progress / b.goal * 100}%"></i></span></div>`;
+  const big = (on, label, v, tipText, d, unit) => `<div class="is-big ${on ? 'on' : ''}"><div class="l">${label}</div><div class="is-score" data-tip="${esc(tipText)}">${v}${unit ? `<span class="u">${unit}</span>` : ''}</div><div class="d">${d}</div></div>`;
+  return `<div class="card is-game">
+    <div class="is-gh"><div><h3>Value per token</h3><p class="cap">What shipped in the last 7 days, per million weighted tokens. <button class="linkbtn" data-tip="${esc(formula + lformula)}">How these work</button></p></div>${seg}</div>
+    <div class="is-grow">
+      <div class="is-hero"><div class="is-bigs">
+          ${big(!isLines, 'Value score', g.score ?? '—', formula, dHtml(dPct(g.score, g.prev_median), g.prev_median, x => Math.round(x)), '')}
+          ${big(isLines, 'Deployed lines', lv, lformula, dHtml(dPct(L.value, L.prev_median), L.prev_median, x => Math.round(x).toLocaleString()), 'lines / M tokens')}</div>
+        <div class="is-facts"><span><b>${cur.points}</b> points</span><span><b>${(L.lines || 0).toLocaleString()}</b> deployed lines</span><span><b>${fmtTok(cur.wtok)}</b> weighted tokens</span>
+          <span title="The best of the last 8 weeks">Best <b>${isLines ? (L.best == null ? '—' : Math.round(L.best).toLocaleString()) : g.best ?? '—'}</b></span>
+          <span title="Days in a row with a merged PR or a closed thread; weekends don't break a run">Streak <b>${plural(g.streak, 'day')}</b> <span class="muted">(best ${g.best_streak})</span></span></div></div>
+      <div class="is-scores"><div class="is-sbars" role="img" aria-label="${isLines ? 'Deployed lines per M tokens' : 'Score'} per week, last 8 weeks">${bars}</div><div class="is-sx"><span>8 weeks ago</span><span>${isLines ? 'Deployed lines / M tokens' : 'Value score'} · last 7 days</span></div></div>
+    </div>
+    <div class="is-badges">${g.badges.map(badge).join('')}</div></div>`;
+}
+function peersCard(st) {
+  const p = st.peers;
+  if (!p.metrics?.length) return `<div class="card"><h3>You and your peers</h3><p class="cap">The People graph has no one close to you yet.</p></div>`;
+  const ppl = p.people;
+  const row = m => {
+    const vals = ppl.filter(x => x[m.key] != null || m.key !== 'turnaround').map(x => ({n: x.name, me: x.me, v: x[m.key] ?? 0}));
+    const max = Math.max(1, ...vals.map(v => v.v)), W = 220;
+    const dots = vals.sort((a, b) => a.me - b.me).map(v => `<circle cx="${8 + v.v / max * (W - 16)}" cy="11" r="${v.me ? 6 : 4}" fill="${v.me ? pal().cat[0] : 'var(--text-3)'}" stroke="var(--bg)" stroke-width="2" data-tip="${esc(`<b>${esc(v.n)}</b><div class="m">${esc(m.label)}: ${v.v}</div>`)}"/>`).join('');
+    const rank = m.rank ? `#${m.rank} of ${m.of}` : '—';
+    return `<tr><td>${esc(m.label)}${m.better === 'down' ? ' <span class="muted">(lower is better)</span>' : ''}</td><td class="num"><b>${m.me ?? '—'}</b></td><td class="num">${m.median != null ? m.median : '—'}</td>
+      <td class="num">${rank}${m.pct != null ? ` <span class="muted">· ${m.pct}th pct</span>` : ''}</td><td><svg width="${W}" height="22" class="is-dots" role="img" aria-label="${esc(m.label)} of you and your peers">${dots}</svg></td></tr>`;
+  };
+  const table = `<table class="tbl"><tr><th>Person</th>${p.metrics.map(m => `<th class="num">${esc(m.label)}</th>`).join('')}</tr>${ppl.map(x => `<tr><td>${esc(x.name)}${x.me ? ' <span class="badge">You</span>' : ''}</td>${p.metrics.map(m => `<td class="num">${x[m.key] ?? '—'}</td>`).join('')}</tr>`).join('')}</table>`;
+  return `<div class="card"><h3>You and your nearest peers</h3><p class="cap">${esc(p.note)} Peers: the ${ppl.length - 1} people closest to you in the People graph.${p.gh ? '' : ' No GitHub data: PRs and reviews are missing.'}</p>
+    <div style="overflow:auto"><table class="tbl is-peers"><tr><th>Output, last ${p.window_days} days</th><th class="num">You</th><th class="num">Peer median</th><th class="num">Rank</th><th><span class="is-key"><i style="background:${pal().cat[0]}"></i>You <i></i>Peers</span></th></tr>${p.metrics.map(row).join('')}</table></div>
+    <details class="is-more"><summary>All values</summary><div style="overflow:auto">${table}</div></details></div>`;
+}
+function momentumCard(st) {
+  const mo = st.momentum, c = mo.counts || {};
+  const th = (x, extra) => `<div class="is-mrow" data-tip="${esc(`<b>${esc(x.title)}</b><div class="m">Events per week, last ${mo.weeks} weeks: ${x.series.join(', ')}</div>${x.left.length ? `<p>Left: ${x.left.map(esc).join('; ')}</p>` : ''}`)}">
+      <span class="t">${esc(x.title)}</span>${sparkSvg(x.series, 64, 20, 'events per week')}<span class="muted">${extra}</span></div>`;
+  const mom = mo.threads.filter(x => x.status === 'momentum').slice(0, 7), stl = mo.threads.filter(x => x.status === 'stalled').slice(0, 7);
+  const repoRows = mo.repos.map(r => `<tr><td class="mono">${esc(r.repo)}</td><td>${statusPill(r.status)}</td><td>${sparkSvg(r.series, 72, 20, 'activity per week')}</td><td class="num">${r.series.at(-1)}</td><td class="muted">${r.quiet_days < 1 ? 'today' : `${Math.round(r.quiet_days)} d ago`}</td><td class="num">${r.n_left || ''}</td></tr>`).join('');
+  return `<div class="grid2 is-mo">
+    <div class="card"><h3>${statusPill('momentum')} <span class="muted">${c.momentum || 0} threads</span></h3><p class="cap">2+ events in the last 7 days, at or above the 3 weeks before.</p>
+      ${mom.map(x => th(x, `${x.series.at(-1)} this week`)).join('') || '<div class="empty">No thread is picking up speed.</div>'}</div>
+    <div class="card"><h3>${statusPill('stalled')} <span class="muted">${c.stalled || 0} threads</span></h3><p class="cap">Quiet for 7+ days with something left to close them.</p>
+      ${stl.map(x => th(x, `quiet ${Math.round(x.quiet_days)} d · ${plural(x.n_left, 'item')} left`)).join('') || '<div class="empty">Nothing stalled.</div>'}</div>
+  </div>
+  <div class="card" style="margin-bottom:12px"><h3>Repos</h3><p class="cap">Your commits, sessions and merged PRs per week in each repo; “left” counts what open threads there still need.</p>
+    <div style="overflow:auto"><table class="tbl"><tr><th>Repo</th><th>Status</th><th>Last ${mo.weeks} weeks</th><th class="num">This week</th><th>Last activity</th><th class="num">Left</th></tr>${repoRows || '<tr><td colspan="6" class="muted">No activity in the last weeks.</td></tr>'}</table></div></div>`;
+}
+function gapsCard() {
+  const g = IST.gaps;
+  const sel = (id, v, opts) => `<select id="${id}" class="is-sel">${opts.map(o => `<option value="${o}" ${o === v ? 'selected' : ''}>${o} days</option>`).join('')}</select>`;
+  const head = `<div class="ins-sec"><div><h2>Knowledge gaps</h2><p>Areas nobody changed for a while, or mostly written by people who stopped committing there, with who still knows them. By risk.</p></div>
+    <div class="is-ctl"><label>Not changed for ${sel('is-stale', IST.staleDays, [30, 60, 90, 180, 365])}</label><label>Inactive after ${sel('is-inactive', IST.inactiveDays, [90, 180, 365])}</label></div></div>`;
+  if (!g) return head + '<div class="card"><div class="shimmer" style="height:120px"></div></div>';
+  const c = g.counts || {};
+  const tiles = `<div class="kpis is-gk">
+    <div class="kpi"><div class="l">Areas at risk</div><div class="v">${c.total ?? '—'}</div><div class="d">${(g.repos || []).length} repos</div></div>
+    <div class="kpi"><div class="l">Not changed for ${g.stale_days}+ days</div><div class="v">${c.stale ?? '—'}</div><div class="d">newest blamed line, vs the repo’s last commit</div></div>
+    <div class="kpi"><div class="l">Mostly by inactive authors</div><div class="v">${c.departed ?? '—'}</div><div class="d">50%+ of lines; no commit for ${g.inactive_days}+ days</div></div>
+    <div class="kpi"><div class="l">No active owner</div><div class="v">${c.no_owner ?? '—'}</div><div class="d">no active author holds 10%</div></div></div>`;
+  const areas = (g.areas || []).slice(0, IST.allGaps ? 60 : 12);
+  const rows = areas.map(a => `<tr><td><span class="is-risk" title="Risk ${Math.round(a.risk * 100)} of 100"><i style="width:${a.risk * 100}%;background:${seqColor(0.35 + a.risk * 0.65)}"></i></span></td>
+      <td><button class="linkbtn mono" data-gap-area="${esc(a.area)}" data-repo="${esc(a.repo)}" title="Show this area on the map">${esc(a.repo)}/${esc(a.area)}</button></td>
+      <td class="num">${a.lines.toLocaleString()}</td><td>${a.stale ? `<span class="warn-t">${a.age_days} d</span>` : a.age_days == null ? '—' : a.age_days < 7 ? '<span class="muted">this week</span>' : `${a.age_days} d`}</td>
+      <td class="num" title="${esc(a.departed.map(d => `${d.name} ${Math.round(d.share * 100)}%`).join(', '))}">${Math.round(a.departed_share * 100)}%</td>
+      <td>${a.knows.length ? a.knows.map(k => `<button class="chip" data-gap-person="${esc(k.name)}" data-repo="${esc(a.repo)}" title="${Math.round(k.share * 100)}% of the lines">${esc(k.name)}</button>`).join(' ') : '<span class="warn-t">No one active</span>'}</td></tr>`).join('');
+  return head + tiles + `<div class="card" style="margin-bottom:12px">${g.building ? `<p class="cap"><span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block"></span> Reading the blame of every repo…${g.areas?.length ? ' Showing the last result.' : ''}</p>` : ''}
+    <div style="overflow:auto"><table class="tbl is-gaps"><tr><th>Risk</th><th>Area</th><th class="num">Lines</th><th>Last change</th><th class="num">By inactive</th><th>Who still knows it</th></tr>${rows || `<tr><td colspan="6" class="muted">${g.building ? 'Working…' : 'No area is at risk.'}</td></tr>`}</table></div>
+    ${(g.areas || []).length > 12 ? `<button class="btn" id="is-allgaps" style="margin-top:8px">${IST.allGaps ? 'Show fewer' : `Show all ${g.areas.length}`}</button>` : ''}
+    <p class="cap" style="margin:8px 0 0">Risk = 0.6 × share by inactive authors + 0.25 × age past the limit + 0.15 when no active author holds 10%; the list ranks by risk and size.</p></div>`;
+}
+addEventListener('resize', debounce(() => { if (S.view === 'insights' && IST.stats) drawCost(IST.stats); }, 150));
 function renderInsights() {
   const el = $('#insights');
-  if (!insightsOn()) { el.innerHTML = aiOffPage(); bindAIButtons(el); return; }
-  const ss = filtered(), all = S.sessions;
-  if (!all.length) { el.innerHTML = '<div class="empty">No sessions indexed yet.</div>'; return; }
-  if (S.insights?.key !== scopeKey()) { loadInsights().then(() => S.view === 'insights' && renderInsights()); }
-  const repo = insRepos().some(r => r.name === S.ins.repo) ? S.ins.repo : insRepos()[0]?.name;
-  if (repo && S.ins.key !== repo + '|' + scopeKey() && !S.ins.loading) loadCodebase().then(() => S.view === 'insights' && renderInsights());
-  const now = Date.now();
-  const days = new Set(ss.map(s => new Date(s.t0).toDateString())).size;
-  const w1 = ss.filter(s => s.t1 > now - 7 * DAY).length, w0 = ss.filter(s => s.t1 > now - 14 * DAY && s.t1 <= now - 7 * DAY).length;
-  const moments = ss.reduce((a, s) => a + (s.n || 0), 0);
-  const med = [...ss.map(s => s.n || 0)].sort((a, b) => a - b)[Math.floor(ss.length / 2)] || 0;
-  const projs = new Set(ss.map(s => s.project)).size;
-  const fresh = S.insights?.key === scopeKey();
-  const ins = fresh ? S.insights?.data : null;
+  if (!IST.stats && !IST.loading) loadStats();
+  else if (IST.stats && Date.now() - IST.at > 60e3 && !IST.loading) loadStats();
+  if (!IST.gaps && !IST.gapsLoading) loadGapsAll();
+  const st = IST.stats;
+  if (!st) { el.innerHTML = `<div class="ins-wrap">${IST.err ? `<div class="empty">Could not load the stats: ${esc(IST.err)}</div>` : '<div class="empty"><div class="spinner" style="margin:auto"></div></div>'}</div>`; return; }
+  if (IST.statsKey !== istRepoParam() && !IST.loading) loadStats();
+  const ss = IST.repos.size ? filtered().filter(s => [...IST.repos].some(n => matchKey(s, n))) : filtered();
+  const ins = S.insights?.key === scopeKey() ? S.insights?.data : null;
   const running = (S.insights?.running || S.status.insights_running) && (S.insights?.running_scope || S.status.insights_scope || '') === scopeKey();
   const busyElsewhere = (S.insights?.running || S.status.insights_running) && !running;
-  const kpi = (l, v, d = '') => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
-  const delta = w1 - w0;
   const scopeName = S.f.projects.size ? [...S.f.projects].map(keyLabel).join(', ') : '';
+  const aiOn = insightsOn();
+  if (aiOn && S.insights?.key !== scopeKey()) loadInsights().then(() => S.view === 'insights' && renderInsights());
+  const openAI = el.querySelector('#is-ai')?.open;
   el.innerHTML = `<div class="ins-wrap">
-    <div class="ins-head"><div>
-      <div class="muted" style="font-size:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${scopeName ? `<span class="scope-chip">▣ ${esc(scopeName)}</span>` : '<span class="scope-chip">All projects</span>'}${plural(ss.length, 'session')} · ${ss.length ? fmtDY(Math.min(...ss.map(s => s.t0))) + ' – ' + fmtDY(Math.max(...ss.map(s => s.t1))) : ''}</div>
-      <h1>${ins?.headline ? esc(ins.headline) : running ? '<span class="shimmer">Reading through these sessions to find patterns…</span>' : scopeName ? `Your work in ${esc(scopeName)}` : 'Your AI work at a glance'}</h1></div>
-      <button class="btn" id="regen" ${running || busyElsewhere ? 'disabled' : ''}>${running ? '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span> Thinking…' : busyElsewhere ? 'Busy with another scope…' : ins ? '✦ Regenerate insights' : '✦ Generate insights'}</button></div>
-    <div class="kpis">
-      ${kpi('Sessions', ss.length.toLocaleString(), `${plural(projs, 'project')}`)}
-      ${kpi('Last 7 days', w1, `<span style="color:${delta > 0 ? 'var(--good)' : delta < 0 ? 'var(--critical)' : 'inherit'}">${delta > 0 ? '▲' : delta < 0 ? '▼' : '•'} ${Math.abs(delta)}</span> vs previous week`)}
-      ${kpi('Active days', days, ss.length ? `${(ss.length / Math.max(1, days)).toFixed(1)} sessions per active day` : '')}
-      ${kpi('Conversation moments', moments.toLocaleString(), `median ${med} per session`)}
-      ${S.ins.terr && S.ins.key === (repo + '|' + scopeKey()) ? kpi(`Code explored · ${esc(repo)}`, Math.round(S.ins.terr.coverage * 100) + '%', `${S.ins.terr.footprint.filter(f => f.sessions).length} of ${S.ins.terr.footprint.length} areas`) : kpi('Agents', new Set(ss.map(s => s.source)).size, [...new Set(ss.map(s => AGENT_NAME[s.source] || s.source))].join(' · '))}
-    </div>
+    <div class="ins-head"><div><div class="muted" style="font-size:12px">Your work on this Mac · rolling 7-day windows · no AI needed</div>
+      <h1>Squeeze more value from every token</h1></div>
+      <button class="btn" id="is-refresh" title="Count again now">Refresh</button></div>
+    <div class="is-filter" role="group" aria-label="Repos"><span class="muted">Repos</span>
+      <button class="chip ${IST.repos.size ? '' : 'on'}" data-isrepo="" aria-pressed="${!IST.repos.size}">All</button>
+      ${(st.repos || []).map(n => `<button class="chip ${IST.repos.has(n) ? 'on' : ''}" data-isrepo="${esc(n)}" aria-pressed="${IST.repos.has(n)}">${esc(n)}</button>`).join('')}
+      ${IST.loading || IST.statsKey !== istRepoParam() ? '<span class="spinner" style="width:10px;height:10px;border-width:2px"></span>' : IST.repos.size ? `<span class="muted">Tokens of sessions in these repos; their output, threads and peers.</span>` : ''}</div>
+    ${statsKpis(st)}
+    ${tokenCard(st)}
+    ${gameCard(st)}
+    ${peersCard(st)}
+    <div class="ins-sec"><div><h2>Momentum and stalls</h2><p>Threads by their events per week (sessions, tickets, commits, merges).</p></div></div>
+    ${momentumCard(st)}
+    ${gapsCard()}
+    <div class="ins-sec"><div><h2>Sessions</h2><p>${plural(ss.length, 'session')}${scopeName ? ` in ${esc(scopeName)}` : ''}.</p></div></div>
     <div class="grid2">
-      <div class="card"><h3>Activity by topic</h3><p class="cap">Sessions per ${actBinLabel(ss)}, stacked by ${S.scope ? 'this scope’s topics' : 'topic'}. Click a bar to filter the map to that period.</p><div class="legend-row" id="actleg"></div><svg id="actchart" class="chart" height="220"></svg></div>
-      <div class="card"><h3>When you work</h3><p class="cap">Sessions started by weekday and hour (local time).</p><svg id="heat" class="chart" height="220"></svg></div>
+      <div class="card"><h3>Activity by topic</h3><p class="cap">Sessions per ${actBinLabel(ss)}, stacked by ${S.scope ? 'this scope’s topics' : 'topic'}. Click a bar to filter the map to that period.</p><div class="legend-row" id="actleg"></div><svg id="actchart" class="chart" height="200"></svg></div>
+      <div class="card"><h3>When you work</h3><p class="cap">Sessions started by weekday and hour (local time).</p><svg id="heat" class="chart" height="200"></svg></div>
     </div>
-    ${aiState.data && ['offline', 'error'].includes(aiState.data.status) ? `<div class="card ai-setup" style="margin-bottom:12px">${aiStatusHtml(aiState.data)}<p class="cap" style="margin:6px 0 0">Insight work pauses until the engine is reachable. <a href="#ai">Change the AI engine</a></p></div>` : ''}
-    ${aiSection(ins, running, scopeName)}
-    ${codebaseSection(repo)}
-    <div class="grid2">
-      <div class="card"><h3>Topics${S.scope ? ' in this scope' : ''}</h3><p class="cap">Click a topic to explore it on the map.</p><div id="topicbars"></div></div>
-      <div class="card"><h3>Projects</h3><p class="cap">Click a project to filter everything to it.</p><div style="overflow:auto"><table class="tbl" id="projtbl"></table></div></div>
-    </div></div>`;
-  $('#regen').onclick = regenInsights;
-  drawActivity(ss); drawHeat(ss); drawTopicBars(ss); drawProjTable(ss);
+    <details class="card is-ai" id="is-ai" ${openAI ? 'open' : ''}><summary><b>AI notes</b> <span class="muted">themes, open threads and unexplored directions, written by ${aiOn ? esc(S.status.llm || 'your AI engine') : 'an AI engine (off)'}</span></summary>
+      ${aiOn ? `<div style="margin-top:10px">${aiState.data && ['offline', 'error'].includes(aiState.data.status) ? `<div class="ai-setup" style="margin-bottom:12px">${aiStatusHtml(aiState.data)}</div>` : ''}
+        <button class="btn" id="regen" ${running || busyElsewhere ? 'disabled' : ''}>${running ? 'Thinking…' : busyElsewhere ? 'Busy with another scope…' : ins ? '✦ Regenerate' : '✦ Generate'}</button>
+        ${ins?.headline ? `<h3 style="margin:10px 0">${esc(ins.headline)}</h3>` : ''}${aiSection(ins, running, scopeName)}</div>` : aiOffPage()}
+    </details>
+    <p class="muted" style="font-size:11.5px">Counted in ${st.ms} ms · ${esc(st.tokens.note)}</p></div>`;
+  $('#is-refresh').onclick = () => { loadStats(true); loadGapsAll(); };
+  if ($('#regen')) $('#regen').onclick = regenInsights;
+  if (!aiOn) bindAIButtons(el);
+  drawCost(st);
+  if (ss.length) { drawActivity(ss); drawHeat(ss); }
+  const setDays = () => { IST.staleDays = +$('#is-stale').value; IST.inactiveDays = +$('#is-inactive').value; IST.gaps = null;
+    try { localStorage.setItem('pensieve.gapDays', JSON.stringify([IST.staleDays, IST.inactiveDays])); } catch {}
+    loadGapsAll(); };
+  $('#is-stale').onchange = setDays; $('#is-inactive').onchange = setDays;
+  if ($('#is-allgaps')) $('#is-allgaps').onclick = () => { IST.allGaps = !IST.allGaps; renderInsights(); };
+  $$('[data-ismetric]', el).forEach(b => b.onclick = () => { IST.metric = b.dataset.ismetric; saveIst(); renderInsights(); });
+  $$('[data-isrepo]', el).forEach(b => b.onclick = () => {
+    const n = b.dataset.isrepo;
+    if (!n) IST.repos.clear(); else IST.repos[IST.repos.has(n) ? 'delete' : 'add'](n);
+    saveIst(); IST.gaps = null; loadStats(); loadGapsAll(); renderInsights();
+  });
   $$('[data-sid]', el).forEach(b => b.onclick = () => openSession(b.dataset.sid));
   $$('[data-tid]', el).forEach(b => b.onclick = () => toggleTopic(+b.dataset.tid));
   $$('[data-findq]', el).forEach(b => b.onclick = () => openPalette(b.dataset.findq));
-  $$('[data-area]', el).forEach(b => b.onclick = () => gotoArea(b.dataset.repo || repo, b.dataset.area));
-  $$('[data-author]', el).forEach(b => b.onclick = e => { e.stopPropagation(); gotoCode(b.dataset.repo || repo, null, b.dataset.author); });
-  $$('[data-insrepo]', el).forEach(b => b.onclick = () => { S.ins.repo = b.dataset.insrepo; S.ins.key = null; renderInsights(); });
   bindGapLinks(el);
-  $$('.frow', el).forEach(b => { b.onmousemove = e => tip(b.dataset.tip, e.clientX, e.clientY); b.onmouseleave = () => tip(null); });
+  $$('[data-tip]', el).forEach(b => { b.onmousemove = e => tip(b.dataset.tip, e.clientX, e.clientY); b.onmouseleave = () => tip(null);
+    b.onfocus = () => { const r = b.getBoundingClientRect(); tip(b.dataset.tip, r.left, r.bottom); }; b.onblur = () => tip(null); });
 }
 const actBin = ss => { const span = ss.length ? Math.max(...ss.map(s => s.t1)) - Math.min(...ss.map(s => s.t0)) : 0; return span < 45 * DAY ? DAY : 7 * DAY; };
 const actBinLabel = ss => actBin(ss) === DAY ? 'day' : 'week';
@@ -4778,56 +4950,6 @@ function aiSection(ins, running, scopeName) {
 const teamAuthor = name => { const p = S.ins.team?.people.find(x => x.name === name); return p ? p.author : null; };
 const initials = n => n.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || '?';
 const kfmt = n => n >= 1e4 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
-function codebaseSection(repo) {
-  const repos = insRepos();
-  if (!repos.length) return '';
-  const ready = S.ins.key === repo + '|' + scopeKey() && S.ins.terr;
-  const seg = repos.length > 1 ? `<div class="repo-seg">${repos.slice(0, 6).map(r => `<button class="chip ${r.name === repo ? 'on' : ''}" data-insrepo="${esc(r.name)}">${esc(r.name)}</button>`).join('')}</div>` : '';
-  const head = (t, sub, right = '') => `<div class="ins-sec"><div><h2>${t}</h2><p>${sub}</p></div>${right}</div>`;
-  if (!ready) return head(`Codebase · ${esc(repo)}`, 'Where you’ve worked, what’s next to it, and who is active there.', seg) + `<div class="card"><div class="shimmer" style="height:140px"></div></div>`;
-  const {terr, team} = S.ins;
-  const name = e => team?.people.find(p => p.email === e)?.name || e.split('@')[0];
-  const ownerName = a => person(a);
-  // footprint
-  const foot = terr.footprint.slice(0, 18), fmax = Math.max(1, ...foot.map(f => f.chunks));
-  const exploredCol = pal().cat[0], otherCol = pal().other;
-  const footHtml = foot.map(f => `<button class="frow" data-area="${esc(f.area)}" data-tip="${esc(`<b>${esc(f.area)}</b><div class="m">${f.chunks.toLocaleString()} code chunks</div><p>${f.sessions ? `You worked here in ${plural(f.sessions, 'session')}` : 'Not touched in your sessions yet'}${f.recent_commits ? ` · ${plural(f.recent_commits, 'commit')} by teammates in 90 days` : ''}${f.owners.length ? `<br>Owners: ${f.owners.map(ownerName).map(esc).join(', ')}` : ''}</p>`)}">
-      <span class="a" title="${esc(f.area)}">&lrm;${esc(f.area)}</span><span><i class="b" style="display:block;width:${f.chunks / fmax * 100}%;background:${f.sessions ? exploredCol : otherCol}"></i></span><span class="r">${f.sessions ? plural(f.sessions, 'session') : '—'}</span></button>`).join('');
-  const sugg = terr.suggestions.map(x => {
-    const recent = x.recent_people.map(e => team?.people.find(p => p.email === e)).filter(Boolean);
-    const people = recent.length ? recent.map(p => [p.author, p.name]) : x.owners.map(a => [a, ownerName(a)]);
-    return `<div class="sg"><div class="h"><code>${esc(x.area)}</code><span class="muted" style="font-size:11.5px">${x.chunks.toLocaleString()} chunks</span></div>
-      <div class="why">${x.near ? `Next to <a href="#" data-area="${esc(x.near)}"><code>${esc(x.near)}</code></a>, where you’ve worked (${Math.round(x.near_sim * 100)}% similar). ` : ''}${x.recent_commits ? `Active: ${plural(x.recent_commits, 'file change')} in the last 90 days.` : `Quiet: no teammate changes in 90 days${x.last_ts ? `, last touched ${rel(x.last_ts * 1000)}` : ''}.`}</div>
-      <div class="acts">${people.slice(0, 3).map(([a, n]) => `<button class="chip" data-author="${esc(a)}" title="Open in Code view">👤 ${esc(n)}</button>`).join('')}
-        <button class="chip" data-area="${esc(x.area)}">⌗ Explore</button></div></div>`;
-  }).join('') || '<div class="empty">Nothing obvious — you’ve touched every sizeable area.</div>';
-  // team
-  const myAreas = terr.footprint.filter(f => f.sessions).map(f => f.area);
-  const shared = a => myAreas.some(m => m === a || m.startsWith(a + '/') || a.startsWith(m + '/'));
-  const ppl = (team?.people || []).slice(0, 12);
-  const sums = team?.summaries || {};
-  const card = p => {
-    const wmax = Math.max(1, ...p.weeks), sm = sums[p.email];
-    return `<div class="pcard">
-      <div class="top"><span class="av" style="background:${p.me ? 'var(--accent)' : 'var(--text-3)'}">${esc(initials(p.name))}</span>
-        <span class="nm"><a href="#" data-author="${esc(p.author)}">${esc(p.name)}</a>${p.me ? ' <span class="badge">You</span>' : ''}</span>
-        <span class="st" title="${p.added.toLocaleString()} lines added, ${p.deleted.toLocaleString()} removed">${plural(p.commits, 'commit')} · +${kfmt(p.added)} −${kfmt(p.deleted)}</span></div>
-      <div class="spark" title="Commits per week, last ${team.days} days (oldest → newest)">${p.weeks.map(w => `<i class="${w ? '' : 'z'}" style="height:${w ? Math.max(12, w / wmax * 100) : 8}%"></i>`).join('')}</div>
-      ${sm ? `<div class="focus">${esc(sm.focus)}</div><p class="sum">${esc(sm.summary)}</p>` : team.summarizing ? `<div class="shimmer" style="height:34px;border-radius:6px"></div>` : ''}
-      <div class="areas">${p.areas.map(a => `<button class="chip ${shared(a.area) ? 'shared' : ''}" data-area="${esc(a.area)}" title="${a.commits} commits${shared(a.area) ? ' · you’ve worked here too' : ''}">${esc(a.area)}</button>`).join('')}</div>
-      <details><summary>Recent commits · last ${rel(p.last * 1000)}</summary><ul>${p.subjects.slice(0, 6).map(c => `<li>${esc(c.subject)} <span class="muted">${rel(c.ts * 1000)}</span></li>`).join('')}</ul></details>
-    </div>`;
-  };
-  return head(`Codebase · ${esc(repo)}`, `You’ve touched ${Math.round(terr.coverage * 100)}% of the code — ${terr.footprint.filter(f => f.sessions).length} of ${terr.footprint.length} areas across ${plural(terr.sessions, 'session')}${S.scope ? ' in this scope' : ''}.`, seg) +
-    `<div class="grid2">
-      <div class="card"><h3>Your footprint</h3><p class="cap">Largest areas of ${esc(repo)}; filled bars are areas your sessions read or edited. Click an area to open it in Code.</p>
-        <div class="legend-row"><span><i class="sw" style="background:${exploredCol}"></i>Worked in</span><span><i class="sw" style="background:${otherCol}"></i>Not yet</span></div><div class="foot">${footHtml}</div></div>
-      <div class="card"><h3>Unexplored territory</h3><p class="cap">Areas you haven’t touched, ranked by how close they are to code and conversations you have — with who to talk to.</p><div class="sugg">${sugg}</div></div>
-    </div>` +
-    ((g => g && g.gaps.length ? `<div class="card gaps-card" style="margin-bottom:12px"><div class="gaps-head"><div><h3>Knowledge gaps</h3><p class="cap">Areas mostly written by people with no commits in ${esc(repo)} for ${g.inactive_days}+ days — who to ask instead.</p></div><button class="btn" data-gaps="${esc(repo)}">See all ${g.gaps.length}</button></div>${g.gaps.slice(0, 3).map(x => gapItemHtml(x, repo)).join('')}</div>` : '')(peekGaps(repo))) +
-    head('Team activity', `What people have been shipping in ${esc(repo)} over the last ${team?.days || 90} days${team?.summarizing ? ' · summarizing with ' + esc(S.status.llm || 'the local model') + '…' : ''}. Highlighted areas overlap with yours.`) +
-    `<div class="team" style="margin-bottom:12px">${ppl.map(card).join('') || '<div class="empty">No commits in this window.</div>'}</div>`;
-}
 function drawActivity(ss) {
   const svg = $('#actchart'); const W = svg.clientWidth || 600, H = 220, pl = 28, pb = 20, pt = 8;
   if (!ss.length) { svg.innerHTML = ''; return; }
@@ -4874,24 +4996,6 @@ function drawHeat(ss) {
   svg.innerHTML = out.join('');
   svg.onmousemove = e => { const r = e.target.dataset?.r; if (r == null) return tip(null); const c = +e.target.dataset.c; tip(`<b>${days[r]} ${String(c).padStart(2, '0')}:00</b><div class="m">${plural(g[r][c], 'session')} started</div>`, e.clientX, e.clientY); };
   svg.onmouseleave = () => tip(null);
-}
-function drawTopicBars(ss) {
-  const cnt = {}, last = {}; ss.forEach(s => { const c = cl(s); cnt[c] = (cnt[c] || 0) + 1; last[c] = Math.max(last[c] || 0, s.t1); });
-  const max = Math.max(1, ...Object.values(cnt));
-  $('#topicbars').innerHTML = `<div class="rows">${TOPICS().filter(t => cnt[t.id]).sort((a, b) => cnt[b.id] - cnt[a.id]).map(t => `
-    <button class="row" data-tid="${t.id}"><i class="sw" style="background:${slotColor(t.id)}"></i><span class="name"><b>${esc(t.name)}</b></span><span class="n">${cnt[t.id]} · ${rel(last[t.id])}</span>
-    <span class="sub">${esc(t.description || t.keywords)}</span><span class="bar"><i style="width:${cnt[t.id] / max * 100}%;background:${slotColor(t.id)}"></i></span></button>`).join('')}</div>`;
-}
-function drawProjTable(ss) {
-  const by = new Map();
-  ss.forEach(s => { const r = by.get(s.project) || {n: 0, m: 0, last: 0, topics: {}, agents: new Set()}; r.n++; r.m += s.n || 0; r.last = Math.max(r.last, s.t1); r.topics[cl(s)] = (r.topics[cl(s)] || 0) + 1; r.agents.add(s.source); by.set(s.project, r); });
-  $('#projtbl').innerHTML = `<tr><th>Project</th><th class="num">Sessions</th><th class="num">Moments</th><th>Main topic</th><th>Last active</th></tr>` +
-    [...by].sort((a, b) => b[1].n - a[1].n).map(([p, r]) => {
-      const top = Object.entries(r.topics).sort((a, b) => b[1] - a[1])[0]?.[0];
-      const t = topicOf(+top);
-      return `<tr class="click" data-p="${esc(p)}"><td><b>${esc(p)}</b> <span class="muted" style="font-size:11px">${[...r.agents].map(a => AGENT_NAME[a] || a).join(', ')}</span></td><td class="num">${r.n}</td><td class="num">${r.m}</td><td>${t ? `<i class="sw" style="background:${slotColor(t.id)}"></i> ${esc(t.name)}` : ''}</td><td class="muted">${rel(r.last)}</td></tr>`;
-    }).join('');
-  $$('#projtbl tr[data-p]').forEach(tr => tr.onclick = () => { S.f.projects = new Set([tr.dataset.p]); refresh(); });
 }
 
 /* ============================== command palette ============================== */
@@ -5205,7 +5309,6 @@ async function handleEvent(m) {
     else if (m.type === 'projects') { if (S.view === 'projects') loadProjects(); else S.proj.stale = true; }
     else if (m.type === 'data_topics') { await loadDataTopics(); if (S.view === 'data') renderLabels(); }
     else if (m.type === 'scoped_topics') { if (S.scope) applyScope(true); }
-    else if (m.type === 'team') { if (S.ins.repo === m.repo) { S.ins.key = null; if (S.view === 'insights') loadCodebase().then(renderInsights); } }
   }
 }
 const reloadDataSoon = debounce(async () => {

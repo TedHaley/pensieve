@@ -638,6 +638,24 @@ def knowledge_gaps(repo: str, inactive_days: int = 180) -> dict:
 
 
 @tool()
+def token_value(repos: list[str] | None = None) -> dict:
+    """The user's token use and what it shipped, last 7 days against the 4 weeks before, for all repos or `repos`:
+    tokens by kind and model, estimated cost (Anthropic list prices), cache-read share, merged PRs, commits, closed
+    threads, deployed lines per million tokens, the value score (points per million weighted tokens) and the
+    formulas. Read only; no AI."""
+    from pensieve import insights_stats, people, store as v2
+    r = (_c() or {}).get("repos")
+    s = insights_stats.stats(v2.index_db(), v2.store_db(), people.graph(), repos=repos or None,
+                             deployed_fn=r.deployed if r else None)
+    g = s["game"]
+    return dict(last_7_days=s["tokens"]["windows"][0], output_last_7_days=g["windows"][0], deployed=g["lines"],
+                kpis=[{k: x[k] for k in ("key", "label", "value", "base", "delta")} for x in s["kpis"]],
+                models_last_4_weeks=s["tokens"]["recent_models"], score=g["score"], score_4wk_median=g["prev_median"],
+                best=g["best"], streak=g["streak"], badges=[{k: b[k] for k in ("name", "rule", "earned")} for b in g["badges"]],
+                formula=g["formula"], note=s["tokens"]["note"])
+
+
+@tool()
 def stale(days: int = 14) -> dict:
     """What looks abandoned on this Mac, to help the user keep a lean system. Each item has a `kind`:
     "worktree": a git worktree with no commit and no agent session in `days` days. verdict "remove": clean, its

@@ -436,6 +436,21 @@ CREATE TABLE IF NOT EXISTS person_edges (
 CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGER NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 """,
+    "session_usage": """
+CREATE TABLE IF NOT EXISTS session_usage (
+  session_id      TEXT NOT NULL,
+  hour            INTEGER NOT NULL,
+  model           TEXT NOT NULL,
+  calls           INTEGER NOT NULL CHECK (calls >= 0),
+  input           INTEGER NOT NULL CHECK (input >= 0),
+  output          INTEGER NOT NULL CHECK (output >= 0),
+  cache_write     INTEGER NOT NULL CHECK (cache_write >= 0),
+  cache_read      INTEGER NOT NULL CHECK (cache_read >= 0),
+  cache_write_1h  INTEGER NOT NULL CHECK (cache_write_1h >= 0),
+  PRIMARY KEY (session_id, hour, model)
+) STRICT;
+CREATE INDEX IF NOT EXISTS session_usage_hour ON session_usage (hour);
+""",
     "avatars": """
 CREATE TABLE IF NOT EXISTS avatars (
   hash  TEXT PRIMARY KEY NOT NULL,

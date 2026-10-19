@@ -11,9 +11,10 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import config, connections, parsers, settings, vectors
+from pensieve import config, connections, parsers, settings, tokens, vectors
 from pensieve.layout import cluster, fit3d, nearest, place_new, unit
 from pensieve.projects import project_name
+from pensieve.store import tokens as tokens_db
 
 LAYOUT_VERSION = "umap-v1"
 ACTIVE_SECONDS = 1.5  # re-index a transcript that's still growing at most this often (its card follows within 2 s)
@@ -532,6 +533,7 @@ class Store:
                         pass
                 self.db.execute(f"DELETE FROM chunks WHERE session_id IN ({q})", part)
                 self.db.execute(f"DELETE FROM session_files WHERE session_id IN ({q})", part)
+                tokens_db.delete_sessions(self.v2.held(), part)
                 self.db.execute(f"DELETE FROM sessions WHERE id IN ({q})", part)
             if sids:
                 self.db.commit()
@@ -543,6 +545,33 @@ class Store:
             rows = [(sid, p, int(e)) for p, e in touched.items()] or [(sid, "", 0)]
             self.db.executemany("INSERT OR REPLACE INTO session_files VALUES(?,?,?)", rows)
             self.db.commit()
+
+    USAGE_BACKFILL = "usage_backfill_v1"  # meta key: the sessions indexed before session_usage have their rows
+
+    def backfill_usage(self, log=lambda m: print(m, flush=True)) -> int:
+        """Token rows for the sessions that were indexed before `session_usage` existed. Reads each transcript for
+        usage only (tokens.scan), and writes 25 sessions per write job, so the writer is never held for long. Runs
+        once per data folder; the session indexer keeps the rows up to date after that."""
+        import time
+        if self.meta(self.USAGE_BACKFILL):
+            return 0
+        t0 = time.monotonic()
+        have = tokens_db.sessions_with_usage(self.v2)
+        todo = [(sid, src, path) for sid, src, path in self.db.execute("SELECT id, source, path FROM sessions")
+                if sid not in have and path and path.endswith(".jsonl")]
+        batch, n = [], 0
+        for sid, src, path in todo:
+            usage = tokens.rows(tokens.scan(src, Path(path)))
+            if usage:
+                batch.append((sid, usage))
+                n += 1
+            if len(batch) >= 25:
+                tokens_db.write_sessions(self.v2, batch)
+                batch = []
+        tokens_db.write_sessions(self.v2, batch)
+        self.meta(self.USAGE_BACKFILL, str(int(time.time())))
+        log(f"token use of {n} of {len(todo)} sessions read in {time.monotonic() - t0:.1f} s")
+        return n
 
     def _index_session(self, source, path: Path, st):
         """Index one transcript; returns False for one that ran in a temp folder (not the user's work). A transcript
@@ -589,6 +618,7 @@ class Store:
                  s.started, s.updated, len(chunks)))
             if new or stale:
                 self.db.execute("UPDATE sessions SET summary=NULL, tags=NULL WHERE id=?", (s.id,))
+            tokens_db.replace_session(self.v2.held(), s.id, tokens.rows(s.state.get("tok")))
             self.db.commit()
         for fn in session_listeners:
             fn(s.id)

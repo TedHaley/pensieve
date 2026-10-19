@@ -46,6 +46,9 @@ EMBED_GROUP = 48    # chunks gathered from several files before one embed() call
 SHADOW_MIN_FILES = 20  # files to (re)index before blame goes through the commit-graph shadow (see blame_shadow)
 PROGRESS_MIN_FILES = 20  # checkouts with at least this many files to index report their progress (Sources, status)
 GENERATED_DIRS = {"dist", "build", "vendor", "third_party", "node_modules", "out", "target", ".venv"}
+# files whose added lines are not written work: lock files and minified bundles (Insights' deployed lines)
+DEPLOY_SKIP = re.compile(r"(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|uv\.lock|poetry\.lock|Gemfile\.lock|"
+                         r"Cargo\.lock|composer\.lock|go\.sum)$|\.min\.(js|css)$|\.map$")
 CODE_CHUNK_CHARS = 1500
 CHARS_PER_CHUNK = 1000  # chunk_code's average size: an estimate of a repo's chunks from file sizes comes within 10%
 RATE_MIN_CHUNKS = 2000  # an index this big measures the Mac's speed
@@ -76,6 +79,37 @@ def default_branch(root) -> str | None:
         if git(root, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{b}").strip():
             return b
     return None
+
+
+def deploy_ref(root) -> str | None:
+    """The ref whose commits count as deployed: origin's default branch, else a local main or master."""
+    b = default_branch(root)
+    if b:
+        return f"refs/remotes/origin/{b}"
+    return next((f"refs/heads/{x}" for x in ("main", "master")
+                 if git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{x}").strip()), None)
+
+
+def deployed_commits(root, ref, days) -> list[tuple[int, str, int]]:
+    """(time, author email, lines added) of the non-merge commits reachable from `ref` in the last `days`, without
+    lock files, minified files and generated folders."""
+    out = git(root, "log", ref, f"--since={days}.days", "--no-merges", "--numstat", "--format=%x1e%at%x1f%ae")
+    rows = []
+    for rec in out.split("\x1e")[1:]:
+        head, _, body = rec.partition("\n")
+        ts, _, email = head.partition("\x1f")
+        added = 0
+        for ln in body.splitlines():
+            parts = ln.split("\t")
+            if len(parts) < 3 or not parts[0].isdigit():
+                continue  # a binary file
+            path = parts[2]
+            if DEPLOY_SKIP.search(path) or any(p in GENERATED_DIRS for p in path.split("/")[:-1]):
+                continue
+            added += int(parts[0])
+        if ts.strip().isdigit():
+            rows.append((int(ts), email.strip().lower(), added))
+    return rows
 
 
 def upstream(root) -> dict | None:
@@ -1329,6 +1363,129 @@ class Repos:
     def _rows_for_root(self, root, cols):
         return self.db.execute(f"SELECT {cols} FROM code_chunks WHERE repo=?", (root,)).fetchall()
 
+    def _blame_areas(self, root):
+        """Blame lines per area and author name, the newest blamed line of each area, each name's emails and the
+        repo's newest commit. Cached until the next reindex (it reads every code chunk of the repo)."""
+        key = ("blame_areas", root)
+        if key in self._cache:
+            return self._cache[key]
+        rows = self.db.execute("SELECT path, authors, last_ts FROM code_chunks WHERE repo=? AND wt=''", (root,)).fetchall()
+        last_by_email = dict(self.db.execute("SELECT lower(author), MAX(ts) FROM commits WHERE repo=? GROUP BY lower(author)", (root,)).fetchall())
+        # the kept commits are the newest 5000, which in a busy repo reach back a few months only: the People build's
+        # git log of a year dates the authors that they miss
+        from pensieve import people
+        for e, a in (people.cache_get("people:git:" + root, {}) or {}).get("authors", {}).items():
+            if a.get("last"):
+                last_by_email[e.lower()] = max(last_by_email.get(e.lower(), 0), int(a["last"]))
+        ref = self.db.execute("SELECT MAX(ts) FROM commits WHERE repo=?", (root,)).fetchone()[0] or 0
+
+        def who(a):  # "Name <email>" -> (name, email)
+            m = re.match(r"(.*?)\s*<([^>]*)>", a)
+            return (m.group(1).strip(), m.group(2).strip().lower()) if m else (a.strip(), "")
+        # one person can commit under several emails: a name counts as active when any of its emails is active
+        emails_by_name = defaultdict(set)
+        area_lines, lines_by, area_last = defaultdict(Counter), Counter(), Counter()
+        deep_lines, deep_last = defaultdict(Counter), Counter()  # three-level areas, for the age of smaller parts
+        own_last = Counter()  # name -> the newest chunk that only they wrote
+        for path, au, ts in rows:
+            area = area_of(path)
+            parts = path.split("/")
+            deep = "/".join(parts[:3]) if len(parts) > 3 else area
+            area_last[area] = max(area_last[area], ts or 0)
+            deep_last[deep] = max(deep_last[deep], ts or 0)
+            names = set()
+            for a, n in json.loads(au or "{}").items():
+                if is_bot(a):
+                    continue
+                nm, em = who(a)
+                names.add(nm)
+                emails_by_name[nm.lower()].add(em)
+                area_lines[area][nm] += n
+                deep_lines[deep][nm] += n
+                lines_by[nm] += n
+            if len(names) == 1:  # one author: the chunk's newest line is theirs (uncommitted lines too)
+                nm = names.pop()
+                own_last[nm] = max(own_last[nm], ts or 0)
+        out = dict(area_lines=area_lines, lines_by=lines_by, area_last=area_last, ref=ref,
+                   deep_lines=deep_lines, deep_last=deep_last, own_last=own_last,
+                   emails_by_name=emails_by_name, last_by_email=last_by_email)
+        self._cache[key] = out
+        return out
+
+    @staticmethod
+    def _departed(b, inactive_days):
+        """Each author's last commit, and the authors with none in `inactive_days` before the repo's newest commit
+        (or none in the commits Pensieve keeps: long gone). Lines that only one author wrote date them too, so
+        uncommitted work counts."""
+        cutoff = b["ref"] - inactive_days * 86400
+        own = b.get("own_last") or {}
+        last = {nm: max(max((b["last_by_email"].get(e, 0) for e in b["emails_by_name"][nm.lower()]), default=0),
+                        own.get(nm, 0)) for nm in b["lines_by"]}
+        return last, {nm for nm, t in last.items() if not t or t < cutoff}
+
+    def deployed(self, name, days=56) -> list[tuple[int, str, int]]:
+        """(time, author email, lines added) of each commit of the last `days` that reached the repo's default
+        branch: origin's (as of the last fetch), or the local main or master of a repo without an origin. Commits
+        of a branch count once they are merged; merge commits are skipped (their lines are in the commits they
+        merge, or in the squash commit). Lock files, minified files and generated folders do not count. Cached in
+        index.db until the branch moves, or the next day."""
+        from pensieve.store import cache as cache_db
+        root = self._root(name)
+        if not root or root == ALL:
+            return []
+        ref = deploy_ref(root)
+        sha = git(root, "rev-parse", "--verify", "--quiet", ref).strip() if ref else ""
+        if not sha:
+            return []
+        key, today = f"deployed:{root}:{days}", time.strftime("%Y-%m-%d")
+        hit = cache_db.get_json(self.store.v2, key)
+        if hit and hit.get("sha") == sha and hit.get("day") == today:
+            return [tuple(r) for r in hit["rows"]]
+        rows = deployed_commits(root, ref, days)
+        cache_db.put_json(self.store.v2, key, {"sha": sha, "day": today, "rows": rows}, 7 * 86400, wait=False)
+        return rows
+
+    def area_health(self, name, stale_days=90, inactive_days=180, min_lines=150):
+        """For the manager view of Insights: each sizeable area of a repo with its age (the newest blamed line,
+        against the repo's newest commit), the share of its lines by authors who stopped committing
+        (`inactive_days`), and the active people who know it best. Only areas that are stale or mostly by
+        inactive authors (or with no active author holding 10%) are listed."""
+        root = self._root(name)
+        if not root or root == ALL:
+            return None
+        b = self._blame_areas(root)
+        last, gone = self._departed(b, inactive_days)
+        ref, out, listed = b["ref"], [], set()
+
+        def entry(area, c, newest):
+            total = sum(c.values())
+            if total < min_lines or area == "." or area.split("/")[0] in GENERATED_DIRS:
+                return None
+            gone_lines = sum(n for nm, n in c.items() if nm in gone)
+            active = [(nm, n) for nm, n in c.most_common() if nm not in gone]
+            age = max(0, (ref - newest) // 86400) if newest else None
+            return dict(area=area, lines=total, age_days=age, stale=age is not None and age >= stale_days,
+                        departed_share=round(gone_lines / total, 3),
+                        bus_factor=sum(1 for _, n in active if n / total >= 0.10),
+                        departed=[dict(name=nm, share=round(n / total, 3), last_active=last.get(nm) or None)
+                                  for nm, n in c.most_common() if nm in gone][:3],
+                        knows=[dict(name=nm, share=round(n / total, 3), last_active=last.get(nm) or None)
+                               for nm, n in active[:3]])
+        for area, c in b["area_lines"].items():
+            e = entry(area, c, b["area_last"][area])
+            if e and (e["stale"] or e["departed_share"] >= 0.5 or e["bus_factor"] == 0):
+                out.append(e)
+                if e["stale"]:
+                    listed.add(area)
+        # a big area changes somewhere every week: its parts one level down show what nobody touched
+        for deep, c in b["deep_lines"].items():
+            if deep in b["area_lines"] or "/".join(deep.split("/")[:2]) in listed:
+                continue
+            e = entry(deep, c, b["deep_last"][deep])
+            if e and e["stale"]:
+                out.append(e)
+        return dict(repo=name, as_of=ref, stale_days=stale_days, inactive_days=inactive_days, areas=out)
+
     def knowledge_gaps(self, name, inactive_days=180, min_lines=150):
         """Areas whose knowledge left with their authors: most of the code (by git blame) was written by people who
         haven't committed for `inactive_days` (measured from the repo's latest commit, so a quiet repo doesn't flag
@@ -1337,33 +1494,9 @@ class Repos:
         root = self._root(name)
         if not root or root == ALL:
             return None
-        rows = self.db.execute("SELECT path, authors FROM code_chunks WHERE repo=? AND wt=''", (root,)).fetchall()
-        last_by_email = dict(self.db.execute("SELECT lower(author), MAX(ts) FROM commits WHERE repo=? GROUP BY lower(author)", (root,)).fetchall())
-        ref = self.db.execute("SELECT MAX(ts) FROM commits WHERE repo=?", (root,)).fetchone()[0] or 0
-        cutoff = ref - inactive_days * 86400
-
-        def who(a):  # "Name <email>" -> (name, email)
-            m = re.match(r"(.*?)\s*<([^>]*)>", a)
-            return (m.group(1).strip(), m.group(2).strip().lower()) if m else (a.strip(), "")
-        # one person can commit under several emails: they're active if any email with their name is
-        emails_by_name = defaultdict(set)
-        area_lines, lines_by = defaultdict(Counter), Counter()
-        for path, au in rows:
-            area = area_of(path)
-            for a, n in json.loads(au or "{}").items():
-                if is_bot(a):
-                    continue
-                nm, em = who(a)
-                emails_by_name[nm.lower()].add(em)
-                area_lines[area][nm] += n
-                lines_by[nm] += n
-        canon = {}
-        for nm in lines_by:
-            canon[nm] = nm
-        last = {nm: max((last_by_email.get(e, 0) for e in emails_by_name[nm.lower()]), default=0) for nm in lines_by}
-        departed = {nm for nm, t in last.items() if t and t < cutoff}
-        unknown = {nm for nm, t in last.items() if not t}  # never seen in the last 5000 commits: long gone
-        gone = departed | unknown
+        b = self._blame_areas(root)
+        area_lines, lines_by, ref = b["area_lines"], b["lines_by"], b["ref"]
+        last, gone = self._departed(b, inactive_days)
         people = [dict(name=nm, lines=lines_by[nm], last_active=last[nm] or None, departed=nm in gone)
                   for nm, _ in lines_by.most_common(40)]
         gaps = []

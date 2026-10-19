@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pensieve import settings
+from pensieve import settings, tokens
 from pensieve.config import session_sources
 
 _REMINDER = re.compile(r"<(system-reminder|task-notification|local-command-\w+|command-\w+)>.*?</\1>", re.S)
@@ -73,8 +73,10 @@ def _note_tool(s: Session, name: str, args):
 def parse_claude(path: Path, s: Session | None = None) -> Session:
     s = s or Session(id=f"claude:{path.stem}", source="claude", path=str(path))
     mcp_uses = s.state.setdefault("mcp_uses", {})
+    tok = s.state.setdefault("tok", tokens.new())
     for d in _lines(path, s):
         t = d.get("type")
+        tokens.claude_line(d, tok)
         if t == "ai-title":
             s.title = d.get("aiTitle") or d.get("title") or s.title
         if t not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
@@ -93,13 +95,16 @@ def parse_claude(path: Path, s: Session | None = None) -> Session:
             c = "\n".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
         if isinstance(c, str):
             _add(s, t, c, d.get("timestamp", ""))
+    tokens.subagents(path, tok)
     return s
 
 
 def parse_qwen(path: Path, s: Session | None = None) -> Session:
     s = s or Session(id=f"qwen:{path.stem}", source="qwen", path=str(path))
+    tok = s.state.setdefault("tok", tokens.new())
     for d in _lines(path, s):
         t = d.get("type")
+        tokens.qwen_line(d, tok)
         if t not in ("user", "assistant") or d.get("subtype") in ("notification", "cron"):
             continue
         s.project = s.project or d.get("cwd", "")
@@ -115,7 +120,9 @@ def parse_qwen(path: Path, s: Session | None = None) -> Session:
 
 def parse_codex(path: Path, s: Session | None = None) -> Session:
     s = s or Session(id=f"codex:{path.stem}", source="codex", path=str(path))
+    tok = s.state.setdefault("tok", tokens.new())
     for d in _lines(path, s):
+        tokens.codex_line(d, tok)
         p = d.get("payload") or {}
         if d.get("type") == "session_meta":
             s.project = p.get("cwd", s.project)

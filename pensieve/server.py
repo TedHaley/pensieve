@@ -596,6 +596,7 @@ async def lifespan(app):
     loop.run_in_executor(None, embed, ["warm up"])  # load the model now, not in the first search or edit
     loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
+    threading.Thread(target=store.backfill_usage, daemon=True, name="usage-backfill").start()
     tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(card_keeper())]
     async with mcp_server.mcp.session_manager.run():
         yield
@@ -872,6 +873,87 @@ async def refresh_insights(req: ScopeReq | None = None):
     scope = req.scope if req else None
     asyncio.create_task(run_insights(scope, req.session_ids if req and scope else None))
     return {"running": True}
+
+
+STATS_TTL = 30  # seconds: the stats of the Insights tab are made again at most this often
+_stats = {"value": {}, "busy": set(), "lock": threading.Lock()}  # value: repos key -> (time, stats)
+_gaps = {"value": {}, "building": set(), "lock": threading.Lock()}
+
+
+@app.get("/api/insights/stats")
+def insights_stats_api(fresh: bool = False, repos: str = ""):
+    """Token use, the value score, deployed lines, peers and momentum (insights_stats.py), for all repos or the
+    comma-separated `repos`. No AI. An answer older than STATS_TTL is returned, and made again in the background.
+    A sync endpoint: it runs on the request thread pool, not behind the indexing jobs of the loop's executor."""
+    from pensieve import insights_stats, people, store as v2
+    sel = sorted({r for r in repos.split(",") if r})
+    key = ",".join(sel)
+
+    def make():
+        v = insights_stats.stats(v2.index_db(), v2.store_db(), people.graph(), repos=sel or None,
+                                 deployed_fn=globals()["repos"].deployed)
+        _stats["value"][key] = (time.time(), v)
+        return v
+
+    def refresh():
+        try:
+            with _stats["lock"]:
+                make()
+        finally:
+            _stats["busy"].discard(key)
+    hit = _stats["value"].get(key)
+    if hit and not fresh:  # an older answer is returned at once, and made again in the background
+        if time.time() - hit[0] >= STATS_TTL and key not in _stats["busy"]:
+            _stats["busy"].add(key)
+            threading.Thread(target=refresh, daemon=True, name="insights-stats").start()
+        return hit[1]
+    with _stats["lock"]:
+        return make()
+
+
+@app.get("/api/insights/gaps")
+def insights_gaps_api(stale_days: int = 90, inactive_days: int = 180, repos: str = ""):
+    """Knowledge gaps over every indexed repo, or the comma-separated `repos`. The first build reads all blame rows,
+    so it runs in the background: the answer has `building` until it is done, and the last result while a new one
+    builds. A result stays until a repo's head moves."""
+    from pensieve import insights_stats, store as v2
+    from pensieve.store import cache as cache_db, insights as q
+    stale_days, inactive_days = max(7, min(stale_days, 3650)), max(30, min(inactive_days, 3650))
+    key = f"insights:gaps:v6:{stale_days}:{inactive_days}"
+    idx = v2.index_db()
+    heads = [[r, h] for r, h, _ in q.repo_heads(idx)]
+    sel = {r for r in repos.split(",") if r}
+
+    def only(res):
+        return insights_stats.gaps_for(res, sel) if sel else res
+    with _gaps["lock"]:
+        hit = _gaps["value"].get(key) or cache_db.get_json(idx, key)
+        if hit and hit.get("heads") == heads:
+            _gaps["value"][key] = hit
+            return dict(only(hit["result"]), building=False)
+        if key not in _gaps["building"]:
+            _gaps["building"].add(key)
+
+            def build():
+                try:
+                    names = [n for _r, n, _rm in q.repos(idx)]
+                    t0 = time.perf_counter()
+                    res = insights_stats.gaps(repos, names, stale_days, inactive_days)
+                    res["ms"] = round((time.perf_counter() - t0) * 1000)
+                    v = {"heads": heads, "result": res}
+                    cache_db.put_json(idx, key, v, 30 * 86400)
+                    with _gaps["lock"]:
+                        _gaps["value"][key] = v
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                finally:
+                    with _gaps["lock"]:
+                        _gaps["building"].discard(key)
+            threading.Thread(target=build, daemon=True, name="insights-gaps").start()
+    last = (hit or {}).get("result")
+    return dict(only(last) if last else {"areas": [], "counts": {}, "stale_days": stale_days,
+                                         "inactive_days": inactive_days}, building=True)
 
 
 class StaleReq(BaseModel):

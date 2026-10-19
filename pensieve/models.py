@@ -709,13 +709,29 @@ class Avatar:
     at: int
 
 
+@dataclass(frozen=True)
+class SessionUsage:
+    """The tokens of an agent session in one hour, with one model (pensieve/tokens.py). `cache_write_1h` is the part
+    of `cache_write` that went to the 1-hour cache."""
+    __table__ = "session_usage"
+    session_id: str
+    hour: int  # the start of the hour, Unix seconds, UTC
+    model: str
+    calls: int
+    input: int
+    output: int
+    cache_write: int
+    cache_read: int
+    cache_write_1h: int
+
+
 STORE_MODELS = (Source, Document, DocumentPerson, DocumentChange, DocumentSession, Identity, Person, PersonKey,
                 PersonAlias, PersonOverride, OrgPullRequest, OrgReview, OrgTitle, OrgFirstCommit, Card, CardMember,
                 CardNote, CardStateSet, CardDone, CardDoneCheck, Thread, ThreadMember, ThreadRepo, ThreadCard, ThreadEventRow,
                 ThreadSnapshot, ThreadSnapshotReason, Feedback, SlackUser, DirectoryPerson, DirectoryEmail,
                 DirectorySource, OrgTeamPair, OrgManagerTitle, OrgState, UsageCall, AgentJob, AgentSession,
                 MigrationStep, V1DocPath)
-INDEX_MODELS = (DocChunk, DocIndexState, EmbedCache, PersonEdge, CacheEntry, Meta, Avatar)
+INDEX_MODELS = (DocChunk, DocIndexState, EmbedCache, PersonEdge, CacheEntry, Meta, Avatar, SessionUsage)
 
 
 @cache
