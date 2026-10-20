@@ -4,7 +4,8 @@ hook. Nothing is installed unless the user turns it on.
 
 The instructions block is kept between markers so it can be updated or removed without touching the rest of the file;
 skills are copied into ~/.claude/skills/<name>/ with a marker file so only Pensieve's own copies are ever removed.
-The hooks are the entries in ~/.claude/settings.json whose commands post to Pensieve (HOOK_SPEC).
+The hooks are the entries in ~/.claude/settings.json whose commands post to Pensieve (HOOK_SPEC: one add-on can
+have several entries, such as the search gate's three).
 """
 import json
 import os
@@ -58,12 +59,20 @@ HOOKS = {  # id -> (label, what it does, recommended)
                              "When you send Claude Code a prompt in an indexed repo, Pensieve adds what it needs: the "
                              "thread of the work it names, your threads for a standup, who knows the code, or the "
                              "best code matches. Claude starts with the answer instead of looking it up.", True),
+    "claude-search-gate": ("Search Pensieve before grep",
+                           "In an indexed repo, Claude can't run Grep, Glob, grep, rg, ag, find or git grep in a turn "
+                           "until it has called a Pensieve tool. Filtering output (… | grep x) stays allowed. If "
+                           "Pensieve isn't running, nothing is blocked.", True),
 }
-HOOK_SPEC = {  # id -> (Claude Code hook event, matcher or None, the URL path the hook posts its JSON to)
-    "claude-hook": ("PostToolUse", "Edit|MultiEdit|Write|NotebookEdit", "/api/touched"),
-    "claude-repo-check": ("SessionStart", None, "/api/repo-check"),
-    "claude-prompt-search": ("UserPromptSubmit", None, "/api/prompt-context"),
+PENSIEVE_TOOLS = "mcp__pensieve__.*|mcp__plugin_pensieve_pensieve__.*"  # the MCP server's tools, direct and as a plugin
+HOOK_SPEC = {  # id -> [(Claude Code hook event, matcher or None, the URL path the hook posts its JSON to)]
+    "claude-hook": [("PostToolUse", "Edit|MultiEdit|Write|NotebookEdit", "/api/touched")],
+    "claude-repo-check": [("SessionStart", None, "/api/repo-check")],
+    "claude-prompt-search": [("UserPromptSubmit", None, "/api/prompt-context")],
+    "claude-search-gate": [("UserPromptSubmit", None, "/api/gate/reset"), ("PostToolUse", PENSIEVE_TOOLS, "/api/gate/mark"),
+                           ("PreToolUse", "Grep|Glob|Bash", "/api/gate/check")],
 }
+ANSWERS = {"SessionStart", "UserPromptSubmit", "PreToolUse"}  # events whose hook output Claude Code reads
 
 
 CLAUDE_JSON = Path.home() / ".claude.json"  # Claude Code keeps user-scope MCP servers here, under "mcpServers"
@@ -241,19 +250,18 @@ def threads_note(name: str, root: str, threads: list[dict]) -> str | None:
             "closes when its PR merges, its ticket closes or its branch goes.")
 
 
-def hook_command(hook: str, port: int) -> str:
+def hook_command(event: str, url: str, port: int) -> str:
     """curl posts the hook's JSON to the backend. If the backend isn't running, the hook does nothing."""
-    event, _, url = HOOK_SPEC[hook]
-    if event in ("SessionStart", "UserPromptSubmit"):  # its answer is the hook's output: context for Claude
+    if event in ANSWERS:  # its answer is the hook's output: context for Claude, or a PreToolUse decision
         return (f"curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- "
                 f"http://127.0.0.1:{port}{url} 2>/dev/null || true")
     return (f"curl -s -m 1 -X POST -H 'Content-Type: application/json' --data-binary @- "
             f"http://127.0.0.1:{port}{url} >/dev/null 2>&1 || true")
 
 
-def _hook_entry(hook: str, port: int) -> dict:
-    _, matcher, _ = HOOK_SPEC[hook]
-    return {**({"matcher": matcher} if matcher else {}), "hooks": [{"type": "command", "command": hook_command(hook, port)}]}
+def _hook_entry(event: str, matcher: str | None, url: str, port: int) -> dict:
+    return {**({"matcher": matcher} if matcher else {}),
+            "hooks": [{"type": "command", "command": hook_command(event, url, port)}]}
 
 
 def _claude_settings() -> dict:
@@ -271,16 +279,16 @@ def _ours(entry, url: str) -> bool:
 
 
 def hook_state(hook: str, port: int) -> str:
-    """'off', 'on', or 'stale' (installed with another port or tool list)."""
-    event, _, url = HOOK_SPEC[hook]
+    """'off', 'on', or 'stale' (installed with another port or tool list, or only some of its entries)."""
     try:
-        entries = _claude_settings().get("hooks", {}).get(event, [])
+        hooks = _claude_settings().get("hooks", {})
     except ValueError:
         return "off"
-    mine = [e for e in entries if _ours(e, url)]
-    if not mine:
+    found = [[e for e in hooks.get(event, []) if _ours(e, url)] == [_hook_entry(event, matcher, url, port)]
+             if any(_ours(e, url) for e in hooks.get(event, [])) else None for event, matcher, url in HOOK_SPEC[hook]]
+    if all(f is None for f in found):
         return "off"
-    return "on" if mine == [_hook_entry(hook, port)] else "stale"
+    return "on" if all(found) else "stale"
 
 
 def drop_plugin_duplicates(port: int) -> list[str]:
@@ -296,18 +304,18 @@ def drop_plugin_duplicates(port: int) -> list[str]:
 
 
 def set_hook(hook: str, on: bool, port: int) -> str:
-    event, _, url = HOOK_SPEC[hook]
     if on and claude_plugin():
         raise ValueError(PLUGIN_HAS)
     s = _claude_settings()
     hooks = s.setdefault("hooks", {})
-    entries = [e for e in hooks.get(event, []) if not _ours(e, url)]
-    if on:
-        entries.append(_hook_entry(hook, port))
-    if entries:
-        hooks[event] = entries
-    else:
-        hooks.pop(event, None)
+    for event, matcher, url in HOOK_SPEC[hook]:
+        entries = [e for e in hooks.get(event, []) if not _ours(e, url)]
+        if on:
+            entries.append(_hook_entry(event, matcher, url, port))
+        if entries:
+            hooks[event] = entries
+        else:
+            hooks.pop(event, None)
     if not hooks:
         s.pop("hooks")
     CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)

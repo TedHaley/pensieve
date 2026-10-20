@@ -57,7 +57,7 @@ pensieve integrate claude-mcp claude pensieve-search   <span class="c"># only Cl
 
 
 <h2 id="plugin">Or install the Claude Code plugin</h2>
-<p>The plugin gives Claude Code the MCP server, the four skills, the instructions block and the three recommended
+<p>The plugin gives Claude Code the MCP server, the four skills, the instructions block and the four recommended
 hooks. It does not change your settings files. Install Pensieve first, because the plugin starts
 <code>~/.local/bin/pensieve</code>. Then type these commands in Claude Code:</p>
 <pre><code>/plugin marketplace add TedHaley/pensieve
@@ -69,8 +69,8 @@ hooks. It does not change your settings files. Install Pensieve first, because t
 </ul>
 
 <h2 id="hooks">Hooks for Claude Code</h2>
-<p><code>pensieve integrate recommended</code> adds three hooks to <code>~/.claude/settings.json</code>:</p>
-<div class="tbl"><table><thead><tr><th>Hook</th><th>Event</th><th>What it does</th></tr></thead><tbody><tr><td><code>claude-hook</code></td><td>PostToolUse</td><td>After each Edit or Write, it sends the changed path to Pensieve. The next search finds the new code. It adds about 50 ms to each edit.</td></tr><tr><td><code>claude-repo-check</code></td><td>SessionStart</td><td>In a repo that Pensieve does not index, Claude asks you once whether to index it. Pensieve keeps your answer. In a repo that Pensieve indexes, it adds one line: the number of loose ends and the thread closest to done. Claude then offers to close it at a natural pause.</td></tr><tr><td><code>claude-prompt-search</code></td><td>UserPromptSubmit</td><td>Pensieve adds what the prompt needs: a thread, your list of threads, who knows the code, past sessions, or the 5 best code matches. It adds about 300 ms and 400 to 1,500 tokens.</td></tr></tbody></table></div>
+<p><code>pensieve integrate recommended</code> adds four hooks to <code>~/.claude/settings.json</code>:</p>
+<div class="tbl"><table><thead><tr><th>Hook</th><th>Event</th><th>What it does</th></tr></thead><tbody><tr><td><code>claude-hook</code></td><td>PostToolUse</td><td>After each Edit or Write, it sends the changed path to Pensieve. The next search finds the new code. It adds about 50 ms to each edit.</td></tr><tr><td><code>claude-repo-check</code></td><td>SessionStart</td><td>In a repo that Pensieve does not index, Claude asks you once whether to index it. Pensieve keeps your answer. In a repo that Pensieve indexes, it adds one line: the number of loose ends and the thread closest to done. Claude then offers to close it at a natural pause.</td></tr><tr><td><code>claude-prompt-search</code></td><td>UserPromptSubmit</td><td>Pensieve adds what the prompt needs: a thread, your list of threads, who knows the code, past sessions, or the 5 best code matches. It adds about 300 ms and 400 to 1,500 tokens.</td></tr><tr><td><code>claude-search-gate</code></td><td>UserPromptSubmit, PostToolUse, PreToolUse</td><td>In a repo that Pensieve indexes, Claude can't run Grep, Glob, <code>grep</code>, <code>rg</code>, <code>ag</code>, <code>find</code> or <code>git grep</code> in a turn until it calls a Pensieve tool. The prompt hook's results count as that call. Filtering output stays allowed. If Pensieve isn't running, nothing is blocked. One session in 5 runs without blocking, as a control group.</td></tr></tbody></table></div>
 <p>Slash commands, prompts of 1 or 2 words, and repos that Pensieve does not index get nothing from the prompt hook.</p>
 
 <h2 id="manual">Connect by hand</h2>

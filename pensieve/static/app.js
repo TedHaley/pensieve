@@ -3329,11 +3329,7 @@ function ppSvg(d, W, H) {
 function renderPeople() {
   const el = $('#people'); if (!el) return;
   const P = S.people, d = P.data;
-  const st = d?.stats || {};
   const typing = document.activeElement?.id === 'ppq';  // a new graph can arrive while the user types a name
-  const from = [st.repos && plural(st.repos, 'repo'), st.prs && plural(st.prs, 'pull request'), st.tasks && plural(st.tasks, 'thread'),
-                st.slack_threads && plural(st.slack_threads, 'Slack thread')].filter(Boolean).join(', ');
-  const shown = Math.min(P.n, Math.max(0, (d?.nodes.length || 1) - 1));
   const org = P.view === 'org';
   el.innerHTML = `<div class="wk-head pp-head"><h2>People</h2>
       <div class="pp-seg" role="group" aria-label="View"><button class="${org ? '' : 'on'}" data-pp-view="graph" aria-pressed="${!org}">Graph</button><button class="${org ? 'on' : ''}" data-pp-view="org" aria-pressed="${org}" title="Teams, seniority and reporting lines, all inferred">Org</button></div>
@@ -3345,7 +3341,7 @@ function renderPeople() {
       <div class="pp-graph" id="ppgraph" ${org ? 'hidden' : ''}>${!d ? (P.err ? `<div class="empty">Could not load people: ${esc(P.err)}</div>` : '<div class="empty">Loading…</div>')
         : d.nodes.length <= 1 ? `<div class="empty">${d.building ? '<div class="spinner" style="margin:0 auto 12px"></div>Finding the people you work with…' : d.error ? 'Could not build the graph: ' + esc(d.error) : 'No people yet. Pensieve finds them in your indexed repos, pull requests and Slack connection.'}</div>` : ''}
         ${P.merging ? `<div class="pp-banner">Pick the person to merge with <b>${esc(d?.nodes.find(n => n.id === P.merging)?.name || '')}</b>. <button class="linkbtn" data-pp-merge-cancel>Cancel</button></div>` : ''}
-        ${d && d.nodes.length > 1 ? `<div class="pp-foot">${d.building ? '<span class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:-1px"></span> Updating · ' : ''}<span class="pp-shown">${shown}</span> of ${d.total - 1 === 1 ? '1 person' : (d.total - 1).toLocaleString() + ' people'}${from ? ' · from ' + esc(from) : ''}${d.built ? ' · ' + rel(d.built * 1000) : ''} · scroll or pinch to zoom</div>` : ''}
+        ${d && d.nodes.length > 1 ? `<div class="pp-foot">scroll or pinch to zoom</div>` : ''}
       </div>
       <section class="pp-rel ${ppRelOn() ? 'on' : ''} ${P.relMin ? 'min' : ''}" id="pprel" aria-label="Connections of the selected person">${ppRelHtml()}</section>
       </div>
@@ -3368,9 +3364,6 @@ function ppDrawGraph({glide = false} = {}) {
   box.querySelector('svg')?.remove();
   const W = Math.max(320, box.clientWidth), H = Math.max(200, box.clientHeight);
   box.insertAdjacentHTML('afterbegin', ppSvg(d, W, H));
-  // the footer and Show more count the people drawn, which a narrow graph halves
-  const sh = box.querySelector('.pp-shown');
-  if (sh) sh.textContent = S.people.drawn;
   ppAnimate(box.querySelector('svg'), glide);
   if (!box.dataset.wheel) {  // the wheel or a pinch zooms: down or pinch in shows more people, up or pinch out fewer
     box.dataset.wheel = '1';
