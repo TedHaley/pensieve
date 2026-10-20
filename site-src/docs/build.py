@@ -88,7 +88,7 @@ def render(p):
 <meta property="og:title" content="{escape(p["title"])}">
 <meta property="og:description" content="{escape(p["desc"])}">
 <meta property="og:url" content="{canon}">
-<meta property="og:image" content="https://pensieve.tools/og.png">
+<meta property="og:image" content="https://pensieve.tools/og.png?v=2">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
