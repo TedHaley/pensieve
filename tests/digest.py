@@ -48,6 +48,10 @@ def run():
     results.append(check("url: one key for the same page",
                          keys(digest.extract_links(text)).get(("url", "https://docs.example.com/Page")), 2))
 
+    text = "Read <https://docs.example.com/a/b&gt;, then https://docs.example.com/a/b."
+    results.append(check("url: HTML entity left after an escaped bracket is dropped",
+                         keys(digest.extract_links(text)).get(("url", "https://docs.example.com/a/b")), 2))
+
     s = Session(id="s-1", source="claude", path="/tmp/x.jsonl", started="2026-10-01T09:00:00Z",
                 updated="2026-10-01T10:00:00Z",
                 turns=[("user", "Fix ABC-7. Secret text here."), ("assistant", "Done, see acme/app#3.")])

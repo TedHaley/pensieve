@@ -23,8 +23,12 @@ NOT_TICKETS = {"UTF", "ISO", "SHA", "HTTP", "HTTPS", "TLS", "SSL", "RFC", "ES", 
 TRAILING = ".,;:!?"
 
 
+_HTML_END = re.compile(r"(?:&(?:gt|lt|quot|amp|#\d+);?)+$")  # "&gt;" or "&gt" left after an escaped "<...>"
+
+
 def canonical_url(url: str) -> str:
-    """A URL without trailing punctuation, fragment or query. The same page gives the same key."""
+    """A URL without trailing punctuation, HTML entities, fragment or query. The same page gives the same key."""
+    url = _HTML_END.sub("", url.rstrip(TRAILING))
     url = url.rstrip(TRAILING)
     parts = urlsplit(url)
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
