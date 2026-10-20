@@ -1,13 +1,17 @@
 """Thread eval: do sessions that belong to one piece of work end up in one thread? Built from session digests.
 
-  python bench/thread_eval.py gold     # the gold threads: each card's sessions, from store.db (read only)
-  python bench/thread_eval.py digests  # a digest for each gold session, built from its transcript
-  python bench/thread_eval.py score    # each arm's threads, scored on session pairs against gold
+  python bench/thread_eval.py tabs        # the Threads tab's threads: each card's sessions, from store.db (read only)
+  python bench/thread_eval.py digests     # a digest for each session in them, built from its transcript
+  python bench/thread_eval.py score       # each arm's threads, scored on session pairs against the Threads tab
+  python bench/thread_eval.py components  # the same, with components as the unit
+  python bench/thread_eval.py sweep       # cut the split at several thresholds and score each
+  python bench/thread_eval.py review      # pairs for hand labels
 
-Gold: a pair of sessions is positive when some card holds both (card_members, kind session). The gold cards were
-joined by git and ticket keys, so an arm that joins by the same keys looks better than it is. Hand labels (below)
-are the check on that bias. Labels: bench/out/thread_eval/labels.json, {"same": [[a, b], ...], "different": [...]}.
-Out: bench/out/thread_eval/ (gold.json, digests.jsonl, results.jsonl)."""
+Threads tab threads: a pair of sessions is "same" when one Threads tab card holds both (card_members, kind session).
+The cards were built from git and ticket keys, so an arm that joins by those same keys looks better than it is.
+Hand labels are the check on that: they say "same" or "different" for each pair, from reading the sessions.
+Labels: bench/out/thread_eval/labels.json, {"same": [[a, b], ...], "different": [...]}.
+Out: bench/out/thread_eval/ (tab_threads.json, digests.jsonl, results.jsonl)."""
 import argparse
 import json
 import os
@@ -31,7 +35,7 @@ ARMS = {
 }
 
 
-def cmd_gold(a):
+def cmd_tabs(a):
     db = sqlite3.connect(f"file:{STORE}?mode=ro", uri=True)
     clusters: dict[str, set[str]] = {}
     for card, ref in db.execute("SELECT card_id, ref FROM card_members WHERE kind = 'session'"):
@@ -39,16 +43,16 @@ def cmd_gold(a):
     clusters = {card: sorted(refs) for card, refs in clusters.items()}
     sessions = sorted({r for refs in clusters.values() for r in refs})
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "gold.json").write_text(json.dumps(dict(made_at=time.time(), source=str(STORE), clusters=clusters,
-                                                   sessions=sessions), indent=1))
-    print(f"gold: {len(clusters)} threads, {len(sessions)} sessions, "
+    (OUT / "tab_threads.json").write_text(json.dumps(dict(made_at=time.time(), source=str(STORE), clusters=clusters,
+                                                           sessions=sessions), indent=1))
+    print(f"tabs: {len(clusters)} Threads tab threads, {len(sessions)} sessions, "
           f"{sum(1 for refs in clusters.values() if len(refs) >= 2)} threads with 2+ sessions")
 
 
 def cmd_digests(a):
     from pensieve import digest, parsers
-    gold = json.loads((OUT / "gold.json").read_text())
-    want = set(gold["sessions"])
+    tabs = json.loads((OUT / "tab_threads.json").read_text())
+    want = set(tabs["sessions"])
     stems = {s.split("/")[-1].split(":", 1)[-1] for s in want}  # the file name, for a quick filter
     found, titles, seen = {}, {}, set()
     for source, path in parsers.discover():
@@ -65,7 +69,7 @@ def cmd_digests(a):
             f.write(json.dumps(found[sid]) + "\n")
     (OUT / "titles.json").write_text(json.dumps(titles, indent=1))
     missing = sorted(want - seen)
-    print(f"digests: {len(found)} of {len(want)} gold sessions; {len(missing)} have no transcript on this machine")
+    print(f"digests: {len(found)} of {len(want)} sessions; {len(missing)} have no transcript on this machine")
 
 
 def load_digests():
@@ -114,21 +118,21 @@ def pairs_of(clusters) -> set[frozenset]:
     return out
 
 
-def score_pairs(gold: set[frozenset], pred: set[frozenset]) -> dict:
-    tp = len(gold & pred)
+def score_pairs(truth: set[frozenset], pred: set[frozenset]) -> dict:
+    tp = len(truth & pred)
     precision = tp / len(pred) if pred else 1.0
-    recall = tp / len(gold) if gold else 1.0
+    recall = tp / len(truth) if truth else 1.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return dict(pairs_gold=len(gold), pairs_pred=len(pred), tp=tp, precision=round(precision, 3),
+    return dict(pairs_tab=len(truth), pairs_pred=len(pred), tp=tp, precision=round(precision, 3),
                 recall=round(recall, 3), f1=round(f1, 3))
 
 
 def cmd_score(a):
-    gold = json.loads((OUT / "gold.json").read_text())
+    tabs = json.loads((OUT / "tab_threads.json").read_text())
     digests = load_digests()
-    universe = set(digests)  # gold sessions with a digest on this machine
-    gold_clusters = [set(refs) & universe for refs in gold["clusters"].values()]
-    gold_pairs = pairs_of(c for c in gold_clusters if len(c) >= 2)
+    universe = set(digests)  # sessions with a digest on this machine
+    tab_clusters = [set(refs) & universe for refs in tabs["clusters"].values()]
+    tab_pairs = pairs_of(c for c in tab_clusters if len(c) >= 2)
     labels_path = OUT / "labels.json"
     results = []
     for arm, (kinds, mode) in ARMS.items():
@@ -136,11 +140,11 @@ def cmd_score(a):
             pred = pairs_by_links(digests, kinds)
         else:
             pred = pairs_of(clusters_by_links(digests, kinds).values())
-        row = dict(arm=arm, at=time.time(), sessions=len(universe), **score_pairs(gold_pairs, pred))
+        row = dict(arm=arm, at=time.time(), sessions=len(universe), **score_pairs(tab_pairs, pred))
         covered = {s for p in pred for s in p}
         row["sessions_in_a_thread"] = len(covered)
         results.append(row)
-        print(f"{arm:30s} pairs gold {row['pairs_gold']:4d} pred {row['pairs_pred']:4d} "
+        print(f"{arm:30s} pairs tab {row['pairs_tab']:4d} pred {row['pairs_pred']:4d} "
               f"precision {row['precision']:.3f} recall {row['recall']:.3f} f1 {row['f1']:.3f} "
               f"sessions joined {row['sessions_in_a_thread']}/{len(universe)}")
         if labels_path.exists():
@@ -159,8 +163,8 @@ def cmd_score(a):
 
 def cmd_components(a):
     """Components as the thread unit. A component pair is joined when two components of different sessions share a
-    link key. Gold: the two sessions share a gold card. Same-session pairs are left out: the gold has no answer."""
-    gold = json.loads((OUT / "gold.json").read_text())
+    link key. Truth: the two sessions share a Threads tab card. Same-session pairs are left out."""
+    tabs = json.loads((OUT / "tab_threads.json").read_text())
     digests = load_digests()
     session_of, comp_links = {}, {}
     for sid, d in digests.items():
@@ -168,11 +172,11 @@ def cmd_components(a):
             session_of[c["id"]] = sid
             comp_links[c["id"]] = {(link["kind"], link["key"]) for link in c["links"]}
     universe = set(session_of)
-    card_sets = [set(refs) for refs in gold["clusters"].values()]
-    gold_pairs = set()
+    card_sets = [set(refs) for refs in tabs["clusters"].values()]
+    tab_pairs = set()
     for x, y in combinations(sorted(universe), 2):
         if session_of[x] != session_of[y] and any(session_of[x] in r and session_of[y] in r for r in card_sets):
-            gold_pairs.add(frozenset((x, y)))
+            tab_pairs.add(frozenset((x, y)))
     for label, kinds in (("components pr+ticket+branch", ("pr", "ticket", "branch")),
                          ("components pr+ticket+branch+url", ("pr", "ticket", "branch", "url"))):
         pred = set()
@@ -182,23 +186,23 @@ def cmd_components(a):
             shared = {k for k in comp_links[x] & comp_links[y] if k[0] in kinds}
             if shared:
                 pred.add(frozenset((x, y)))
-        row = dict(arm=label, at=time.time(), components=len(universe), **score_pairs(gold_pairs, pred))
-        print(f"{label:34s} pairs gold {row['pairs_gold']:5d} pred {row['pairs_pred']:5d} "
+        row = dict(arm=label, at=time.time(), components=len(universe), **score_pairs(tab_pairs, pred))
+        print(f"{label:34s} pairs tab {row['pairs_tab']:5d} pred {row['pairs_pred']:5d} "
               f"precision {row['precision']:.3f} recall {row['recall']:.3f} f1 {row['f1']:.3f}")
         with (OUT / "results.jsonl").open("a") as f:
             f.write(json.dumps(row) + "\n")
 
 
 def cmd_sweep(a):
-    """Tune the component split: for each SHIFT, cut the gold sessions into components, join them by links, and score.
+    """Tune the component split: for each SHIFT, cut the sessions into components, join them by links, and score.
     Reads the transcripts again (parsers), so it does not need the digests file.
 
-    Caveat: the gold is per session, so a component pair counts as gold when its two sessions share a card. More
-    components give more gold pairs, so recall falls as the cut gets finer. Read precision here. Score components
-    by hand labels (theme boundaries and component-to-thread) before you tune SHIFT on recall."""
-    from pensieve import digest, parsers, segment
-    gold = json.loads((OUT / "gold.json").read_text())
-    want = set(gold["sessions"])
+    Caveat: the Threads tab cards are per session, so a component pair counts as "same" when its two sessions share a
+    card. More components give more such pairs, so recall falls as the cut gets finer. Read precision here. Score
+    components by hand labels (theme boundaries and component-to-thread) before you tune SHIFT on recall."""
+    from pensieve import digest, parsers
+    tabs = json.loads((OUT / "tab_threads.json").read_text())
+    want = set(tabs["sessions"])
     stems = {s.split("/")[-1].split(":", 1)[-1] for s in want}
     sessions = {}
     for source, path in parsers.discover():
@@ -206,7 +210,7 @@ def cmd_sweep(a):
             s = parsers.parse(source, path)
             if s.id in want:
                 sessions[s.id] = s
-    card_sets = [set(refs) & set(sessions) for refs in gold["clusters"].values()]
+    card_sets = [set(refs) & set(sessions) for refs in tabs["clusters"].values()]
     card_sets = [c for c in card_sets if c]
     for shift in a.shifts:
         session_of, comp_links = {}, {}
@@ -215,21 +219,21 @@ def cmd_sweep(a):
                 session_of[c["id"]] = sid
                 comp_links[c["id"]] = {(link["kind"], link["key"]) for link in c["links"]}
         ids = sorted(session_of)
-        gold_pairs = {frozenset((x, y)) for x, y in combinations(ids, 2)
-                      if session_of[x] != session_of[y]
-                      and any(session_of[x] in r and session_of[y] in r for r in card_sets)}
+        tab_pairs = {frozenset((x, y)) for x, y in combinations(ids, 2)
+                     if session_of[x] != session_of[y]
+                     and any(session_of[x] in r and session_of[y] in r for r in card_sets)}
         for kinds in (("pr", "ticket", "branch"), ("pr", "ticket", "branch", "url")):
             pred = {frozenset((x, y)) for x, y in combinations(ids, 2)
                     if session_of[x] != session_of[y]
                     and any(k[0] in kinds for k in comp_links[x] & comp_links[y])}
-            r = score_pairs(gold_pairs, pred)
+            r = score_pairs(tab_pairs, pred)
             print(f"shift {shift:.2f} comps {len(ids):4d} kinds {'+'.join(kinds):28s} "
                   f"precision {r['precision']:.3f} recall {r['recall']:.3f} f1 {r['f1']:.3f} "
-                  f"pairs {r['pairs_pred']}/{r['pairs_gold']}")
+                  f"pairs {r['pairs_pred']}/{r['pairs_tab']}")
 
 
 def cmd_review(a):
-    """Pairs to label by hand, shown without the gold answer: pairs a link arm joins, and pairs that share no key.
+    """Pairs to label by hand, shown without the Threads tab answer: pairs a link arm joins.
     Writes review.md. Label the pairs in labels.json, as same / different."""
     digests = load_digests()
     titles = json.loads((OUT / "titles.json").read_text())
@@ -255,7 +259,7 @@ def main():
     rv = sub.add_parser("review")
     rv.add_argument("-n", type=int, default=30)
     rv.set_defaults(run=cmd_review)
-    for name, fn in (("gold", cmd_gold), ("digests", cmd_digests), ("score", cmd_score),
+    for name, fn in (("tabs", cmd_tabs), ("digests", cmd_digests), ("score", cmd_score),
                      ("components", cmd_components)):
         sub.add_parser(name).set_defaults(run=fn)
     sw = sub.add_parser("sweep")
