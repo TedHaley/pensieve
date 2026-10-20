@@ -46,6 +46,13 @@ DEFAULTS = {
     "embed_model": "",         # the embedding model to index with (config.EMBED_MODELS); "" = the index's own
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "search_gate_holdout": 5,  # the search gate (gate.py) leaves 1 session in this many unblocked, as a control; 0 = none
+    # What writes the notes, summaries and insights (engine.py): cli | server. "" = not chosen: load() picks one
+    "text_engine": "",
+    "cli_command": "",         # cli: a command-line agent, run once per job (templates: engine.TEMPLATES)
+    "llm_url": "http://localhost:1234/v1",  # server: an OpenAI-compatible URL that the user runs (LM Studio here)
+    "llm_model": "",
+    "llm_key": "",             # server: an API key for a hosted server; sent only to llm_url, never shown back
+    "engine_rate": 20,         # cli and server: at most this many jobs a minute
     "auto_update_check": True,  # the Mac app checks GitHub Releases daily and offers updates (never installs by itself)
     "setup_done": False,       # the user has chosen what to index; until then nothing is indexed (see /api/setup)
     # Connections (connections.py): MCP servers whose data Pensieve collects with read-only tools. Each one is off
@@ -86,6 +93,12 @@ DESCRIPTIONS = {
                    "again with the new model, in the background; search keeps working meanwhile.",
     "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
     "search_gate_holdout": "The search gate (Claude Code add-on) leaves one session in this many unblocked, so you can compare Pensieve with grep. 0 blocks every session.",
+    "text_engine": "What writes thread notes, summaries and insights in the background: builtin (Qwen 3.5 9B on this Mac, which Pensieve starts when there is work), cli (a command-line agent, once per job) or server (a model server that you run, local or hosted).",
+    "cli_command": "The command-line agent that writes them when text_engine is cli. It gets the prompt on stdin, or in place of {prompt}; {out} is a file it can write its answer to.",
+    "llm_url": "The OpenAI-compatible URL of a model server that you run, when text_engine is server: LM Studio (http://localhost:1234/v1), Ollama (http://localhost:11434/v1) or a hosted API.",
+    "llm_model": "The model on that server.",
+    "llm_key": "An API key for a hosted server. Pensieve sends it only to llm_url and never shows it again.",
+    "engine_rate": "At most this many jobs a minute for the command-line agent or the model server.",
     "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
     "setup_done": "Whether the sources to index were chosen. Pensieve indexes nothing until they are.",
     "connections_on": "Connections switched on by hand (easier to change in Sources). A connection that Pensieve holds data from is on too, unless it is in disabled.",
@@ -108,6 +121,19 @@ def _overrides():
     return o
 
 
+ENGINES = ("builtin", "cli", "server")
+
+
+def _default_engine(s: dict) -> dict:
+    """The text engine for someone who hasn't chosen one: Claude Code with Haiku when Claude Code is installed, else
+    the built-in model when this Mac can run it, else a model server at llm_url (LM Studio's address by default).
+    Setup asks, and Settings → Models changes it."""
+    from pensieve import engine
+    if config.find_exe("claude"):
+        return dict(text_engine="cli", cli_command=s["cli_command"] or engine.TEMPLATES[0]["command"])
+    return dict(text_engine="server" if engine.builtin_unsupported() else "builtin")
+
+
 def load() -> dict:
     global _data
     with _lock:
@@ -121,6 +147,8 @@ def load() -> dict:
             _data = {**DEFAULTS, **{k: v for k, v in saved.items() if k in DEFAULTS}}
             if saved and "setup_done" not in saved:  # set up by a version from before the setup step
                 _data["setup_done"] = True
+            if _data["text_engine"] not in ENGINES:  # not chosen, or "agent" before 0.14.1
+                _data.update(_default_engine(_data))
             off = _data["disabled"]  # the two repo-discovery rules became one
             if "repos/sessions" in off or "repos/sweep" in off:
                 _data["disabled"] = [d for d in off if d not in ("repos/sessions", "repos/sweep")] + \
@@ -188,6 +216,12 @@ def update(changes: dict) -> dict:
             raise ValueError("chunk_chars must be between 200 and 20000")
         if k == "appearance" and v not in ("system", "light", "dark"):
             raise ValueError("appearance must be system, light or dark")
+        if k == "text_engine" and v not in ENGINES:
+            raise ValueError("text_engine must be builtin, cli or server")
+        if k == "llm_url" and v and not v.startswith(("http://", "https://")):
+            raise ValueError("llm_url must start with http:// or https://, e.g. http://localhost:1234/v1")
+        if k == "engine_rate" and not 1 <= v <= 600:
+            raise ValueError("engine_rate must be between 1 and 600 jobs a minute")
         if k == "editor" and v not in ("default", "vscode", "cursor", "zed"):
             raise ValueError("editor must be default, vscode, cursor or zed")
         clean[k] = v
@@ -203,9 +237,9 @@ def update(changes: dict) -> dict:
 
 def public(s: dict) -> dict:
     """Settings as the visualizer and agents see them: MCP server headers and environment are sent by name only,
-    with empty values."""
+    with empty values, and the model server's API key only as whether one is saved."""
     mcp = [{**c, **{f: {n: "" for n in c[f]} for f in ("headers", "env") if f in c}} for c in s.get("mcp_servers", [])]
-    return {**s, "mcp_servers": mcp}
+    return {**s, "mcp_servers": mcp, "llm_key": "", "llm_key_set": bool(s.get("llm_key"))}
 
 
 def _mcp_servers(v, cur: list) -> list:

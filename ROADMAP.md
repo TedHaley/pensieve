@@ -256,8 +256,8 @@ For each change in this section, measure on the validation set (`bench/validatio
     document was indexed at 31 s, against 365 s before. One run each.
   - The session speed differed between the two runs (about 12 and 30 chunks/s) because of other work on the Mac.
     So the runs do not show whether the change slows the sessions.
-  - Open: the first full folder sweep has no time limit. A large new folder still makes the sessions wait.
-    `files._sync` drops the files that it did not see, so it cannot simply stop partway.
+  - The first full folder sweep has no time limit, but since 2026-10-18 it no longer makes the sessions wait:
+    agent sessions are indexed in a loop of their own (`session_watcher` in `server.py`).
 
 ## B. Agents use Pensieve when it is better
 

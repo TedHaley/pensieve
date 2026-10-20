@@ -71,7 +71,20 @@ def guide() -> dict:
             "energy": ENERGY_NOTE, "files_per_minute": REPO_FILES_PER_MINUTE,
             "embed_model": config.EMBED_MODEL,
             "embed_models": [dict(id=k, label=m["label"], about=m["about"]) for k, m in config.EMBED_MODELS.items()],
-            "content": content_types()}
+            "content": content_types(), "text_engine": settings.get("text_engine"), "engines": engines()}
+
+
+def engines() -> list[dict]:
+    """The text engines that setup offers, with why one can't run on this Mac."""
+    from pensieve import engine
+    claude = None if config.find_exe("claude") else "Claude Code is not installed."
+    return [dict(id="cli", label="Claude Code (Haiku)", command=engine.TEMPLATES[0]["command"], unavailable=claude,
+                 about="Your Claude Code writes them with its smallest model, one job at a time. It uses your Claude plan."),
+            dict(id="builtin", label="Built-in Qwen 3.5 9B", unavailable=engine.builtin_unsupported(),
+                 about="Runs on this Mac, and nothing leaves it. Pensieve starts it when there is work and stops it "
+                       "after 10 minutes without work. It downloads about 5 GB once, or uses LM Studio's copy."),
+            dict(id="server", label="Model server", unavailable=None,
+                 about="A server that you run, such as LM Studio or Ollama, or a hosted API. Set it in Settings → Models.")]
 
 
 CONTENT_NOTES = {  # what switching a kind on costs; speeds measured on an M4 Max
@@ -243,16 +256,20 @@ def index(path: str, cwd=None) -> dict:
             else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
 
 
-def start(chosen=None, recommended=False, embed_model=None, kinds=None) -> dict:
+def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_engine=None) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
     switched off, then indexing starts. Categories that were never scanned are switched off whole. `embed_model` picks
     the search model (guide()["embed_models"]).
     On an empty index the search model changes at once; otherwise the switch runs in the background (reembed).
     `kinds`: which of images, video and audio to read by content (content.KINDS); the others are found by name. None
     leaves them as they are. They need the EmbeddingGemma 2 search model: with kinds and no `embed_model`, that
-    model is chosen. Their model parts download in the background."""
+    model is chosen. Their model parts download in the background. `text_engine`: what writes notes (engines())."""
     if chosen is None and not recommended:
         raise ValueError("Send the source ids to index, or recommended: true")
+    if text_engine:
+        from pensieve import engine
+        settings.update({"text_engine": text_engine, **({"cli_command": settings.get("cli_command") or
+                                                          engine.TEMPLATES[0]["command"]} if text_engine == "cli" else {})})
     unknown = set(kinds or ()) - set(content.KINDS)
     if unknown:
         raise ValueError(f"unknown content {', '.join(sorted(unknown))}; one of: {', '.join(content.KINDS)}")

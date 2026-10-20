@@ -324,9 +324,17 @@ _TEMP = re.compile(r"^(/private)?/(tmp|var/folders)/")
 
 
 def in_temp(path: str) -> bool:
-    """A system temp folder, when skip_temp_sessions is on: sessions that ran there are throwaway (Pensieve's own AI
-    calls through the Claude Code CLI, scripts, tests), not the user's work."""
-    return bool(path) and bool(_TEMP.match(path)) and settings.get("skip_temp_sessions")
+    """A system temp folder, when skip_temp_sessions is on: sessions that ran there are throwaway (scripts, tests),
+    not the user's work. The text engine's own folders are skipped whatever the setting."""
+    from pensieve import engine
+    return bool(path) and (engine.TEMP_PREFIX in path or bool(_TEMP.match(path)) and settings.get("skip_temp_sessions"))
+
+
+def engine_session(s) -> bool:
+    """A session that the text engine ran (engine.MARK opens its prompt): Pensieve's own notes must never come back
+    as the user's sessions, or notes would be written about notes."""
+    from pensieve import engine
+    return in_temp(s.project) or any(role == "user" and engine.MARK in (text or "")[:500] for role, text in s.turns[:2])
 
 class WriteHold:
     """`with store.writing:` runs the block with index.db's writer connection on this thread (Db.hold): the block's
@@ -584,7 +592,7 @@ class Store:
         self._parsed[str(path)] = s  # the newest last: the oldest goes when there are too many
         while len(self._parsed) > PARSED_KEEP:
             self._parsed.pop(next(iter(self._parsed)))
-        if in_temp(s.project):
+        if engine_session(s):
             return False
         self.save_session_files(s.id, s.touched)
         if len(s.mcp) > mcp_done and settings.enabled(f"connections/{connections.SESSIONS}"):
