@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pensieve.tools/schema/session_digest.v0.json",
+  "title": "Pensieve session digest",
+  "description": "What one session contributes to threads, without its transcript text. Built on the device from the session, then stored locally or in the cloud.",
+  "type": "object",
+  "required": ["schema", "session_id", "source", "started_at", "ended_at", "summary", "steps_done", "steps_left", "closing_signal", "links"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "session_digest/0.1"},
+    "session_id": {"type": "string", "description": "The session's id in its agent, for example a Claude Code session id."},
+    "source": {"type": "string", "description": "The agent that made the session: claude, codex, qwen, or a web or app source."},
+    "started_at": {"type": "string", "description": "When the session started, as the transcript says it."},
+    "ended_at": {"type": "string", "description": "When the session was last written."},
+    "summary": {"type": "string", "maxLength": 600, "description": "What the session did and where it stands, in at most 80 words."},
+    "steps_done": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+    "steps_left": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Work the session says is still to do. Empty when nothing is left."},
+    "closing_signal": {"type": ["object", "null"], "description": "Set when the session says nothing is left. The quote is the sentence that says so.", "required": ["nothing_left", "quote"], "additionalProperties": false, "properties": {"nothing_left": {"type": "boolean"}, "quote": {"type": "string", "maxLength": 300}}},
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "key", "ref", "count"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {"enum": ["pr", "ticket", "branch", "url"]},
+          "key": {"type": "string", "description": "The canonical key: org/repo#n for a pull request, KEY-n for a ticket, the branch name, or the normalized URL. One key, one entity."},
+          "ref": {"type": "string", "description": "The link as the session wrote it."},
+          "count": {"type": "integer", "minimum": 1, "description": "How often the session mentions it."}
+        }
+      }
+    }
+  }
+}
