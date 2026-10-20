@@ -1,6 +1,6 @@
-"""Where summaries, topic names, notes and insights get written: by the user's own agent. Pensieve has no model of
-its own for text. Each completion that it needs waits in a queue (agent_jobs) until an agent connected over MCP
-answers it with pending_work and submit_work. Nothing runs in the background."""
+"""Where summaries, topic names, notes and insights get written. Pensieve runs no text model of its own: each
+completion that it needs waits in a queue (agent_jobs) until the background text engine answers it (engine.py: a
+command-line agent or a model server that the user runs), or an agent does over MCP (pending_work, submit_work)."""
 import json
 
 

@@ -44,7 +44,7 @@ SETUP = [
 ]
 
 WORK = [
-    ("pending_work", "<code>limit</code> = 5, <code>kind</code>", "Jobs that wait for your agent: thread notes, session summaries, topic names, insights and collection plans. Each job holds its instructions and its data."),
+    ("pending_work", "<code>limit</code> = 5, <code>kind</code>", "Jobs that wait for an answer: thread notes, session summaries, topic names, insights and collection plans. Each job holds its instructions and its data."),
     ("submit_work", "<code>id</code>, <code>answer</code>", "Saves the answer to one job. Pensieve uses it in its next pass."),
 ]
 
@@ -81,7 +81,7 @@ of the connection.</p>
 {table(["Set", "When the agent sees it", "Tools"], [
     ["Default", "Always", str(len(DEFAULT))],
     ["Setup", "Until setup is done", str(len(SETUP))],
-    ["Work queue", "Always", str(len(WORK))],
+    ["Work queue", "With <code>pensieve mcp --all-tools</code> or <code>?tools=all</code>", str(len(WORK))],
     ["Settings", "With <code>pensieve mcp --all-tools</code> or <code>?tools=all</code>", str(len(ALL))],
 ], num=(2,))}
 
@@ -110,8 +110,8 @@ installed Pensieve can do setup with you in its chat.</p>
 {tools(SETUP)}
 
 <h2 id="work">Work queue tools</h2>
-<p>Pensieve has no text model of its own. It keeps the jobs for your agent in a queue, and nothing runs in the
-background. Ask the agent to “do Pensieve's pending work”.</p>
+<p>A command-line agent, the built-in model or a model server that you run answers the text jobs in the background (Settings → Models → Notes and summaries). These two tools are only in the
+<code>?tools=all</code> set: with them, an agent can answer the same jobs by hand.</p>
 {tools(WORK)}
 
 <h2 id="settings">Settings tools</h2>

@@ -112,8 +112,10 @@ calls only read-only tools. Each connection is off until you switch it on.
 <h2 id="models">Models</h2>
 <p>Pensieve runs one model: the search model. It turns text into vectors, and it always runs on your computer. The
 default for a new index is EmbeddingGemma 2.</p>
-<p>Pensieve has no text model of its own. Your agent writes thread notes, summaries and insights with its own model,
-through Pensieve's MCP tools. Search, agent context, ownership and knowledge gaps do not need the agent.</p>
+<p>Thread notes, summaries and insights are written in the background. Setup asks what writes them: a command-line
+agent (Claude Code with Haiku), the built-in Qwen 3.5 9B on your Mac, or a model server that you run, such as LM
+Studio or Ollama. The built-in model runs only when there is work, and only one copy runs. Search, agent context,
+ownership and knowledge gaps need none of them.</p>
 """)
 
 page("install", "Install",

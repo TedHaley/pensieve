@@ -20,8 +20,6 @@ AGENT_TOOLS = {"search", "read", "similar", "people", "repo", "projects", "list_
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
-# Always listed: the user's agent writes all of Pensieve's text (notes, summaries, insights).
-WORK_TOOLS = {"pending_work", "submit_work"}
 tool_profile = contextvars.ContextVar("tool_profile", default="agent")
 agent_cwd = contextvars.ContextVar("agent_cwd", default=None)  # where the agent runs (?cwd=), for relative paths
 agent_client = contextvars.ContextVar("agent_client", default=None)  # ?client=: the agent's name, e.g. claude-code
@@ -33,7 +31,7 @@ class _Server(MCPServer):
         tools = await super().list_tools()
         if tool_profile.get() == "all":
             return tools
-        shown = AGENT_TOOLS | WORK_TOOLS | (set() if settings.get("setup_done") else SETUP_TOOLS)
+        shown = AGENT_TOOLS | (set() if settings.get("setup_done") else SETUP_TOOLS)
         return [t for t in tools if t.name in shown]
 
 
@@ -825,7 +823,7 @@ def set_thread_state(id: str, state: str, reason: str = "") -> dict:
 
 @tool()
 def pending_work(limit: int = 5, kind: str = "") -> str:
-    """Pensieve's text jobs that wait for you (Pensieve has no model of its own for text): thread notes, session summaries, topic names, insights, team
+    """Pensieve's text jobs that wait for an answer (Pensieve runs no text model of its own): thread notes, session summaries, topic names, insights, team
     summaries and collection plans. Call it when the user asks you to do Pensieve's pending work. For each job, follow
     its instructions, answer from its data only, and send the answer with submit_work. kind: one kind only, e.g.
     "thread note". The jobs are yours for 10 minutes: other sessions get different ones. The list is empty when nothing
@@ -1013,8 +1011,9 @@ def setup_guide() -> dict:
        or repos it missed.
     5. Ask which of images, video and audio to read by what they show or say (`content`: each entry's note says
        what it costs). All three are off by default: then those files are found by name.
-    6. Tell them that you write Pensieve's notes, summaries and insights when they ask you to do Pensieve's pending
-       work (pending_work). Pensieve has no model of its own for text.
+    6. Ask what writes Pensieve's notes, summaries and insights in the background: one of `engines` (its `about`
+       says what it costs; leave out the ones with `unavailable`). `text_engine` is the default. They can change it
+       later in Settings → Models.
     7. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
     return onboarding.guide()
 
@@ -1036,13 +1035,15 @@ def setup_add_source(kind: str, path: str) -> dict:
 
 
 @tool()
-def setup_start(sources: list[str] | None = None, recommended: bool = False, content: list[str] | None = None) -> dict:
+def setup_start(sources: list[str] | None = None, recommended: bool = False, content: list[str] | None = None,
+                text_engine: str | None = None) -> dict:
     """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
     ones); everything else is switched off. `content`: which of "images", "video" and "audio" to read by what they show or say (this selects the
     EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by name.
+    `text_engine`: the id of the engine from setup_guide's `engines` that the user chose.
     Indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left, counting only what isn't
     indexed yet), the `energy` note when minutes > 1, and `next` (how to search and see the map)."""
-    res = onboarding.start(sources, recommended, kinds=content)
+    res = onboarding.start(sources, recommended, kinds=content, text_engine=text_engine)
     from pensieve import server
     server.watch.force_full()
     return res

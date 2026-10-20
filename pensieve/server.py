@@ -455,6 +455,23 @@ async def agent_pass(loop, pool):
         broadcast({"type": "threads"})
 
 
+async def engine_worker():
+    """Answer the waiting jobs with the text engine (engine.py) one at a time, at most engine_rate a minute, and stop
+    an idle built-in server. A failed job waits a minute before the next try."""
+    from pensieve import engine
+    while True:
+        if not settings.get("setup_done"):
+            await asyncio.sleep(15)
+            continue
+        try:
+            await asyncio.to_thread(engine.sweep)
+            n = await asyncio.to_thread(engine.run_once)
+            await asyncio.sleep(60 / max(1, settings.get("engine_rate")) if n else 10)
+        except Exception as e:
+            status["message"] = f"text engine: {e}"[:200]
+            await asyncio.sleep(60)
+
+
 async def enricher():
     """Every 30 seconds, the jobs for your agent: session summaries, topic names, insights and task notes."""
     loop = asyncio.get_running_loop()
@@ -542,11 +559,14 @@ async def lifespan(app):
     loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
     threading.Thread(target=store.backfill_usage, daemon=True, name="usage-backfill").start()
-    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(card_keeper())]
+    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(card_keeper()),
+             asyncio.create_task(engine_worker())]
     async with mcp_server.mcp.session_manager.run():
         yield
     for t in tasks:
         t.cancel()
+    from pensieve import engine
+    engine.stop_builtin()
     _save_indexes()
 
 
@@ -1419,13 +1439,15 @@ class SetupReq(BaseModel):
     recommended: bool = False
     embed_model: str | None = None  # the search model (config.EMBED_MODELS)
     content: list[str] | None = None  # images, video, audio: read by content (needs EmbeddingGemma 2)
+    text_engine: str | None = None  # what writes notes and summaries (onboarding.engines)
 
 
 @app.post("/api/setup")
 async def post_setup(req: SetupReq):
     """Index exactly the chosen sources: every other candidate is switched off, then indexing starts."""
     try:
-        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.embed_model, req.content))
+        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.embed_model, req.content,
+                                                  req.text_engine))
     except ValueError as e:
         raise HTTPException(400, str(e))
     wake_files.set()
@@ -2212,6 +2234,44 @@ async def touched(req: Request):
     for p in paths:
         watch.note(os.path.realpath(os.path.join(cwd, os.path.expanduser(p))))
     return {"queued": len(paths)}
+
+
+@app.get("/api/engine")
+def get_engine():
+    """The text engine (engine.py): which one, how many jobs wait, its last answer and error, and the command
+    templates with whether each is installed."""
+    from pensieve import engine
+    return engine.status()
+
+
+class EngineTestReq(BaseModel):
+    text_engine: str
+    cli_command: str = ""
+    llm_url: str = ""
+    llm_model: str = ""
+    llm_key: str | None = None  # None: the saved key, for the saved URL only
+
+
+@app.post("/api/engine/test")
+async def test_engine(req: EngineTestReq):
+    """Ask an engine for one word before it is saved: {ok, reply, ms, error}."""
+    from pensieve import engine
+    s = {**settings.load(), **req.model_dump(exclude_none=True)}
+    if req.llm_key is None and req.llm_url.rstrip("/") != settings.get("llm_url").rstrip("/"):
+        s["llm_key"] = ""
+    return await asyncio.to_thread(engine.test, s)
+
+
+@app.get("/api/engine/models")
+async def engine_models(url: str, key: str = ""):
+    """The models that an OpenAI-compatible server lists; a saved key is used only for the saved URL."""
+    from pensieve import engine
+    if not key and url.rstrip("/") == settings.get("llm_url").rstrip("/"):
+        key = settings.get("llm_key")
+    try:
+        return {"models": await asyncio.to_thread(engine.server_models, url, key)}
+    except RuntimeError as e:
+        return {"models": [], "error": str(e)}
 
 
 @app.get("/api/settings")

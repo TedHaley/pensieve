@@ -2310,6 +2310,7 @@ async function openSetup() {
   try { setupState.guide = await api('/api/setup?scan=0'); }
   catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
   setupState.embed = setupState.guide.embed_model;
+  setupState.engine = setupState.guide.text_engine;
   setupState.kinds = new Set((setupState.guide.content || []).filter(c => c.id !== 'text' && c.on).map(c => c.id));
   renderSetup();
 }
@@ -2366,7 +2367,9 @@ function renderSetup() {
       <h3 class="setup-h">Embedding model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Embedding model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
         <div class="ai-opt-h"><b>${esc(m.label)}</b><span class="priv local">Local</span></div><p>${esc(m.about)}</p></button>`).join('')}</div>
-      <h3 class="setup-h">Notes and insights</h3><p class="sub">Pensieve has no text model of its own. Your agent writes thread notes, summaries, topic names and insights with Pensieve's MCP tools, when you ask it to do Pensieve's pending work.</p>
+      <h3 class="setup-h">Notes and insights</h3><p class="sub">What writes thread notes, summaries, topic names and insights in the background. You can change it later in Settings → Models.</p>
+      <div class="ai-opts" role="radiogroup" aria-label="Text engine">${(g.engines || []).map(x => `<button class="ai-opt ${st.engine === x.id ? 'on' : ''}" data-setup-engine="${esc(x.id)}" role="radio" aria-checked="${st.engine === x.id}" ${x.unavailable ? 'disabled' : ''}>
+        <div class="ai-opt-h"><b>${esc(x.label)}</b>${x.id === 'builtin' ? '<span class="priv local">Local</span>' : ''}</div><p>${esc(x.unavailable || x.about)}</p></button>`).join('')}</div>
       ${btns('start', 'Next')}`;
   } else {
     body = `<h1>Ready to index</h1><p class="sub">Pensieve will index ${esc(plural(picked.filter(i => !i.rule).length, 'source'))}${files ? `, including ${files.toLocaleString()} code files` : ''}.</p>
@@ -2384,6 +2387,7 @@ function renderSetup() {
     if (st.kinds.size && needs && st.embed !== needs) { st.kinds.clear(); toast('Images, video and audio are found by name: reading them needs EmbeddingGemma 2'); }
     renderSetup();
   });
+  $$('[data-setup-engine]', el).forEach(b => b.onclick = () => { st.engine = b.dataset.setupEngine; renderSetup(); });
   $$('[data-setup-content]', el).forEach(c => c.onchange = () => {
     const k = (g.content || []).find(x => x.id === c.dataset.setupContent);
     if (!k || k.id === 'text') return;
@@ -2405,7 +2409,7 @@ function renderSetup() {
     }
     if (next !== 'go') return setupGo(next);
     st.busy = true; renderSetup();
-    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], embed_model: st.embed, content: [...st.kinds]})});
+    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], embed_model: st.embed, content: [...st.kinds], text_engine: st.engine})});
     const j = await r.json().catch(() => ({}));
     st.busy = false;
     if (!r.ok) { st.err = typeof j.detail === 'string' ? j.detail : 'Could not start indexing'; return renderSetup(); }
@@ -2879,12 +2883,12 @@ async function renderSettings() {
       <p class="sc-p">The agent that "New session" on a thread starts in Terminal. "Resume last session" always uses the agent that wrote the session.</p>
       <div id="agentpick"><div class="spinner" style="margin:8px 0"></div></div></div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
-  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. MCP servers bring in tickets and messages.') + `
+  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. Your agent, a command-line agent or a model server writes the notes. MCP servers bring in tickets and messages.') + `
     <div class="set-card mdl" id="set-Embedding-model">
       <div class="mdl-h"><span class="mdl-n">1</span><div class="mdl-t"><h3>Embedding model</h3><p>Finds your files, code and sessions by meaning. Always on.</p></div><span class="priv local">Local</span></div>
       <div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div>
       <div class="set-row"><div><div class="k">Reads</div><div class="d">Text always. Images, video and audio are found by name until you switch them on.</div></div><div id="contentbox"></div></div>
-    </div>` + mcpCardHtml();
+    </div>` + engineCardHtml() + mcpCardHtml();
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/v2/store.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
@@ -2909,7 +2913,7 @@ async function renderSettings() {
   $('#setmain').scrollTop = y;
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
-  if (tab === 'ai') { bindAISettings($('#setmain')); renderModels(); renderContent(); }
+  if (tab === 'ai') { bindAISettings($('#setmain')); bindEngine($('#setmain')); renderModels(); renderContent(); }
   if (tab === 'agents') { loadIntegrations(); renderAgentPick(); }
   if (tab === 'sources') renderPlaces();
   if (tab === 'general') { bindGeneral(); $('#set-Setup [data-open-setup]')?.addEventListener('click', openSetup); }
@@ -3157,13 +3161,57 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
+// Settings → Models: what writes thread notes, summaries and insights (engine.py): a command-line agent or a model
+// server that you run. ENG.test is the last Test result, ENG.models the server's model list.
+const ENG = {data: null, test: null, models: null, busy: false};
+const ENGINES = [['builtin', 'Built-in Qwen'], ['cli', 'Command line'], ['server', 'Model server']];
+async function loadEngine() {
+  try { ENG.data = await api('/api/engine'); } catch { ENG.data = ENG.data || {}; }
+  if (S.view === 'settings' && S.setTab === 'ai') renderSettings();
+}
+function engineCardHtml() {
+  const D = S.set?.draft; if (!D) return '';
+  if (!ENG.data) loadEngine();
+  const e = ENG.data || {}, eng = D.text_engine, t = ENG.test;
+  const tmpl = (e.templates || []).map(x => `<option value="${esc(x.command)}" ${x.command === D.cli_command ? 'selected' : ''}>${esc(x.label)}${x.installed ? '' : ' (not installed)'}</option>`).join('');
+  const models = ENG.models?.models?.length ? `<datalist id="engmodels">${ENG.models.models.map(m => `<option value="${esc(m)}">`).join('')}</datalist>` : '';
+  const b = e.builtin || {};
+  const how = eng === 'builtin' ? `<div class="set-row"><div><div class="k">Qwen 3.5 9B on this Mac</div><div class="d">${b.unsupported ? `<span class="err">${esc(b.unsupported)}</span>` : `Nothing leaves this Mac. Pensieve starts the model when there is work, at background priority, and stops it after 10 minutes without work. It uses about 6 GB of memory while it runs. ${b.local_copy ? 'It uses the copy that LM Studio downloaded.' : 'It downloads about 5 GB the first time.'}`}</div></div>
+        <div class="muted" style="font-size:12px">${b.detail ? esc(b.detail) : b.running ? 'Running' : 'Stopped'}</div></div>`
+    : eng === 'cli' ? `<div class="set-row"><div><div class="k">Command</div><div class="d">Runs once per job in an empty folder, at background priority. The prompt goes on stdin, or in place of {prompt}.</div></div>
+        <div><select class="set-in" data-engtmpl><option value="">Pick a template…</option>${tmpl}</select>
+        <input class="set-in" style="margin-top:6px" data-sk="cli_command" value="${esc(D.cli_command)}" placeholder="claude -p --model haiku …"></div></div>`
+    : `<div class="set-row"><div><div class="k">Server</div><div class="d">An OpenAI-compatible URL that you run: LM Studio, Ollama, or a hosted API. Pensieve only connects to it.</div></div>
+        <div><input class="set-in" data-sk="llm_url" value="${esc(D.llm_url)}" placeholder="http://localhost:1234/v1">
+        <input class="set-in" style="margin-top:6px" data-sk="llm_model" list="engmodels" value="${esc(D.llm_model)}" placeholder="model, e.g. qwen/qwen3.5-9b">${models}
+        <input class="set-in" style="margin-top:6px" type="password" data-engkey placeholder="${S.set.orig.llm_key_set ? 'API key saved (type to replace)' : 'API key (hosted servers only)'}"></div></div>`;
+  const state = `<div class="set-row"><div><div class="k">Status</div><div class="d">${e.error ? `<span class="err">${esc(e.error)}</span>` : e.last_answer ? `Last answer ${rel(e.last_answer * 1000)} · ${plural(e.answered || 0, 'job')} since the backend started` : 'No answer yet'} · ${plural(e.waiting || 0, 'job')} waiting · at most ${D.engine_rate} a minute, one at a time</div></div>
+      <div><button class="btn" data-engtest ${ENG.busy ? 'disabled' : ''}>${ENG.busy ? 'Testing…' : 'Test'}</button>${t ? `<div class="${t.ok ? 'muted' : 'err'}" style="font-size:12px;margin-top:4px">${t.ok ? `Answered “${esc(t.reply)}” in ${(t.ms / 1000).toFixed(1)} s` : esc(t.error)}</div>` : ''}</div></div>`;
+  return `<div class="set-card mdl" id="set-Notes">
+      <div class="mdl-h"><span class="mdl-n">2</span><div class="mdl-t"><h3>Notes and summaries</h3><p>What writes thread notes, session summaries and insights.</p></div></div>
+      <div class="seg" role="radiogroup" aria-label="Text engine" style="margin:4px 0 10px">${ENGINES.map(([id, label]) => `<button data-engpick="${id}" class="${eng === id ? 'on' : ''}" aria-pressed="${eng === id}">${label}</button>`).join('')}</div>
+      ${how}${state}</div>`;
+}
+function bindEngine(root) {
+  const D = S.set?.draft; if (!D) return;
+  $$('[data-engpick]', root).forEach(b => b.onclick = () => { D.text_engine = b.dataset.engpick; ENG.test = null; saveSettings().then(loadEngine); });
+  const tm = $('[data-engtmpl]', root); if (tm) tm.onchange = () => { if (tm.value) { D.cli_command = tm.value; saveSettings(); } };
+  const key = $('[data-engkey]', root); if (key) key.onchange = () => { D.llm_key = key.value; saveSettings(); };
+  if (D.text_engine === 'server' && D.llm_url && !ENG.models) api(`/api/engine/models?url=${enc(D.llm_url)}`).then(r => { ENG.models = r; renderSettings(); }).catch(() => {});
+  const tb = $('[data-engtest]', root); if (tb) tb.onclick = async () => {
+    ENG.busy = true; renderSettings();
+    try { ENG.test = await api('/api/engine/test', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({text_engine: D.text_engine, cli_command: D.cli_command, llm_url: D.llm_url, llm_model: D.llm_model})}); }
+    catch (err) { ENG.test = {ok: false, error: err.message}; }
+    ENG.busy = false; renderSettings();
+  };
+}
 function mcpCardHtml() {
   const c = (srcState.cat || []).find(x => x.id === 'connections');
   if (!srcState.cat) loadSources().then(() => S.view === 'settings' && S.setTab === 'ai' && renderSettings());
   const servers = (c?.items || []).filter(i => i.id !== 'connections/agent_sessions' && i.available);
   const on = servers.filter(i => i.enabled).length;
   return `<div class="set-card mdl" id="set-MCP-servers">
-      <div class="mdl-h"><span class="mdl-n">2</span><div class="mdl-t"><h3>MCP servers</h3><p>Where tickets and messages come from. Pensieve uses only read-only tools.</p></div>
+      <div class="mdl-h"><span class="mdl-n">3</span><div class="mdl-t"><h3>MCP servers</h3><p>Where tickets and messages come from. Pensieve uses only read-only tools.</p></div>
         ${servers.length ? `<span class="muted" style="font-size:12px">${on} of ${servers.length} on</span>` : ''}</div>
       ${c?.note ? `<p class="mdl-mcp-note">${esc(c.note)}</p>` : ''}
       ${servers.length ? `<div class="mdl-mcp">${servers.slice(0, 12).map(i => `<span class="mdl-srv ${i.enabled ? 'on' : ''}" title="${esc(i.detail || '')}"><i></i>${esc(i.label)}${i.count ? `<small>${i.count.toLocaleString()}</small>` : ''}</span>`).join('')}${servers.length > 12 ? `<span class="muted" style="font-size:12px;align-self:center">and ${servers.length - 12} more</span>` : ''}</div>` : ''}

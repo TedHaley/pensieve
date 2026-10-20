@@ -16,7 +16,7 @@ One place for all your information, for context engineering: your files, reposit
 - **Know who to ask:** git blame shows who owns what and who has the most domain knowledge, plus what each teammate has been working on.
 - **Find knowledge gaps:** areas where most of the code was written by people no longer active in the repo, how many active people still know it, and who to ask now.
 
-Everything runs on your Mac. Text is embedded with `Qwen3-Embedding-0.6B` and stored in SQLite (with a word full-text index for exact matches) plus [turbovec](https://pypi.org/project/turbovec/) vector indexes. Pensieve has no text model of its own. Your agent writes the summaries, notes and insights, with its own model, through Pensieve's MCP tools.
+Everything runs on your Mac. Text is embedded with `Qwen3-Embedding-0.6B` and stored in SQLite (with a word full-text index for exact matches) plus [turbovec](https://pypi.org/project/turbovec/) vector indexes. Summaries, notes and insights are written in the background by a command-line agent (Claude Code with Haiku by default), the built-in Qwen 3.5 9B, or a model server that you run, such as LM Studio.
 
 ## Install
 
@@ -169,7 +169,7 @@ Tools: `search`, `read`, `similar`, `people`, `repo`, `projects`, `list_repos`, 
 - `thread` gives one thread: its folder and branch, PRs, tickets, the steps left, the command that resumes its last session, and where that session stopped. `version` gives a saved version, and `version="list"` lists them.
 - `share_thread` saves a thread that is fit to send as one HTML page in Downloads.
 
-Pensieve only reads: it sets each state from the evidence. An agent closes a thread when it merges the PR, closes the ticket or deletes the branch. It does not set the state. `set_thread_state` is only in `?tools=all`. `stale` lists what looks abandoned, so that your agent can offer to clean it up. It finds three kinds. Git worktrees with no commit and no agent session in 14 days: "remove" (clean, and its commits are merged or pushed, with the command) or "review" (it has work that exists nowhere else). Local branches that are merged into the default branch, idle for 14 days and not checked out: the command is `git branch -d`, which refuses unmerged work. Squash-merged branches get "review" and no command: their whole change is one commit in the default branch, but `git branch -d` refuses them, because their own commits are not there. Indexed repos with no agent session and no git activity in 3 months: the command is `pensieve repo remove`, which removes the repo from Pensieve's index only. The repo stays on disk. Pensieve only reports: the agent asks you before it removes anything, and the index drops a removed worktree on its next sweep. With the session-start hook, a session in a repo with stale worktrees or merged branches gets a one-line hint to offer this at a natural pause. `index_path` indexes a folder when you ask the agent to: a git repo, a folder of repos, a folder of agent sessions, or documents. Pensieve finds out which kind it is. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`, `set_thread_state`. Until setup is done, every connection also gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source`, `setup_start`. Every connection also gets `pending_work` and `submit_work`, with which your agent writes Pensieve's notes, summaries and insights.
+Pensieve only reads: it sets each state from the evidence. An agent closes a thread when it merges the PR, closes the ticket or deletes the branch. It does not set the state. `set_thread_state` is only in `?tools=all`. `stale` lists what looks abandoned, so that your agent can offer to clean it up. It finds three kinds. Git worktrees with no commit and no agent session in 14 days: "remove" (clean, and its commits are merged or pushed, with the command) or "review" (it has work that exists nowhere else). Local branches that are merged into the default branch, idle for 14 days and not checked out: the command is `git branch -d`, which refuses unmerged work. Squash-merged branches get "review" and no command: their whole change is one commit in the default branch, but `git branch -d` refuses them, because their own commits are not there. Indexed repos with no agent session and no git activity in 3 months: the command is `pensieve repo remove`, which removes the repo from Pensieve's index only. The repo stays on disk. Pensieve only reports: the agent asks you before it removes anything, and the index drops a removed worktree on its next sweep. With the session-start hook, a session in a repo with stale worktrees or merged branches gets a one-line hint to offer this at a natural pause. `index_path` indexes a folder when you ask the agent to: a git repo, a folder of repos, a folder of agent sessions, or documents. Pensieve finds out which kind it is. Connect with `?tools=all` (HTTP) or `pensieve mcp --all-tools` to add the ones that manage Pensieve itself: `show_search`, `show_visualizer`, `status`, `list_scopes`, `save_scope`, `delete_scope`, `list_sources`, `set_source`, `add_folder`, `remove_folder`, `get_settings`, `update_settings`, `reindex`, `set_thread_state`, and `pending_work` and `submit_work`, with which an agent can answer the text jobs that the background engine also answers. Until setup is done, every connection also gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source`, `setup_start`.
 
 ### Get the most out of it: agent add-ons
 
@@ -335,7 +335,7 @@ Change them in the Map window (Settings), from an agent connected with `--all-to
 
 ## Models
 
-Pensieve runs one model: the search model. You choose it at setup, and change it in Settings → Models. Your agent writes all text.
+Pensieve runs one model: the search model. You choose it at setup, and change it in Settings → Models. Text is written in the background by a command-line agent or a model server that you run.
 
 ### Search model
 
@@ -348,11 +348,19 @@ The search model turns text into vectors, so that search finds things by meaning
 
 An index keeps the model it was built with: an update does not change it. If you choose another model, Pensieve warns you first. Then it embeds the text it already holds with the new model, in the background. It does not read your files or run git blame again, and search keeps working with the old model. When the new vectors are ready, the backend restarts and uses them.
 
-### Your agent writes the text
+### Notes and summaries
 
-Pensieve has no text model of its own. Your agent writes thread notes, session summaries, topic names, insights, team summaries and the collection plans for MCP servers. It uses its own model.
+Thread notes, session summaries, topic names, insights, team summaries and the collection plans for MCP servers wait in a queue, and an engine writes them in the background. Setup asks which engine to use. Change it in Settings → Models → Notes and summaries (`text_engine`):
 
-Pensieve keeps these jobs in a queue, and nothing runs in the background. Ask your agent to "do Pensieve's pending work". The agent reads the jobs with `pending_work` and answers each one with `submit_work`. Several sessions can work at the same time, and each one gets different jobs.
+| Engine | What writes the text |
+|---|---|
+| **Built-in** (`builtin`) | Qwen 3.5 9B on your Mac, with MLX. Nothing leaves the Mac. Pensieve starts the model when there is work, at background priority, and stops it after 10 minutes without work. It downloads about 5 GB once, or uses the copy that LM Studio downloaded. It needs Apple Silicon and 16 GB of memory. There is only one built-in server: a server that already runs, for example from before a restart, is used again. |
+| **Command line** (`cli`) | A command-line agent, run once per job in an empty folder. The default when Claude Code is installed: its template uses Haiku with no tools, MCP servers, hooks or saved transcript. Codex, Gemini CLI, Qwen Code and Ollama have templates too. |
+| **Model server** (`server`) | A model server that you run, at an OpenAI-compatible URL: LM Studio or Ollama on your Mac, or a hosted API with a key. With no model chosen, Pensieve uses the server's first chat model. Pensieve only connects to the server: it never starts one. |
+
+One job runs at a time, across every Pensieve process, at most `engine_rate` jobs a minute (20 by default). A job that runs longer than 3 minutes is stopped, with every process it started. An agent connected with `?tools=all` can also answer jobs with `pending_work` and `submit_work`: the first answer wins.
+
+Pensieve's own engine runs never come back as your sessions. Every prompt the engine sends opens with a marker line, and each command runs in a `pensieve-ai-…` folder. The indexer skips both, so notes are never written about notes.
 
 Search, maps, activity, keyword topics, your footprint in each repo and teammates' commits do not need the agent.
 
