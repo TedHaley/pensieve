@@ -82,8 +82,8 @@ Each event goes into the history of the thread. Old ids and old links continue t
 | **Split** | One thread turns out to hold two goals. The part with the larger overlap keeps the thread id. The other part starts a thread that is "split from" it. |
 | **Merge** | Two threads turn out to be one goal. The older thread continues. The other thread is "merged into" it. |
 | **Fork** | The members match, but the goal moved: a new thread "forked from" the old one. |
-| **End** | The goal is done (Complete) or left (Forgotten). |
-| **Revive** | New work on an ended thread, with the same goal. The thread opens again, with no time limit. A different goal starts a new thread. |
+| **End** | The goal is done (Closed) or left (Forgotten). A thread that has nothing left and no outside evidence is Closing for 7 days first. |
+| **Revive** | New work on a Closed thread starts a new thread, with the same goal. A Forgotten thread opens again. A different goal starts a new thread. |
 
 ### 8. Threads cross repos and people
 

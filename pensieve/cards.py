@@ -215,7 +215,7 @@ def render_agent(card: dict) -> str:
     return head + "\n" + json.dumps(_clean(c), ensure_ascii=False, separators=(",", ":"))
 
 
-STATE_LABEL = {"todo": "To do", "open": "Open", "loose_ends": "Loose ends", "complete": "Complete",
+STATE_LABEL = {"todo": "To do", "open": "Open", "loose_ends": "Loose ends", "closing": "Closing", "closed": "Closed",
                "forgotten": "Forgotten"}
 NOTE_LABEL = {"session": "Session", "memory": "Memory", "change": "Changes", "file": "File", "artifact": "Artifact",
               "message": "Message", "page": "Page", "ticket": "Ticket"}

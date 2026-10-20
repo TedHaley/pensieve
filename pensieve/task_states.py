@@ -1,8 +1,12 @@
-"""The five states of a thread on the Threads tab, how each one is set, and where changes are kept.
+"""The six states of a thread on the Threads tab, how each one is set, and where changes are kept.
 
 A thread gets a state automatically from its evidence (`derive`). The user can set a state by hand on the Threads
 tab. A state set by hand holds until the thread has new activity after it; then the automatic state applies again.
-Every change by hand is a row in `card_states` (in store.db), so a thread keeps its history."""
+Every change by hand is a row in `card_states` (in store.db), so a thread keeps its history.
+
+Two paths lead out of work. Loose ends -> forgotten: work is left and has gone quiet for FORGET_DAYS. Closing ->
+closed: nothing is left, and no outside evidence says so; after CLOSE_DAYS with no change it is closed. A closed
+thread does not reopen. New work starts a new thread."""
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -12,7 +16,8 @@ class State(str, Enum):
     TODO = "todo"
     OPEN = "open"
     LOOSE_ENDS = "loose_ends"
-    COMPLETE = "complete"
+    CLOSING = "closing"
+    CLOSED = "closed"
     FORGOTTEN = "forgotten"
 
 
@@ -35,23 +40,26 @@ MODELS = {m.state: m for m in [
     StateModel(State.TODO, "To do", "A ticket you have not started.",
                "A ticket that is not done (or whose status is not known), with no edits, commits, branch or PR yet.",
                "#5e5ce6"),
-    StateModel(State.COMPLETE, "Complete", "Done.",
-               "A PR is merged and nothing happened after the merge, with no PR open. Or its own PR (from its branch) "
-               "is merged and no PR is open. Or its PRs are merged or closed, or its ticket is done, or its work is in "
-               "the default branch (its branch is merged, or its commits are there and its note says nothing is left), "
-               "and nothing is left uncommitted.",
+    StateModel(State.CLOSING, "Closing", "Nothing is left to do. No outside evidence says it is done yet.",
+               "Material work with nothing left in its note, no open PR, no open ticket, nothing uncommitted, and no "
+               "merged PR or done ticket. It becomes Closed after 7 days with no change.",
+               "#64d2ff"),
+    StateModel(State.CLOSED, "Closed", "Done. A closed thread does not reopen: new work starts a new thread.",
+               "Outside evidence says it is done: its PR is merged or closed, its ticket is done, or its work is in the "
+               "default branch, with nothing left uncommitted. Or it has been closing for 7 days with no change.",
                "#8e8e93"),
     StateModel(State.FORGOTTEN, "Forgotten", "Not finished, and it will likely stay that way.",
                "Material work that is not done and quiet for 21 days, with no open PR and no uncommitted work. Or a "
                "conversation with no ticket and no edits, once its session has ended.",
                "#ff453a"),
 ]}
-ORDER = [State.OPEN, State.LOOSE_ENDS, State.TODO, State.COMPLETE, State.FORGOTTEN]
+ORDER = [State.OPEN, State.LOOSE_ENDS, State.TODO, State.CLOSING, State.CLOSED, State.FORGOTTEN]
 RECENT_DAYS = 3
-FORGET_DAYS = 21  # the Forgotten rule above says this number
+FORGET_DAYS = 21  # the Forgotten rule above says this number: loose ends left this long become forgotten
+CLOSE_DAYS = 7  # the Closed rule above says this number: closing for this long becomes closed
 MERGE_GRACE = 15 * 60  # activity this soon after a merge is the wrap-up of the same work
 RENAMED = {"discarded": "forgotten", "latent": "todo", "conscious": "open", "subconscious": "loose_ends",
-           "etched": "complete"}  # states saved under an earlier name
+           "etched": "closed", "complete": "closed"}  # states saved under an earlier name
 DONE = {"done", "closed", "resolved", "won't do", "wont do", "cancelled", "canceled", "merged", "complete", "completed",
         "fixed", "invalid", "duplicate", "released", "shipped"}
 
@@ -89,14 +97,18 @@ def derive(task: dict, note: dict, now: float | None = None) -> tuple[State, str
         return State.OPEN, "a session is running now"
     merged_at = max([p.get("merged_at") or 0 for p in prs if p.get("state") == "merged"] + [0])
     if merged_at and not open_prs and not open_tickets and task.get("updated", 0) <= merged_at + MERGE_GRACE:
-        return State.COMPLETE, "its PR is merged, and nothing happened after"
+        return State.CLOSED, "its PR is merged, and nothing happened after"
     own_merged = any(p.get("own") and p.get("state") == "merged" for p in prs)
     if not open_prs and not open_tickets and own_merged:  # files left uncommitted after a merge are leftovers
-        return State.COMPLETE, "its PR is merged"
+        return State.CLOSED, "its PR is merged"
     if not open_prs and not open_tickets and not uncommitted and task.get("integrated"):  # see work._integrated
-        return State.COMPLETE, task["integrated"]["why"]
-    if not open_prs and not open_tickets and not uncommitted and (merged or done_tickets or (material and _nothing_left(note))):
-        return State.COMPLETE, "merged" if merged else "ticket done" if done_tickets else "nothing left"
+        return State.CLOSED, task["integrated"]["why"]
+    if not open_prs and not open_tickets and not uncommitted and (merged or done_tickets):
+        return State.CLOSED, "merged" if merged else "ticket done"
+    if not open_prs and not open_tickets and not uncommitted and material and _nothing_left(note):
+        if quiet >= CLOSE_DAYS:  # no outside evidence, and no change for the whole closing period
+            return State.CLOSED, f"nothing left for {quiet} days, with no change"
+        return State.CLOSING, "nothing left, and no outside evidence yet"
     if not material:  # to do is a ticket not started yet (status unknown counts); a conversation alone is not work
         if any(not (k.get("status") or "").lower() in DONE for k in tickets):
             return State.TODO, "a ticket with no edits, commits, branch or PR yet"
@@ -112,14 +124,14 @@ def latest(store=None) -> dict[str, StateChange]:
     """The last change by hand of each task (the card_states table of store.db; `store` is not used any more)."""
     from pensieve import store as v2
     from pensieve.store import cards
-    return {k: StateChange(k, s.state.value, s.by.value, s.reason or "", float(s.at))
+    return {k: StateChange(k, RENAMED.get(s.state.value, s.state.value), s.by.value, s.reason or "", float(s.at))
             for k, s in cards.latest_states(v2.store_db()).items()}
 
 
 def history(store, task_id: str) -> list[dict]:
     from pensieve import store as v2
     from pensieve.store import cards
-    return [dict(state=s.state.value, by=s.by.value, reason=s.reason or "", at=float(s.at))
+    return [dict(state=RENAMED.get(s.state.value, s.state.value), by=s.by.value, reason=s.reason or "", at=float(s.at))
             for s in cards.state_history(v2.store_db(), task_id)]
 
 
@@ -145,7 +157,8 @@ def apply(task: dict, note: dict, manual: StateChange | None):
     """Set task["state"] and why: by hand while no activity is newer than that change, else automatically."""
     auto, why = derive(task, note)
     if manual and manual.state != "auto" and manual.at >= task.get("updated", 0):
-        task.update(state=State(manual.state).value, state_by=manual.by, state_why=manual.reason or f"set by {manual.by}")
+        state = RENAMED.get(manual.state, manual.state)
+        task.update(state=State(state).value, state_by=manual.by, state_why=manual.reason or f"set by {manual.by}")
     else:
         task.update(state=auto.value, state_by="auto", state_why=why)
 

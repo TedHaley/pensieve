@@ -110,7 +110,8 @@ class State(StrEnum):
     TODO = "todo"
     OPEN = "open"
     LOOSE_ENDS = "loose_ends"
-    COMPLETE = "complete"
+    CLOSING = "closing"
+    CLOSED = "closed"
     FORGOTTEN = "forgotten"
 
 
@@ -119,7 +120,9 @@ class StateSet(StrEnum):
     TODO = "todo"
     OPEN = "open"
     LOOSE_ENDS = "loose_ends"
-    COMPLETE = "complete"
+    CLOSING = "closing"
+    CLOSED = "closed"
+    COMPLETE = "complete"  # saved before the rename; read as closed (task_states.RENAMED)
     FORGOTTEN = "forgotten"
     AUTO = "auto"
 
