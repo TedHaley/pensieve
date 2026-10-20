@@ -45,6 +45,7 @@ DEFAULTS = {
     "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
     "embed_model": "",         # the embedding model to index with (config.EMBED_MODELS); "" = the index's own
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
+    "search_gate_holdout": 5,  # the search gate (gate.py) leaves 1 session in this many unblocked, as a control; 0 = none
     "auto_update_check": True,  # the Mac app checks GitHub Releases daily and offers updates (never installs by itself)
     "setup_done": False,       # the user has chosen what to index; until then nothing is indexed (see /api/setup)
     # Connections (connections.py): MCP servers whose data Pensieve collects with read-only tools. Each one is off
@@ -84,6 +85,7 @@ DESCRIPTIONS = {
     "embed_model": "The model that turns text into vectors for search. Switching embeds the text already indexed "
                    "again with the new model, in the background; search keeps working meanwhile.",
     "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
+    "search_gate_holdout": "The search gate (Claude Code add-on) leaves one session in this many unblocked, so you can compare Pensieve with grep. 0 blocks every session.",
     "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
     "setup_done": "Whether the sources to index were chosen. Pensieve indexes nothing until they are.",
     "connections_on": "Connections switched on by hand (easier to change in Sources). A connection that Pensieve holds data from is on too, unless it is in disabled.",

@@ -1,6 +1,6 @@
 {
   "name": "pensieve",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Pensieve for Claude Code: semantic search over your repos, documents and past agent sessions, and your threads of work (MCP server), the skills for search and for closing out threads, and hooks that keep the index current. Needs the Pensieve app or `pensieve` command on this Mac.",
   "author": {
     "name": "Ted Haley"
@@ -37,6 +37,10 @@
           {
             "type": "command",
             "command": "curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/prompt-context 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/gate/reset 2>/dev/null || true"
           }
         ]
       }
@@ -48,6 +52,26 @@
           {
             "type": "command",
             "command": "curl -s -m 1 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/touched >/dev/null 2>&1 || true"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__pensieve__.*|mcp__plugin_pensieve_pensieve__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/gate/mark >/dev/null 2>&1 || true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Grep|Glob|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:${PENSIEVE_PORT:-8765}/api/gate/check 2>/dev/null || true"
           }
         ]
       }

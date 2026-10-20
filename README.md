@@ -201,10 +201,11 @@ pensieve integrate claude --remove    # removes exactly what was added
   - any other prompt: the 5 best code matches, as the `search` tool shows them.
 
   The hook adds about 300 ms and 400 to 1,500 tokens to each prompt. Slash commands, prompts of 1 or 2 words and folders that Pensieve does not index get nothing.
+- **`claude-search-gate`** (recommended): three hooks that make Claude search Pensieve before it greps. In a repo that Pensieve indexes, Claude can't run Grep, Glob, `grep`, `rg`, `ag`, `find` or `git grep` in a turn until it has called a Pensieve tool. The prompt hook's results count as that call. Filtering output (`… | grep x`) stays allowed. If Pensieve isn't running, or the repo isn't indexed, nothing is blocked. One session in 5 runs without blocking (`search_gate_holdout`), so `bench/field.py` can compare Pensieve with grep in your own work. Set it to 0 to block in every session.
 
 ### Claude Code plugin
 
-The plugin gives Claude Code the MCP server, the four skills, the instructions block and the three recommended hooks. It does not change your config files. Install Pensieve first, because the plugin starts `~/.local/bin/pensieve`.
+The plugin gives Claude Code the MCP server, the four skills, the instructions block and the four recommended hooks. It does not change your config files. Install Pensieve first, because the plugin starts `~/.local/bin/pensieve`.
 
 ```
 /plugin marketplace add TedHaley/pensieve

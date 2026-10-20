@@ -1245,6 +1245,35 @@ def index_place(req: PlaceReq):
     return get_places(fresh=True)
 
 
+@app.post("/api/gate/{mode}")
+async def hook_gate(mode: str, request: Request):
+    """The search gate's three Claude Code hooks (gate.py): reset on a user prompt, mark after a Pensieve tool call,
+    check before Grep, Glob or Bash. Only a denied check answers; every other answer is empty, so the call goes on."""
+    from fastapi.responses import Response
+    from pensieve import gate
+    try:
+        d = await request.json()
+    except ValueError:
+        return Response()
+    sid = d.get("session_id") or ""
+    if mode == "reset":
+        gate.reset(sid, d.get("prompt") or "")
+    elif mode == "mark":
+        gate.mark(sid)
+    elif mode == "check":
+        cwd, tool, inp = d.get("cwd") or "", d.get("tool_name") or "", d.get("tool_input") or {}
+        t = time.perf_counter()
+        decision = await asyncio.to_thread(gate.check, sid, tool, inp, lambda: _repo_check(cwd).get("state") == "indexed")
+        if decision != "not_search":
+            usage.record(ts=time.time(), source="gate", tool=f"gate_{decision}", client="claude-code", conn=sid, cwd=cwd,
+                         args=dict(tool=tool, arm=gate.arm(sid), input=str(inp.get("command") or inp.get("pattern") or "")[:300]),
+                         ms=round((time.perf_counter() - t) * 1000, 2), ok=True)  # a denial is the gate working
+        if decision == "deny":
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                           "permissionDecisionReason": gate.DENY}}
+    return Response()
+
+
 @app.post("/api/repo-check")
 async def hook_repo_check(request: Request):
     """Claude Code's SessionStart hook posts its JSON here; the answer adds a note about the repo to the session."""
@@ -1280,6 +1309,9 @@ async def hook_prompt_context(request: Request):
         import traceback
         traceback.print_exc()
         return {}
+    if text:  # Pensieve searched for this prompt: that opens the search gate, so Claude doesn't search it again
+        from pensieve import gate
+        gate.mark(body.get("session_id") or "", by="prompt")
     return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}} if text else {}
 
 

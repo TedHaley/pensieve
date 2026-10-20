@@ -78,7 +78,7 @@ args = ["mcp"]
 EXTRA = {
     "claude-code": f"""
 <h2 id="plugin">Or install the Claude Code plugin</h2>
-<p>The plugin gives Claude Code the MCP server, the four skills, the instructions block and the three recommended
+<p>The plugin gives Claude Code the MCP server, the four skills, the instructions block and the four recommended
 hooks. It does not change your settings files. Install Pensieve first, because the plugin starts
 <code>~/.local/bin/pensieve</code>. Then type these commands in Claude Code:</p>
 {pre('''/plugin marketplace add TedHaley/pensieve
@@ -90,11 +90,12 @@ hooks. It does not change your settings files. Install Pensieve first, because t
 </ul>
 
 <h2 id="hooks">Hooks for Claude Code</h2>
-<p><code>pensieve integrate recommended</code> adds three hooks to <code>~/.claude/settings.json</code>:</p>
+<p><code>pensieve integrate recommended</code> adds four hooks to <code>~/.claude/settings.json</code>:</p>
 {table(["Hook", "Event", "What it does"], [
     ["<code>claude-hook</code>", "PostToolUse", "After each Edit or Write, it sends the changed path to Pensieve. The next search finds the new code. It adds about 50 ms to each edit."],
     ["<code>claude-repo-check</code>", "SessionStart", "In a repo that Pensieve does not index, Claude asks you once whether to index it. Pensieve keeps your answer. In a repo that Pensieve indexes, it adds one line: the number of loose ends and the thread closest to done. Claude then offers to close it at a natural pause."],
     ["<code>claude-prompt-search</code>", "UserPromptSubmit", "Pensieve adds what the prompt needs: a thread, your list of threads, who knows the code, past sessions, or the 5 best code matches. It adds about 300 ms and 400 to 1,500 tokens."],
+    ["<code>claude-search-gate</code>", "UserPromptSubmit, PostToolUse, PreToolUse", "In a repo that Pensieve indexes, Claude can't run Grep, Glob, <code>grep</code>, <code>rg</code>, <code>ag</code>, <code>find</code> or <code>git grep</code> in a turn until it calls a Pensieve tool. The prompt hook's results count as that call. Filtering output stays allowed. If Pensieve isn't running, nothing is blocked. One session in 5 runs without blocking, as a control group."],
 ])}
 <p>Slash commands, prompts of 1 or 2 words, and repos that Pensieve does not index get nothing from the prompt hook.</p>
 
@@ -224,7 +225,7 @@ Settings → Agents → Agent add-ons, or with <code>pensieve integrate</code>.<
     ["<code>pensieve-teammates</code>", "A skill: who knows an area, from git blame, and a draft question. It never sends a message.", "No"],
     ["<code>pensieve-plan</code>", "A skill: plans for new code list code to reuse, earlier attempts, people to ask and knowledge risks.", "No"],
     ["<code>pensieve-wrap-up</code>", "A skill: gets the threads closest to done and does the steps that close them in git, GitHub and the tracker. It asks before a merge or a close.", "No"],
-    ["<code>claude-hook</code>, <code>claude-repo-check</code>, <code>claude-prompt-search</code>", 'Claude Code hooks (see <a href="/docs/agents/claude-code/#hooks">Claude Code</a>).', "Yes"],
+    ["<code>claude-hook</code>, <code>claude-repo-check</code>, <code>claude-prompt-search</code>, <code>claude-search-gate</code>", 'Claude Code hooks (see <a href="/docs/agents/claude-code/#hooks">Claude Code</a>). The search gate makes Claude search Pensieve before it greps.', "Yes"],
 ])}
 <p>Skills go once into <code>~/.agents/skills</code>, the user skills folder that many agents read. Claude Code reads
 only its own folder, so it gets a link in <code>~/.claude/skills</code>. Pensieve makes no folder for an agent that
