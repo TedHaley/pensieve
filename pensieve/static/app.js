@@ -1666,7 +1666,7 @@ function openPersonPanel(who, {keep = false} = {}) {
      ${peers.length ? `<div class="h4">Works alongside</div><div class="chips">${peers.map(([w, n]) => `<button class="chip" data-ppeer="${esc(w)}" title="Open ${esc(w)}"><i class="sw" style="background:${slotColor(D.authorSlot.get(w) ?? -1)}"></i>${esc(w)}<span class="n">${n}</span></button>`).join('')}</div>` : ''}
      <div id="pteam"></div>
      ${recent.length ? `<div class="h4">Recently changed</div><div class="list">${recent.map(itemRow).join('')}</div>` : ''}
-     <div class="actions"><button class="btn" data-pfilter>${D.authors.has(who) && D.authors.size === 1 ? 'Show everyone' : 'Show only their work'}</button><button class="btn" data-pprofile title="Their card in the People tab: what they work on and how you work together">Open their card</button></div>`);
+     <div class="actions"><button class="btn" data-pfilter>${D.authors.has(who) && D.authors.size === 1 ? 'Show everyone' : 'Show only their work'}</button><button class="btn" data-pprofile title="Their profile in the People tab: what they work on and how you work together">Open their card</button></div>`);
   D.drawerPerson = who;
   if (!keep) renderSidebar(); else $$('.prow-w').forEach(r => r.classList.toggle('open', r.querySelector('[data-pwho]')?.dataset.pwho === who));
   const body = $('#drawer-body');
@@ -3035,7 +3035,7 @@ function pjBody(p) {
   }
   const live = rows.filter(r => !r.done), done = rows.filter(r => r.done), all = S.proj.all.has(p.id);
   const shown = all ? done : done.slice(0, Math.max(0, PJ_DONE_SHOWN - Math.min(live.length, PJ_DONE_SHOWN - 2)));
-  const team = p.members.map(m => `<button class="pj-mem" data-pj-person="${esc(m.id)}" title="Open their card in People">${ppAv(m, 26)}<span class="nm">${esc(m.me ? 'You' : m.name)}</span><small>${m.roles.map(r => PJ_ROLE[r]).join(', ')}</small></button>`).join('');
+  const team = p.members.map(m => `<button class="pj-mem" data-pj-person="${esc(m.id)}" title="Open their profile in People">${ppAv(m, 26)}<span class="nm">${esc(m.me ? 'You' : m.name)}</span><small>${m.roles.map(r => PJ_ROLE[r]).join(', ')}</small></button>`).join('');
   return `<div class="pj-body">
     ${team ? `<div class="pj-h4">Who is on it</div><div class="pj-team">${team}</div>` : ''}
     <div class="pj-h4">${p.kind === 'pr' ? 'Pull requests with no ticket' : 'Tickets'}</div>
@@ -3345,10 +3345,10 @@ function renderPeople() {
       </div>
       <section class="pp-rel ${ppRelOn() ? 'on' : ''} ${P.relMin ? 'min' : ''}" id="pprel" aria-label="Connections of the selected person">${ppRelHtml()}</section>
       </div>
-      <aside class="pp-card" id="ppcard" aria-label="Person card">
-        <div class="pp-cardbar"><button class="pp-cbtn" data-pp-collapse title="Collapse the card to the edge" aria-label="Collapse the card"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="pp-cbtn" data-pp-close title="Close (Esc)" aria-label="Close the card"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
+      <aside class="pp-card" id="ppcard" aria-label="Profile">
+        <div class="pp-cardbar"><button class="pp-cbtn" data-pp-collapse title="Collapse the profile to the edge" aria-label="Collapse the profile"><svg viewBox="0 0 24 24" width="14" height="14"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="pp-cbtn" data-pp-close title="Close (Esc)" aria-label="Close the profile"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
         <div class="pp-cardin" id="ppcardin">${P.card ? (P.card.directory ? ppDirCardHtml : ppCardHtml)(P.card) : ''}</div>
-        <button class="pp-strip" id="ppstrip" data-pp-expand title="Show the card" aria-label="Show the card">${ppStripHtml()}</button>
+        <button class="pp-strip" id="ppstrip" data-pp-expand title="Show the profile" aria-label="Show the profile">${ppStripHtml()}</button>
       </aside>
     </div>`;
   ppDrawGraph();
@@ -3492,7 +3492,7 @@ async function ppPick(id) {
   const P = S.people;
   if (P.merging && P.merging !== id) {
     const a = P.merging; P.merging = null;
-    try { const r = await api('/api/people/merge', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids: [a, id]})}); toast('Merged. To undo, split an identity on their card.'); P.sel = r.id; }
+    try { const r = await api('/api/people/merge', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids: [a, id]})}); toast('Merged. To undo, split an identity on their profile.'); P.sel = r.id; }
     catch (e) { toast('Could not merge: ' + e.message); }
     return loadPeople();
   }
