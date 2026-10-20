@@ -1,35 +1,34 @@
-"""The model of work for threads built from sessions: Session > Scene, Area, Thread, Item.
+"""The model of work for threads built from sessions.
 
-  Session  one agent transcript. Its scenes are its children.
-  Scene    one run of exchanges on one theme (segment.components). Belongs to one session.
-  Thread   one goal, followed over time. Holds work scenes from one or more sessions. Sits in one area.
-  Area     a space the user works in. Areas nest. Every thread sits in one area; Unfiled is the default.
-  Item     a standalone question or comment. Sits in a placeholder area. No goal, no state, never closes.
+  Session    one agent transcript. Its components are its children.
+  Component  one run of exchanges on one theme (segment.components). It belongs to one session. Some components
+             carry support data (repo, PR, branch, ticket). Many carry none.
+  Goal       what components work toward or achieve. Not every component has one.
+  Thread     one goal, followed over time. It holds one or more components that share that goal. One thread per goal.
+  Area       groups threads. A thread may have no area.
+  Item       a standalone question or comment. It sits in a placeholder area. It has no goal and never closes.
 
-A scene is a work scene, a question or a comment. Only work scenes join threads. Questions and comments become
-items.
+A component is a work component, a question or a comment. Only work components join threads. A question or comment
+becomes an item.
 
-Closing without evidence: a thread with no PR, ticket or commit data can still close. When its last scene ends
-with no action left (the last message asks nothing and says nothing is to do), the thread is closing. It becomes
-closed after CLOSE_DAYS with no change. The rule is in `no_evidence_state`. It reads what the scene says, not
-external data."""
+Closing without evidence: a thread with no PR, ticket or commit data can still close. When the last component of its
+thread ends with nothing left to do, the thread is closing. It becomes closed after CLOSE_DAYS with no change. The
+rule is `no_evidence_state`. It reads what the component says, not external data."""
 from dataclasses import dataclass, field
 from enum import Enum
 import time
 
 from pensieve.task_states import CLOSE_DAYS, FORGET_DAYS, RECENT_DAYS, State
 
-UNFILED = "unfiled"
 
-
-class SceneKind(str, Enum):
+class ComponentKind(str, Enum):
     WORK = "work"
     QUESTION = "question"
     COMMENT = "comment"
 
 
 class LastMessage(str, Enum):
-    """What the last message of a scene leaves: an action for someone, a question, or nothing to do."""
+    """What the last message of a component leaves: an action for someone, a question, or nothing to do."""
     ACTION = "action"
     QUESTION = "question"
     NOTHING = "nothing"  # no clear action, nothing to do
@@ -57,7 +56,7 @@ class Session:
     updated: float = 0.0
     title: str = ""
     project: str = ""  # the folder the session ran in
-    scenes: list = field(default_factory=list)
+    components: list = field(default_factory=list)
 
 
 @dataclass
@@ -67,15 +66,16 @@ class Link:
 
 
 @dataclass
-class Scene:
+class Component:
     session_id: str
     index: int
     exchanges: tuple   # (first, last), inclusive
     title: str = ""
     description: str = ""
-    kind: SceneKind = SceneKind.WORK
+    kind: ComponentKind = ComponentKind.WORK
     last: LastMessage = LastMessage.UNCLEAR
-    branch: str = ""
+    goal: str = ""     # what the component works toward; empty when it has none
+    branch: str = ""   # support data: empty when the component has none
     links: list = field(default_factory=list)
 
     @property
@@ -96,47 +96,47 @@ class Area:
 class Thread:
     id: str
     goal: str
-    area_id: str = UNFILED
-    scenes: list = field(default_factory=list)  # scene ids, in time order
+    area_id: str = ""  # empty when the thread has no area
+    components: list = field(default_factory=list)  # component ids, in time order
     state: State = State.OPEN
 
 
 @dataclass
 class Item:
     id: str
-    area_id: str        # a placeholder area, such as Questions or Comments
-    kind: SceneKind     # question or comment
-    scene_id: str
+    area_id: str        # a placeholder area: Questions or Comments
+    kind: ComponentKind # question or comment
+    component_id: str
 
 
 def builtin_areas() -> list[Area]:
-    """The areas every install starts with: Unfiled for threads, and the two placeholder areas for items."""
+    """The placeholder areas every install starts with. Items live in them. Work areas are made by the user or by
+    the sources (repo, folder, topic)."""
     return [
-        Area(UNFILED, "Unfiled", source=AreaSource.BUILTIN),
         Area("questions", "Questions", source=AreaSource.BUILTIN, kind=AreaKind.PLACEHOLDER),
         Area("comments", "Comments", source=AreaSource.BUILTIN, kind=AreaKind.PLACEHOLDER),
     ]
 
 
-def item_for(scene: Scene) -> Item | None:
-    """A question or comment scene becomes an item in its placeholder area. A work scene does not."""
-    if scene.kind == SceneKind.QUESTION:
-        return Item(scene.id, "questions", SceneKind.QUESTION, scene.id)
-    if scene.kind == SceneKind.COMMENT:
-        return Item(scene.id, "comments", SceneKind.COMMENT, scene.id)
+def item_for(component: Component) -> Item | None:
+    """A question or comment component becomes an item in its placeholder area. A work component does not."""
+    if component.kind == ComponentKind.QUESTION:
+        return Item(component.id, "questions", ComponentKind.QUESTION, component.id)
+    if component.kind == ComponentKind.COMMENT:
+        return Item(component.id, "comments", ComponentKind.COMMENT, component.id)
     return None
 
 
-def no_evidence_state(scenes: list[Scene], updated: float, now: float | None = None) -> tuple[State, str]:
-    """The state of a thread that has no PR, ticket or commit data. Reads what its scenes say.
+def no_evidence_state(components: list[Component], updated: float, now: float | None = None) -> tuple[State, str]:
+    """The state of a thread that has no PR, ticket or commit data. Reads what its components say.
 
-    The last scene decides. If its last message leaves nothing to do, the thread is closing, and it becomes closed
-    after CLOSE_DAYS with no change. Otherwise it is open while recent, loose ends when quiet, and forgotten after
-    FORGET_DAYS."""
+    The last component decides. If its last message leaves nothing to do, the thread is closing, and it becomes
+    closed after CLOSE_DAYS with no change. Otherwise it is open while recent, loose ends when quiet, and forgotten
+    after FORGET_DAYS."""
     now = now or time.time()
-    if not scenes:
-        return State.FORGOTTEN, "no work scenes"
-    last = scenes[-1]
+    if not components:
+        return State.FORGOTTEN, "no work components"
+    last = components[-1]
     quiet = int((now - updated) // 86400)
     if last.last == LastMessage.NOTHING:
         if quiet >= CLOSE_DAYS:
