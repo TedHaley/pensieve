@@ -6,7 +6,7 @@ stores the same JSON. Schema: pensieve/session_digest.schema.json."""
 import re
 from urllib.parse import urlsplit, urlunsplit
 
-SCHEMA = "session_digest/0.1"
+SCHEMA = "session_digest/0.2"
 
 # GitHub pull request URL and the org/repo#n form. Both give the key "org/repo#n".
 _PR_URL = re.compile(r"https?://(?:www\.)?github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
@@ -68,10 +68,38 @@ def extract_links(text: str) -> list[dict]:
     return sorted(found.values(), key=lambda r: (r["kind"], -r["count"], r["key"]))
 
 
+def top_words(text: str, n: int = 4) -> list[str]:
+    """The n most used content words of a component. Words, not sentences: a digest holds no transcript text."""
+    from pensieve import segment
+    counts = segment.words(text)
+    return [w for w, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:n]]
+
+
+def build_components(session, shift: float | None = None) -> list[dict]:
+    """The components of a session, each with its id, turns, words and links."""
+    from pensieve import segment
+    kw = {} if shift is None else {"shift": shift}
+    out = []
+    for c in segment.components(session.turns, **kw):
+        lo, hi = c["turns"]
+        part = "\n".join(t for _, t in session.turns[lo:hi] if t)
+        out.append(dict(
+            id=f"{session.id}#{c['index']}",
+            index=c["index"],
+            turns=[lo, hi],
+            exchanges=c["exchanges"],
+            words=top_words(part),
+            links=extract_links(part),
+        ))
+    return out
+
+
 def build(session) -> dict:
     """A digest of a parsed session. `summary`, `steps_done`, `steps_left` and `closing_signal` are empty here;
-    the summarizer fills them. The links come from the text of the user's and the agent's turns."""
+    the summarizer fills them. The links come from the text of the user's and the agent's turns. Each component
+    carries the links of its own turns, so a thread can join on a component."""
     text = "\n".join(t for _, t in session.turns if t)
+    comps = build_components(session)
     return {
         "schema": SCHEMA,
         "session_id": session.id,
@@ -83,4 +111,5 @@ def build(session) -> dict:
         "steps_left": [],
         "closing_signal": None,
         "links": extract_links(text),
+        "components": comps,
     }

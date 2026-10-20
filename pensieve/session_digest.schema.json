@@ -4,10 +4,27 @@
   "title": "Pensieve session digest",
   "description": "What one session contributes to threads, without its transcript text. Built on the device from the session, then stored locally or in the cloud.",
   "type": "object",
-  "required": ["schema", "session_id", "source", "started_at", "ended_at", "summary", "steps_done", "steps_left", "closing_signal", "links"],
+  "required": ["schema", "session_id", "source", "started_at", "ended_at", "summary", "steps_done", "steps_left", "closing_signal", "links", "components"],
   "additionalProperties": false,
   "properties": {
-    "schema": {"const": "session_digest/0.1"},
+    "schema": {"const": "session_digest/0.2"},
+    "components": {
+      "type": "array",
+      "description": "The episodes of the session: runs of exchanges on one theme. Each one can be a thread on its own, and components join into threads.",
+      "items": {
+        "type": "object",
+        "required": ["id", "index", "turns", "exchanges", "words", "links"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "description": "The session id and the index: <session id>#<index>."},
+          "index": {"type": "integer", "minimum": 0},
+          "turns": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "First and end turn of the component, end exclusive."},
+          "exchanges": {"type": "integer", "minimum": 1},
+          "words": {"type": "array", "items": {"type": "string"}, "maxItems": 4, "description": "The most used content words of the component. Words, not sentences."},
+          "links": {"$ref": "#/properties/links"}
+        }
+      }
+    },
     "session_id": {"type": "string", "description": "The session's id in its agent, for example a Claude Code session id."},
     "source": {"type": "string", "description": "The agent that made the session: claude, codex, qwen, or a web or app source."},
     "started_at": {"type": "string", "description": "When the session started, as the transcript says it."},

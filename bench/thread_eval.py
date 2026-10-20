@@ -157,6 +157,77 @@ def cmd_score(a):
             f.write(json.dumps(row) + "\n")
 
 
+def cmd_components(a):
+    """Components as the thread unit. A component pair is joined when two components of different sessions share a
+    link key. Gold: the two sessions share a gold card. Same-session pairs are left out: the gold has no answer."""
+    gold = json.loads((OUT / "gold.json").read_text())
+    digests = load_digests()
+    session_of, comp_links = {}, {}
+    for sid, d in digests.items():
+        for c in d.get("components", []):
+            session_of[c["id"]] = sid
+            comp_links[c["id"]] = {(link["kind"], link["key"]) for link in c["links"]}
+    universe = set(session_of)
+    card_sets = [set(refs) for refs in gold["clusters"].values()]
+    gold_pairs = set()
+    for x, y in combinations(sorted(universe), 2):
+        if session_of[x] != session_of[y] and any(session_of[x] in r and session_of[y] in r for r in card_sets):
+            gold_pairs.add(frozenset((x, y)))
+    for label, kinds in (("components pr+ticket+branch", ("pr", "ticket", "branch")),
+                         ("components pr+ticket+branch+url", ("pr", "ticket", "branch", "url"))):
+        pred = set()
+        for x, y in combinations(sorted(universe), 2):
+            if session_of[x] == session_of[y]:
+                continue
+            shared = {k for k in comp_links[x] & comp_links[y] if k[0] in kinds}
+            if shared:
+                pred.add(frozenset((x, y)))
+        row = dict(arm=label, at=time.time(), components=len(universe), **score_pairs(gold_pairs, pred))
+        print(f"{label:34s} pairs gold {row['pairs_gold']:5d} pred {row['pairs_pred']:5d} "
+              f"precision {row['precision']:.3f} recall {row['recall']:.3f} f1 {row['f1']:.3f}")
+        with (OUT / "results.jsonl").open("a") as f:
+            f.write(json.dumps(row) + "\n")
+
+
+def cmd_sweep(a):
+    """Tune the component split: for each SHIFT, cut the gold sessions into components, join them by links, and score.
+    Reads the transcripts again (parsers), so it does not need the digests file.
+
+    Caveat: the gold is per session, so a component pair counts as gold when its two sessions share a card. More
+    components give more gold pairs, so recall falls as the cut gets finer. Read precision here. Score components
+    by hand labels (theme boundaries and component-to-thread) before you tune SHIFT on recall."""
+    from pensieve import digest, parsers, segment
+    gold = json.loads((OUT / "gold.json").read_text())
+    want = set(gold["sessions"])
+    stems = {s.split("/")[-1].split(":", 1)[-1] for s in want}
+    sessions = {}
+    for source, path in parsers.discover():
+        if path.stem in stems:
+            s = parsers.parse(source, path)
+            if s.id in want:
+                sessions[s.id] = s
+    card_sets = [set(refs) & set(sessions) for refs in gold["clusters"].values()]
+    card_sets = [c for c in card_sets if c]
+    for shift in a.shifts:
+        session_of, comp_links = {}, {}
+        for sid, s in sessions.items():
+            for c in digest.build_components(s, shift=shift):
+                session_of[c["id"]] = sid
+                comp_links[c["id"]] = {(link["kind"], link["key"]) for link in c["links"]}
+        ids = sorted(session_of)
+        gold_pairs = {frozenset((x, y)) for x, y in combinations(ids, 2)
+                      if session_of[x] != session_of[y]
+                      and any(session_of[x] in r and session_of[y] in r for r in card_sets)}
+        for kinds in (("pr", "ticket", "branch"), ("pr", "ticket", "branch", "url")):
+            pred = {frozenset((x, y)) for x, y in combinations(ids, 2)
+                    if session_of[x] != session_of[y]
+                    and any(k[0] in kinds for k in comp_links[x] & comp_links[y])}
+            r = score_pairs(gold_pairs, pred)
+            print(f"shift {shift:.2f} comps {len(ids):4d} kinds {'+'.join(kinds):28s} "
+                  f"precision {r['precision']:.3f} recall {r['recall']:.3f} f1 {r['f1']:.3f} "
+                  f"pairs {r['pairs_pred']}/{r['pairs_gold']}")
+
+
 def cmd_review(a):
     """Pairs to label by hand, shown without the gold answer: pairs a link arm joins, and pairs that share no key.
     Writes review.md. Label the pairs in labels.json, as same / different."""
@@ -184,8 +255,12 @@ def main():
     rv = sub.add_parser("review")
     rv.add_argument("-n", type=int, default=30)
     rv.set_defaults(run=cmd_review)
-    for name, fn in (("gold", cmd_gold), ("digests", cmd_digests), ("score", cmd_score)):
+    for name, fn in (("gold", cmd_gold), ("digests", cmd_digests), ("score", cmd_score),
+                     ("components", cmd_components)):
         sub.add_parser(name).set_defaults(run=fn)
+    sw = sub.add_parser("sweep")
+    sw.add_argument("--shifts", type=float, nargs="+", default=[0.12, 0.2, 0.3, 0.4, 0.5])
+    sw.set_defaults(run=cmd_sweep)
     a = p.parse_args()
     a.run(a)
 

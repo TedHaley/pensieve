@@ -57,7 +57,7 @@ def run():
                 turns=[("user", "Fix ABC-7. Secret text here."), ("assistant", "Done, see acme/app#3.")])
     d = digest.build(s)
     results.append(check("build: schema and ids", (d["schema"], d["session_id"], d["source"]),
-                         ("session_digest/0.1", "s-1", "claude")))
+                         ("session_digest/0.2", "s-1", "claude")))
     results.append(check("build: no transcript text in the digest",
                          "Secret text" in json.dumps(d), False))
     results.append(check("build: links from both turns",
