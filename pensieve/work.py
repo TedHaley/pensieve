@@ -618,6 +618,14 @@ def group(inp: Inputs) -> list[dict]:
                            project=s["project"], artifacts=_artifacts(s, facts[s["id"]]["links"])) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
+    # A ticket that a thread in another repo works on belongs there: sessions here that only name it (a pasted log,
+    # a printed list of threads) give it no reference here
+    worked_in = defaultdict(set)
+    for t in out:
+        for k in t["keys"]:
+            worked_in[k].update(t["repos"])
+    for t in out:
+        t["ticket_refs"] = [r for r in t["ticket_refs"] if not worked_in[r["key"]] or worked_in[r["key"]] & set(t["repos"])]
     # What the card's sessions read through MCP (Slack threads, tickets, pages): shown on the card, not joined to it,
     # so that a session that read many items does not merge their cards. v2: the documents that document_sessions
     # links to the card's sessions.
