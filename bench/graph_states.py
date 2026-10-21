@@ -2,8 +2,8 @@
 
   .venv/bin/python bench/graph_states.py     # reads relations.json, writes threads.json and prints a summary
 
-A session is the centre of its work. Sessions that write to the same PR or branch join one thread, so a thread is a
-connected group of sessions. Each sink's state comes from GitHub (gh), cached in sink_states_cache.json:
+A thread is one session: the centre of its work. A session's thread holds every sink it writes to. Several sessions can
+write to the same sink, so one sink can belong to several threads. Each sink's state comes from GitHub (gh), cached in sink_states_cache.json:
   PR      MERGED, CLOSED, or OPEN
   branch  DELETED, MERGED, EXISTS, or OPEN (see pensieve/sink_status.py)
 Tickets have no writes yet (no extractor reads Jira writes), so they are not sinks here.
@@ -90,49 +90,27 @@ def main():
             cache_path.write_text(json.dumps(cache, indent=1))
     cache_path.write_text(json.dumps(cache, indent=1))
 
-    by_sink = defaultdict(set)
-    for r in written:
-        by_sink[r["target"]].add(r["source"])
-    parent = {}
-
-    def find(x):
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for sessions in by_sink.values():
-        ss = sorted(sessions)
-        for s in ss[1:]:
-            parent[find(s)] = find(ss[0])
-
-    sessions_of = defaultdict(set)
     sinks_of = defaultdict(set)
     for r in written:
-        root = find(r["source"])
-        sessions_of[root].add(r["source"])
-        sinks_of[root].add(r["target"])
+        sinks_of[r["source"]].add(r["target"])
 
     now = time.time()
     done_states = {"MERGED", "CLOSED", "DELETED"}
     threads = []
-    for root in sessions_of:
-        ss = sessions_of[root]
-        sk = sorted(sinks_of[root])
+    for s, sk in sorted(sinks_of.items()):
+        sk = sorted(sk)
         states = {t: cache.get(t, "UNKNOWN") for t in sk}
-        last = max((nodes.get(s, {}).get("written", 0) for s in ss), default=0)
-        quiet = (now - last) / DAY
+        quiet = (now - nodes.get(s, {}).get("written", 0)) / DAY
         if all(v in done_states for v in states.values()):
             state = "closed"
         elif any(v in ("OPEN", "EXISTS") for v in states.values()):
             state = "open" if quiet <= RECENT_DAYS else "stale"
         else:
             state = "unknown"
-        threads.append(dict(id="t" + hashlib.sha1("|".join(sorted(ss)).encode()).hexdigest()[:8], state=state, sessions=sorted(ss),
+        threads.append(dict(id="t" + hashlib.sha1(s.encode()).hexdigest()[:8], state=state, sessions=[s],
                             sinks=[dict(target=t, state=states[t]) for t in sk],
                             quiet_days=round(quiet, 1),
-                            titles=[nodes.get(s, {}).get("label", s) for s in sorted(ss)]))
+                            titles=[nodes.get(s, {}).get("label", s)]))
     threads.sort(key=lambda t: (t["state"] != "open", t["state"] != "stale", t["quiet_days"]))
     (OUT / "threads.json").write_text(json.dumps(threads, indent=1))
 
