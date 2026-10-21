@@ -156,6 +156,10 @@ def set_state(store, task_id: str, state: str, by: str = "user", reason: str = "
 def apply(task: dict, note: dict, manual: StateChange | None):
     """Set task["state"] and why: by hand while no activity is newer than that change, else automatically."""
     auto, why = derive(task, note)
+    from pensieve import sink_status
+    done, reason = sink_status.task_closed_by_sinks(task)
+    if done:  # every sink the task writes to is verified done (sink_status.py)
+        auto, why = State.CLOSED, reason
     if manual and manual.state != "auto" and manual.at >= task.get("updated", 0):
         state = RENAMED.get(manual.state, manual.state)
         task.update(state=State(state).value, state_by=manual.by, state_why=manual.reason or f"set by {manual.by}")
