@@ -10,7 +10,7 @@ from pathlib import Path
 from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
-    "Pensieve follows your work across AI agent sessions, and ties up the loose ends: the threads you left open.",
+    "Pensieve follows your work across AI agent sessions, ties up the loose ends (the threads you left open), and helps you organize and track all of your ideas.",
     "Session mode, the default, reads your agent sessions and builds threads from them. Nothing else is indexed.",
     "Developer mode also indexes your git repos and files, and unlocks the Map, People and Insights.",
     "Everything runs on this Mac. Nothing is uploaded.",
