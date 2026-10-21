@@ -108,13 +108,7 @@ def main():
         members = sorted((work[i] for i in g), key=lambda c: iso(heads.get(c["session_id"], {}).get("written", "")))
         sids = sorted({c["session_id"] for c in members},
                       key=lambda s: iso(heads.get(s, {}).get("written", "")))
-        repos = Counter(repo_of(heads.get(s, {}).get("project", "")) for s in sids)
-        repos.pop("", None)
-        area = ""
-        if repos:
-            repo, n = repos.most_common(1)[0]
-            if n / len(sids) >= 0.6:
-                area = repo
+        area = ""  # a repo is too broad to be an area; no area until a narrower rule is chosen
         newest_session = sids[-1]
         ending = session_end[newest_session]  # the thread's closing evidence: its newest session's last component
         last_write = iso(heads.get(newest_session, {}).get("written", ""))
@@ -142,6 +136,7 @@ def main():
             state=state.value,
             state_why=why,
             sessions=sids,
+            last_active=last_write,
             component_count=len(members),
             ending=dict(session=ending["session_id"], title=ending["title"], description=ending["description"],
                         last=ending["last"], exchanges=ending["exchanges"]),
@@ -161,7 +156,7 @@ def main():
                     threads=len(threads), single_component_threads=sum(1 for t in threads if t["component_count"] == 1),
                     states=dict(states)),
         areas=[dict(name=k, threads=v) for k, v in areas_used.most_common()],
-        threads=threads,
+        threads=sorted(threads, key=lambda t: t["last_active"], reverse=True),  # most recently active first
         items=question_items,
         limits=[
             "States use no PR, ticket or commit state. Only the last-message rule and the time rules apply.",
