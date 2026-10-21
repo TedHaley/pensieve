@@ -2367,7 +2367,7 @@ function renderSetup() {
       <h3 class="setup-h">Embedding model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Embedding model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
         <div class="ai-opt-h"><b>${esc(m.label)}</b><span class="priv local">Local</span></div><p>${esc(m.about)}</p></button>`).join('')}</div>
-      <h3 class="setup-h">Notes and insights</h3><p class="sub">What writes thread notes, summaries, topic names and insights in the background. You can change it later in Settings → Models.</p>
+      <h3 class="setup-h">Notes and insights</h3><p class="sub">The agent you connect to Pensieve over MCP writes thread notes, summaries, topic names and insights. Pensieve runs no text model of its own.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Text engine">${(g.engines || []).map(x => `<button class="ai-opt ${st.engine === x.id ? 'on' : ''}" data-setup-engine="${esc(x.id)}" role="radio" aria-checked="${st.engine === x.id}" ${x.unavailable ? 'disabled' : ''}>
         <div class="ai-opt-h"><b>${esc(x.label)}</b>${x.id === 'builtin' ? '<span class="priv local">Local</span>' : ''}</div><p>${esc(x.unavailable || x.about)}</p></button>`).join('')}</div>
       ${btns('start', 'Next')}`;

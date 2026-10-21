@@ -75,16 +75,8 @@ def guide() -> dict:
 
 
 def engines() -> list[dict]:
-    """The text engines that setup offers, with why one can't run on this Mac."""
-    from pensieve import engine
-    claude = None if config.find_exe("claude") else "Claude Code is not installed."
-    return [dict(id="cli", label="Claude Code (Haiku)", command=engine.TEMPLATES[0]["command"], unavailable=claude,
-                 about="Your Claude Code writes them with its smallest model, one job at a time. It uses your Claude plan."),
-            dict(id="builtin", label="Built-in Qwen 3.5 9B", unavailable=engine.builtin_unsupported(),
-                 about="Runs on this Mac, and nothing leaves it. Pensieve starts it when there is work and stops it "
-                       "after 10 minutes without work. It downloads about 5 GB once, or uses LM Studio's copy."),
-            dict(id="server", label="Model server", unavailable=None,
-                 about="A server that you run, such as LM Studio or Ollama, or a hosted API. Set it in Settings → Models.")]
+    """The text engines that setup offers: none. The agent connected over MCP writes the text (settings.ENGINES)."""
+    return []
 
 
 CONTENT_NOTES = {  # what switching a kind on costs; speeds measured on an M4 Max

@@ -121,17 +121,13 @@ def _overrides():
     return o
 
 
-ENGINES = ("builtin", "cli", "server")
+ENGINES = ("", "builtin", "cli", "server")  # "" is the connected agent, which writes the text over MCP
 
 
 def _default_engine(s: dict) -> dict:
-    """The text engine for someone who hasn't chosen one: Claude Code with Haiku when Claude Code is installed, else
-    the built-in model when this Mac can run it, else a model server at llm_url (LM Studio's address by default).
-    Setup asks, and Settings → Models changes it."""
-    from pensieve import engine
-    if config.find_exe("claude"):
-        return dict(text_engine="cli", cli_command=s["cli_command"] or engine.TEMPLATES[0]["command"])
-    return dict(text_engine="server" if engine.builtin_unsupported() else "builtin")
+    """The text engine for someone who hasn't chosen one: none. The agent the user connects over MCP writes the text
+    (its queue, agent_jobs); no background model runs. Settings → Models can still pick one."""
+    return dict(text_engine="")
 
 
 def load() -> dict:

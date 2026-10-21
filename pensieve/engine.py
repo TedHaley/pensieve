@@ -293,6 +293,8 @@ def test(s: dict) -> dict:
 def run_once() -> int:
     """Answer the newest waiting job, if the engine is on and no other Pensieve process runs one now. Returns how
     many it answered (0 or 1)."""
+    if not settings.get("text_engine"):  # no background engine: the connected agent answers the queue over MCP
+        return 0
     if not _lock.acquire(blocking=False):
         return 0
     try:

@@ -70,14 +70,11 @@ def test_engine_sessions_are_never_indexed():
 
 
 def test_default_engine():
-    """Someone who never chose an engine (or chose "agent" before) gets Claude Code with Haiku when it's installed,
-    else the built-in model when the Mac can run it, else a model server. Never no engine at all."""
+    """Someone who never chose an engine gets none: the connected agent writes the text over MCP, and no background
+    model runs. The background worker answers nothing while the engine is empty."""
     s = {**settings.DEFAULTS, "text_engine": "agent"}
-    d = settings._default_engine(s)
-    if config.find_exe("claude"):
-        assert d["text_engine"] == "cli" and d["cli_command"].startswith("claude -p --model haiku")
-    else:
-        assert d == {"text_engine": "server" if engine.builtin_unsupported() else "builtin"}
+    assert settings._default_engine(s) == {"text_engine": ""}
+    assert engine.run_once() == 0
     real_find, real_unsupported = config.find_exe, engine.builtin_unsupported
     try:
         for claude in (True, False):
