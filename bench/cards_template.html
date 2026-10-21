@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thread cards</title>
+<style>
+:root { --bg:#f6f6f4; --ink:#1b1b1d; --muted:#6b6b70; --line:#dcdcd8; --panel:#ffffff; --chip:#ececE8;
+  --open:#1f8a3b; --stale:#b26a00; --closed:#6b6b70; --unknown:#9a9aa0; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#161617; --ink:#ececec; --muted:#9a9aa0;
+  --line:#34343a; --panel:#1f1f21; --chip:#2a2a2e; --open:#4cd46e; --stale:#f0a33a; --closed:#9a9aa0; --unknown:#9a9aa0; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg:#161617; --ink:#ececec; --muted:#9a9aa0; --line:#34343a; --panel:#1f1f21; --chip:#2a2a2e;
+  --open:#4cd46e; --stale:#f0a33a; --closed:#9a9aa0; --unknown:#9a9aa0; color-scheme: dark; }
+body { margin:0; background:var(--bg); color:var(--ink); font:13px/1.45 -apple-system, system-ui, sans-serif;
+  padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); padding-block:18px 40px; }
+main { max-width:1040px; margin:0 auto; display:flex; flex-direction:column; gap:14px; min-width:0; }
+h1 { font-size:20px; margin:0; font-weight:650; }
+.sub, .muted { color:var(--muted); font-size:12px; }
+.bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+select, input { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 9px; min-width:0; }
+input[type=search] { flex:1 1 220px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; min-width:0; }
+.card-h { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; justify-content:space-between; min-width:0; }
+.title { font-weight:650; overflow-wrap:anywhere; }
+.sinks { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+.sink { border-top:1px solid var(--line); padding-top:8px; min-width:0; }
+.sink-h { display:flex; flex-wrap:wrap; gap:6px; align-items:center; min-width:0; }
+.kind { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+.name { font-weight:550; overflow-wrap:anywhere; }
+.pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:99px; background:var(--chip); white-space:nowrap; }
+.s-open { color:var(--open); } .s-stale { color:var(--stale); } .s-closed { color:var(--closed); } .s-unknown { color:var(--unknown); }
+.assoc { margin:4px 0 0 10px; font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.assoc b { color:var(--ink); font-weight:550; }
+.source { margin-top:10px; padding-top:8px; border-top:1px dashed var(--line); font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.source code { font-size:11px; }
+.empty { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Thread cards</h1>
+    <div class="sub" id="built"></div>
+  </div>
+  <div class="bar">
+    <select id="state" aria-label="Filter by state">
+      <option value="">All states</option>
+      <option value="open">Open</option>
+      <option value="stale">Stale</option>
+      <option value="closed">Closed</option>
+      <option value="unknown">Unknown</option>
+    </select>
+    <input id="q" type="search" placeholder="Search titles, PRs, branches, tickets" aria-label="Search">
+    <span class="muted" id="count"></span>
+  </div>
+  <div id="cards" style="display:flex;flex-direction:column;gap:12px"></div>
+</main>
+<script>
+const DATA = __DATA__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ago = ts => ts ? new Date(ts * 1000).toISOString().slice(0, 16).replace("T", " ") : "";
+const SINK_LABEL = {branch: "Branch", pr: "PR", ticket: "Ticket"};
+const cls = s => (s === "open" || s === "OPEN" || s === "EXISTS") ? "s-open" : (s === "stale" ? "s-stale" : (s === "closed" || s === "MERGED" || s === "CLOSED" || s === "DELETED" || s === "done") ? "s-closed" : "s-unknown");
+const label = s => ({open: "open", stale: "stale", closed: "closed", unknown: "unknown", OPEN: "open", EXISTS: "exists", MERGED: "merged", CLOSED: "closed", DELETED: "deleted", UNKNOWN: "unknown", done: "done"})[s] || s;
+
+function sinkRow(s) {
+  const pr = s.kind === 'pr' ? s.name : null;
+  const assoc = [];
+  if (s.kind === 'pr' && s.title) assoc.push(`<div class="assoc">Title: <b>${esc(s.title)}</b></div>`);
+  if (s.kind === 'pr' && s.branch) assoc.push(`<div class="assoc">Head branch: <b>${esc(s.branch)}</b></div>`);
+  if (s.kind === 'branch' && s.prs.length) assoc.push(`<div class="assoc">PRs: ${s.prs.map(p => `<b>${esc(p.key)}</b> <span class="pill ${cls(p.state)}">${esc(label(p.state))}</span>${p.title ? ' ' + esc(p.title) : ''}`).join('; ')}</div>`);
+  if (s.tickets.length) assoc.push(`<div class="assoc">Tickets: ${s.tickets.map(t => `<b>${esc(t.key)}</b> <span class="pill ${cls(t.state)}">${esc(label(t.state))}</span>`).join(' ')}</div>`);
+  return `<div class="sink">
+    <div class="sink-h"><span class="kind">${SINK_LABEL[s.kind] || s.kind}</span><span class="name">${esc(s.name)}</span>
+      <span class="pill ${cls(s.state)}">${esc(label(s.state))}</span></div>${assoc.join('')}</div>`;
+}
+
+function card(c) {
+  const sinks = c.sinks.length ? c.sinks.map(sinkRow).join('') : '<div class="empty">No sinks</div>';
+  const src = c.source;
+  return `<section class="card">
+    <div class="card-h"><span class="title">${esc(src.title || src.session)}</span>
+      <span class="pill ${cls(c.state)}">${esc(label(c.state))}</span></div>
+    <div class="sinks">${sinks}</div>
+    <div class="source">Source: session <code>${esc(src.session)}</code>${src.folder ? ' · folder <code>' + esc(src.folder) + '</code>' : ''} · last written ${esc(ago(src.written))}</div>
+  </section>`;
+}
+
+function render() {
+  const st = $("state").value, q = $("q").value.trim().toLowerCase();
+  const rows = DATA.cards.filter(c => {
+    if (st && c.state !== st) return false;
+    if (!q) return true;
+    const hay = [c.source.title, c.source.session, ...c.sinks.flatMap(s => [s.name, s.title || '', s.branch || '',
+      ...s.prs.map(p => p.key + ' ' + p.title), ...s.tickets.map(t => t.key)])].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  $("count").textContent = rows.length + " of " + DATA.cards.length + " cards";
+  $("cards").innerHTML = rows.map(card).join('') || '<div class="empty">No cards match.</div>';
+}
+
+$("built").textContent = "Built from " + DATA.cards.length + " sessions. Open sinks first.";
+$("state").addEventListener("input", render);
+$("q").addEventListener("input", render);
+render();
+</script>
+</body>
+</html>
