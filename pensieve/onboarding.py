@@ -16,16 +16,15 @@ ABOUT = [
     "Everything runs on this Mac. Nothing is uploaded.",
 ]
 
-# Who the user is decides which categories are worth scanning; the scan then pre-checks what it finds in them.
+# The mode decides which categories are scanned. Session mode reads only agent sessions. Developer mode also reads
+# git repos and files into an index, so that sessions get richer context.
 PROFILES = [
-    dict(id="developer", label="Software development", categories=["repos", "agents"],
-         description="Code in git repos, with its history and who wrote what."),
-    dict(id="agents", label="AI coding agents", categories=["agents", "repos"],
-         description="Your Claude Code, Codex or Qwen Code conversations, linked to the code they changed."),
-    dict(id="office", label="Documents and office work", categories=["files"],
-         description="Word, PDF, PowerPoint, spreadsheets and text in Documents, Desktop and Downloads."),
-    dict(id="notes", label="Research and notes", categories=["files", "apps"],
-         description="Notes apps such as Obsidian and Apple Notes, and folders of Markdown."),
+    dict(id="session", label="Session mode", categories=["agents"],
+         description="Reads only your historic agent sessions (Claude Code, Codex, Qwen Code) and builds threads from "
+                     "them. Nothing else is read or indexed."),
+    dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
+         description="Also reads your git repos and your files into an index, so sessions get richer context. Unlocks "
+                     "the Map, People and Insights."),
 ]
 
 ENERGY_NOTE = ("Indexing uses a lot of power: it runs the embedding model on your Mac's GPU until it finishes, so the Mac "

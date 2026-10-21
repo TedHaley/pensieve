@@ -2301,11 +2301,11 @@ const ENERGY_IC = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M13 
 // user's profiles, permission to look, what to index, the search model, then start. No folder is read before "Look".
 const SETUP_STEPS = ['about', 'profile', 'look', 'choose', 'ai', 'start'];
 const SETUP_ADD = {files: 'Add folder…', repos: 'Add repo…', agents: 'Add session folder…'};
-const setupState = {step: 'about', guide: null, profiles: new Set(), cands: null, chosen: new Set(), busy: false, err: null, adding: null};
+const setupState = {step: 'about', guide: null, profiles: new Set(['session']), cands: null, chosen: new Set(), busy: false, err: null, adding: null};
 async function openSetup() {
   let el = $('#setupsheet');
   if (!el) { el = document.createElement('div'); el.id = 'setupsheet'; el.className = 'setup-sheet'; document.body.appendChild(el); }
-  Object.assign(setupState, {step: 'about', profiles: new Set(), cands: null, chosen: new Set(), busy: false, err: null, adding: null});
+  Object.assign(setupState, {step: 'about', profiles: new Set(['session']), cands: null, chosen: new Set(), busy: false, err: null, adding: null});
   el.innerHTML = '<div class="setup-card"><div class="spinner" style="margin:24px auto"></div></div>';
   try { setupState.guide = await api('/api/setup?scan=0'); }
   catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
@@ -2340,8 +2340,8 @@ function renderSetup() {
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
       <p class="sub">Setup takes a minute. Pick a mode. Developer mode also asks what to index and which search model to use.</p>${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
-    body = `<h1>How do you use your Mac?</h1><p class="sub">Choose all that fit. Pensieve suggests what to index from this.</p>
-      <div class="setup-profiles">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="checkbox" aria-checked="${st.profiles.has(p.id)}">
+    body = `<h1>Choose a mode</h1><p class="sub">Session mode reads only your agent sessions. Developer mode also indexes your repos and files, so sessions get richer context.</p>
+      <div class="setup-profiles" role="radiogroup">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="radio" aria-checked="${st.profiles.has(p.id)}">
         <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${btns('look', 'Next', st.profiles.size > 0)}`;
   } else if (step === 'look') {
     body = `<h1>Allow Pensieve to look</h1><p class="sub">To suggest sources, Pensieve looks in these places. macOS may ask you to allow access to some folders. Pensieve reads them only on this Mac, and nothing is indexed until you choose.</p>
@@ -2379,7 +2379,7 @@ function renderSetup() {
   el.innerHTML = `<div class="setup-card">${dots}${body}</div>`;
   $('[data-setup-cancel]', el)?.addEventListener('click', () => el.remove());
   $('[data-setup-back]', el)?.addEventListener('click', () => setupGo(SETUP_STEPS[n - 1]));
-  $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { const id = b.dataset.setupProf; st.profiles[st.profiles.has(id) ? 'delete' : 'add'](id); st.cands = null; st.chosen.clear(); renderSetup(); });
+  $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { st.profiles = new Set([b.dataset.setupProf]); st.cands = null; st.chosen.clear(); renderSetup(); });
   $$('[data-setup-id]', el).forEach(c => c.onchange = () => { st.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
   $$('[data-setup-embed]', el).forEach(b => b.onclick = () => {
     st.embed = b.dataset.setupEmbed;
