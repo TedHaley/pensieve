@@ -107,24 +107,28 @@ class CardKind(StrEnum):
 
 class State(StrEnum):
     """A thread's state (pensieve/task_states.py says what each one means)."""
-    TODO = "todo"
     OPEN = "open"
     LOOSE_ENDS = "loose_ends"
-    CLOSING = "closing"
     CLOSED = "closed"
     FORGOTTEN = "forgotten"
 
 
 class StateSet(StrEnum):
-    """What a row of card_states sets: a state, or `auto` (the automatic state applies again)."""
-    TODO = "todo"
+    """What a row of card_states sets: a state, or `auto` (the automatic state applies again). The old names stay
+    so that saved rows still read; task_states.RENAMED maps them to the four states."""
     OPEN = "open"
     LOOSE_ENDS = "loose_ends"
-    CLOSING = "closing"
     CLOSED = "closed"
-    COMPLETE = "complete"  # saved before the rename; read as closed (task_states.RENAMED)
     FORGOTTEN = "forgotten"
     AUTO = "auto"
+    TODO = "todo"
+    CLOSING = "closing"
+    COMPLETE = "complete"
+    DISCARDED = "discarded"
+    LATENT = "latent"
+    CONSCIOUS = "conscious"
+    SUBCONSCIOUS = "subconscious"
+    ETCHED = "etched"
 
 
 class SetBy(StrEnum):

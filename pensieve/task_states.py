@@ -1,22 +1,19 @@
-"""The six states of a thread on the Threads tab, how each one is set, and where changes are kept.
+"""The four states of a thread on the Threads tab, how each one is set, and where changes are kept.
 
 A thread gets a state automatically from its evidence (`derive`). The user can set a state by hand on the Threads
 tab. A state set by hand holds until the thread has new activity after it; then the automatic state applies again.
 Every change by hand is a row in `card_states` (in store.db), so a thread keeps its history.
 
-Two paths lead out of work. Loose ends -> forgotten: work is left and has gone quiet for FORGET_DAYS. Closing ->
-closed: nothing is left, and no outside evidence says so; after CLOSE_DAYS with no change it is closed. A closed
-thread does not reopen. New work starts a new thread."""
+Loose ends -> forgotten: work is left and has gone quiet for FORGET_DAYS. Closed comes only from verified sinks
+(sink_status.py) or outside evidence. A closed thread does not reopen. New work starts a new thread."""
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
 
 
 class State(str, Enum):
-    TODO = "todo"
     OPEN = "open"
     LOOSE_ENDS = "loose_ends"
-    CLOSING = "closing"
     CLOSED = "closed"
     FORGOTTEN = "forgotten"
 
@@ -35,31 +32,24 @@ MODELS = {m.state: m for m in [
                "A session is running, or the thread has material work (edits, commits, a branch or a PR) and activity "
                "in the last 3 days, and it is not done.", "#34c759"),
     StateModel(State.LOOSE_ENDS, "Loose ends", "Work that is not done and has gone quiet: close it out.",
-               "Material work that is not done (an open PR, a ticket that is not done, uncommitted files, or work "
-               "left), with no activity in the last 3 days.", "#ff9f0a"),
-    StateModel(State.TODO, "To do", "A ticket you have not started.",
-               "A ticket that is not done (or whose status is not known), with no edits, commits, branch or PR yet.",
-               "#5e5ce6"),
-    StateModel(State.CLOSING, "Closing", "Nothing is left to do. No outside evidence says it is done yet.",
-               "Material work with nothing left in its note, no open PR, no open ticket, nothing uncommitted, and no "
-               "merged PR or done ticket. It becomes Closed after 7 days with no change.",
-               "#64d2ff"),
+               "Work that is not done (an open PR, a ticket that is not done, uncommitted files, or work left), with "
+               "no activity in the last 3 days. Also a ticket not started yet, or a thread with no sink to verify.",
+               "#ff9f0a"),
     StateModel(State.CLOSED, "Closed", "Done. A closed thread does not reopen: new work starts a new thread.",
-               "Outside evidence says it is done: its PR is merged or closed, its ticket is done, or its work is in the "
-               "default branch, with nothing left uncommitted. Or it has been closing for 7 days with no change.",
+               "Every sink it writes to is verified done: its PR is merged or closed, its ticket is done, or its branch "
+               "is merged or deleted.",
                "#8e8e93"),
     StateModel(State.FORGOTTEN, "Forgotten", "Not finished, and it will likely stay that way.",
                "Material work that is not done and quiet for 21 days, with no open PR and no uncommitted work. Or a "
                "conversation with no ticket and no edits, once its session has ended.",
                "#ff453a"),
 ]}
-ORDER = [State.OPEN, State.LOOSE_ENDS, State.TODO, State.CLOSING, State.CLOSED, State.FORGOTTEN]
+ORDER = [State.OPEN, State.LOOSE_ENDS, State.CLOSED, State.FORGOTTEN]
 RECENT_DAYS = 3
-FORGET_DAYS = 21  # the Forgotten rule above says this number: loose ends left this long become forgotten
-CLOSE_DAYS = 7  # the Closed rule above says this number: closing for this long becomes closed
+FORGET_DAYS = 21  # loose ends left this long become forgotten
 MERGE_GRACE = 15 * 60  # activity this soon after a merge is the wrap-up of the same work
-RENAMED = {"discarded": "forgotten", "latent": "todo", "conscious": "open", "subconscious": "loose_ends",
-           "etched": "closed", "complete": "closed"}  # states saved under an earlier name
+RENAMED = {"discarded": "forgotten", "latent": "loose_ends", "conscious": "open", "subconscious": "loose_ends",
+           "etched": "closed", "complete": "closed", "todo": "loose_ends", "closing": "loose_ends"}  # earlier names
 DONE = {"done", "closed", "resolved", "won't do", "wont do", "cancelled", "canceled", "merged", "complete", "completed",
         "fixed", "invalid", "duplicate", "released", "shipped"}
 
@@ -105,13 +95,9 @@ def derive(task: dict, note: dict, now: float | None = None) -> tuple[State, str
         return State.CLOSED, task["integrated"]["why"]
     if not open_prs and not open_tickets and not uncommitted and (merged or done_tickets):
         return State.CLOSED, "merged" if merged else "ticket done"
-    if not open_prs and not open_tickets and not uncommitted and material and _nothing_left(note):
-        if quiet >= CLOSE_DAYS:  # no outside evidence, and no change for the whole closing period
-            return State.CLOSED, f"nothing left for {quiet} days, with no change"
-        return State.CLOSING, "nothing left, and no outside evidence yet"
-    if not material:  # to do is a ticket not started yet (status unknown counts); a conversation alone is not work
+    if not material:  # a ticket not started yet is loose ends; a conversation alone is not work
         if any(not (k.get("status") or "").lower() in DONE for k in tickets):
-            return State.TODO, "a ticket with no edits, commits, branch or PR yet"
+            return State.LOOSE_ENDS, "a ticket with no edits, commits, branch or PR yet"
         return State.FORGOTTEN, "a conversation with no ticket and no work to pick up"
     if not open_prs and not uncommitted and quiet >= FORGET_DAYS:
         return State.FORGOTTEN, f"not done, quiet for {quiet} days, nothing waiting"
