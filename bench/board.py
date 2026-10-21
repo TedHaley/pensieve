@@ -191,10 +191,16 @@ def main():
     by_card = defaultdict(list)
     for t in threads:
         by_card[t["sinks"][0] if t["sinks"] else "No sink"].append(t)
+    def active_sink(name: str) -> bool:
+        """An open PR, or a branch (its state is not checked yet). Closed PRs and "No sink" are not active."""
+        if name.startswith("pr "):
+            return sink_states.get(name[3:]) == "OPEN"
+        return name.startswith("branch ")
+
     cards = sorted(
         ({"sink": k, "threads": [t["id"] for t in v], "count": len(v),
-          "last_active": max(t["last_active"] for t in v)} for k, v in by_card.items()),
-        key=lambda c: c["last_active"], reverse=True)
+          "last_active": max(t["last_active"] for t in v), "active": active_sink(k)} for k, v in by_card.items()),
+        key=lambda c: (c["active"], c["last_active"]), reverse=True)
     for t in threads:
         t["card"] = t["sinks"][0] if t["sinks"] else "No sink"
 
