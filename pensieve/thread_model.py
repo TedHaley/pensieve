@@ -119,8 +119,9 @@ def thread_state(sinks: list[Sink], status: dict, last_active: float, now: float
     """The state of a thread from its sinks and its last activity.
 
     closed: every sink is verified DONE. A thread with one sink that cannot be verified cannot close.
-    open: some sink is OPEN, and the thread had work in the last RECENT_DAYS.
-    loose ends: nothing verified closed, and quiet for RECENT_DAYS or longer.
+    open: work in the last RECENT_DAYS, and some sink is not verified done. A sink with no check (unknown) counts as
+          not done, so a branch thread can be open.
+    loose ends: quiet for RECENT_DAYS or longer, and not closed.
     forgotten: quiet for FORGET_DAYS or longer, and not closed."""
     now = now or time.time()
     if not sinks:
@@ -131,6 +132,6 @@ def thread_state(sinks: list[Sink], status: dict, last_active: float, now: float
     quiet = (now - last_active) / 86400
     if quiet >= FORGET_DAYS:
         return ThreadState.FORGOTTEN, f"quiet for {int(quiet)} days"
-    if quiet < RECENT_DAYS and any(sink_complete(s, status) == Completion.OPEN for s in sinks):
-        return ThreadState.OPEN, f"work in the last {RECENT_DAYS} days, and a sink is open"
+    if quiet < RECENT_DAYS:
+        return ThreadState.OPEN, f"work in the last {RECENT_DAYS} days, and a sink is not verified done"
     return ThreadState.LOOSE_ENDS, f"quiet for {int(quiet)} days, or a sink cannot be verified"
