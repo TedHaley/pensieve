@@ -130,7 +130,9 @@ def main():
             entry = f"{c['sink'][0]} {c['sink'][1]}"
             if entry not in sinks:
                 sinks.append(entry)
-        sink = bool(sinks)
+        # A goal counts as contributed to a sink only when its own text writes to a sink it names itself.
+        sink = any(tb.WRITE.search(c["title"] + " " + c["description"]) and c.get("sink_source") == "own"
+                   for c in members)
         # A thread with no sink leaves loose ends sooner.
         state, why = tm.no_evidence_state(model, last_write, recent_days=RECENT_SINKLESS if not sink else RECENT_DAYS)
         why = f"{why}; the label comes from the session's last component and is not validated"
@@ -165,6 +167,24 @@ def main():
                            title=c["title"], description=c["description"], session=c["session_id"],
                            repo=repo_of(heads.get(c["session_id"], {}).get("project", "")))
                       for c in items]
+
+    # Sink state from GitHub (bench/out/board/sink_states.json). A closed sink closes every thread on it: nothing more
+    # can be verified about the goals under it. A thread with no own write to a sink is not open: it is loose ends
+    # at most, because no change of its own is known to satisfy it.
+    sink_states = {}
+    cache = OUT / "sink_states.json"
+    if cache.exists():
+        sink_states = json.loads(cache.read_text())
+    for t in threads:
+        own_prs = [f"pr {c['sink'][1]}" for c in t["_members"] if c.get("sink_source") == "own"
+                   and c["sink"][0] == "pr" and tb.WRITE.search(c["title"] + " " + c["description"])]
+        closed = [s for s in dict.fromkeys(own_prs) if sink_states.get(s[3:]) in ("MERGED", "CLOSED")]
+        if closed:
+            t["state"] = "closed"
+            t["state_why"] = f"sink closed ({closed[0]}): every thread on a closed sink is done"
+        elif not t["has_sink"] and t["state"] == "open":
+            t["state"] = "loose_ends"
+            t["state_why"] = "no own write to a sink, so no known change satisfies the goal; not open"
 
     # Cards wrap threads that share a sink, the way a shared area groups them. A thread with several sinks sits under
     # its first one. A thread with no sink sits under "No sink".
