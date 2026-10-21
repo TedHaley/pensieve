@@ -1,150 +1,136 @@
-"""The model of work for threads built from sessions.
+"""The model of tracked work: sources, sinks, sessions, components, threads and notes.
 
+  Source     where work is read from. A session is a source.
+  Sink       where work is written to: a branch, a pull request, a ticket, an email. A sink has a completion that can
+             be verified (a PR merged or closed, a branch deleted or merged, a ticket done). A sink with no verifiable
+             completion cannot close a thread.
   Session    one agent transcript. Its components are its children.
-  Component  one run of exchanges on one theme (segment.components). It belongs to one session. Some components
-             carry support data (repo, PR, branch, ticket). Many carry none.
-  Goal       what components work toward or achieve. Not every component has one.
-  Thread     one goal, followed over time. It holds one or more components that share that goal. One thread per goal.
-  Area       groups threads. A thread may have no area.
-  Item       a standalone question or comment. It sits in a placeholder area. It has no goal and never closes.
+  Component  one run of exchanges on one theme. It reads from its session and may write to one or more sinks.
+  Thread     the work that writes to one sink, or to a set of sinks that the same components write to. It has a
+             label (its title) and a state. A thread never holds a question or an answer.
+  Note       a question or an answer (or any component that asks or states without writing). It sits outside
+             threads. It has no state and never closes.
 
-A component is a work component, a question or a comment. Only work components join threads. A question or comment
-becomes an item.
+Rules are in `thread_state`. The state of a thread comes from its sinks and its last activity. A closed thread does
+not reopen. New work on a closed sink starts a new thread.
 
-Closing without evidence: a thread with no PR, ticket or commit data can still close. When the last component of its
-thread ends with nothing left to do, the thread is closing. It becomes closed after CLOSE_DAYS with no change. The
-rule is `no_evidence_state`. It reads what the component says, not external data."""
+Sinks are kinds: `pr`, `branch`, `ticket`, `email`. Each kind has a completion check (`sink_complete`). Adding a kind
+means adding one check."""
 from dataclasses import dataclass, field
 from enum import Enum
 import time
 
-from pensieve.task_states import CLOSE_DAYS, FORGET_DAYS, RECENT_DAYS, State
+RECENT_DAYS = 3  # an open thread had work in this many days
+FORGET_DAYS = 21  # a loose thread quiet for this many days is forgotten
+
+
+class SinkKind(str, Enum):
+    PR = "pr"
+    BRANCH = "branch"
+    TICKET = "ticket"
+    EMAIL = "email"
+
+
+class Completion(str, Enum):
+    DONE = "done"  # verified complete
+    OPEN = "open"  # verified not complete
+    UNKNOWN = "unknown"  # no check, or the check failed: the sink cannot close a thread
+
+
+class ThreadState(str, Enum):
+    OPEN = "open"
+    LOOSE_ENDS = "loose_ends"
+    CLOSED = "closed"
+    FORGOTTEN = "forgotten"
 
 
 class ComponentKind(str, Enum):
     WORK = "work"
     QUESTION = "question"
+    ANSWER = "answer"
     COMMENT = "comment"
 
 
-class LastMessage(str, Enum):
-    """What the last message of a component leaves: an action for someone, a question, or nothing to do."""
-    ACTION = "action"
-    QUESTION = "question"
-    NOTHING = "nothing"  # no clear action, nothing to do
-    UNCLEAR = "unclear"
+@dataclass(frozen=True)
+class Sink:
+    kind: SinkKind
+    key: str  # org/repo#n for a PR, a branch name, KEY-n for a ticket, an address for email
 
-
-class AreaSource(str, Enum):
-    REPO = "repo"
-    FOLDER = "folder"
-    TOPIC = "topic"
-    USER = "user"
-    BUILTIN = "builtin"
-
-
-class AreaKind(str, Enum):
-    WORK = "work"
-    PLACEHOLDER = "placeholder"
+    @property
+    def label(self) -> str:
+        return f"{self.kind.value} {self.key}"
 
 
 @dataclass
 class Session:
-    id: str            # the agent's id, e.g. claude:<uuid>
-    source: str        # claude, qwen, codex
+    id: str
+    source: str  # claude, codex, qwen
     started: float = 0.0
-    updated: float = 0.0
+    written: float = 0.0  # last write: the time rules use it
     title: str = ""
-    project: str = ""  # the folder the session ran in
     components: list = field(default_factory=list)
-
-
-@dataclass
-class Link:
-    kind: str  # pr, ticket, branch, url
-    key: str
 
 
 @dataclass
 class Component:
     session_id: str
     index: int
-    exchanges: tuple   # (first, last), inclusive
+    exchanges: tuple  # (first, last), inclusive
+    kind: ComponentKind = ComponentKind.WORK
     title: str = ""
     description: str = ""
-    kind: ComponentKind = ComponentKind.WORK
-    last: LastMessage = LastMessage.UNCLEAR
-    goal: str = ""     # what the component works toward; empty when it has none
-    branch: str = ""   # support data: empty when the component has none
-    links: list = field(default_factory=list)
+    writes: list = field(default_factory=list)  # Sink objects this component writes to
 
     @property
     def id(self) -> str:
-        return f"{self.session_id}#{self.index}"
-
-
-@dataclass
-class Area:
-    id: str
-    name: str
-    parent_id: str = ""  # empty for a top-level area
-    source: AreaSource = AreaSource.TOPIC
-    kind: AreaKind = AreaKind.WORK
+        return f"{self.session_id}#{self.exchanges[0]}-{self.exchanges[1]}"
 
 
 @dataclass
 class Thread:
     id: str
-    goal: str
-    area_id: str = ""  # empty when the thread has no area
+    label: str
+    sinks: list = field(default_factory=list)  # Sink objects
     components: list = field(default_factory=list)  # component ids, in time order
-    state: State = State.OPEN
+    last_active: float = 0.0
+    state: ThreadState = ThreadState.OPEN
 
 
-@dataclass
-class Item:
-    id: str
-    area_id: str        # a placeholder area: Questions or Comments
-    kind: ComponentKind # question or comment
-    component_id: str
+def sink_complete(sink: Sink, status: dict) -> Completion:
+    """The completion of one sink. `status` maps a sink label to what its system reported: a PR state (OPEN, MERGED,
+    CLOSED) for a pr sink, or a ticket status for a ticket sink. Kinds with no check return UNKNOWN."""
+    value = status.get(sink.label)
+    if sink.kind == SinkKind.PR:
+        if value in ("MERGED", "CLOSED"):
+            return Completion.DONE
+        if value == "OPEN":
+            return Completion.OPEN
+        return Completion.UNKNOWN
+    if sink.kind == SinkKind.TICKET:
+        if value in ("Done", "Closed", "Resolved"):
+            return Completion.DONE
+        if value:
+            return Completion.OPEN
+        return Completion.UNKNOWN
+    return Completion.UNKNOWN  # branch and email: no completion check yet
 
 
-def builtin_areas() -> list[Area]:
-    """The placeholder areas every install starts with. Items live in them. Work areas are made by the user or by
-    the sources (repo, folder, topic)."""
-    return [
-        Area("questions", "Questions", source=AreaSource.BUILTIN, kind=AreaKind.PLACEHOLDER),
-        Area("comments", "Comments", source=AreaSource.BUILTIN, kind=AreaKind.PLACEHOLDER),
-    ]
+def thread_state(sinks: list[Sink], status: dict, last_active: float, now: float | None = None) -> tuple[ThreadState, str]:
+    """The state of a thread from its sinks and its last activity.
 
-
-def item_for(component: Component) -> Item | None:
-    """A question or comment component becomes an item in its placeholder area. A work component does not."""
-    if component.kind == ComponentKind.QUESTION:
-        return Item(component.id, "questions", ComponentKind.QUESTION, component.id)
-    if component.kind == ComponentKind.COMMENT:
-        return Item(component.id, "comments", ComponentKind.COMMENT, component.id)
-    return None
-
-
-def no_evidence_state(components: list[Component], updated: float, now: float | None = None,
-                      recent_days: float = RECENT_DAYS) -> tuple[State, str]:
-    """The state of a thread that has no PR, ticket or commit data. Reads what its components say.
-
-    The last component decides. If its last message leaves nothing to do, the thread is closing, and it becomes
-    closed after CLOSE_DAYS with no change. Otherwise it is open while recent, loose ends when quiet, and forgotten
-    after FORGET_DAYS."""
+    closed: every sink is verified DONE. A thread with one sink that cannot be verified cannot close.
+    open: some sink is OPEN, and the thread had work in the last RECENT_DAYS.
+    loose ends: nothing verified closed, and quiet for RECENT_DAYS or longer.
+    forgotten: quiet for FORGET_DAYS or longer, and not closed."""
     now = now or time.time()
-    if not components:
-        return State.FORGOTTEN, "no work components"
-    last = components[-1]
-    quiet = int((now - updated) // 86400)
-    if last.last == LastMessage.NOTHING:
-        if quiet >= CLOSE_DAYS:
-            return State.CLOSED, f"nothing left for {quiet} days, with no change"
-        return State.CLOSING, "the last message leaves nothing to do"
-    if now - updated < recent_days * 86400:
-        return State.OPEN, f"work in the last {recent_days:g} days"
+    if not sinks:
+        return ThreadState.LOOSE_ENDS, "no sink: the work cannot be verified"
+    done = [s for s in sinks if sink_complete(s, status) == Completion.DONE]
+    if len(done) == len(sinks):
+        return ThreadState.CLOSED, "every sink is verified done: " + ", ".join(s.label for s in sinks)
+    quiet = (now - last_active) / 86400
     if quiet >= FORGET_DAYS:
-        return State.FORGOTTEN, f"left, quiet for {quiet} days"
-    return State.LOOSE_ENDS, f"left, quiet for {quiet} days"
+        return ThreadState.FORGOTTEN, f"quiet for {int(quiet)} days"
+    if quiet < RECENT_DAYS and any(sink_complete(s, status) == Completion.OPEN for s in sinks):
+        return ThreadState.OPEN, f"work in the last {RECENT_DAYS} days, and a sink is open"
+    return ThreadState.LOOSE_ENDS, f"quiet for {int(quiet)} days, or a sink cannot be verified"

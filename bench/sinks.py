@@ -78,6 +78,12 @@ def main():
         rows.append(dict(c, sink=list(sink) if sink else None, sink_source=source))
     out = SCENES / "components_sinks.jsonl"
     out.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    prs = defaultdict(dict)
+    for sid, evs in events.items():
+        for _, kind, key in evs:
+            if kind == "pr":
+                prs[sid][key.rsplit("#", 1)[-1]] = key
+    (SCENES / "session_prs.json").write_text(json.dumps(prs, indent=1))
     from collections import Counter
     print("components", len(rows), Counter(r["sink_source"] for r in rows))
     print("written", out)

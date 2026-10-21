@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "bench"))
 SCENES = ROOT / "bench" / "out" / "scenes"
 OUT = ROOT / "bench" / "out" / "board"
 
-from pensieve import thread_model as tm  # noqa: E402
+from pensieve import thread_model_v1 as tm  # noqa: E402
 from pensieve.task_states import State  # noqa: E402
 
 GOAL, CAP = 0.78, 8
