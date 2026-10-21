@@ -43,9 +43,11 @@ def run():
                          tm.thread_state([PR], {PR.label: "OPEN"}, NOW - 21 * DAY, NOW)[0],
                          tm.ThreadState.FORGOTTEN))
     results.append(check("unverifiable branch never closes",
-                         tm.thread_state([BRANCH], {}, NOW, NOW)[0], tm.ThreadState.OPEN))
-    results.append(check("unverifiable branch, quiet 5 days: loose ends, never closed",
-                         tm.thread_state([BRANCH], {}, NOW - 5 * DAY, NOW)[0], tm.ThreadState.LOOSE_ENDS))
+                         tm.thread_state([BRANCH], {}, NOW, NOW)[0], tm.ThreadState.LOOSE_ENDS))
+    results.append(check("branch that exists opens while recent",
+                         tm.thread_state([BRANCH], {BRANCH.label: "EXISTS"}, NOW, NOW)[0], tm.ThreadState.OPEN))
+    results.append(check("unverifiable ticket does not open a thread",
+                         tm.thread_state([TICKET], {}, NOW, NOW)[0], tm.ThreadState.LOOSE_ENDS))
     results.append(check("two sinks, one done and one open: not closed",
                          tm.thread_state([PR, TICKET], {PR.label: "MERGED", TICKET.label: "In Progress"}, NOW, NOW)[0],
                          tm.ThreadState.OPEN))
