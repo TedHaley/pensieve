@@ -147,7 +147,7 @@ function threadCard(t) {
     <summary>
       <span class="goal">${esc(t.goal)}</span>
       <span class="pill ${t.state}">${LABEL[t.state] || t.state}</span>
-      <span class="meta">${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${t.has_sink ? "has a sink" : "no sink"} · ${esc(t.state_why)}</span>
+      <span class="meta">${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${t.sinks && t.sinks.length ? "sink: " + t.sinks.map(esc).join(", ") : "no sink"} · ${esc(t.state_why)}</span>
     </summary>
     <div class="list">${ends}${links}</div>
   </details>`;

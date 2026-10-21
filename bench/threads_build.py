@@ -128,7 +128,8 @@ WRITE = re.compile(
 SINK_KINDS = ("pr", "branch")  # a ticket is a project that holds many goals, so it is not a sink (see workflow rule 0)
 
 
-def sink_joins(comps: list[dict], cap: int, resolve: bool = False) -> list[tuple[int, int]]:
+def sink_joins(comps: list[dict], cap: int, resolve: bool = False,
+               session_sinks: bool = False) -> list[tuple[int, int]]:
     """Pairs of components that write to the same sink (rule 0): a PR or a branch they change. Only a sink that at
     most `cap` components write to joins them, and only components whose text says they write.
 
@@ -145,6 +146,8 @@ def sink_joins(comps: list[dict], cap: int, resolve: bool = False) -> list[tuple
         if not own and resolve:
             own = [(r["kind"], r["key"]) for r in c.get("resolved", []) if r["kind"] == "pr" or
                    (r["kind"] == "branch" and r["key"] not in GENERIC_BRANCHES)]
+        if not own and session_sinks and c.get("sink") and c.get("sink_source") == "session":
+            own = [tuple(c["sink"])]
         for sink in own:
             by_sink[sink].add(i)
     pairs = []
@@ -156,7 +159,7 @@ def sink_joins(comps: list[dict], cap: int, resolve: bool = False) -> list[tuple
 
 
 def build(comps: list[dict], vecs, goal: float, cap: int, bonus: float = BONUS, sinks: bool = True,
-          resolve: bool = False):
+          resolve: bool = False, session_sinks: bool = False):
     import numpy as np
     n = len(comps)
     sim = vecs @ vecs.T
@@ -164,7 +167,7 @@ def build(comps: list[dict], vecs, goal: float, cap: int, bonus: float = BONUS, 
     for (a, b) in joins:
         sim[a, b] += bonus
         sim[b, a] += bonus
-    forced = sink_joins(comps, cap, resolve=resolve) if sinks else []
+    forced = sink_joins(comps, cap, resolve=resolve, session_sinks=session_sinks) if sinks else []
     groups = average_linkage(sim.tolist(), n, goal, forced)
     return groups, joins, skipped
 

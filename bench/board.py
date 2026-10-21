@@ -34,7 +34,7 @@ RECENT_SINKLESS = 1  # days: a thread with no sink is open for this long after i
 
 
 def load_components():
-    comps = [json.loads(l) for l in (SCENES / "components.jsonl").read_text().splitlines()]
+    comps = [json.loads(l) for l in (SCENES / "components_sinks.jsonl").read_text().splitlines()]
     for c in comps:
         c["id"] = f"{c['session_id']}#e{c['exchanges'][0]}-{c['exchanges'][1]}"
     kinds = {}
@@ -121,9 +121,17 @@ def main():
             last=tm.LastMessage(ending["last"]) if ending["last"] in tm.LastMessage._value2member_map_
             else tm.LastMessage.UNCLEAR,
         )]
-        # A thread with no sink (no PR or branch that its components write to) leaves loose ends sooner.
-        sink = any(tb.WRITE.search(c["title"] + " " + c["description"]) and
-                   (c.get("branch") or any(l["kind"] == "pr" for l in c["links"])) for c in members)
+        # A sink: a component's text says it writes, and the PR or branch is its own or named earlier in its session.
+        # The session's sink is shown on the thread but does not join components (bench/sinks.py).
+        sinks = []
+        for c in members:
+            if not tb.WRITE.search(c["title"] + " " + c["description"]) or not c.get("sink"):
+                continue
+            entry = f"{c['sink'][0]} {c['sink'][1]}"
+            if entry not in sinks:
+                sinks.append(entry)
+        sink = bool(sinks)
+        # A thread with no sink leaves loose ends sooner.
         state, why = tm.no_evidence_state(model, last_write, recent_days=RECENT_SINKLESS if not sink else RECENT_DAYS)
         why = f"{why}; the label comes from the session's last component and is not validated"
         if area:
@@ -145,6 +153,7 @@ def main():
             state_why=why,
             sessions=sids,
             has_sink=sink,
+            sinks=sinks[:3],
             last_active=last_write,
             component_count=len(members),
             ending=dict(session=ending["session_id"], title=ending["title"], description=ending["description"],
