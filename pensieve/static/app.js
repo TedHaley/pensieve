@@ -2585,6 +2585,11 @@ async function loadSettings(force = false) {
   const [r, st] = await Promise.all([api('/api/settings'), api('/api/status').catch(() => S.status), loadSources(), loadScopes()]);
   Object.assign(S.status, st);
   S.set = {orig: r.settings, draft: structuredClone(r.settings), defaults: r.defaults, desc: r.descriptions, err: null, errKey: null};
+  applyMode(r.settings.mode);
+}
+function applyMode(mode) {
+  document.body.dataset.mode = mode === 'developer' ? 'developer' : 'session';
+  if (document.body.dataset.mode === 'session' && ['people', 'data', 'insights'].includes(S.view)) setView('work');
 }
 const setDirty = () => S.set ? Object.keys(S.set.draft).filter(k => JSON.stringify(S.set.draft[k]) !== JSON.stringify(S.set.orig[k])) : [];
 function setField(k) {
@@ -2609,6 +2614,7 @@ function setField(k) {
 }
 // Settings is a System-Settings-style sheet: a list on the left, one section at a time on the right.
 const SET_TABS = [
+  ['mode', 'Mode', '#0a84ff', '<path d="M5 12h14M12 5l7 7-7 7" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/>'],
   ['general', 'General', '#8e8e93', '<circle cx="12" cy="12" r="3" fill="none" stroke="#fff" stroke-width="1.8"/><path d="M12 3.5v2.4M12 18.1v2.4M3.5 12h2.4M18.1 12h2.4M6 6l1.7 1.7M16.3 16.3 18 18M6 18l1.7-1.7M16.3 7.7 18 6" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>'],
   ['sources', 'Sources', '#0a84ff', '<path d="M4 6.5C4 5.1 7.6 4 12 4s8 1.1 8 2.5S16.4 9 12 9 4 7.9 4 6.5Z M4 6.5v11C4 18.9 7.6 20 12 20s8-1.1 8-2.5v-11 M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" fill="none" stroke="#fff" stroke-width="1.8"/>'],
   ['scopes', 'Scopes', '#5e5ce6', '<circle cx="12" cy="12" r="7.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="#fff"/>'],
@@ -2889,6 +2895,13 @@ async function renderSettings() {
       <div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div>
       <div class="set-row"><div><div class="k">Reads</div><div class="d">Text always. Images, video and audio are found by name until you switch them on.</div></div><div id="contentbox"></div></div>
     </div>` + engineCardHtml() + mcpCardHtml();
+  else if (tab === 'mode') {
+    const cur = S.set?.draft?.mode || 'session';
+    const opt = (id, label, text) => `<button class="ai-opt ${cur === id ? 'on' : ''}" data-mode-pick="${id}" role="radio" aria-checked="${cur === id}">
+      <div class="ai-opt-h"><b>${label}</b></div><p>${text}</p></button>`;
+    body = bar('Mode', 'Session mode reads only your agent sessions. Developer mode also indexes your repos and files, so sessions get richer context.') +
+      `<div class="ai-opts" role="radiogroup" aria-label="Mode">${opt('session', 'Session mode', 'Reads only your historic agent sessions and builds threads from them. Nothing else is indexed. Map, People and Insights are hidden.')}${opt('developer', 'Developer mode', 'Also reads your git repos and files into an index, so sessions get richer context. Unlocks the Map, People and Insights. It is more compute intensive: indexing uses the Mac\'s GPU and takes a while.')}</div>`;
+  }
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/v2/store.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
@@ -2918,6 +2931,11 @@ async function renderSettings() {
   if (tab === 'sources') renderPlaces();
   if (tab === 'general') { bindGeneral(); $('#set-Setup [data-open-setup]')?.addEventListener('click', openSetup); }
   if (tab === 'usage') bindUsage();
+  if (tab === 'mode') $$('[data-mode-pick]', el).forEach(b => b.onclick = () => {
+    if (!S.set) return;
+    S.set.draft.mode = b.dataset.modePick;
+    saveSettings().then(() => applyMode(S.set.draft.mode));
+  });
   if (tab === 'feedback') renderFeedback();
   const upd = $('[data-upd]', el);
   if (upd) upd.onchange = async () => {

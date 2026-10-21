@@ -1573,3 +1573,4 @@ a.pj-key:hover,a.pj-tt:hover{text-decoration:underline}
 @media (max-width:520px){.is-kpis{grid-template-columns:1fr 1fr;gap:8px}.is-kv{flex-direction:column;align-items:flex-start;gap:2px}
   .is-kpis .kpi{padding:10px 12px}.is-kpis .kpi .v{font-size:19px}.is-sbars{gap:3px}.is-gk{grid-template-columns:1fr 1fr}}
 @media (max-width:860px){.is-wgrid{grid-template-columns:1fr}.is-score{font-size:38px}.is-mrow{grid-template-columns:1fr auto}.is-mrow .is-spark{display:none}}
+body[data-mode="session"] .dev-only{display:none}

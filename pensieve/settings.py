@@ -47,6 +47,7 @@ DEFAULTS = {
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "search_gate_holdout": 5,  # the search gate (gate.py) leaves 1 session in this many unblocked, as a control; 0 = none
     # What writes the notes, summaries and insights (engine.py): cli | server. "" = not chosen: load() picks one
+    "mode": "session",  # session: threads only; developer: also indexing, Map, People and Insights
     "text_engine": "",
     "cli_command": "",         # cli: a command-line agent, run once per job (templates: engine.TEMPLATES)
     "llm_url": "http://localhost:1234/v1",  # server: an OpenAI-compatible URL that the user runs (LM Studio here)
@@ -88,6 +89,7 @@ DESCRIPTIONS = {
     "hotkey": "Shortcut for the search panel. ⌘Space turns off the Spotlight shortcut while Pensieve runs. "
               "Choose another shortcut to give ⌘Space back to Spotlight.",
     "editor": "Where code results open: default, vscode, cursor or zed.",
+    "mode": "Session: only your agent sessions, as threads. Developer: also your repos and files, indexed, and the Map, People and Insights.",
     "appearance": "System, light or dark. System follows macOS.",
     "embed_model": "The model that turns text into vectors for search. Switching embeds the text already indexed "
                    "again with the new model, in the background; search keeps working meanwhile.",
@@ -212,6 +214,8 @@ def update(changes: dict) -> dict:
             raise ValueError("chunk_chars must be between 200 and 20000")
         if k == "appearance" and v not in ("system", "light", "dark"):
             raise ValueError("appearance must be system, light or dark")
+        if k == "mode" and v not in ("session", "developer"):
+            raise ValueError("mode must be session or developer")
         if k == "text_engine" and v not in ENGINES:
             raise ValueError("text_engine must be builtin, cli or server")
         if k == "llm_url" and v and not v.startswith(("http://", "https://")):
