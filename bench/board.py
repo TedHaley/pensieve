@@ -11,6 +11,7 @@ Steps:
   4. Each thread's state comes from no_evidence_state (the thread has no PR or ticket state here). Its last component
      decides closing. Time comes from the session's last write.
 Limits are written into the board file, so the board says what it does not know."""
+import hashlib
 import json
 import re
 import sys
@@ -130,8 +131,10 @@ def main():
                     seen.add(k)
                     context.append(dict(kind=l["kind"], key=l["key"]))
         threads.append(dict(
-            id=f"t{len(threads) + 1:03d}",
-            goal=members[-1]["title"],
+            id="t" + hashlib.sha1("|".join(sorted(c["id"] for c in members)).encode()).hexdigest()[:8],
+            goal=members[-1]["title"],  # a placeholder until the titles pass sets the thread's name (see titles.py)
+            component_ids=sorted(c["id"] for c in members),
+            _members=members,
             area=area,
             state=state.value,
             state_why=why,
@@ -147,6 +150,23 @@ def main():
                            title=c["title"], description=c["description"], session=c["session_id"],
                            repo=repo_of(heads.get(c["session_id"], {}).get("project", "")))
                       for c in items]
+
+    # Names: a titles pass (agents, see bench/titles.py) writes one name per thread from all its components.
+    names = {}
+    for f in sorted((OUT).glob("titles-*.json")):
+        for row in json.loads(f.read_text()):
+            names[row["id"]] = row["title"]
+    for t in threads:
+        if t["id"] in names:
+            t["goal"] = names[t["id"]]
+            t["named"] = True
+        else:
+            t["named"] = False
+    (OUT / "titles_input.json").write_text(json.dumps([
+        dict(id=t["id"], titles=[c["title"] for c in t["_members"]], descriptions=[c["description"][:120] for c in t["_members"]])
+        for t in threads], indent=1))
+    for t in threads:
+        t.pop("_members", None)
 
     states = Counter(t["state"] for t in threads)
     board = dict(

@@ -108,8 +108,37 @@ def average_linkage(sim, n: int, goal: float, forced: list) -> list[list[int]]:
 
 BONUS = 0.10  # a shared usable key adds this to a pair's similarity; it never joins a pair on its own
 
+# A component writes TO a sink when it changes it: pushes to a branch, opens or merges a PR, comments on a ticket,
+# sends a message. A sink is the thing contributed to, not a source that was read.
+WRITE = re.compile(
+    r"\b(push\w*|merg\w*|open\w*|creat\w*|commit\w*|send\w*|repl\w*|comment\w*|post\w*|updat\w*|edit\w*|writ\w*|"
+    r"submit\w*|releas\w*|file\w*|fix\w*|add\w*|renam\w*|deploy\w*)\b", re.I)
 
-def build(comps: list[dict], vecs, goal: float, cap: int, bonus: float = BONUS):
+
+SINK_KINDS = ("pr", "branch")  # a ticket is a project that holds many goals, so it is not a sink (see workflow rule 0)
+
+
+def sink_joins(comps: list[dict], cap: int) -> list[tuple[int, int]]:
+    """Pairs of components that write to the same sink (rule 0): a PR or a branch they change. Only a sink that at
+    most `cap` components write to joins them, and only components whose text says they write."""
+    by_sink = defaultdict(set)
+    for i, c in enumerate(comps):
+        if not WRITE.search(f"{c['title']} {c['description']}"):
+            continue
+        if c.get("branch") and c["branch"] not in GENERIC_BRANCHES:
+            by_sink[("branch", c["branch"])].add(i)
+        for link in c["links"]:
+            if link["kind"] == "pr":
+                by_sink[("pr", link["key"])].add(i)
+    pairs = []
+    for idx in by_sink.values():
+        if 2 <= len(idx) <= cap:
+            idx = sorted(idx)
+            pairs += [(idx[a], idx[b]) for a in range(len(idx)) for b in range(a + 1, len(idx))]
+    return pairs
+
+
+def build(comps: list[dict], vecs, goal: float, cap: int, bonus: float = BONUS, sinks: bool = True):
     import numpy as np
     n = len(comps)
     sim = vecs @ vecs.T
@@ -117,7 +146,8 @@ def build(comps: list[dict], vecs, goal: float, cap: int, bonus: float = BONUS):
     for (a, b) in joins:
         sim[a, b] += bonus
         sim[b, a] += bonus
-    groups = average_linkage(sim.tolist(), n, goal, [])
+    forced = sink_joins(comps, cap) if sinks else []
+    groups = average_linkage(sim.tolist(), n, goal, forced)
     return groups, joins, skipped
 
 
