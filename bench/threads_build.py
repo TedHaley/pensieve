@@ -29,9 +29,19 @@ PROCESS = re.compile(
 GENERIC_BRANCHES = {"main", "master", "develop", "dev"}
 
 
-def goal_text(c: dict) -> str:
+# Words that every component in this project uses, so they say nothing about which goal a component serves.
+# Pensieve's own work is about threads, sessions and states, so those words would join unrelated components.
+DOMAIN = re.compile(
+    r"\b(threads?|sessions?|components?|goals?|areas?|items?|states?|closing|closed|pensieve|scenes?|labels?|"
+    r"gold|evals?|tabs?)\b", re.I)
+
+
+def goal_text(c: dict, domain: bool = True) -> str:
     text = f"{c['title']}. {c['description']}"
-    return " ".join(PROCESS.sub(" ", text).split())
+    text = PROCESS.sub(" ", text)
+    if domain:
+        text = DOMAIN.sub(" ", text)
+    return " ".join(text.split())
 
 
 def embed(texts: list[str]):
