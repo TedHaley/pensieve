@@ -803,7 +803,8 @@ DONE = task_states.DONE
 
 
 def _order(t):
-    return task_states.ORDER.index(task_states.State(t["state"])), not t.get("active"), -t["updated"]
+    return task_states.ORDER.index(task_states.State(task_states.RENAMED.get(t["state"], t["state"]))), \
+        not t.get("active"), -t["updated"]
 
 
 def _attention(task: dict):

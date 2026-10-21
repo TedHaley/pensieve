@@ -17,6 +17,7 @@ A full build runs at the start and every FULL_SECONDS: it moves the window, and 
 import copy
 import hashlib
 import json
+from pensieve import task_states
 import queue
 import threading
 import time
@@ -205,7 +206,8 @@ class Builder:
     def _card(t: dict, view: str, now: int) -> Card:
         kind = CardKind.GOAL if t.get("goal_of") else CardKind(t["kind"])
         times = [e["ts"] for e in t.get("events", []) if e.get("ts")] + [t["updated"]]
-        return Card(t["id"], kind, t.get("goal_of"), t["title"] or t["id"], State(t["state"]), int(min(times) or 0),
+        return Card(t["id"], kind, t.get("goal_of"), t["title"] or t["id"],
+                    State(task_states.RENAMED.get(t["state"], t["state"])), int(min(times) or 0),
                     int(t["updated"] or 0), now, work._signature(t), view)
 
     def _notes(self):
