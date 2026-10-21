@@ -24,7 +24,8 @@ PROFILES = [
                      "them. Nothing else is read or indexed."),
     dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
          description="Also reads your git repos and your files into an index, so sessions get richer context. Unlocks "
-                     "the Map, People and Insights."),
+                     "the Map, People and Insights. It is more compute intensive: indexing uses the Mac's GPU and "
+                     "takes a while."),
 ]
 
 ENERGY_NOTE = ("Indexing uses a lot of power: it runs the embedding model on your Mac's GPU until it finishes, so the Mac "
