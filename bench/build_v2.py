@@ -133,6 +133,8 @@ def main():
     status = {f"pr {k}": v for k, v in status.items()}
     if (OUT / "branch_states.json").exists():
         status.update(json.loads((OUT / "branch_states.json").read_text()))
+    if (OUT / "ticket_states.json").exists():
+        status.update(json.loads((OUT / "ticket_states.json").read_text()))
 
     notes = [c for c in comps if c["kind"] in ("question", "comment")]
     work = [c for c in comps if c["kind"] == "work"]

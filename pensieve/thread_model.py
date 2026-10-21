@@ -140,4 +140,5 @@ def thread_state(sinks: list[Sink], status: dict, last_active: float, now: float
         return ThreadState.FORGOTTEN, f"quiet for {int(quiet)} days"
     if quiet < RECENT_DAYS and any(sink_complete(s, status) == Completion.OPEN for s in sinks):
         return ThreadState.OPEN, f"work in the last {RECENT_DAYS} days, and a sink is verified open"
-    return ThreadState.LOOSE_ENDS, f"quiet for {int(quiet)} days, or a sink cannot be verified"
+    not_done = [s.label for s in sinks if sink_complete(s, status) != Completion.DONE]
+    return ThreadState.LOOSE_ENDS, f"not verified done: {', '.join(not_done)}; quiet for {int(quiet)} days"
