@@ -90,7 +90,7 @@ input { flex: 1 1 200px; }
         <option value="closed">Closed</option>
         <option value="forgotten">Forgotten</option>
       </select>
-      <select id="area" aria-label="Filter by area"></select>
+      <label class="note"><input id="small" type="checkbox" style="flex:none"> Show small threads with no sink</label>
       <input id="q" type="search" placeholder="Search goals and components" aria-label="Search">
       <span class="note" id="count"></span>
     </div>
@@ -123,14 +123,16 @@ function fill() {
     ["Threads", c.threads], ["Single-component threads", c.single_component_threads], ["Items", c.items]
   ];
   $("stats").innerHTML = cells.map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join("");
-  const areas = DATA.areas.map(a => a.name);
-  $("area").innerHTML = `<option value="">All areas</option><option value="__none">No area</option>` +
-    areas.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join("");
+  const small = DATA.threads.filter(isSmall).length;
+  $("small").parentElement.lastChild.textContent = ` Show small threads with no sink (${small})`;
   $("limits").innerHTML = DATA.limits.map(l => `<li>${esc(l)}</li>`).join("");
 }
 
+function isSmall(t) {
+  return t.component_count <= 2 && !t.has_sink;
+}
+
 function threadCard(t) {
-  const area = t.area ? `<span class="pill">${esc(t.area)}</span>` : `<span class="pill">no area</span>`;
   const e = t.ending;
   const ends = `<div class="comp">
       <div class="t">Ends with: ${esc(e.title)} <span class="pill">${LAST[e.last] || esc(e.last)}</span></div>
@@ -145,18 +147,17 @@ function threadCard(t) {
     <summary>
       <span class="goal">${esc(t.goal)}</span>
       <span class="pill ${t.state}">${LABEL[t.state] || t.state}</span>
-      <span class="meta">${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${area} · ${esc(t.state_why)}</span>
+      <span class="meta">${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${t.has_sink ? "has a sink" : "no sink"} · ${esc(t.state_why)}</span>
     </summary>
     <div class="list">${ends}${links}</div>
   </details>`;
 }
 
 function renderThreads() {
-  const state = $("state").value, area = $("area").value, q = $("q").value.trim().toLowerCase();
+  const state = $("state").value, showSmall = $("small").checked, q = $("q").value.trim().toLowerCase();
   const rows = DATA.threads.filter(t => {
     if (state && t.state !== state) return false;
-    if (area === "__none" && t.area) return false;
-    if (area && area !== "__none" && t.area !== area) return false;
+    if (!showSmall && isSmall(t)) return false;
     if (!q) return true;
     const hay = (t.goal + " " + t.ending.title + " " + t.ending.description + " " +
       t.context.map(l => l.key).join(" ")).toLowerCase();
@@ -175,7 +176,7 @@ function renderItems() {
 }
 
 fill(); renderThreads(); renderItems();
-["state", "area", "q"].forEach(id => $(id).addEventListener("input", renderThreads));
+["state", "small", "q"].forEach(id => $(id).addEventListener("input", renderThreads));
 </script>
 </body>
 </html>

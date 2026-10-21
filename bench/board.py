@@ -29,6 +29,8 @@ from pensieve import thread_model as tm  # noqa: E402
 from pensieve.task_states import State  # noqa: E402
 
 GOAL, CAP = 0.78, 8
+RECENT_DAYS = 3  # days a thread with a sink stays open after its last work
+RECENT_SINKLESS = 1  # days: a thread with no sink is open for this long after its last work, then loose ends
 
 
 def load_components():
@@ -119,7 +121,10 @@ def main():
             last=tm.LastMessage(ending["last"]) if ending["last"] in tm.LastMessage._value2member_map_
             else tm.LastMessage.UNCLEAR,
         )]
-        state, why = tm.no_evidence_state(model, last_write)
+        # A thread with no sink (no PR or branch that its components write to) leaves loose ends sooner.
+        sink = any(tb.WRITE.search(c["title"] + " " + c["description"]) and
+                   (c.get("branch") or any(l["kind"] == "pr" for l in c["links"])) for c in members)
+        state, why = tm.no_evidence_state(model, last_write, recent_days=RECENT_SINKLESS if not sink else RECENT_DAYS)
         why = f"{why}; the label comes from the session's last component and is not validated"
         if area:
             areas_used[area] += 1
@@ -139,6 +144,7 @@ def main():
             state=state.value,
             state_why=why,
             sessions=sids,
+            has_sink=sink,
             last_active=last_write,
             component_count=len(members),
             ending=dict(session=ending["session_id"], title=ending["title"], description=ending["description"],

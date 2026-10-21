@@ -127,7 +127,8 @@ def item_for(component: Component) -> Item | None:
     return None
 
 
-def no_evidence_state(components: list[Component], updated: float, now: float | None = None) -> tuple[State, str]:
+def no_evidence_state(components: list[Component], updated: float, now: float | None = None,
+                      recent_days: float = RECENT_DAYS) -> tuple[State, str]:
     """The state of a thread that has no PR, ticket or commit data. Reads what its components say.
 
     The last component decides. If its last message leaves nothing to do, the thread is closing, and it becomes
@@ -142,8 +143,8 @@ def no_evidence_state(components: list[Component], updated: float, now: float | 
         if quiet >= CLOSE_DAYS:
             return State.CLOSED, f"nothing left for {quiet} days, with no change"
         return State.CLOSING, "the last message leaves nothing to do"
-    if now - updated < RECENT_DAYS * 86400:
-        return State.OPEN, f"work in the last {RECENT_DAYS} days"
+    if now - updated < recent_days * 86400:
+        return State.OPEN, f"work in the last {recent_days:g} days"
     if quiet >= FORGET_DAYS:
         return State.FORGOTTEN, f"left, quiet for {quiet} days"
     return State.LOOSE_ENDS, f"left, quiet for {quiet} days"
