@@ -44,16 +44,20 @@ def _save(cache: dict) -> None:
     CACHE.write_text(json.dumps(cache, indent=1))
 
 
-def branch_status(repo: str, branch: str) -> str:
-    """DELETED, MERGED, OPEN, EXISTS, or UNKNOWN when gh cannot answer."""
+def branch_status(repo: str, branch: str, env: dict | None = None) -> str:
+    """DELETED, MERGED, OPEN, EXISTS, or UNKNOWN when gh cannot answer. DELETED needs the repo to be visible: GitHub
+    answers "not found" for a branch in a repo the account cannot read, too."""
     if not repo or not branch:
         return "UNKNOWN"
     api = subprocess.run(["gh", "api", f"repos/{repo}/branches/{urllib.parse.quote(branch, safe='')}"],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, env=env)
     if api.returncode != 0:
-        return "DELETED" if "Branch not found" in (api.stdout + api.stderr) else "UNKNOWN"
+        if "Branch not found" not in (api.stdout + api.stderr):
+            return "UNKNOWN"
+        visible = subprocess.run(["gh", "api", f"repos/{repo}"], capture_output=True, text=True, env=env)
+        return "DELETED" if visible.returncode == 0 else "UNKNOWN"
     r = subprocess.run(["gh", "pr", "list", "-R", repo, "--head", branch, "--state", "all", "--json", "state"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=env)
     states = {p["state"] for p in json.loads(r.stdout)} if r.returncode == 0 and r.stdout.strip() else set()
     if "MERGED" in states:
         return "MERGED"

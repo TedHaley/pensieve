@@ -39,10 +39,12 @@ def main():
         if not s.turns or s.turns[0][1].startswith("You ") or (s.project or "").startswith(("/private", "/tmp")):
             continue
         sess = extract.Session(s.id, s.turns, records_of(path))
-        sessions[s.id] = dict(project=s.project, title=s.title, started=s.started, updated=s.updated)
+        sessions[s.id] = dict(project=s.project, title=s.title, started=s.started, updated=s.updated,
+                              written=path.stat().st_mtime)
         edges.extend(extract.run_all(sess))
 
-    nodes = {sid: dict(id=sid, kind="session", label=v["title"][:80], project=v["project"]) for sid, v in sessions.items()}
+    nodes = {sid: dict(id=sid, kind="session", label=v["title"][:80], project=v["project"], written=v["written"])
+             for sid, v in sessions.items()}
     for e in edges:
         nid = f"{e.kind}:{e.key}"
         nodes.setdefault(nid, dict(id=nid, kind=e.kind, label=e.key))
