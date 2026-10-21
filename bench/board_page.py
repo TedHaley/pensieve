@@ -130,19 +130,24 @@ function fill() {
 }
 
 function threadCard(t) {
-  const comps = t.components.map(k => `<div class="comp">
-      <div class="t">${esc(k.title)} <span class="pill">${LAST[k.last] || esc(k.last)}</span></div>
-      <div class="d">${esc(k.description)}</div>
-      <div class="links">${k.session ? esc(k.session.replace("claude:", "").slice(0, 13)) : ""}${k.exchanges ? " · exchanges " + k.exchanges[0] + "–" + k.exchanges[1] : ""}${k.branch ? " · branch " + esc(k.branch) : ""}</div>
-    </div>`).join("");
   const area = t.area ? `<span class="pill">${esc(t.area)}</span>` : `<span class="pill">no area</span>`;
+  const e = t.ending;
+  const ends = `<div class="comp">
+      <div class="t">Ends with: ${esc(e.title)} <span class="pill">${LAST[e.last] || esc(e.last)}</span></div>
+      <div class="d">${esc(e.description)}</div>
+      <div class="links">${esc(e.session.replace("claude:", "").slice(0, 13))} · exchanges ${e.exchanges[0]}–${e.exchanges[1]}</div>
+    </div>`;
+  const links = t.context.length
+    ? `<details class="comp"><summary class="links">${t.context.length} context link${t.context.length === 1 ? "" : "s"}</summary>
+       <div class="links" style="margin-top:6px">${t.context.map(l => `<div>${esc(l.kind)} ${esc(l.key)}</div>`).join("")}</div></details>`
+    : `<div class="links">No context links.</div>`;
   return `<details class="thread">
     <summary>
       <span class="goal">${esc(t.goal)}</span>
       <span class="pill ${t.state}">${LABEL[t.state] || t.state}</span>
-      <span class="meta">${t.components.length} component${t.components.length === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${area} · ${esc(t.state_why)}</span>
+      <span class="meta">${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${area} · ${esc(t.state_why)}</span>
     </summary>
-    <div class="list">${comps}</div>
+    <div class="list">${ends}${links}</div>
   </details>`;
 }
 
@@ -153,7 +158,8 @@ function renderThreads() {
     if (area === "__none" && t.area) return false;
     if (area && area !== "__none" && t.area !== area) return false;
     if (!q) return true;
-    const hay = (t.goal + " " + t.components.map(k => k.title + " " + k.description).join(" ")).toLowerCase();
+    const hay = (t.goal + " " + t.ending.title + " " + t.ending.description + " " +
+      t.context.map(l => l.key).join(" ")).toLowerCase();
     return hay.includes(q);
   });
   $("count").textContent = rows.length + " of " + DATA.threads.length + " threads";

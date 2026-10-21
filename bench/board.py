@@ -95,10 +95,19 @@ def main():
     vecs = tb.embed([tb.goal_text(c) for c in work])
     groups, joins, skipped = tb.build(work, vecs, GOAL, CAP)
 
+    # The label that counts is the last component of each session (the session's final exchange). Every other
+    # component contributes its links only, and its own last-message label is not used.
+    session_end = {}
+    for c in comps:
+        cur = session_end.get(c["session_id"])
+        if cur is None or c["exchanges"][1] > cur["exchanges"][1]:
+            session_end[c["session_id"]] = c
+
     threads, areas_used = [], Counter()
     for g in sorted(groups, key=lambda g: -len(g)):
-        members = sorted((work[i] for i in g), key=lambda c: iso(heads.get(c["session_id"], {}).get("started", "")))
-        sids = sorted({c["session_id"] for c in members})
+        members = sorted((work[i] for i in g), key=lambda c: iso(heads.get(c["session_id"], {}).get("written", "")))
+        sids = sorted({c["session_id"] for c in members},
+                      key=lambda s: iso(heads.get(s, {}).get("written", "")))
         repos = Counter(repo_of(heads.get(s, {}).get("project", "")) for s in sids)
         repos.pop("", None)
         area = ""
@@ -106,27 +115,37 @@ def main():
             repo, n = repos.most_common(1)[0]
             if n / len(sids) >= 0.6:
                 area = repo
-        newest = members[-1]
-        last_write = max(iso(heads.get(s, {}).get("written", "")) for s in sids)
-        model_components = [tm.Component(
-            session_id=c["session_id"], index=0, exchanges=tuple(c["exchanges"]), title=c["title"],
-            description=c["description"], kind=tm.ComponentKind.WORK,
-            last=tm.LastMessage(c["last"]) if c["last"] in tm.LastMessage._value2member_map_ else tm.LastMessage.UNCLEAR,
-        ) for c in members]
-        state, why = tm.no_evidence_state(model_components, last_write)
+        newest_session = sids[-1]
+        ending = session_end[newest_session]  # the thread's closing evidence: its newest session's last component
+        last_write = iso(heads.get(newest_session, {}).get("written", ""))
+        model = [tm.Component(
+            session_id=ending["session_id"], index=0, exchanges=tuple(ending["exchanges"]), title=ending["title"],
+            description=ending["description"], kind=tm.ComponentKind.WORK,
+            last=tm.LastMessage(ending["last"]) if ending["last"] in tm.LastMessage._value2member_map_
+            else tm.LastMessage.UNCLEAR,
+        )]
+        state, why = tm.no_evidence_state(model, last_write)
+        why = f"{why}; the label comes from the session's last component and is not validated"
         if area:
             areas_used[area] += 1
+        seen, context = set(), []
+        for c in members:
+            for l in c["links"]:
+                k = (l["kind"], l["key"])
+                if k not in seen:
+                    seen.add(k)
+                    context.append(dict(kind=l["kind"], key=l["key"]))
         threads.append(dict(
             id=f"t{len(threads) + 1:03d}",
-            goal=newest["title"],
-            goal_text=newest["description"],
+            goal=members[-1]["title"],
             area=area,
             state=state.value,
             state_why=why,
             sessions=sids,
-            components=[dict(id=c["id"], session=c["session_id"], title=c["title"], description=c["description"],
-                             exchanges=c["exchanges"], last=c["last"],
-                             links=[l for l in c["links"]], branch=c.get("branch")) for c in members],
+            component_count=len(members),
+            ending=dict(session=ending["session_id"], title=ending["title"], description=ending["description"],
+                        last=ending["last"], exchanges=ending["exchanges"]),
+            context=context,
         ))
 
     question_items = [dict(id=c["id"], kind=c["kind"], area="Questions" if c["kind"] == "question" else "Comments",
@@ -139,7 +158,7 @@ def main():
         built=datetime.now().isoformat(timespec="seconds"),
         settings=dict(goal_threshold=GOAL, key_cap=CAP, bonus=tb.BONUS),
         counts=dict(sessions=len(heads), components=len(comps), work=len(work), items=len(items),
-                    threads=len(threads), single_component_threads=sum(1 for t in threads if len(t["components"]) == 1),
+                    threads=len(threads), single_component_threads=sum(1 for t in threads if t["component_count"] == 1),
                     states=dict(states)),
         areas=[dict(name=k, threads=v) for k, v in areas_used.most_common()],
         threads=threads,
