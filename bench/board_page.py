@@ -67,6 +67,9 @@ input { flex: 1 1 200px; }
 .links { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .grid { display: flex; flex-direction: column; gap: 8px; }
 .note { color: var(--muted); font-size: 12px; }
+.card-wrap { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--bg); min-width: 0; }
+.card-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 10px; min-width: 0; }
+.card-head .goal { overflow-wrap: anywhere; }
 .limits li { margin: 4px 0; color: var(--muted); }
 </style>
 </head>
@@ -143,19 +146,13 @@ function threadCard(t) {
     ? `<details class="comp"><summary class="links">${t.context.length} context link${t.context.length === 1 ? "" : "s"}</summary>
        <div class="links" style="margin-top:6px">${t.context.map(l => `<div>${esc(l.kind)} ${esc(l.key)}</div>`).join("")}</div></details>`
     : `<div class="links">No context links.</div>`;
-  const goals = t.goals.map(g => `<div class="comp">
-      <div class="t">${esc(g.goal)} <span class="pill ${g.state}">${LABEL[g.state] || g.state}</span></div>
-      <div class="d">${esc(g.state_why)}</div>
-      <div class="links">${g.component_ids.length} component${g.component_ids.length === 1 ? "" : "s"}${g.sinks.length ? " · " + g.sinks.map(esc).join(", ") : ""}</div>
-    </div>`).join("");
-  const sinks = t.sinks && t.sinks.length ? t.sinks.map(s => `<span class="pill">${esc(s)}</span>`).join(" ") : `<span class="pill">no sink</span>`;
   return `<details class="thread">
     <summary>
       <span class="goal">${esc(t.goal)}</span>
       <span class="pill ${t.state}">${LABEL[t.state] || t.state}</span>
-      <span class="meta">${t.goals.length} goal${t.goals.length === 1 ? "" : "s"} · ${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${sinks}</span>
+      <span class="meta">${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${t.sinks && t.sinks.length ? "sink: " + t.sinks.map(esc).join(", ") : "no sink"} · ${esc(t.state_why)}</span>
     </summary>
-    <div class="list"><div class="note">Goals</div>${goals}<div class="note">Ends with</div>${ends}${links}</div>
+    <div class="list">${ends}${links}</div>
   </details>`;
 }
 
@@ -170,7 +167,18 @@ function renderThreads() {
     return hay.includes(q);
   });
   $("count").textContent = rows.length + " of " + DATA.threads.length + " threads";
-  $("threads").innerHTML = rows.slice(0, 400).map(threadCard).join("") || `<div class="note">No threads match.</div>`;
+  const shown = new Set(rows.map(t => t.id));
+  const html = DATA.cards.map(card => {
+    const members = card.threads.filter(id => shown.has(id)).map(id => DATA.threads.find(t => t.id === id));
+    if (!members.length) return "";
+    const title = card.sink === "No sink" ? "No sink" : card.sink;
+    return `<section class="card-wrap">
+      <div class="card-head"><span class="goal">${esc(title)}</span>
+        <span class="meta">${members.length} thread${members.length === 1 ? "" : "s"}</span></div>
+      <div class="grid">${members.map(threadCard).join("")}</div>
+    </section>`;
+  }).join("");
+  $("threads").innerHTML = html || `<div class="note">No threads match.</div>`;
 }
 
 function renderItems() {

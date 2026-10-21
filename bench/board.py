@@ -15,7 +15,7 @@ import hashlib
 import json
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -121,45 +121,21 @@ def main():
             last=tm.LastMessage(ending["last"]) if ending["last"] in tm.LastMessage._value2member_map_
             else tm.LastMessage.UNCLEAR,
         )]
-        # A thread joins components on a shared sink (a PR or branch they write to). Inside it, components split into
-        # goals by similarity. Each goal has its own state, and the thread collects every goal's links and sinks.
-        local = (vecs[g] @ vecs[g].T).tolist()
-        goal_groups = tb.average_linkage(local, len(g), GOAL, [])
-        goals = []
-        for gg in goal_groups:
-            gm = sorted((members[k] for k in gg), key=lambda c: iso(heads.get(c["session_id"], {}).get("written", "")))
-            gsid = gm[-1]["session_id"]
-            gend = session_end[gsid]
-            gmodel = [tm.Component(
-                session_id=gend["session_id"], index=0, exchanges=tuple(gend["exchanges"]), title=gend["title"],
-                description=gend["description"], kind=tm.ComponentKind.WORK,
-                last=tm.LastMessage(gend["last"]) if gend["last"] in tm.LastMessage._value2member_map_
-                else tm.LastMessage.UNCLEAR,
-            )]
-            gsinks = []
-            for c in gm:
-                if tb.WRITE.search(c["title"] + " " + c["description"]) and c.get("sink"):
-                    entry = f"{c['sink'][0]} {c['sink'][1]}"
-                    if entry not in gsinks:
-                        gsinks.append(entry)
-            gwritten = iso(heads.get(gsid, {}).get("written", ""))
-            gstate, gwhy = tm.no_evidence_state(gmodel, gwritten, recent_days=RECENT_DAYS if gsinks else RECENT_SINKLESS)
-            goals.append(dict(
-                id="g" + hashlib.sha1("|".join(c["id"] for c in gm).encode()).hexdigest()[:8],
-                goal=gm[-1]["title"],  # a placeholder until a titles pass names the goal
-                state=gstate.value,
-                state_why=f"{gwhy}; the label comes from the session's last component and is not validated",
-                sinks=gsinks[:3],
-                component_ids=[c["id"] for c in gm],
-                sessions=sorted({c["session_id"] for c in gm}),
-                last_active=gwritten,
-            ))
-        goals.sort(key=lambda x: x["last_active"], reverse=True)
+        # A sink: a component's text says it writes, and the PR or branch is its own or named earlier in its session.
+        # The session's sink is shown on the thread but does not join components (bench/sinks.py).
         sinks = []
-        for goal in goals:
-            for s in goal["sinks"]:
-                if s not in sinks:
-                    sinks.append(s)
+        for c in members:
+            if not tb.WRITE.search(c["title"] + " " + c["description"]) or not c.get("sink"):
+                continue
+            entry = f"{c['sink'][0]} {c['sink'][1]}"
+            if entry not in sinks:
+                sinks.append(entry)
+        sink = bool(sinks)
+        # A thread with no sink leaves loose ends sooner.
+        state, why = tm.no_evidence_state(model, last_write, recent_days=RECENT_SINKLESS if not sink else RECENT_DAYS)
+        why = f"{why}; the label comes from the session's last component and is not validated"
+        if area:
+            areas_used[area] += 1
         seen, context = set(), []
         for c in members:
             for l in c["links"]:
@@ -167,19 +143,17 @@ def main():
                 if k not in seen:
                     seen.add(k)
                     context.append(dict(kind=l["kind"], key=l["key"]))
-        active = goals[0]
         threads.append(dict(
             id="t" + hashlib.sha1("|".join(sorted(c["id"] for c in members)).encode()).hexdigest()[:8],
-            goal=members[-1]["title"],  # a placeholder until the titles pass sets the thread's name
+            goal=members[-1]["title"],  # a placeholder until the titles pass sets the thread's name (see titles.py)
             component_ids=sorted(c["id"] for c in members),
             _members=members,
             area=area,
-            state=active["state"],
-            state_why=active["state_why"],
-            goals=goals,
+            state=state.value,
+            state_why=why,
             sessions=sids,
-            has_sink=bool(sinks),
-            sinks=sinks[:6],
+            has_sink=sink,
+            sinks=sinks[:3],
             last_active=last_write,
             component_count=len(members),
             ending=dict(session=ending["session_id"], title=ending["title"], description=ending["description"],
@@ -191,6 +165,18 @@ def main():
                            title=c["title"], description=c["description"], session=c["session_id"],
                            repo=repo_of(heads.get(c["session_id"], {}).get("project", "")))
                       for c in items]
+
+    # Cards wrap threads that share a sink, the way a shared area groups them. A thread with several sinks sits under
+    # its first one. A thread with no sink sits under "No sink".
+    by_card = defaultdict(list)
+    for t in threads:
+        by_card[t["sinks"][0] if t["sinks"] else "No sink"].append(t)
+    cards = sorted(
+        ({"sink": k, "threads": [t["id"] for t in v], "count": len(v),
+          "last_active": max(t["last_active"] for t in v)} for k, v in by_card.items()),
+        key=lambda c: c["last_active"], reverse=True)
+    for t in threads:
+        t["card"] = t["sinks"][0] if t["sinks"] else "No sink"
 
     # Names: a titles pass (agents, see bench/titles.py) writes one name per thread from all its components.
     names = {}
@@ -218,6 +204,7 @@ def main():
                     states=dict(states)),
         areas=[dict(name=k, threads=v) for k, v in areas_used.most_common()],
         threads=sorted(threads, key=lambda t: t["last_active"], reverse=True),  # most recently active first
+        cards=cards,
         items=question_items,
         limits=[
             "States use no PR, ticket or commit state. Only the last-message rule and the time rules apply.",
