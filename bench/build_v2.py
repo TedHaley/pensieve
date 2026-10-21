@@ -192,7 +192,7 @@ def main():
             state=state.value,
             state_why=why,
         ))
-    threads.sort(key=lambda t: t["last_active"], reverse=True)
+    threads.sort(key=lambda t: (t["state"] != "open", -t["last_active"]))  # open first, then most recent session
 
     loose_rows = [dict(id=c["id"], session=c["session_id"], title=c["title"], description=c["description"],
                        exchanges=c["exchanges"], last_active=times.get(c["session_id"], 0.0)) for c in loose]
