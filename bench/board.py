@@ -121,21 +121,45 @@ def main():
             last=tm.LastMessage(ending["last"]) if ending["last"] in tm.LastMessage._value2member_map_
             else tm.LastMessage.UNCLEAR,
         )]
-        # A sink: a component's text says it writes, and the PR or branch is its own or named earlier in its session.
-        # The session's sink is shown on the thread but does not join components (bench/sinks.py).
+        # A thread joins components on a shared sink (a PR or branch they write to). Inside it, components split into
+        # goals by similarity. Each goal has its own state, and the thread collects every goal's links and sinks.
+        local = (vecs[g] @ vecs[g].T).tolist()
+        goal_groups = tb.average_linkage(local, len(g), GOAL, [])
+        goals = []
+        for gg in goal_groups:
+            gm = sorted((members[k] for k in gg), key=lambda c: iso(heads.get(c["session_id"], {}).get("written", "")))
+            gsid = gm[-1]["session_id"]
+            gend = session_end[gsid]
+            gmodel = [tm.Component(
+                session_id=gend["session_id"], index=0, exchanges=tuple(gend["exchanges"]), title=gend["title"],
+                description=gend["description"], kind=tm.ComponentKind.WORK,
+                last=tm.LastMessage(gend["last"]) if gend["last"] in tm.LastMessage._value2member_map_
+                else tm.LastMessage.UNCLEAR,
+            )]
+            gsinks = []
+            for c in gm:
+                if tb.WRITE.search(c["title"] + " " + c["description"]) and c.get("sink"):
+                    entry = f"{c['sink'][0]} {c['sink'][1]}"
+                    if entry not in gsinks:
+                        gsinks.append(entry)
+            gwritten = iso(heads.get(gsid, {}).get("written", ""))
+            gstate, gwhy = tm.no_evidence_state(gmodel, gwritten, recent_days=RECENT_DAYS if gsinks else RECENT_SINKLESS)
+            goals.append(dict(
+                id="g" + hashlib.sha1("|".join(c["id"] for c in gm).encode()).hexdigest()[:8],
+                goal=gm[-1]["title"],  # a placeholder until a titles pass names the goal
+                state=gstate.value,
+                state_why=f"{gwhy}; the label comes from the session's last component and is not validated",
+                sinks=gsinks[:3],
+                component_ids=[c["id"] for c in gm],
+                sessions=sorted({c["session_id"] for c in gm}),
+                last_active=gwritten,
+            ))
+        goals.sort(key=lambda x: x["last_active"], reverse=True)
         sinks = []
-        for c in members:
-            if not tb.WRITE.search(c["title"] + " " + c["description"]) or not c.get("sink"):
-                continue
-            entry = f"{c['sink'][0]} {c['sink'][1]}"
-            if entry not in sinks:
-                sinks.append(entry)
-        sink = bool(sinks)
-        # A thread with no sink leaves loose ends sooner.
-        state, why = tm.no_evidence_state(model, last_write, recent_days=RECENT_SINKLESS if not sink else RECENT_DAYS)
-        why = f"{why}; the label comes from the session's last component and is not validated"
-        if area:
-            areas_used[area] += 1
+        for goal in goals:
+            for s in goal["sinks"]:
+                if s not in sinks:
+                    sinks.append(s)
         seen, context = set(), []
         for c in members:
             for l in c["links"]:
@@ -143,17 +167,19 @@ def main():
                 if k not in seen:
                     seen.add(k)
                     context.append(dict(kind=l["kind"], key=l["key"]))
+        active = goals[0]
         threads.append(dict(
             id="t" + hashlib.sha1("|".join(sorted(c["id"] for c in members)).encode()).hexdigest()[:8],
-            goal=members[-1]["title"],  # a placeholder until the titles pass sets the thread's name (see titles.py)
+            goal=members[-1]["title"],  # a placeholder until the titles pass sets the thread's name
             component_ids=sorted(c["id"] for c in members),
             _members=members,
             area=area,
-            state=state.value,
-            state_why=why,
+            state=active["state"],
+            state_why=active["state_why"],
+            goals=goals,
             sessions=sids,
-            has_sink=sink,
-            sinks=sinks[:3],
+            has_sink=bool(sinks),
+            sinks=sinks[:6],
             last_active=last_write,
             component_count=len(members),
             ending=dict(session=ending["session_id"], title=ending["title"], description=ending["description"],

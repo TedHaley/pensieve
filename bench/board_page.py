@@ -143,13 +143,19 @@ function threadCard(t) {
     ? `<details class="comp"><summary class="links">${t.context.length} context link${t.context.length === 1 ? "" : "s"}</summary>
        <div class="links" style="margin-top:6px">${t.context.map(l => `<div>${esc(l.kind)} ${esc(l.key)}</div>`).join("")}</div></details>`
     : `<div class="links">No context links.</div>`;
+  const goals = t.goals.map(g => `<div class="comp">
+      <div class="t">${esc(g.goal)} <span class="pill ${g.state}">${LABEL[g.state] || g.state}</span></div>
+      <div class="d">${esc(g.state_why)}</div>
+      <div class="links">${g.component_ids.length} component${g.component_ids.length === 1 ? "" : "s"}${g.sinks.length ? " · " + g.sinks.map(esc).join(", ") : ""}</div>
+    </div>`).join("");
+  const sinks = t.sinks && t.sinks.length ? t.sinks.map(s => `<span class="pill">${esc(s)}</span>`).join(" ") : `<span class="pill">no sink</span>`;
   return `<details class="thread">
     <summary>
       <span class="goal">${esc(t.goal)}</span>
       <span class="pill ${t.state}">${LABEL[t.state] || t.state}</span>
-      <span class="meta">${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${t.sinks && t.sinks.length ? "sink: " + t.sinks.map(esc).join(", ") : "no sink"} · ${esc(t.state_why)}</span>
+      <span class="meta">${t.goals.length} goal${t.goals.length === 1 ? "" : "s"} · ${t.component_count} component${t.component_count === 1 ? "" : "s"} · ${t.sessions.length} session${t.sessions.length === 1 ? "" : "s"} · ${sinks}</span>
     </summary>
-    <div class="list">${ends}${links}</div>
+    <div class="list"><div class="note">Goals</div>${goals}<div class="note">Ends with</div>${ends}${links}</div>
   </details>`;
 }
 
