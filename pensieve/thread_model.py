@@ -112,7 +112,13 @@ def sink_complete(sink: Sink, status: dict) -> Completion:
         if value:
             return Completion.OPEN
         return Completion.UNKNOWN
-    return Completion.UNKNOWN  # branch and email: no completion check yet
+    if sink.kind == SinkKind.BRANCH:
+        if value in ("MERGED", "DELETED"):
+            return Completion.DONE
+        if value in ("EXISTS", "OPEN"):
+            return Completion.OPEN
+        return Completion.UNKNOWN
+    return Completion.UNKNOWN  # email: no completion check yet
 
 
 def thread_state(sinks: list[Sink], status: dict, last_active: float, now: float | None = None) -> tuple[ThreadState, str]:

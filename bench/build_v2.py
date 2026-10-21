@@ -69,7 +69,8 @@ def writes_of(c, prs: dict) -> list[tm.Sink]:
         return []
     sinks = []
     if c.get("branch") and c["branch"] not in GENERIC_BRANCHES:
-        sinks.append(tm.Sink(tm.SinkKind.BRANCH, c["branch"]))
+        repo = project_repo(c["session_id"])
+        sinks.append(tm.Sink(tm.SinkKind.BRANCH, f"{repo}@{c['branch']}" if repo else c["branch"]))
     for l in c["links"]:
         if l["kind"] == "pr":
             sinks.append(tm.Sink(tm.SinkKind.PR, l["key"]))
@@ -130,12 +131,17 @@ def main():
     times = session_times()
     status = json.loads((OUT / "sink_states.json").read_text()) if (OUT / "sink_states.json").exists() else {}
     status = {f"pr {k}": v for k, v in status.items()}
+    if (OUT / "branch_states.json").exists():
+        status.update(json.loads((OUT / "branch_states.json").read_text()))
 
     notes = [c for c in comps if c["kind"] in ("question", "comment")]
     work = [c for c in comps if c["kind"] == "work"]
     prs = session_prs(comps)
     for c in work:
         c["sinks"] = writes_of(c, prs)
+
+    branch_keys = sorted({s.key for c in work for s in c["sinks"] if s.kind == tm.SinkKind.BRANCH})
+    (OUT / "branch_sinks.json").write_text(json.dumps(branch_keys, indent=1))
 
     # Union components that share a PR or branch sink, unless the sink is used by more than CAP components.
     by_sink = defaultdict(list)
