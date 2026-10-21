@@ -178,10 +178,12 @@ def main():
     for t in threads:
         own_prs = [f"pr {c['sink'][1]}" for c in t["_members"] if c.get("sink_source") == "own"
                    and c["sink"][0] == "pr" and tb.WRITE.search(c["title"] + " " + c["description"])]
-        closed = [s for s in dict.fromkeys(own_prs) if sink_states.get(s[3:]) in ("MERGED", "CLOSED")]
-        if closed:
+        own_prs = list(dict.fromkeys(own_prs))
+        closed = [s for s in own_prs if sink_states.get(s[3:]) in ("MERGED", "CLOSED")]
+        # A thread closes only when every PR it writes to is closed. One open PR keeps its goals in play.
+        if own_prs and len(closed) == len(own_prs):
             t["state"] = "closed"
-            t["state_why"] = f"sink closed ({closed[0]}): every thread on a closed sink is done"
+            t["state_why"] = f"every sink closed ({', '.join(closed)}): the thread is done"
         elif not t["has_sink"] and t["state"] == "open":
             t["state"] = "loose_ends"
             t["state_why"] = "no own write to a sink, so no known change satisfies the goal; not open"
