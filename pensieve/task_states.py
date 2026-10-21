@@ -50,6 +50,14 @@ FORGET_DAYS = 21  # loose ends left this long become forgotten
 MERGE_GRACE = 15 * 60  # activity this soon after a merge is the wrap-up of the same work
 RENAMED = {"discarded": "forgotten", "latent": "loose_ends", "conscious": "open", "subconscious": "loose_ends",
            "etched": "closed", "complete": "closed", "todo": "loose_ends", "closing": "loose_ends"}  # earlier names
+STORED = {"closed": "complete", "todo": "loose_ends", "closing": "loose_ends"}  # the names the store's CHECK accepts
+
+
+def stored(value: str) -> str:
+    """The name a state is saved under: closed is saved as complete, which the store's CHECK still allows."""
+    return STORED.get(value, value)
+
+
 DONE = {"done", "closed", "resolved", "won't do", "wont do", "cancelled", "canceled", "merged", "complete", "completed",
         "fixed", "invalid", "duplicate", "released", "shipped"}
 

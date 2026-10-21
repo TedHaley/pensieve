@@ -106,10 +106,11 @@ class CardKind(StrEnum):
 
 
 class State(StrEnum):
-    """A thread's state (pensieve/task_states.py says what each one means)."""
+    """A thread's state as the store saves it (pensieve/task_states.py says what each one means). Closed is saved
+    as complete, the name the store's CHECK allows (task_states.stored)."""
     OPEN = "open"
     LOOSE_ENDS = "loose_ends"
-    CLOSED = "closed"
+    CLOSED = "complete"
     FORGOTTEN = "forgotten"
 
 

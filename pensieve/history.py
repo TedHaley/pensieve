@@ -126,7 +126,7 @@ class Keeper:
                 continue
             note = notes.get(t["id"], {})
             card = dict(cards.build(t, note, task_states.history(self.store, t["id"])), thread_id=tid)
-            rows.add_save(db, ThreadSnapshot(None, tid, int(now), s["snapshot"], State(task_states.RENAMED.get(t["state"], t["state"])), structure, pushed,
+            rows.add_save(db, ThreadSnapshot(None, tid, int(now), s["snapshot"], State(task_states.stored(t["state"])), structure, pushed,
                                              np.asarray(s["vec"], dtype=np.float32).tobytes(), json.dumps(card)), why)
             saved.append(dict(thread=tid, task=t["id"], reasons=sorted(why)))
         threads.save(self.linker, dict(self.of_task))

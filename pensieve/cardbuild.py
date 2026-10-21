@@ -207,7 +207,7 @@ class Builder:
         kind = CardKind.GOAL if t.get("goal_of") else CardKind(t["kind"])
         times = [e["ts"] for e in t.get("events", []) if e.get("ts")] + [t["updated"]]
         return Card(t["id"], kind, t.get("goal_of"), t["title"] or t["id"],
-                    State(task_states.RENAMED.get(t["state"], t["state"])), int(min(times) or 0),
+                    State(task_states.stored(t["state"])), int(min(times) or 0),
                     int(t["updated"] or 0), now, work._signature(t), view)
 
     def _notes(self):
