@@ -2338,7 +2338,7 @@ function renderSetup() {
   if (step === 'about') {
     body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg>
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-      <p class="sub">Setup takes a minute: tell Pensieve how you work, choose what it indexes, and pick a search model.</p>${btns('profile', 'Get started')}`;
+      <p class="sub">Setup takes a minute. Pick a mode. Developer mode also asks what to index and which search model to use.</p>${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
     body = `<h1>How do you use your Mac?</h1><p class="sub">Choose all that fit. Pensieve suggests what to index from this.</p>
       <div class="setup-profiles">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="checkbox" aria-checked="${st.profiles.has(p.id)}">

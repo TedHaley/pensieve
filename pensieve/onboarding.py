@@ -10,10 +10,10 @@ from pathlib import Path
 from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
-    "Pensieve searches everything on this Mac by meaning: documents, git repos and your AI agent sessions.",
-    "Agents get the right context in one search through its MCP server, instead of a disk-wide grep.",
-    "A map shows your work by topic, and git history shows who knows each part of the code.",
-    "Everything is indexed and searched on this Mac. Nothing is uploaded.",
+    "Pensieve follows your work across AI agent sessions, and ties up the loose ends: the threads you left open.",
+    "Session mode, the default, reads your agent sessions and builds threads from them. Nothing else is indexed.",
+    "Developer mode also indexes your git repos and files, and unlocks the Map, People and Insights.",
+    "Everything runs on this Mac. Nothing is uploaded.",
 ]
 
 # Who the user is decides which categories are worth scanning; the scan then pre-checks what it finds in them.
