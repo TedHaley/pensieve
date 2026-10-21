@@ -128,18 +128,25 @@ WRITE = re.compile(
 SINK_KINDS = ("pr", "branch")  # a ticket is a project that holds many goals, so it is not a sink (see workflow rule 0)
 
 
-def sink_joins(comps: list[dict], cap: int) -> list[tuple[int, int]]:
+def sink_joins(comps: list[dict], cap: int, resolve: bool = False) -> list[tuple[int, int]]:
     """Pairs of components that write to the same sink (rule 0): a PR or a branch they change. Only a sink that at
-    most `cap` components write to joins them, and only components whose text says they write."""
+    most `cap` components write to joins them, and only components whose text says they write.
+
+    With `resolve`, a writing component that names no PR or branch of its own takes the nearest one in its context
+    chain (bench/inherit.py). That is how "push it" or "reply to the review" finds its sink."""
     by_sink = defaultdict(set)
     for i, c in enumerate(comps):
         if not WRITE.search(f"{c['title']} {c['description']}"):
             continue
+        own = []
         if c.get("branch") and c["branch"] not in GENERIC_BRANCHES:
-            by_sink[("branch", c["branch"])].add(i)
-        for link in c["links"]:
-            if link["kind"] == "pr":
-                by_sink[("pr", link["key"])].add(i)
+            own.append(("branch", c["branch"]))
+        own += [("pr", link["key"]) for link in c["links"] if link["kind"] == "pr"]
+        if not own and resolve:
+            own = [(r["kind"], r["key"]) for r in c.get("resolved", []) if r["kind"] == "pr" or
+                   (r["kind"] == "branch" and r["key"] not in GENERIC_BRANCHES)]
+        for sink in own:
+            by_sink[sink].add(i)
     pairs = []
     for idx in by_sink.values():
         if 2 <= len(idx) <= cap:
@@ -148,7 +155,8 @@ def sink_joins(comps: list[dict], cap: int) -> list[tuple[int, int]]:
     return pairs
 
 
-def build(comps: list[dict], vecs, goal: float, cap: int, bonus: float = BONUS, sinks: bool = True):
+def build(comps: list[dict], vecs, goal: float, cap: int, bonus: float = BONUS, sinks: bool = True,
+          resolve: bool = False):
     import numpy as np
     n = len(comps)
     sim = vecs @ vecs.T
@@ -156,7 +164,7 @@ def build(comps: list[dict], vecs, goal: float, cap: int, bonus: float = BONUS, 
     for (a, b) in joins:
         sim[a, b] += bonus
         sim[b, a] += bonus
-    forced = sink_joins(comps, cap) if sinks else []
+    forced = sink_joins(comps, cap, resolve=resolve) if sinks else []
     groups = average_linkage(sim.tolist(), n, goal, forced)
     return groups, joins, skipped
 
