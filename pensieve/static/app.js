@@ -4268,7 +4268,7 @@ function wkWrapUp(c) {
         <span class="what">${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</span>
         ${s.who ? `<span class="who" title="${esc(WK_WHO[s.who]?.[1] || '')}">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join('') : '<div class="wk-step muted">Nothing left: every step is done</div>'}
       <div class="wk-menu-foot">${WRAP_STATES.has(c.state)
-        ? `<span class="muted">The agent does its steps and asks you before yours</span><button class="wk-btn primary" data-wk-wrapup-start="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does the agent's steps, asking you before each of yours">${WK_IC.spark}Start a session to wrap up</button>`
+        ? `<button class="wk-btn primary" data-wk-wrapup-start="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does the agent's steps, asking you before each of yours">${WK_IC.spark}Start a session to wrap up</button>`
         : `<span class="muted">${esc(wkModel(c.state).label)}: nothing to wrap up</span>`}</div></div>`;
   return `<span class="wk-wrap"><button class="wk-btn ${open ? 'on' : ''}" data-wk-wrap="${esc(key)}" aria-haspopup="menu" aria-expanded="${open}" title="The steps left to close the work on this branch">Wrap up<span class="wk-n">${steps.length}</span></button>${menu}</span>`;
 }

@@ -4,61 +4,27 @@ A session claims the lines it wrote with its edit tools (Edit, Write, MultiEdit)
 branch's current version of the file. A surviving line belongs to the latest session that wrote it. A session with more
 than half of the surviving lines has the majority claim. A session without it loses the branch: the branch is not active
 on its thread, and the thread's other sinks still decide its state."""
-import json
 import subprocess
 from functools import lru_cache
-from pathlib import Path
-
-EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
-MIN_LINE = 25  # shorter lines (imports, brackets, blank-ish lines) say too little to claim
-
-
-def _lines_of(text: str) -> list[str]:
-    return list(dict.fromkeys(x.strip() for x in text.splitlines() if len(x.strip()) >= MIN_LINE))
-
-
-@lru_cache(maxsize=512)
-def _written(path: str, mtime: float) -> tuple:
-    """(file path, line) for each line that the transcript wrote with an edit tool."""
-    out = []
-    for line in Path(path).read_text(errors="ignore").splitlines():
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        content = (rec.get("message") or {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") in EDIT_TOOLS):
-                continue
-            inp = block.get("input") or {}
-            file_path = inp.get("file_path") or ""
-            if not file_path:
-                continue
-            if "edits" in inp:
-                texts = [e.get("new_string") or "" for e in inp["edits"] if isinstance(e, dict)]
-            else:
-                texts = [inp.get("new_string") or inp.get("content") or ""]
-            for text in texts:
-                out.extend((file_path, x) for x in _lines_of(text))
-    return tuple(dict.fromkeys(out))
 
 
 def written(path: str) -> tuple:
-    """The (file, line) pairs a transcript wrote, cached by the transcript's modification time."""
-    if not path:
-        return ()
-    try:
-        return _written(path, Path(path).stat().st_mtime)
-    except OSError:
-        return ()
+    """The (file, line) pairs a transcript wrote with an edit tool (pensieve/transcripts.py)."""
+    from pensieve import transcripts
+    return transcripts.written(path)
 
 
 @lru_cache(maxsize=2048)
-def _at_branch(root: str, branch: str, rel: str) -> str:
-    r = subprocess.run(["git", "-C", root, "show", f"refs/heads/{branch}:{rel}"], capture_output=True, text=True)
+def _at_tip(root: str, tip: str, rel: str) -> str:
+    r = subprocess.run(["git", "-C", root, "show", f"{tip}:{rel}"], capture_output=True, text=True)
     return r.stdout if r.returncode == 0 else ""
+
+
+def _at_branch(root: str, branch: str, rel: str) -> str:
+    """A file's text on a branch, cached by the branch's tip: a commit on the branch reads the file again."""
+    from pensieve import work
+    tip = work._git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", ttl=30)
+    return _at_tip(root, tip, rel) if tip else ""
 
 
 def shares(sessions: list[dict], root: str, branch: str, lines_of=None, text_of=None) -> dict:

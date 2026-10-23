@@ -37,7 +37,6 @@ _TITLE_WORD = re.compile(r"[a-z0-9][a-z0-9.+#-]*")
 _STOP = {"a", "an", "the", "and", "or", "for", "of", "to", "in", "on", "with", "from", "into", "by", "at", "is", "it",
          "this", "that", "my", "our", "how", "what", "why", "do", "does", "can", "we", "i", "vs", "via", "new"}
 _TEMP = ("/private/tmp/", "/tmp/", "/private/var/folders/", "/var/folders/")
-_branch_cache = {}       # transcript path -> (mtime, branch)
 _roots = {}              # folder -> its git root, or ""
 _cache = {}
 
@@ -48,37 +47,45 @@ def _not_users(project: str) -> bool:
     return p.startswith(_TEMP) or p.startswith(str(Path.home() / "Library") + "/")
 
 
-_GIT_BRANCH = re.compile(rb'"gitBranch":"([^"]*)"')
-_LINE_CWD = re.compile(rb'"cwd":"([^"]*)"')
-_LINE_TS = re.compile(rb'"timestamp":"([^"]*)"')
+def _in_temp(project: str) -> bool:
+    """A session in a system temp folder, when `skip_temp_sessions` is on (as the indexer skips them)."""
+    from pensieve import indexer
+    return indexer.in_temp(project)
 
 
 def _branches(path: str) -> dict[tuple[str, str], float]:
-    """Every git branch that a Claude Code transcript records, by (cwd, branch), with the time of its last message.
-    "HEAD" is left out: Claude Code records it during some git operations, so it is not the branch the work is on."""
-    try:
-        size = Path(path).stat().st_size
-    except OSError:
-        return {}
-    hit = _branch_cache.get(path)
-    if hit and hit[0] == size:
-        return hit[1]
-    start, out = (hit[0], dict(hit[1])) if hit and hit[0] < size else (0, {})  # a transcript only grows: read the end
-    try:
-        with open(path, "rb") as f:
-            f.seek(start)
-            data = f.read()
-    except OSError:
-        return out
-    end = data.rfind(b"\n") + 1  # whole lines only: the last one can be half written
-    for line in data[:end].splitlines():
-        b = _GIT_BRANCH.search(line)
-        if not b or b.group(1) in (b"", b"HEAD"):
-            continue
-        c, t = _LINE_CWD.search(line), _LINE_TS.search(line)
-        k = ((c.group(1) if c else b"").decode(errors="replace"), b.group(1).decode(errors="replace"))
-        out[k] = max(out.get(k, 0), _ts(t.group(1).decode()) if t else 0)
-    _branch_cache[path] = (start + end, out)
+    """Every git branch that a Claude Code transcript records, by (cwd, branch), with the time of its last message
+    (pensieve/transcripts.py). "HEAD" is left out: Claude Code records it during some git operations, so it is not
+    the branch the work is on."""
+    from pensieve import transcripts
+    return transcripts.branches(path)
+
+
+def _worktrees(root: str) -> dict[str, tuple[str, str]]:
+    """{worktree path: (repo root, branch)} of a repo, from git."""
+    out, path, branch = {}, "", ""
+    for line in _git(root, "worktree", "list", "--porcelain", ttl=60).splitlines():
+        if line.startswith("worktree "):
+            path, branch = line[9:], ""
+        elif line.startswith("branch "):
+            branch = line[7:].removeprefix("refs/heads/")
+        elif not line.strip() and path:
+            out[path] = (root, branch)
+            path = ""
+    if path:
+        out[path] = (root, branch)
+    return out
+
+
+def _commits(root: str, since: float, end: float) -> list[tuple]:
+    """(repo, sha, ts, author, subject) of a repo's commits on any branch in the window, from git."""
+    out = []
+    raw = _git(root, "log", "--all", "--no-merges", f"--since={int(since)}", f"--until={int(end)}", "-n", "2000",
+               "--format=%H%x1f%ct%x1f%an%x1f%s", ttl=300)
+    for line in raw.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) == 4 and parts[1].isdigit():
+            out.append((root, parts[0], int(parts[1]), parts[2], parts[3]))
     return out
 
 
@@ -327,46 +334,49 @@ class Inputs:
         self.load_repos(store)
         self.items = {i["doc"]: i for i in _items(self.since, self.until)}
 
-    def load_sessions(self, store, ids=None):
+    def load_sessions(self, store=None, ids=None):
         """The sessions of the window (or only `ids`, which leave when they are no longer in it), their text facts
-        and their edited files."""
-        sql = ("SELECT id, project, title, summary, updated, started, path FROM sessions WHERE updated > ? AND "
-               "coalesce(started, updated) <= ? AND n_chunks > 0 AND path NOT LIKE '%.md'")
-        args = [self.since_iso, self.upto_iso]
-        if ids is not None:
-            ids = list(ids)
-            sql += f" AND id IN ({','.join('?' * len(ids))})"
-            args += ids
-        db = store.db
-        rows = db.execute(sql + " ORDER BY updated DESC", args).fetchall() if ids is None or ids else []
-        got = [r[0] for r in rows]
-        texts, edits = defaultdict(list), defaultdict(set)
-        for i in range(0, len(got), 50):  # 50 sessions at a time
-            part = got[i:i + 50]
-            q = ",".join("?" * len(part))
-            for sid, t in db.execute(f"SELECT session_id, text FROM chunks WHERE session_id IN ({q}) "
-                                     "ORDER BY session_id, idx", part).fetchall():
-                texts[sid].append(t)
-            for sid, p in db.execute(f"SELECT session_id, path FROM session_files WHERE edited=1 AND session_id "
-                                     f"IN ({q})", part).fetchall():
-                if not p.startswith(_TEMP):  # scratch files are not the work
-                    edits[sid].add(p)
-        for sid in ids or []:
+        and their edited files, from the transcripts (pensieve/transcripts.py: read once, incrementally). With no
+        `ids`, the transcript folders are read for changes first."""
+        from pensieve import transcripts
+        if ids is None:
+            transcripts.sync()
+        by_id = {f.id: f for f in transcripts.all_facts().values()}
+        for sid in (list(ids) if ids is not None else list(by_id)):
             self.sessions.pop(sid, None)
             self.facts.pop(sid, None)
             self.edits.pop(sid, None)
-        for r in rows:
-            self.sessions[r[0]] = r
-            self.facts[r[0]] = _facts(texts.get(r[0], []))
-            self.edits[r[0]] = edits.get(r[0], set())
+            f = by_id.get(sid)
+            if not f or not f.n_turns or not f.updated or f.state.get("own") or _in_temp(f.project):
+                continue
+            upd, started = f.updated_ts(), _ts(f.started)
+            if not (self.since < upd and (started or upd) <= self.end):
+                continue
+            self.sessions[sid] = (sid, f.project, f.title, "", f.updated, f.started, f.path)
+            self.facts[sid] = transcripts.text_facts(f)
+            self.edits[sid] = {p for p in f.edited if not p.startswith(_TEMP)}  # scratch files are not the work
 
-    def load_repos(self, store):
-        """The repos, worktrees and commits of the window."""
-        db = store.db
-        self.roots = [r[0] for r in db.execute("SELECT root FROM repos").fetchall()]
-        self.wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
-        self.commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
-                                  (self.since, self.end)).fetchall()
+    def load_repos(self, store=None):
+        """The repos, worktrees and commits of the window: from the index when the repo indexer runs (developer
+        mode), else from git, for the repos the window's sessions ran in."""
+        rows = []
+        if store is not None:
+            try:
+                rows = store.db.execute("SELECT root FROM repos").fetchall()
+            except Exception:
+                rows = []
+        if rows:
+            db = store.db
+            self.roots = [r[0] for r in rows]
+            self.wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
+            self.commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
+                                      (self.since, self.end)).fetchall()
+            return
+        roots = sorted({r for r in (_git_root(s[1]) for s in self.sessions.values() if s[1]) if r})
+        self.roots, self.wts, self.commits = roots, {}, []
+        for root in roots:
+            self.wts.update(_worktrees(root))
+            self.commits += _commits(root, self.since, self.end)
 
     def load_items(self, ids):
         """The collected items `ids` again: a changed one is replaced, one that left the window or the switched-on
@@ -381,18 +391,6 @@ class Inputs:
                 and (not self.until or (d.time or 0) <= self.until)]
         for d, ppl in zip(docs, _assignees(db, [d.id for d in docs])):
             self.items[d.id] = _item(d, ppl)
-
-
-def _facts(texts: list[str]) -> dict:
-    """What a session's text names, kept so that a card build does not read the text again: ticket keys (as
-    (prefix, number) pairs, counted), ticket links, pull request links (counted), published Artifact links, and how
-    the session ended."""
-    joined = "\n".join(texts)
-    return dict(keys=Counter(KEY.findall(joined)), ticket_urls=TICKET_URL.findall(joined),
-                prs=Counter(PR_URL.findall(joined)), links=list(dict.fromkeys(ARTIFACT_URL.findall(joined))),
-                last=_tail(texts[-1]) if texts else "",  # where the session stopped
-                ending=_tail("\n".join(texts[-2:]), 2400) if texts else "",  # what the note reads
-                turns=cardtext.turns_from_chunks(texts[-8:]))  # the last turns: the user's words, the agent's reply
 
 
 def group(inp: Inputs) -> list[dict]:
@@ -1397,7 +1395,8 @@ def _gh_pr(url: str) -> dict:
     checks: passing | failing | pending; review: approved | changes requested | review required."""
     import shutil
     hit = _gh_cache.get(url)
-    if hit and (time.time() - hit[0] < 600 or _net["off"]):
+    # a merged or closed PR seldom changes: a day; an open one, or one gh could not read: 10 minutes
+    if hit and (time.time() - hit[0] < (86400 if hit[1].get("state") in ("merged", "closed") else 600) or _net["off"]):
         return hit[1]
     out = {}
     if _net["off"]:  # no network now (the first build after a start): the last answer kept on disk, so that a

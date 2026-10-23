@@ -199,16 +199,29 @@ async def session_watcher():
             continue
         try:
             paths = watch.take_sessions() if watch else set()
-            if not last_sweep or store.behind or time.time() - last_sweep > SESSION_SWEEP_SECONDS:
-                last_sweep = time.time()  # every folder: new folders, and what the watcher missed
-                n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
-                    on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
-                if not store.behind:  # every session is indexed
-                    await _run(migrate.mark_indexed, "sessions")
-            elif paths or store.waiting:  # the transcripts that changed, at once
-                n = await _run(lambda: store.sync_paths(paths))
+            # Threads read the transcripts themselves (transcripts.py), in every mode: the changed ones at once,
+            # every folder now and then for new files
+            from pensieve import cardbuild, transcripts
+            sweep = not last_sweep or time.time() - last_sweep > SESSION_SWEEP_SECONDS
+            if sweep:
+                changed, _ = await _run(transcripts.sync)
             else:
-                n = 0
+                changed = [p for p in paths if await _run(transcripts.facts, p)]
+            if changed:
+                have = transcripts.all_facts()
+                cardbuild.emit(cardbuild.SESSION, [have[p].id for p in changed if p in have])
+            # the index of the sessions' text (search, the Map) is developer mode's: threads mode reads no index
+            n = 0
+            if settings.get("mode") == "developer":
+                if sweep or store.behind:
+                    n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
+                        on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
+                    if not store.behind:  # every session is indexed
+                        await _run(migrate.mark_indexed, "sessions")
+                elif paths or store.waiting:  # the transcripts that changed, at once
+                    n = await _run(lambda: store.sync_paths(paths))
+            if sweep:
+                last_sweep = time.time()
             if n:
                 broadcast({"type": "updated", "sessions": n})
                 _indexed()

@@ -212,7 +212,17 @@ def test_unpushed_and_uncommitted_on_own_branch():
     c = card(branches=[dict(repo="/r", branch="retry")],
              places=[dict(branch="retry", changed=2, ahead=1), dict(branch="retry", head="main", changed=9)])
     got = [p.text for p in pending(c)]
-    assert got == ["Commit 2 changed files on retry", "Push 1 commits on retry"]
+    assert got == ["Commit 2 changed files on retry", "Push 1 commits on retry", "Open a pull request for retry"]
+
+
+def test_branch_with_a_pull_request_needs_none():
+    """A branch that has a pull request, open or merged, needs no new one; a branch with nothing on it needs none
+    either."""
+    c = card(branches=[dict(repo="/r", branch="retry")], places=[dict(branch="retry", commits=3)],
+             prs=[dict(url=PR + "4", state="open", head="retry")])
+    assert [p.text for p in pending(c)] == ["Get #4 reviewed"]
+    bare = card(branches=[dict(repo="/r", branch="retry")], places=[dict(branch="retry")])
+    assert pending(bare) == []
 
 
 def test_agent_question_comes_first():

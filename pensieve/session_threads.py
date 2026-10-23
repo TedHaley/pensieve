@@ -1,73 +1,36 @@
 """Threads per session, built as the bench builds them (bench/graph_build.py, bench/graph_states.py).
 
 Each session is one thread. The thread holds only what that session wrote: the sinks its own transcript changes
-(pensieve/extract, write edges). A session that writes nothing holds no sinks, so it is a thought. Several threads can
-hold the same sink.
+(pensieve/transcripts.py, write edges). A session that writes nothing holds no sinks, so it is a thought. Several
+threads can hold the same sink.
 
 A task (the app's grouping of sessions that share a branch, PR or ticket) is split into one thread per session, so no
 thread takes state from a sink another session wrote."""
 import hashlib
-import json
-import os
-from pathlib import Path
 
 from pensieve import sink_status
 from pensieve.chains import _mentions
-from pensieve.extract import git_tools, mentions  # registers the extractors that writes() runs
-
-EXTRACTORS = (git_tools, mentions)
-
-_writes: dict[str, tuple[float, list]] = {}  # transcript path -> (mtime, [(kind, key, evidence)])
-
-
-def _extract(path: str) -> list[tuple[str, str, str]]:
-    """The (kind, key, evidence) write edges of a Claude transcript, cached by the file's mtime."""
-    if not path:
-        return []
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        return []
-    hit = _writes.get(path)
-    if hit and hit[0] == mtime:
-        return hit[1]
-    from pensieve import extract, parsers
-    out = []
-    try:
-        s = parsers.parse("claude", Path(path))
-        records = []
-        for line in Path(path).read_text(errors="ignore").splitlines():
-            try:
-                records.append(json.loads(line))
-            except ValueError:
-                continue
-        out = [(e.kind, e.key, e.evidence) for e in extract.run_all(extract.Session(s.id, s.turns, records))
-               if e.strength == extract.WRITE]
-    except Exception:
-        out = []
-    _writes[path] = (mtime, out)
-    return out
 
 
 def writes(path: str) -> list[tuple[str, str]]:
-    """The (kind, key) sinks a Claude transcript writes to: branches, PRs and tickets (write edges only)."""
-    return [(kind, key) for kind, key, _ in _extract(path)]
+    """The (kind, key) sinks a transcript writes to: branches and PRs, from its git and gh calls
+    (pensieve/transcripts.py)."""
+    from pensieve import transcripts
+    return transcripts.writes(path)
 
 
 def evidence(path: str) -> dict[tuple[str, str], list[str]]:
     """What a transcript did to each sink it wrote to: {(kind, key): ["git commit", "git push x", ...]}, in order."""
-    out: dict[tuple[str, str], list[str]] = {}
-    for kind, key, ev in _extract(path):
-        out.setdefault((kind, key), []).append(ev)
-    return out
+    from pensieve import transcripts
+    return transcripts.evidence(path)
 
 
 def uncommitted(t: dict, s: dict) -> list[tuple[str, str]]:
     """The branch a session wrote to without a commit: lines it wrote with an edit tool are in the uncommitted diff
     of a checkout of the task on that branch. One (branch, key) per such place; nothing when another branch is open
     there. A session whose edits were committed since (by it or by another) has no line left in the diff."""
-    from pensieve import claims, work
-    pairs = claims.written(s.get("path", ""))
+    from pensieve import transcripts, work
+    pairs = transcripts.written(s.get("path", ""))
     if not pairs:
         return []
     out = []

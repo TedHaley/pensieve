@@ -65,9 +65,9 @@ def run():
     results.append(check("a thread keeps what its session wrote", one["_writes"], writes["/x/s1.jsonl"]))
 
     # a session's edits still in the uncommitted diff of the task's checkout: a write to that branch
-    from pensieve import claims, work
+    from pensieve import transcripts, work
     ROOT = "/code/app"
-    claims.written = lambda path: ((f"{ROOT}/x.py", "a line the session wrote"),) if path == "/x/s4.jsonl" else ()
+    transcripts.written = lambda path: ((f"{ROOT}/x.py", "a line the session wrote"),) if path == "/x/s4.jsonl" else ()
     gits = {("log", "-1", "--format=%ct"): "100", ("diff", "HEAD", "--", "x.py"): "+++ b/x.py\n+a line the session wrote\n-old"}
     work._git = lambda root, *args, ttl=60: gits.get(args, "")
     place = dict(path=ROOT, branch="feat", git=True, changed=1)

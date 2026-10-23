@@ -175,7 +175,8 @@ def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
     """What is left to close the thread, most urgent first, each with who can act:
     - a question the agent asked: only the user can answer it;
     - each open pull request, by where it stands (failing checks, changes requested, approved, in review, draft);
-    - unpushed commits and uncommitted files on the card's own branch;
+    - unpushed commits and uncommitted files on the card's own branch, and a pull request to open when the branch
+      has none;
     - a ticket that is not done although the card's pull request merged: close it in its tracker;
     - a ticket that is not done, with no pull request: the work itself."""
     out = []
@@ -197,6 +198,7 @@ def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
         elif review != "changes requested":
             out.append(Pending(f"Get {n} reviewed", "you", p["url"]))
     own = {b.get("branch") for b in card.get("branches", [])}
+    with_pr = {p.get("head") for p in card.get("prs", []) if p.get("state") in ("open", "draft", "merged")}
     for pl in card.get("places", []):
         if pl.get("branch") not in own or pl.get("head"):
             continue
@@ -204,6 +206,8 @@ def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
             out.append(Pending(f"Commit {pl['changed']} changed files on {pl['branch']}", "agent", pl["branch"]))
         if pl.get("ahead"):
             out.append(Pending(f"Push {pl['ahead']} commits on {pl['branch']}", "agent", pl["branch"]))
+        if pl["branch"] not in with_pr and (pl.get("commits") or pl.get("ahead") or pl.get("changed")):
+            out.append(Pending(f"Open a pull request for {pl['branch']}", "agent", pl["branch"]))
     merged = any(p.get("state") == "merged" for p in card.get("prs", []))
     seen = set()
     for k in card.get("tickets", []):  # one ticket can come from two sources (its tracker, a session that read it)
@@ -226,7 +230,7 @@ def _stage(text: str) -> str:
     """The stage of a close-out step, from the text that `pending` wrote."""
     if text.startswith("Answer"):
         return "answer"
-    if text.startswith(("Get ", "Mark ")):
+    if text.startswith(("Get ", "Mark ", "Open a pull request")):
         return "review"
     if text.startswith("Merge "):
         return "merge"
