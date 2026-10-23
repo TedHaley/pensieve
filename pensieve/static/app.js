@@ -4048,7 +4048,8 @@ function wkActions(t, d) {
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
-  return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
+  const wrap = wkWrapUp({key: `thread|${t.id}`, state: t.state, branch: t.branches?.[0]?.branch || t.claim?.branch || '', tasks: [t]});
+  return `<div class="wk-bar">${resume}${fresh}${details}${wrap}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
 }
 // A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
 // thread goes on; only a thread with no anchor title takes the note's (the same rule as cardtext.card_title)
@@ -4125,15 +4126,15 @@ function wkSections(t) {
       <span class="when">${i.updated ? wkDate(i.updated) : ''}</span></div>`).join('')
     + (t.seen_more ? `<div class="wk-row muted">and ${plural(t.seen_more, 'more item')} that its sessions read</div>` : '');
   const hideA = S.work.open.has(t.id + ':ah');
-  const artifacts = t.sessions.flatMap(s => (s.artifacts || []).filter(a => a.kind === 'link').map(a => `<div class="wk-row">
-      <a class="nm" href="${esc(a.url)}" target="_blank" rel="noopener">${WK_IC.share}${esc(a.url.replace(/^https:\/\//, ''))}</a></div>`)).join('');
+  const made = t.sessions.flatMap(s => s.artifacts || []);  // the published pages first, then the files it edited
+  const showF = S.work.open.has(t.id + ':fl');
+  const files = !made.length ? '' : `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:fl" aria-expanded="${showF}">${showF ? '▾' : '▸'} Files <span class="muted">${made.length}</span></button></h5>${!showF ? '' :
+    made.slice(0, 20).map(a => a.kind === 'link'
+      ? `<div class="wk-row">${wkSt('page')}<a class="ttl" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.url)}">${esc(a.url.replace(/^https:\/\//, ''))}</a></div>`
+      : `<div class="wk-row">${wkSt('file')}<button class="ttl linkbtn subtle" data-wk-openfile="${esc(a.path)}" title="${esc(a.path)}">${esc(a.name)}</button><span class="wk-path" title="${esc(a.path)}">${esc(homeTilde(a.path.slice(0, -a.name.length - 1)))}</span></div>`).join('')}</section>`;
   const recent = t.events.slice(0, WK_RECENT);  // the events are newest first
   const activity = recent.length ? `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:ah" aria-expanded="${!hideA}">${hideA ? '▸' : '▾'} Activity <span class="muted">${recent.length}</span></button></h5>${hideA ? '' : `<ol class="wk-tl">${recent.map(wkEvent).join('')}</ol>`}</section>` : '';
-  // the steps that take the thread to a complete state, in order; a step already done stays in the list, struck through
-  const wrapUp = sec('Wrap-up',(t.closeout || []).map(s => `<div class="wk-step${s.done ? ' done' : ''}"><span class="box" aria-hidden="true">${s.done ? '✓' : ''}</span>
-      <span class="what">${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</span>
-      ${s.who ? `<span class="who">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join(''));
-  return sec('Data sources in session', folders + prs + tickets + seen + artifacts) + activity + wrapUp;
+  return sec('Data sources in session', folders + prs + tickets + seen) + files + activity;
 }
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
@@ -4214,7 +4215,7 @@ function wkAbout(t) {
     reply ? `<div class="wk-said agent"><span class="who">Agent</span><span class="txt" title="${esc(reply)}">${esc(cut(reply, 260))}</span></div>` : '',
     question ? `<div class="wk-said ask"><span class="who">Asks</span><span class="txt">${esc(cut(question, 200))}</span></div>` : ''].join('');
   const body = t.summary ? `<p class="wk-summary">${esc(t.summary)}</p>${rows}` : rows || '<p class="wk-summary muted">No words from this session yet</p>';
-  return `<section class="wk-sec wk-about"><h5>About</h5>${body}</section>`;
+  return `<section class="wk-sec wk-about"><h5>Conversation snippet</h5>${body}</section>`;
 }
 // The sessions related to this one, newest first, each with how it relates: the kin (the sessions of the same work:
 // what each did on the shared branch, PR or ticket, and its share of the branch) and the threads whose context is
@@ -4253,9 +4254,9 @@ function wkWrapSteps(tasks) {
   return out;
 }
 function wkWrapUp(c) {
-  const key = `${c.state}|${c.branch}`, open = S.work.wrap === key, steps = wkWrapSteps(c.tasks), ids = c.tasks.map(t => t.id).join(',');
+  const key = c.key || `${c.state}|${c.branch}`, open = S.work.wrap === key, steps = wkWrapSteps(c.tasks), ids = c.tasks.map(t => t.id).join(',');
   const menu = !open ? '' : `<div class="wk-menu wk-wrap-menu" role="menu">
-      <div class="wk-wrap-h">To close the work on <span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span></div>
+      <div class="wk-wrap-h">${c.branch ? `To close the work on <span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span>` : 'To close this thread'}</div>
       <ul class="wk-wrap-steps">${steps.length ? steps.map(s => `<li>${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</li>`).join('')
         : '<li class="muted">Nothing left: every step is done</li>'}</ul>
       <div class="wk-menu-foot">${WRAP_STATES.has(c.state)

@@ -929,11 +929,12 @@ def _title(t: dict):
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 
 
-def _artifacts(s: dict, links: list[str], limit: int = 12) -> list[dict]:
-    """What a session made: the files it created or edited that still exist (not scratch files), and the published
-    Artifact links in its text (`links`), newest file first."""
+def _artifacts(s: dict, links: list[str], limit: int = 20) -> list[dict]:
+    """What a session made: the published Artifact links in its text (`links`) first, then the files it created or
+    edited that still exist (not scratch files), newest file first, `limit` in all."""
+    out = [dict(kind="link", url=u, name=u.rsplit("/", 1)[-1]) for u in links[:limit]]
     files = sorted((p for p in s["edited"] if Path(p).is_file()), key=_mtime, reverse=True)
-    out = [dict(kind="file", path=p, name=Path(p).name) for p in files[:limit]]
+    out += [dict(kind="file", path=p, name=Path(p).name) for p in files[:max(0, limit - len(out))]]
     return out
 
 
