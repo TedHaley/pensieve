@@ -350,20 +350,30 @@ def revive_cluster_command(cards: list[dict], branch: str, folder, agent: str = 
     return _revive_start(cards, agent, _cluster_head(cards, branch, f"their copies in {path}"))
 
 
-WRAPUP_PROMPT = ("Wrap up the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
-                 "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
-                 "{copy}. The steps left to close this work, in order:\n{steps}\n"
-                 "Do the agent's steps with your own tools, in this order, and stop before each step that is mine or "
-                 "the tracker's: tell me what it is and what you need from me. Before anything that leaves this Mac "
-                 "(a push, a pull request, a comment, a ticket change), show me what you will do and wait for my yes. "
-                 "When a step is done, say what you checked to know it is done.")
+RESOLVE_PROMPTS = {
+    "merge": ("Merge the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+              "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
+              "{copy}. The steps that take this work to merged and closed, in order:\n{steps}\n"
+              "Do the agent's steps with your own tools, in this order, and stop before each step that is mine or "
+              "the tracker's: tell me what it is and what you need from me. Before anything that leaves this Mac "
+              "(a push, a pull request, a comment, a ticket change), show me what you will do and wait for my yes. "
+              "When a step is done, say what you checked to know it is done."),
+    "discard": ("Discard the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+                "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
+                "{copy}. The steps that close this work without merging it, in order:\n{steps}\n"
+                "Nothing here is reversible: before each step, show me exactly what it deletes, closes or changes "
+                "and wait for my yes. Do the agent's steps with your own tools, in this order, and stop before each "
+                "step that is mine or the tracker's: tell me what it is and what you need from me. When a step is "
+                "done, say what you checked to know it is done."),
+}
 
 
-def wrapup_steps(threads: list[dict]) -> list[dict]:
-    """The steps left to close a cluster: each thread's closeout steps that are not done, one of each, in order."""
+def resolve_steps(threads: list[dict], intent: str = "merge") -> list[dict]:
+    """The steps left to close a cluster one way: `merge` takes each thread's closeout steps that are not done,
+    `discard` its discard steps; one of each text, in order."""
     out, seen = [], set()
     for t in threads:
-        for s in t.get("closeout", []):
+        for s in t.get("discard" if intent == "discard" else "closeout", []):
             key = s.get("text", "")
             if s.get("done") or key in seen:
                 continue
@@ -372,21 +382,21 @@ def wrapup_steps(threads: list[dict]) -> list[dict]:
     return out
 
 
-def _wrapup_head(cards: list[dict], branch: str, steps: list[dict], copy: str) -> str:
+def _resolve_head(cards: list[dict], branch: str, steps: list[dict], copy: str, intent: str) -> str:
     who = {"agent": "you, the agent", "you": "me, the user", "parent": "the tracker or GitHub"}
     lines = [f"{i + 1}. {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for i, s in enumerate(steps)] or ["(nothing left: check that the work is done)"]
-    return WRAPUP_PROMPT.format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards), copy=copy,
-                                steps="\n".join(lines))
+    return RESOLVE_PROMPTS[intent].format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards),
+                                          copy=copy, steps="\n".join(lines))
 
 
-def wrapup_prompt(cards: list[dict], branch: str, steps: list[dict]) -> str:
-    return _wrapup_head(cards, branch, steps, "their copies below") + "\n\n" + _cluster_text(cards)
+def resolve_prompt(cards: list[dict], branch: str, steps: list[dict], intent: str = "merge") -> str:
+    return _resolve_head(cards, branch, steps, "their copies below", intent) + "\n\n" + _cluster_text(cards)
 
 
-def wrapup_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "") -> str:
-    """The shell command that starts a new agent session to wrap a cluster up: the steps left lead its prompt."""
-    path = _revive_copy(folder, f"wrap-up-{branch or 'branch'}", _cluster_text(cards))
-    return _revive_start(cards, agent, _wrapup_head(cards, branch, steps, f"their copies in {path}"))
+def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "", intent: str = "merge") -> str:
+    """The shell command that starts a new agent session to merge or discard a cluster: the steps lead its prompt."""
+    path = _revive_copy(folder, f"{intent}-{branch or 'branch'}", _cluster_text(cards))
+    return _revive_start(cards, agent, _resolve_head(cards, branch, steps, f"their copies in {path}", intent))
 
 
 def revive_command(card: dict, folder, agent: str = "") -> str:

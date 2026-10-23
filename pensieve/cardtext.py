@@ -270,6 +270,35 @@ def closeout(card: dict, reply: Reply | None = None) -> list[dict]:
     return out
 
 
+def discard(card: dict) -> list[dict]:
+    """The steps that close the thread without merging its work, in order: drop the uncommitted files, close each
+    open pull request without a merge, delete each branch (and its remote copy when it was pushed), and mark each
+    ticket that is not done as cancelled. Each step says who acts, as `pending` does."""
+    out = []
+    own = {b.get("branch") for b in card.get("branches", []) if b.get("branch")}
+    for pl in card.get("places", []):
+        b = pl.get("branch")
+        if b not in own or pl.get("head"):
+            continue
+        if pl.get("changed"):
+            out.append(dict(text=f"Discard {pl['changed']} uncommitted files on {b}", who="agent", ref=b, stage="work", done=False))
+    for p in card.get("prs", []):
+        if p.get("state") in ("open", "draft"):
+            n = "#" + p["url"].rstrip("/").rsplit("/", 1)[-1]
+            out.append(dict(text=f"Close {n} without merging", who="you", ref=p["url"], stage="merge", done=False))
+    pushed = {pl.get("branch") for pl in card.get("places", []) if pl.get("upstream") or pl.get("remote_url")}
+    for b in sorted(own):
+        where = "local and remote" if b in pushed else "local"
+        out.append(dict(text=f"Delete branch {b} ({where})", who="agent", ref=b, stage="branch", done=False))
+    seen = set()
+    for k in card.get("tickets", []):
+        if k.get("ref") or k["key"] in seen or DONE_WORDS.search(k.get("status") or ""):
+            continue
+        seen.add(k["key"])
+        out.append(dict(text=f"Mark {k['key']} as cancelled (won't do)", who="parent", ref=k["key"], stage="ticket", done=False))
+    return out
+
+
 _ROLE = re.compile(r"^(User|Assistant|Memory): ", re.M)
 
 

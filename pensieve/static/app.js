@@ -4048,7 +4048,7 @@ function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header 
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
-  const wrap = cluster ? '' : wkWrapUp({key: `thread|${t.id}`, state: t.state, branch: t.branches?.[0]?.branch || t.claim?.branch || '', tasks: [t]});
+  const wrap = cluster ? '' : wkResolveBtns({key: `thread|${t.id}`, state: t.state, branch: t.branches?.[0]?.branch || t.claim?.branch || '', tasks: [t]});
   return `<div class="wk-bar">${resume}${fresh}${details}${wrap}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
 }
 // A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
@@ -4244,29 +4244,38 @@ function wkKin(t) {
   const n = rows.filter(k => !k.me).length;
   return `<section class="wk-sec wk-kin"><h5>Related sessions${branch && kin.length ? ` · <span class="wk-kin-b">${WK_IC.branch}${esc(branch)}</span>` : ''} <span class="muted">${n}</span></h5><ol class="wk-kin-list">${html}</ol></section>`;
 }
-// A cluster's Wrap up button and its dropdown: the steps left to close the branch's work (each thread's steps that
-// are not done, one of each), who does each, and a button that starts a session to do them, when the work is not
-// closed yet.
+// The two ways to close work, each a button with a dropdown: Merge lists the steps that take every data source of the
+// threads to merged and done (commit, push, the PR's review and merge, the ticket closed after it); Discard lists the
+// steps that close them without a merge (drop the changes, close the PR, delete the branch, cancel the ticket). The
+// button at the bottom starts a session that does those steps, when the work is not closed yet.
 const WRAP_STATES = new Set(['open', 'loose_ends', 'forgotten']);
-function wkWrapSteps(tasks) {
+const RESOLVE = {
+  merge: {label: 'Merge', head: 'To merge the work on', single: 'To merge this thread', start: 'Start merge', field: 'closeout',
+    title: 'The steps that take this work to merged and done'},
+  discard: {label: 'Discard', head: 'To discard the work on', single: 'To discard this thread', start: 'Start discard', field: 'discard',
+    title: 'The steps that close this work without merging it'},
+};
+function wkResolveSteps(tasks, intent) {
   const seen = new Set(), out = [];
-  for (const t of tasks) for (const s of t.closeout || []) {
+  for (const t of tasks) for (const s of t[RESOLVE[intent].field] || []) {
     if (s.done || seen.has(s.text)) continue;
     seen.add(s.text); out.push(s);
   }
   return out;
 }
-function wkWrapUp(c) {
-  const key = c.key || `${c.state}|${c.branch}`, open = S.work.wrap === key, steps = wkWrapSteps(c.tasks), ids = c.tasks.map(t => t.id).join(',');
+function wkResolve(c, intent) {
+  const r = RESOLVE[intent], key = `${intent}|${c.key || `${c.state}|${c.branch}`}`, open = S.work.wrap === key;
+  const steps = wkResolveSteps(c.tasks, intent), ids = c.tasks.map(t => t.id).join(',');
   const menu = !open ? '' : `<div class="wk-menu wk-wrap-menu" role="menu">
-      <div class="wk-wrap-h">${c.branch ? `To close the work on <span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span>` : 'To close this thread'}</div>
+      <div class="wk-wrap-h">${c.branch ? `${r.head} <span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span>` : r.single}</div>
       <ul class="wk-wrap-steps">${steps.length ? steps.map(s => `<li>${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</li>`).join('')
         : '<li class="muted">Nothing left: every step is done</li>'}</ul>
       <div class="wk-menu-foot">${WRAP_STATES.has(c.state)
-        ? `<button class="wk-btn primary" data-wk-wrapup-start="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does the agent's steps, asking you before each of yours">${WK_IC.spark}Start a session to wrap up</button>`
-        : `<span class="muted">${esc(wkModel(c.state).label)}: nothing to wrap up</span>`}</div></div>`;
-  return `<span class="wk-wrap"><button class="wk-btn ${open ? 'on' : ''}" data-wk-wrap="${esc(key)}" aria-haspopup="menu" aria-expanded="${open}" title="The steps left to close the work on this branch">Wrap up<span class="wk-n">${steps.length}</span></button>${menu}</span>`;
+        ? `<button class="wk-btn primary" data-wk-resolve-start="${esc(ids)}" data-intent="${intent}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does these steps, asking you before each of yours">${WK_IC.spark}${r.start}</button>`
+        : `<span class="muted">${esc(wkModel(c.state).label)}: nothing left</span>`}</div></div>`;
+  return `<span class="wk-wrap"><button class="wk-btn ${open ? 'on' : ''}" data-wk-wrap="${esc(key)}" aria-haspopup="menu" aria-expanded="${open}" title="${r.title}">${r.label}<span class="wk-n">${steps.length}</span></button>${menu}</span>`;
 }
+const wkResolveBtns = c => wkResolve(c, 'merge') + wkResolve(c, 'discard');
 // A thread's session's own time: the holder of a branch adopts the time of the newest session on it (t.updated)
 const wkOwnTime = t => t.sessions?.[0]?.updated || t.updated;
 // The threads of a page as clusters: the threads of one state that wrote to the same branch sit together, the
@@ -4370,7 +4379,7 @@ function renderWork() {
       const p = c.tasks.map(t => (t.places || []).find(x => x.branch === c.branch)).find(Boolean) || {};
       const repo = p.repo || (p.path || '').split('/').pop();
       const link = p.remote_url ? `<a class="wk-branch" href="${esc(p.remote_url)}" target="_blank" rel="noopener">${WK_IC.branch}${esc(c.branch)}</a>` : `<span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span>`;
-      return head + `<section class="wk-cluster" data-branch="${esc(c.branch)}" style="--acc:${wkModel(c.state).color}"><header class="wk-cluster-h">${repo ? `<span class="wk-where-repo" title="${esc(p.path || '')}">${esc(repo)}</span>` : ''}${link}${p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : ''}<span class="wk-cl-btns">${wkWrapUp({...c, branch: c.branch})}
+      return head + `<section class="wk-cluster" data-branch="${esc(c.branch)}" style="--acc:${wkModel(c.state).color}"><header class="wk-cluster-h">${repo ? `<span class="wk-where-repo" title="${esc(p.path || '')}">${esc(repo)}</span>` : ''}${link}${p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : ''}<span class="wk-cl-btns">${wkResolveBtns(c)}
         <span class="wk-split"><button class="wk-btn" data-wk-revive-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads all ${c.tasks.length} threads of this branch first">${WK_IC.spark}Fork from all ${c.tasks.length}</button><button class="wk-btn copy" data-wk-revive-cluster-copy="${esc(ids)}" data-branch="${esc(c.branch)}" aria-label="Copy a prompt with every thread of this branch in it" title="Copy a prompt with every thread of this branch in it, to start the work in any agent">${WK_IC.copy}</button></span>
         <button class="wk-btn icon" data-wk-preview-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Preview the ${c.tasks.length} threads of this branch as one page">${WK_IC.eye}</button></span></header>${c.tasks.map(t => `<div class="wk-twig">${wkCard(t, d, c.branch)}</div>`).join('')}</section>`;
     }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.threads.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
@@ -4453,12 +4462,13 @@ function wkBind(el, d) {
   $$('[data-wk-resume-copy]', el).forEach(b => b.onclick = e => {
     e.stopPropagation(); navigator.clipboard?.writeText(b.dataset.wkResumeCopy); toast('Resume command copied');
   });
-  const cluster = b => ({ids: (b.dataset.wkReviveCluster || b.dataset.wkReviveClusterCopy || b.dataset.wkWrapupStart || b.dataset.wkPreviewCluster).split(','), branch: b.dataset.branch, days: S.work.days});
+  const cluster = b => ({ids: (b.dataset.wkReviveCluster || b.dataset.wkReviveClusterCopy || b.dataset.wkResolveStart || b.dataset.wkPreviewCluster).split(','), branch: b.dataset.branch, days: S.work.days});
   $$('[data-wk-wrap]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.wrap = S.work.wrap === b.dataset.wkWrap ? null : b.dataset.wkWrap; S.work.menu = false; renderWork(); });
   $$('.wk-wrap-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
-  $$('[data-wk-wrapup-start]', el).forEach(b => b.onclick = async e => {
+  $$('[data-wk-resolve-start]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
-    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({...cluster(b), intent: 'wrap_up'})}); S.work.wrap = null; renderWork(); toast(`Starting a session to wrap up ${b.dataset.branch} in Terminal`); }
+    const intent = b.dataset.intent;
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({...cluster(b), intent})}); S.work.wrap = null; renderWork(); toast(`Starting a session to ${intent} ${b.dataset.branch || 'this thread'} in Terminal`); }
     catch (err) { toast('Could not start it: ' + err.message); }
   });
   $$('[data-wk-preview-cluster]', el).forEach(b => b.onclick = e => {

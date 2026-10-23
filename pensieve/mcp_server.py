@@ -786,10 +786,12 @@ def _branch_threads(branch: str) -> list[dict]:
 @tool()
 def cluster(branch: str) -> str:
     """The threads of one branch (the last 30 days, within this connection's scope), newest session first: what
-    each session did on the branch and its share of the lines, each thread's state, and the steps left to wrap the
-    branch up, with who can do each (you, the agent; the user; or the tracker). Pensieve only reads: do the steps in
-    git, GitHub or the tracker. branch: its name as `threads` and `thread` print it. thread(id) gives one thread
-    whole; thread_page(branch=...) saves the page of them all."""
+    each session did on the branch and its share of the lines, each thread's state, and the two ways to close the
+    work, each as steps with who can do each (you, the agent; the user; or the tracker): merge it (commit, push,
+    open and merge the PR, close the ticket) or discard it (drop the changes, close the PR, delete the branch,
+    cancel the ticket). Pensieve only reads: do the steps in git, GitHub or the tracker, and ask the user before
+    each step that deletes or closes. branch: its name as `threads` and `thread` print it. thread(id) gives one
+    thread whole; thread_page(branch=...) saves the page of them all."""
     from datetime import datetime
     from pensieve import cards
     ts = _branch_threads(branch)
@@ -803,11 +805,12 @@ def cluster(branch: str) -> str:
         share = f", {round(me['share'] * 100)}% of the branch" if me.get("share") else ""
         at = (t.get("sessions") or [{}])[0].get("updated") or t["updated"]
         out.append(f"- {day(at)} {t['title']} [{t['id']} {t['state']}]: {me.get('did') or 'no changes'}{share}")
-    steps = cards.wrapup_steps(ts)
-    out += ["", "Left to wrap this branch up (Pensieve only reads: these are steps, not changes it made):"]
-    out += [f"- {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for s in steps] or ["- nothing: every step is done"]
     can = any(t["state"] in ("open", "loose_ends", "forgotten") for t in ts)
-    out.append(f"\nWrap-up: {'open: the steps above close it' if can else 'done: every thread is closed'}")
+    for intent, label in (("merge", "To merge this work and close it"), ("discard", "To discard this work and close it")):
+        steps = cards.resolve_steps(ts, intent)
+        out += ["", f"{label} (Pensieve only reads: these are steps, not changes it made):"]
+        out += [f"- {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for s in steps] or ["- nothing: every step is done"]
+    out.append(f"\nState: {'open: one of the two lists above closes it' if can else 'done: every thread is closed'}")
     return "\n".join(out)
 
 

@@ -878,7 +878,8 @@ def _thread(t: dict, inp: "Inputs"):
     t["mine"] = cardtext.my_messages(turns)
     t["reply"] = asdict(reply) if reply and (reply.text or reply.waiting) else None
     t["left"] = [asdict(x) for x in cardtext.pending(t, reply)]
-    t["closeout"] = cardtext.closeout(t, reply)
+    t["closeout"] = cardtext.closeout(t, reply)  # the steps that merge the work
+    t["discard"] = cardtext.discard(t)  # the steps that close it without merging
 
 
 _REFLOG_CREATED = re.compile(r"^(\S+)@\{(\d+)\}\|branch: Created")

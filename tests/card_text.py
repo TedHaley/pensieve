@@ -215,6 +215,19 @@ def test_unpushed_and_uncommitted_on_own_branch():
     assert got == ["Commit 2 changed files on retry", "Push 1 commits on retry", "Open a pull request for retry"]
 
 
+def test_discard_steps():
+    """Discarding closes without a merge: drop the changes, close the open PR, delete the branch (and its remote copy
+    when pushed), cancel the ticket that is not done."""
+    from pensieve.cardtext import discard
+    c = card(branches=[dict(repo="/r", branch="retry")], places=[dict(branch="retry", changed=2, upstream=True)],
+             prs=[dict(url=PR + "4", state="open", head="retry"), dict(url=PR + "3", state="merged", head="old")],
+             tickets=[dict(key="ABC-1", status="In Progress"), dict(key="ABC-2", status="Done")])
+    assert [s["text"] for s in discard(c)] == ["Discard 2 uncommitted files on retry", "Close #4 without merging",
+                                               "Delete branch retry (local and remote)", "Mark ABC-1 as cancelled (won't do)"]
+    assert [s["who"] for s in discard(c)] == ["agent", "you", "agent", "parent"]
+    assert discard(card()) == []
+
+
 def test_branch_with_a_pull_request_needs_none():
     """A branch that has a pull request, open or merged, needs no new one; a branch with nothing on it needs none
     either."""

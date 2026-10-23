@@ -1905,7 +1905,7 @@ class ReviveReq(BaseModel):
     id: str = ""  # a thread on the Threads tab, as it is now
     ids: list[str] = []  # or a cluster: the threads of one branch, newest first
     branch: str = ""  # the cluster's branch
-    intent: str = ""  # "wrap_up": the new session closes the cluster's steps left, instead of picking the work up
+    intent: str = ""  # "merge" or "discard": the new session closes the work that way, instead of picking it up
     days: int = 30
     run: bool = True  # false: only the prompt with the thread in it, to paste into any agent
     agent: str = ""  # the agent to start (agents.AGENTS); "" = the user's default agent
@@ -1925,12 +1925,13 @@ def revive_thread(req: ReviveReq):
     from pensieve import cards
     if req.ids:
         got = [_local_card(i, req.days) for i in req.ids]
-        if req.intent == "wrap_up":
+        intent = {"wrap_up": "merge"}.get(req.intent, req.intent)
+        if intent in ("merge", "discard"):
             ts = [t for t in work.tasks(store, req.days) if t["id"] in set(req.ids)]
-            steps = cards.wrapup_steps(sorted(ts, key=lambda t: req.ids.index(t["id"])))
+            steps = cards.resolve_steps(sorted(ts, key=lambda t: req.ids.index(t["id"])), intent)
             if not req.run:
-                return {"ok": True, "prompt": cards.wrapup_prompt(got, req.branch, steps), "steps": steps}
-            cmd = cards.wrapup_command(got, req.branch, steps, config.V2_DIR / "revive", req.agent)
+                return {"ok": True, "prompt": cards.resolve_prompt(got, req.branch, steps, intent), "steps": steps}
+            cmd = cards.resolve_command(got, req.branch, steps, config.V2_DIR / "revive", req.agent, intent)
             _terminal(cmd)
             return {"ok": True, "command": cmd, "steps": steps}
         if not req.run:
