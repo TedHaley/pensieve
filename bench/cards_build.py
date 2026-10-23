@@ -11,15 +11,54 @@ title, body and head branch, and from a branch's name. So:
 Each card has the session's sinks, open ones first, then its source: the session, its folder and its times."""
 import json
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
+from pensieve import agents, cardtext
 from pensieve.digest import NOT_TICKETS
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "bench" / "out" / "graph"
 TICKET = re.compile(r"(?<![\w-])([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
-ORDER = {"open": 0, "unknown": 1, "stale": 2, "closed": 3}
+ORDER = {"open": 0, "stale": 1, "closed": 2, "unknown": 2}  # unknown sorts with closed
+OPEN_STATES = {"open", "OPEN", "EXISTS", "stale"}
+TRANSCRIPTS = Path.home() / ".claude" / "projects"
+
+
+def turns_of(sid: str) -> list:
+    """(role, text) for each user and assistant message of a Claude session, read from its transcript file."""
+    hits = list(TRANSCRIPTS.glob(f"*/{sid}.jsonl"))
+    if not hits:
+        return []
+    turns = []
+    for line in hits[0].read_text(errors="ignore").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        msg = rec.get("message") or {}
+        role = msg.get("role") or rec.get("type")
+        content = msg.get("content")
+        if isinstance(content, list):  # text blocks only; tool results and tool calls have no text
+            content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+        if role in ("user", "assistant") and isinstance(content, str):
+            turns.append((role, content))
+    return turns
+
+
+def start_prompt(title: str, folder: str, sinks: list, turns: list) -> str:
+    """A short first prompt for a new session on this thread: its title, its open items, and the user's last words."""
+    lines = [f"Continue the work in {folder}: {title}."]
+    open_items = [f"{s['name'].split('@')[-1] if s['kind'] == 'branch' else s['name']} ({s['kind']})"
+                  for s in sinks if s["state"] in OPEN_STATES]
+    if open_items:
+        lines.append("Still open: " + ", ".join(open_items) + ".")
+    last = cardtext.my_messages(turns, n=2)
+    if last:
+        lines.append("The last thing asked, in the user's words:")
+        lines += [f"- {m if len(m) <= 240 else m[:240] + ' …'}" for m in last]
+    return "\n".join(lines)
 
 
 def token(user: str) -> str:
@@ -102,9 +141,14 @@ def main():
         sinks.sort(key=lambda s: (ORDER.get(s["state"], 9), s["kind"], s["name"]))
         s = th["sessions"][0]
         node = nodes.get(s, {})
+        folder, title = node.get("project", ""), node.get("label", "")
+        sid = s.split(":", 1)[1] if s.startswith("claude:") else ""  # resume and start are built for Claude sessions
+        cd = f"cd {shlex.quote(folder)} && " if folder else ""
+        resume = agents.resume("claude", sid) if sid else None
+        start = agents.start("claude", start_prompt(title, folder, sinks, turns_of(sid))) if sid else None
         cards.append(dict(id=th["id"], state=th["state"], quiet_days=th["quiet_days"], sinks=sinks,
-                          source=dict(session=s, title=node.get("label", ""), folder=node.get("project", ""),
-                                      written=node.get("written", 0))))
+                          resume=f"{cd}{resume}" if resume else "", start=f"{cd}{start}" if start else "",
+                          source=dict(session=s, title=title, folder=folder, written=node.get("written", 0))))
     cards.sort(key=lambda c: (ORDER.get(c["state"], 9), c["quiet_days"]))
     (OUT / "cards.json").write_text(json.dumps(cards, indent=1))
     print(f"cards {len(cards)}; sinks {sum(len(c['sinks']) for c in cards)}; "

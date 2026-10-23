@@ -43,36 +43,32 @@ def run():
     results.append(check("sinks of a task: PR, branch, ticket", keys,
                          ["pr org/repo#12", "branch org/repo@mac-app", "ticket ABC-7"]))
 
+    def state(x):
+        return ss.task_state(x)[0]
+
     use_cache({"branch org/repo@mac-app": "MERGED", "ticket ABC-7": "Done"})
-    closed, why = ss.task_closed_by_sinks(t)
-    results.append(check("all sinks done: closes", closed, True))
+    results.append(check("all sinks done: closed", state(t) == tm.ThreadState.CLOSED, True))
 
     use_cache({"branch org/repo@mac-app": "EXISTS", "ticket ABC-7": "Done"})
-    results.append(check("branch still exists: not closed", ss.task_closed_by_sinks(t)[0], False))
+    results.append(check("branch still exists, PR merged: open or loose ends, not closed",
+                         state(t) != tm.ThreadState.CLOSED, True))
 
     open_pr = task(prs=[dict(url="https://github.com/org/repo/pull/12", state="open")])
     use_cache({})
-    results.append(check("open PR: not closed", ss.task_closed_by_sinks(open_pr)[0], False))
+    results.append(check("open PR: not closed", state(open_pr) == tm.ThreadState.CLOSED, False))
 
     ticket_only = task(tickets=[dict(key="ABC-9", status="In Progress")])
-    use_cache({})
+    results.append(check("ticket in progress: open, not closed", state(ticket_only) == tm.ThreadState.CLOSED, False))
 
-    def agent_silent(keys):
-        raise RuntimeError("the agent has not answered")
-    ss.ticket_statuses = agent_silent
-    results.append(check("ticket the agent has not answered: unknown, not closed",
-                         ss.task_closed_by_sinks(ticket_only)[0], False))
-
-    ss.ticket_statuses = lambda keys: {k: "Done" for k in keys}
-    results.append(check("ticket answered Done by the agent: closes",
-                         ss.task_closed_by_sinks(task(tickets=[dict(key="ABC-9")]))[0], True))
+    results.append(check("ticket with no status: unknown, so closed",
+                         state(task(tickets=[dict(key="ABC-10")])) == tm.ThreadState.CLOSED, True))
 
     ss.branch_status = lambda repo, branch: "DELETED"
     use_cache({})
     results.append(check("deleted branch counts as done",
-                         ss.task_closed_by_sinks(task(branches=[dict(repo="org/repo", branch="old")]))[0], True))
+                         state(task(branches=[dict(repo="org/repo", branch="old")])) == tm.ThreadState.CLOSED, True))
 
-    results.append(check("no sinks: never closed by sinks", ss.task_closed_by_sinks(task())[0], False))
+    results.append(check("no sinks: no state from sinks", ss.task_state(task())[0], None))
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)

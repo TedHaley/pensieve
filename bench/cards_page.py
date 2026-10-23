@@ -2,9 +2,9 @@
 
   .venv/bin/python bench/cards_page.py     # writes bench/out/graph/cards.html
 
-Each card lists its open sinks first, then its stale and unknown sinks, then its closed sinks under one dropdown. The
-dropdown shows at most 20 items. Partners sit on the same line: a branch with its PR and ticket, a PR with its branch
-and ticket."""
+Each card shows its pairs in one direction: branch to PR, then PR to ticket. A branch with no PR pairs with its
+tickets. A branch with neither stands alone. Open and stale pairs come first. Closed and unknown pairs go under one
+dropdown, at most 20 items."""
 import json
 from pathlib import Path
 

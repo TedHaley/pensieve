@@ -662,6 +662,10 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
         for t in out:
             t["places"] = []
     _own_prs(out)
+    from pensieve import session_threads
+    out = session_threads.split(out)  # one thread per writing session, each with only its own sinks
+    from pensieve import claims
+    claims.apply(out)  # a branch shared by several threads goes to the session with the majority claim
     have, manual = notes(), task_states.latest(store)
     if inp.until is None:
         _integrated(out, have)
@@ -670,6 +674,7 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
         _attention(t)
         _thread(t, inp, have.get(t["id"], {}))
         task_states.apply(t, have.get(t["id"], {}), manual.get(t["id"]))
+        _title(t)
         t.pop("_sessions")
         t.pop("_shared", None)
         t.pop("_named", None)
@@ -688,6 +693,35 @@ def _thread(t: dict, inp: "Inputs", note: dict):
     t["mine"] = cardtext.my_messages(turns)
     t["reply"] = asdict(reply) if reply and (reply.text or reply.waiting) else None
     t["left"] = [asdict(x) for x in cardtext.pending(t, reply, resolved=bool(note.get("resolved")))]
+
+
+TITLE_FILLER = re.compile(r"^(i'?ll|i'?m|i\s|i've|let'?s|let me|sure|okay|ok|done|got it|yes|no|now|next|great|thanks|here)\b", re.I)
+
+
+def _headline(text: str) -> str:
+    """The first sentence of a text when it reads as a title: 15 to 90 characters, plain, a statement. Else ''."""
+    line = next((x.strip() for x in (text or "").splitlines() if x.strip()), "")
+    line = re.sub(r"[*_`#>|]+", "", line).strip()
+    line = re.split(r"(?<=[.!?])\s", line)[0].rstrip(".")
+    ok = 15 <= len(line) <= 90 and not line.endswith((":", "?")) and not TITLE_FILLER.match(line)
+    return line if ok else ""
+
+
+def _title(t: dict):
+    """The card's title: the open PR or ticket it works on. Once its sinks are all closed, the session's own title.
+    Otherwise the agent's last reply, then the user's latest words, when either reads as a title."""
+    own = t["sessions"][0]["title"] if t.get("sessions") else t.get("title", "")
+    pr = next((p for p in t["prs"] if (p.get("state") or "").lower() in ("open", "draft")), None)
+    tk = next((k for k in t["tickets"] if k.get("status") and k["status"].lower() not in DONE), None)
+    if tk:
+        found = tk.get("title", "")
+    elif pr:
+        found = pr.get("title", "")
+    elif (t["prs"] or t["branches"] or t["tickets"]) and t.get("state") == "closed":
+        found = own
+    else:
+        found = _headline((t.get("reply") or {}).get("text", "")) or _headline((t.get("mine") or [""])[-1])
+    t["title"] = found or own
 
 
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
@@ -729,7 +763,8 @@ PR_SUBJECT = re.compile(r"^Merge pull request #(\d+)\b|\(#(\d+)\)\s*$")  # a Git
 
 def _integrated(ts: list[dict], have: dict):
     """Where a task's work reached the default branch of its repo, from git. Pensieve only reads: the merge is the
-    evidence, and task_states.derive turns it into a state. Without an open PR, a task is integrated when:
+    evidence, and the card names the PR that merged it. A thread's state comes from its sinks, not from this. Without an
+    open PR, a task is integrated when:
     - it has a feature branch and every commit of the task is in the default branch (a merge or a fast-forward);
     - its feature branch is squash-merged (stale._squashed);
     - it has no feature branch (its commits are on a shared branch), every commit of the task is in the default
@@ -799,7 +834,8 @@ def _mark(t: dict, root: str, base: str, sha: str, why: str, webs: dict):
 
 ACTIVE_MINUTES = 10      # a transcript written this recently: the session is running now
 ACTIVE_TURN_MINUTES = 30  # ... and its last turn this recent
-DONE = task_states.DONE
+DONE = {"done", "closed", "resolved", "won't do", "wont do", "cancelled", "canceled", "merged", "complete", "completed",
+        "fixed", "invalid", "duplicate", "released", "shipped"}  # ticket statuses that count as finished
 
 
 def _order(t):
@@ -1371,6 +1407,12 @@ def _pickup(task: dict, wts: dict):
             p["changed"] = 0 if p.get("head") else \
                 len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
             p["worktree"] = root in wts
+            if p["branch"] not in DEFAULT_BRANCHES:  # each commit of the branch: is its patch already in the default branch
+                from pensieve import stale
+                base = stale._default_branch(root)
+                cherry = _git(root, "cherry", base, p["branch"], ttl=300).splitlines() if base else []
+                p["commits"] = len(cherry)
+                p["unmerged"] = sum(line.startswith("+") for line in cherry)
             # ahead and behind of the task's branch, not of the branch that is open in the checkout now
             ref = p["branch"] if p.get("head") else "HEAD"
             ab = _git(root, "rev-list", "--left-right", "--count", f"{ref}@{{upstream}}...{ref}").split()
@@ -1668,7 +1710,9 @@ def notes() -> dict:
 def _signature(task: dict) -> str:
     import hashlib
     data = [NOTE_VERSION, [(e["ts"], e["title"]) for e in task["events"][:30]], [(p["url"], p["state"]) for p in task["prs"]],
-            [(p["path"], p.get("branch"), p.get("changed")) for p in task.get("places", [])]]
+            [(p["path"], p.get("branch"), p.get("changed")) for p in task.get("places", [])],
+            task.get("state"), [(k.get("key"), k.get("status")) for k in task.get("tickets", [])],
+            task.get("chains", [])]  # the state and chains come from the sinks: a change in either rewrites the card
     return hashlib.sha1(json.dumps(data).encode()).hexdigest()[:16]
 
 

@@ -1,11 +1,9 @@
 """The four states of a thread on the Threads tab, how each one is set, and where changes are kept.
 
-A thread gets a state automatically from its evidence (`derive`). The user can set a state by hand on the Threads
-tab. A state set by hand holds until the thread has new activity after it; then the automatic state applies again.
-Every change by hand is a row in `card_states` (in store.db), so a thread keeps its history.
-
-Loose ends -> forgotten: work is left and has gone quiet for FORGET_DAYS. Closed comes only from verified sinks
-(sink_status.py) or outside evidence. A closed thread does not reopen. New work starts a new thread."""
+A thread gets its state automatically from its sinks (thread_model.thread_state, through sink_status.task_state).
+Unknown counts as closed. A task with no sink is closed too: nothing verifies it. The user can set a state by hand on
+the Threads tab, and forgotten is only set by hand. A state set by hand holds until the thread has new activity after
+it; then the automatic state applies again. Every change by hand is a row in `card_states` (in store.db)."""
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -13,6 +11,7 @@ from enum import Enum
 
 class State(str, Enum):
     OPEN = "open"
+    THOUGHTS = "thoughts"
     LOOSE_ENDS = "loose_ends"
     CLOSED = "closed"
     FORGOTTEN = "forgotten"
@@ -31,7 +30,10 @@ MODELS = {m.state: m for m in [
     StateModel(State.OPEN, "Open", "You are working on it now.",
                "A session is running, or the thread has material work (edits, commits, a branch or a PR) and activity "
                "in the last 3 days, and it is not done.", "#34c759"),
-    StateModel(State.LOOSE_ENDS, "Loose ends", "Work that is not done and has gone quiet: close it out.",
+    StateModel(State.THOUGHTS, "Thoughts", "A session with no data source: no PR, branch or ticket it wrote to.",
+               "A session with no data source, written in the last 3 days. Loose ends after 3 days quiet, forgotten "
+               "after 21 days quiet.", "#5ac8fa"),
+    StateModel(State.LOOSE_ENDS, "Loose ends","Work that is not done and has gone quiet: close it out.",
                "Work that is not done (an open PR, a ticket that is not done, uncommitted files, or work left), with "
                "no activity in the last 3 days. Also a ticket not started yet, or a thread with no sink to verify.",
                "#ff9f0a"),
@@ -44,10 +46,7 @@ MODELS = {m.state: m for m in [
                "conversation with no ticket and no edits, once its session has ended.",
                "#ff453a"),
 ]}
-ORDER = [State.OPEN, State.LOOSE_ENDS, State.CLOSED, State.FORGOTTEN]
-RECENT_DAYS = 3
-FORGET_DAYS = 21  # loose ends left this long become forgotten
-MERGE_GRACE = 15 * 60  # activity this soon after a merge is the wrap-up of the same work
+ORDER = [State.OPEN, State.THOUGHTS, State.LOOSE_ENDS, State.CLOSED, State.FORGOTTEN]
 RENAMED = {"discarded": "forgotten", "latent": "loose_ends", "conscious": "open", "subconscious": "loose_ends",
            "etched": "closed", "complete": "closed", "todo": "loose_ends", "closing": "loose_ends"}  # earlier names
 STORED = {"closed": "complete", "todo": "loose_ends", "closing": "loose_ends"}  # the names the store's CHECK accepts
@@ -56,10 +55,6 @@ STORED = {"closed": "complete", "todo": "loose_ends", "closing": "loose_ends"}  
 def stored(value: str) -> str:
     """The name a state is saved under: closed is saved as complete, which the store's CHECK still allows."""
     return STORED.get(value, value)
-
-
-DONE = {"done", "closed", "resolved", "won't do", "wont do", "cancelled", "canceled", "merged", "complete", "completed",
-        "fixed", "invalid", "duplicate", "released", "shipped"}
 
 
 @dataclass
@@ -74,44 +69,6 @@ class StateChange:
 def _nothing_left(note: dict) -> bool:
     left = (note.get("next") or note.get("left") or "").strip().rstrip(".").lower()  # "left" in notes before version 8
     return left in ("nothing", "none", "n/a", "nothing left")
-
-
-def derive(task: dict, note: dict, now: float | None = None) -> tuple[State, str]:
-    """The automatic state of a task, and why."""
-    now = now or time.time()
-    prs = task.get("prs", [])
-    open_prs = [p for p in prs if p.get("state") in ("open", "draft")]
-    merged = [p for p in prs if p.get("state") in ("merged", "closed")]
-    tickets = task.get("tickets", [])
-    open_tickets = [k for k in tickets if k.get("status") and k["status"].lower() not in DONE]
-    done_tickets = [k for k in tickets if k.get("status") and k["status"].lower() in DONE]
-    feature = {b["branch"] for b in task.get("branches", [])}
-    uncommitted = any(p.get("changed") and p.get("branch") in feature and not p.get("head")
-                      for p in task.get("places", []))
-    material = bool(task.get("files") or task.get("commits") or prs or feature)
-    recent = now - task.get("updated", 0) < RECENT_DAYS * 86400
-    quiet = int((now - task.get("updated", now)) // 86400)
-    if task.get("active"):
-        return State.OPEN, "a session is running now"
-    merged_at = max([p.get("merged_at") or 0 for p in prs if p.get("state") == "merged"] + [0])
-    if merged_at and not open_prs and not open_tickets and task.get("updated", 0) <= merged_at + MERGE_GRACE:
-        return State.CLOSED, "its PR is merged, and nothing happened after"
-    own_merged = any(p.get("own") and p.get("state") == "merged" for p in prs)
-    if not open_prs and not open_tickets and own_merged:  # files left uncommitted after a merge are leftovers
-        return State.CLOSED, "its PR is merged"
-    if not open_prs and not open_tickets and not uncommitted and task.get("integrated"):  # see work._integrated
-        return State.CLOSED, task["integrated"]["why"]
-    if not open_prs and not open_tickets and not uncommitted and (merged or done_tickets):
-        return State.CLOSED, "merged" if merged else "ticket done"
-    if not material:  # a ticket not started yet is loose ends; a conversation alone is not work
-        if any(not (k.get("status") or "").lower() in DONE for k in tickets):
-            return State.LOOSE_ENDS, "a ticket with no edits, commits, branch or PR yet"
-        return State.FORGOTTEN, "a conversation with no ticket and no work to pick up"
-    if not open_prs and not uncommitted and quiet >= FORGET_DAYS:
-        return State.FORGOTTEN, f"not done, quiet for {quiet} days, nothing waiting"
-    if recent:
-        return State.OPEN, f"work in the last {RECENT_DAYS} days"
-    return State.LOOSE_ENDS, f"not done, quiet for {quiet} days"
 
 
 def latest(store=None) -> dict[str, StateChange]:
@@ -137,6 +94,8 @@ def set_state(store, task_id: str, state: str, by: str = "user", reason: str = "
     from pensieve.models import CardStateSet, SetBy, StateSet
     from pensieve.store import cards
     state = RENAMED.get(state, state)
+    if state == State.THOUGHTS.value:
+        raise ValueError("thoughts is automatic: a session with no data source")
     if state != "auto" and state not in State._value2member_map_:
         raise ValueError(f"state must be one of: {', '.join(s.value for s in ORDER)}, or auto")
     if by not in ("user", "agent"):
@@ -149,11 +108,14 @@ def set_state(store, task_id: str, state: str, by: str = "user", reason: str = "
 
 def apply(task: dict, note: dict, manual: StateChange | None):
     """Set task["state"] and why: by hand while no activity is newer than that change, else automatically."""
-    auto, why = derive(task, note)
-    from pensieve import sink_status
-    done, reason = sink_status.task_closed_by_sinks(task)
-    if done:  # every sink the task writes to is verified done (sink_status.py)
-        auto, why = State.CLOSED, reason
+    from pensieve import chains, sink_status, thread_model as tm
+    by_sinks, reason, status = sink_status.task_state(task)
+    if by_sinks is None:  # no data source: a thought, by its last activity
+        by_sinks, why = tm.thought_state(task.get("updated", 0))
+    else:
+        why = reason
+    auto = State(by_sinks.value)
+    task["chains"] = chains.build(task, status)
     if manual and manual.state != "auto" and manual.at >= task.get("updated", 0):
         state = RENAMED.get(manual.state, manual.state)
         task.update(state=State(state).value, state_by=manual.by, state_why=manual.reason or f"set by {manual.by}")

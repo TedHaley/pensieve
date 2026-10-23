@@ -1,4 +1,5 @@
 """Git repo indexing: code chunks + blame, session<->code links, and 'who knows this area' experts."""
+from __future__ import annotations  # Repos.list shadows the builtin list inside the class body; annotations stay lazy
 import hashlib
 import json
 import os

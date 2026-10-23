@@ -791,7 +791,7 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-menu span{margin-left:auto;color:var(--text-3);font-variant-numeric:tabular-nums;font-size:12px}
 .wk-menu-foot{display:flex;justify-content:space-between;padding:6px 9px 2px;border-top:1px solid var(--line);margin-top:4px}
 .wk-menu-foot .linkbtn{font-size:12px}
-.wk-state{appearance:none;-webkit-appearance:none;border:0;border-radius:999px;padding:3px 10px;font:600 11px var(--sans);cursor:pointer;
+.wk-state{appearance:none;-webkit-appearance:none;border:0;border-radius:999px;padding:3px 10px;font:600 11px var(--sans);cursor:pointer;field-sizing:content;
   color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);flex:none}
 .wk-state:hover{background:color-mix(in srgb,var(--c) 25%,transparent)}
 /* a card: what happened (left), the note (right), and the bar to pick it back up (bottom) */
@@ -814,6 +814,14 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-sub a{color:var(--accent);text-decoration:none}.wk-sub a:hover{text-decoration:underline}
 .wk-branch{display:inline-flex;align-items:center;gap:5px;font:12px var(--mono);color:var(--text-2)}
 .wk-branch em{font:600 10px var(--sans);font-style:normal;padding:1px 6px;border-radius:999px;background:var(--card-2);color:var(--text-3)}
+a.wk-branch{color:var(--accent);text-decoration:none}a.wk-branch:hover{text-decoration:underline}
+.wk-hcol{flex:1 1 220px;min-width:0;display:flex;flex-direction:column;gap:3px}
+.wk-title{margin:0;font:600 14px var(--sans);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wk-working{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12.5px;min-width:0}
+.wk-working .wk-where-repo{font:600 12px var(--mono);color:var(--text-2);white-space:nowrap}
+.ch-n{display:inline-flex;align-items:center;gap:5px}
+.ch-n svg{flex:none;color:var(--text-3)}
+a.ch-n{color:var(--accent);text-decoration:none}a.ch-n:hover{text-decoration:underline}
 .wk-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px}
 .wk-tag{font:600 11px var(--sans);padding:3px 9px;border-radius:999px;background:var(--card-2);color:var(--text-2)}
 .wk-tag.soft{color:var(--text-3);font-weight:500}
@@ -831,6 +839,8 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-main header .wk-tag{flex:none}
 .wk-sec{margin-top:14px}
 .wk-sec h5{margin:0 0 4px;font:600 10.5px var(--sans);text-transform:uppercase;letter-spacing:.07em;color:var(--text-3)}
+.wk-sec h5 .wk-more{padding:0;font:inherit;text-transform:inherit;letter-spacing:inherit;color:inherit}
+.wk-summary{margin:0 0 10px;font-size:12.5px;line-height:1.45;color:var(--text-2)}
 .wk-row{display:flex;align-items:center;gap:8px;min-height:28px;font-size:12.5px;min-width:0}
 .wk-row+.wk-row,.wk-artlist+.wk-row{border-top:1px solid var(--line)}
 .wk-row .nm{display:inline-flex;align-items:center;gap:5px;font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;flex:none}
@@ -1363,24 +1373,15 @@ body.native #top{pointer-events:auto}  /* the whole top bar drags the window, li
 .sh-r label b{flex:1;font-weight:500;min-width:0;overflow-wrap:anywhere}.sh-r label .muted{font-size:11px;white-space:nowrap}.sh-r textarea{margin-top:6px}
 .sh-foot{position:sticky;bottom:-18px;display:flex;gap:8px;align-items:center;padding:12px 0 2px;background:var(--sheet)}.sh-foot .muted{flex:1;font-size:11px}
 .wk-view button{display:inline-flex;align-items:center;gap:5px}
-.wk-row-c{display:flex;align-items:center;gap:12px;padding:9px 12px 9px 18px;margin-bottom:6px;border-radius:12px;cursor:pointer}
-.wk-row-c .c-main{flex:1;min-width:0}
-.wk-row-c .c-l1{display:flex;align-items:center;gap:7px;min-width:0}
-.wk-row-c h4{margin:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.wk-row-c a.wk-st{text-decoration:none}
-.wk-row-c .c-l2{display:flex;gap:10px;margin-top:2px;font-size:12px;color:var(--text-3);min-width:0}
-.wk-row-c .c-where{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wk-row-c .c-next{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)}
-.wk-row-c time{flex:none;font-size:12px;color:var(--text-3)}
-.wk-row-c .c-btns{flex:none;display:flex;gap:4px;opacity:.55;transition:opacity .15s}.wk-row-c:hover .c-btns{opacity:1}
-.wk-task.opened{cursor:pointer}
+.wk-task{grid-template-columns:minmax(0,1fr);grid-template-areas:"main" "bar"}
+.wk-task.wk-compact{cursor:pointer}
+.wk-counts{font-size:12px;color:var(--text-3);white-space:nowrap}
+.wk-chains{margin-top:10px}
 .preview-dlg{display:flex;flex-direction:column;width:min(860px,calc(100vw - 2 * var(--gap)));height:80vh}
 .preview-dlg .pv-body{flex:1;min-height:0}.preview-dlg iframe{width:100%;height:100%;border:0;border-radius:0 0 26px 26px;background:transparent}
 .wk-thread{flex:none;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border:0;border-radius:999px;background:var(--card-2);color:var(--text-3);font:600 10.5px var(--sans);cursor:pointer}
 .wk-thread:hover{color:var(--text)}.wk-thread span{font-weight:500;color:var(--text-3)}.wk-thread svg{width:11px;height:11px}
 .th-save .cap{margin:4px 0 6px}.th-btns{display:flex;gap:6px}
-.wk-task.v-glance,.wk-task:has(.wk-glance){grid-template-columns:1fr;grid-template-areas:"main" "bar" "adj"}
-.wk-glance{margin-top:6px}
 .wk-where1{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-3);min-width:0}
 .wk-where1 span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wk-where1 svg{flex:none}
 .wk-next{margin:8px 0 0;font-size:14px;line-height:1.45;color:var(--text);max-width:820px}
@@ -1574,3 +1575,9 @@ a.pj-key:hover,a.pj-tt:hover{text-decoration:underline}
   .is-kpis .kpi{padding:10px 12px}.is-kpis .kpi .v{font-size:19px}.is-sbars{gap:3px}.is-gk{grid-template-columns:1fr 1fr}}
 @media (max-width:860px){.is-wgrid{grid-template-columns:1fr}.is-score{font-size:38px}.is-mrow{grid-template-columns:1fr auto}.is-mrow .is-spark{display:none}}
 body[data-mode="session"] .dev-only{display:none}
+/* Work card chains: branch, PR and ticket on one line, state word after each name */
+.ch-n{font:600 12.5px var(--sans);color:var(--text);white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis}
+.ch-arrow{color:var(--text-3)}
+.wk-row.ch{flex-wrap:wrap;row-gap:4px}
+.ch-more{margin-top:6px}
+.ch-more>summary{cursor:pointer;color:var(--text-3);font-size:12px}

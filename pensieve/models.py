@@ -109,9 +109,18 @@ class State(StrEnum):
     """A thread's state as the store saves it (pensieve/task_states.py says what each one means). Closed is saved
     as complete, the name the store's CHECK allows (task_states.stored)."""
     OPEN = "open"
+    THOUGHTS = "thoughts"
     LOOSE_ENDS = "loose_ends"
     CLOSED = "complete"
     FORGOTTEN = "forgotten"
+
+    @classmethod
+    def _missing_(cls, value):  # rows saved under an older name (todo, closing, closed) still load
+        from pensieve.task_states import RENAMED
+        new = "closed" if value == "closed" else RENAMED.get(value)
+        if new == "closed":
+            return cls.CLOSED
+        return cls(new) if new in cls._value2member_map_ else None
 
 
 class StateSet(StrEnum):

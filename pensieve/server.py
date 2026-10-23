@@ -232,14 +232,7 @@ def _start_cards(loop):
     def changed(ids, removed):
         loop.call_soon_threadsafe(broadcast, {"type": "thread", "ids": ids, "removed": removed})
 
-    def note(t) -> bool:
-        try:
-            work.write_note(t, [])
-            return True
-        except llm.Queued:  # your agent answers it later, and agent_pass writes it then
-            return False
     b.listeners.append(changed)
-    b.note_fn = note
     indexer.session_listeners.append(lambda sid: cardbuild.emit(cardbuild.SESSION, [sid]))
     connections.listeners.append(lambda r: cardbuild.emit(cardbuild.DOCUMENT, [r.id]))
     repos_mod.commit_listeners.append(lambda root: cardbuild.emit(cardbuild.COMMIT, [root]))
@@ -449,10 +442,6 @@ async def agent_pass(loop, pool):
         broadcast({"type": "topics"})
     if not status["insights_running"] and store.topics() and await _run(_insights_due):
         await run_insights()
-    ts = await asyncio.to_thread(work.tasks, store, 30)
-    todo = [t for t in work.stale_notes(ts, limit=AGENT_BATCH * 3) if t["state"] in ("open", "loose_ends")][:AGENT_BATCH]
-    if ok(await asyncio.gather(*[asyncio.to_thread(work.write_note, t, ts) for t in todo], return_exceptions=True)):
-        broadcast({"type": "threads"})
 
 
 async def engine_worker():
@@ -493,7 +482,6 @@ async def card_keeper():
     history.current, pruned = history.Keeper(store), 0.0
     while True:
         try:
-            await asyncio.to_thread(lambda: work.check_done(work.tasks(store, 30)))
             saved = await asyncio.to_thread(history.current.run_once)
             if saved:
                 print(f"Saved {len(saved)} context cards to their threads' history", flush=True)
@@ -1969,37 +1957,6 @@ def set_thread_state(req: TaskStateReq):
         raise HTTPException(400, str(e))
     broadcast({"type": "thread", "ids": [req.id], "removed": []})
     return r
-
-
-_notes_running = threading.Lock()
-
-
-@app.post("/api/threads/notes")
-async def write_thread_notes(days: int = 30, ids: str = ""):
-    """Write the notes that are missing or out of date, for the threads in `ids` (comma-separated; default: the
-    first 10), in the background."""
-    if _notes_running.locked():
-        return {"started": False}
-
-    async def run():
-        with _notes_running:
-            ts = work.tasks(store, days)
-            todo = work.stale_notes(ts, ids=set(_csv(ids)) or None)
-            status["work_notes"] = [t["id"] for t in todo]  # the notes being written, for their "Updating…" mark
-            for t in todo:
-                try:
-                    await asyncio.to_thread(work.write_note, t, ts)
-                except llm.Queued:  # it waits for your agent; the next one can too
-                    pass
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
-                status["work_notes"] = [x for x in status["work_notes"] if x != t["id"]]
-                broadcast({"type": "thread", "ids": [t["id"]], "removed": []})
-            status["work_notes"] = []
-            broadcast({"type": "thread", "ids": [t["id"] for t in todo], "removed": []})
-    asyncio.create_task(run())
-    return {"started": True}
 
 
 class ResumeReq(BaseModel):

@@ -1,4 +1,5 @@
-"""Tests of the app's four thread states (pensieve/task_states.py): open, loose ends, closed, forgotten.
+"""Tests of the thread states (pensieve/task_states.py) set from sinks: open, loose ends, closed, forgotten.
+A task with no sink is a thought: thoughts, then loose ends and forgotten by its quiet days. Unknown counts as closed.
 Run: python tests/thread_states.py"""
 import sys
 import time
@@ -11,14 +12,18 @@ from pensieve.task_states import State  # noqa: E402
 
 DAY = 86400
 NOW = time.time()
-LEFT = {"next": "write the tests"}
-NOTHING = {"next": "nothing"}
+PR_URL = "https://github.com/org/repo/pull/12"
 
 
 def task(quiet_days=0, **extra):
-    base = dict(prs=[], tickets=[], branches=[], places=[], files=[], commits=[{"sha": "abc1234"}],
+    base = dict(prs=[], tickets=[], branches=[], places=[], files=[], commits=[], events=[],
                 updated=NOW - quiet_days * DAY, active=False)
     return {**base, **extra}
+
+
+def state_of(t):
+    ts.apply(t, {}, None)
+    return t["state"]
 
 
 def check(name, got, want):
@@ -29,23 +34,35 @@ def check(name, got, want):
 
 def run():
     results = []
-    results.append(check("open: recent work, work left", ts.derive(task(0), LEFT, NOW)[0], State.OPEN))
-    results.append(check("loose ends: work left, quiet 10 days", ts.derive(task(10), LEFT, NOW)[0], State.LOOSE_ENDS))
-    results.append(check("forgotten: work left, quiet 21 days", ts.derive(task(21), LEFT, NOW)[0], State.FORGOTTEN))
-    results.append(check("nothing left, no evidence, recent: not closed",
-                         ts.derive(task(0), NOTHING, NOW)[0], State.OPEN))
-    results.append(check("nothing left, no evidence, quiet: not closed",
-                         ts.derive(task(10), NOTHING, NOW)[0], State.LOOSE_ENDS))
-    results.append(check("merged PR, nothing after: closed",
-                         ts.derive(task(1, prs=[dict(state="merged", merged_at=NOW - 3600, own=True)]), LEFT, NOW)[0],
-                         State.CLOSED))
+    open_pr = [dict(url=PR_URL, state="open", head="feat")]
+    results.append(check("open PR, work in the last 3 days: open",
+                         state_of(task(0, prs=open_pr)), "open"))
+    results.append(check("open PR, quiet 10 days: loose ends",
+                         state_of(task(10, prs=open_pr)), "loose_ends"))
+    results.append(check("ticket in progress, quiet 10 days: loose ends",
+                         state_of(task(10, tickets=[dict(key="ABC-1", status="In Progress")])), "loose_ends"))
+    results.append(check("ticket with no status: unknown, so closed",
+                         state_of(task(0, tickets=[dict(key="ABC-2")])), "closed"))
+    results.append(check("merged PR: closed",
+                         state_of(task(1, prs=[dict(url=PR_URL, state="merged", head="feat")])), "closed"))
     results.append(check("ticket done: closed",
-                         ts.derive(task(0, tickets=[dict(key="ABC-1", status="Done")]), LEFT, NOW)[0], State.CLOSED))
-    results.append(check("ticket not started: loose ends",
-                         ts.derive(task(0, commits=[], tickets=[dict(key="ABC-2", status="To Do")]), NOTHING, NOW)[0],
-                         State.LOOSE_ENDS))
-    results.append(check("four states in order", [s.value for s in ts.ORDER],
-                         ["open", "loose_ends", "closed", "forgotten"]))
+                         state_of(task(0, tickets=[dict(key="ABC-3", status="Done")])), "closed"))
+    results.append(check("no sink, written now: thoughts", state_of(task(0)), "thoughts"))
+    results.append(check("no sink, quiet 5 days: loose ends", state_of(task(5)), "loose_ends"))
+    results.append(check("no sink, quiet 30 days: forgotten", state_of(task(30)), "forgotten"))
+
+    manual = ts.StateChange("t1", "forgotten", "user", "parked", NOW - 1)
+    held = task(0, prs=open_pr, updated=NOW - 5)
+    ts.apply(held, {}, manual)
+    results.append(check("a state set by hand holds while nothing newer happens",
+                         held["state"], "forgotten"))
+    newer = task(0, prs=open_pr, updated=NOW + 60)
+    ts.apply(newer, {}, manual)
+    results.append(check("new activity after a state set by hand: automatic again",
+                         newer["state"], "open"))
+
+    results.append(check("five states in order", [s.value for s in ts.ORDER],
+                         ["open", "thoughts", "loose_ends", "closed", "forgotten"]))
     results.append(check("todo and closing fold into loose ends", (ts.RENAMED["todo"], ts.RENAMED["closing"]),
                          ("loose_ends", "loose_ends")))
     results.append(check("complete becomes closed", ts.RENAMED["complete"], "closed"))

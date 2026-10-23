@@ -39,23 +39,23 @@ def run():
     results.append(check("open sink, quiet 5 days: loose ends",
                          tm.thread_state([PR], {PR.label: "OPEN"}, NOW - 5 * DAY, NOW)[0],
                          tm.ThreadState.LOOSE_ENDS))
-    results.append(check("open sink, quiet 21 days: forgotten",
+    results.append(check("open sink, quiet 21 days: still loose ends (forgotten is set by hand)",
                          tm.thread_state([PR], {PR.label: "OPEN"}, NOW - 21 * DAY, NOW)[0],
-                         tm.ThreadState.FORGOTTEN))
-    results.append(check("unverifiable branch never closes",
-                         tm.thread_state([BRANCH], {}, NOW, NOW)[0], tm.ThreadState.LOOSE_ENDS))
+                         tm.ThreadState.LOOSE_ENDS))
+    results.append(check("unknown branch counts as closed",
+                         tm.thread_state([BRANCH], {}, NOW, NOW)[0], tm.ThreadState.CLOSED))
     results.append(check("branch that exists opens while recent",
                          tm.thread_state([BRANCH], {BRANCH.label: "EXISTS"}, NOW, NOW)[0], tm.ThreadState.OPEN))
-    results.append(check("unverifiable ticket does not open a thread",
-                         tm.thread_state([TICKET], {}, NOW, NOW)[0], tm.ThreadState.LOOSE_ENDS))
+    results.append(check("unknown ticket counts as closed, and does not open a thread",
+                         tm.thread_state([TICKET], {}, NOW, NOW)[0], tm.ThreadState.CLOSED))
     results.append(check("two sinks, one done and one open: not closed",
                          tm.thread_state([PR, TICKET], {PR.label: "MERGED", TICKET.label: "In Progress"}, NOW, NOW)[0],
                          tm.ThreadState.OPEN))
     results.append(check("two sinks, both done: closed",
                          tm.thread_state([PR, TICKET], {PR.label: "MERGED", TICKET.label: "Done"}, NOW, NOW)[0],
                          tm.ThreadState.CLOSED))
-    results.append(check("no sink: loose ends, never open",
-                         tm.thread_state([], {}, NOW, NOW)[0], tm.ThreadState.LOOSE_ENDS))
+    results.append(check("no sink: no verified open sink, so closed (the caller decides for a task with no sinks)",
+                         tm.thread_state([], {}, NOW, NOW)[0], tm.ThreadState.CLOSED))
     results.append(check("sink label", PR.label, "pr org/repo#12"))
     results.append(check("component id", tm.Component("s", 0, (3, 5)).id, "s#3-5"))
 

@@ -21,7 +21,7 @@ from enum import Enum
 import time
 
 RECENT_DAYS = 3  # an open thread had work in this many days
-FORGET_DAYS = 21  # a loose thread quiet for this many days is forgotten
+FORGOTTEN_DAYS = 21  # a thought, or a thread with work left, quiet this long is forgotten
 
 
 class SinkKind(str, Enum):
@@ -39,6 +39,7 @@ class Completion(str, Enum):
 
 class ThreadState(str, Enum):
     OPEN = "open"
+    THOUGHTS = "thoughts"
     LOOSE_ENDS = "loose_ends"
     CLOSED = "closed"
     FORGOTTEN = "forgotten"
@@ -122,23 +123,34 @@ def sink_complete(sink: Sink, status: dict) -> Completion:
 
 
 def thread_state(sinks: list[Sink], status: dict, last_active: float, now: float | None = None) -> tuple[ThreadState, str]:
-    """The state of a thread from its sinks and its last activity.
+    """The state of a thread from its sinks and its last activity. Unknown counts as closed.
 
-    closed: every sink is verified DONE. A thread with one sink that cannot be verified cannot close.
-    open: work in the last RECENT_DAYS, and some sink is verified open. A sink that cannot be verified does not open
-          a thread.
-    loose ends: quiet for RECENT_DAYS or longer, and not closed.
-    forgotten: quiet for FORGET_DAYS or longer, and not closed."""
+    closed: every sink is verified DONE, or no sink is verified open (an unknown sink counts as closed).
+    open: some sink is verified open, and the thread had work in the last RECENT_DAYS.
+    loose ends: some sink is verified open, and the thread has been quiet for RECENT_DAYS or longer.
+    A caller with no sinks at all decides by other evidence: this function does not run for them."""
     now = now or time.time()
     if not sinks:
-        return ThreadState.LOOSE_ENDS, "no sink: the work cannot be verified"
+        return ThreadState.CLOSED, "no sink to verify"
     done = [s for s in sinks if sink_complete(s, status) == Completion.DONE]
     if len(done) == len(sinks):
         return ThreadState.CLOSED, "every sink is verified done: " + ", ".join(s.label for s in sinks)
+    opened = [s.label for s in sinks if sink_complete(s, status) == Completion.OPEN]
+    if not opened:
+        return ThreadState.CLOSED, "no sink is verified open: " + ", ".join(s.label for s in sinks)
     quiet = (now - last_active) / 86400
-    if quiet >= FORGET_DAYS:
-        return ThreadState.FORGOTTEN, f"quiet for {int(quiet)} days"
-    if quiet < RECENT_DAYS and any(sink_complete(s, status) == Completion.OPEN for s in sinks):
-        return ThreadState.OPEN, f"work in the last {RECENT_DAYS} days, and a sink is verified open"
-    not_done = [s.label for s in sinks if sink_complete(s, status) != Completion.DONE]
-    return ThreadState.LOOSE_ENDS, f"not verified done: {', '.join(not_done)}; quiet for {int(quiet)} days"
+    if quiet < RECENT_DAYS:
+        return ThreadState.OPEN, f"work in the last {RECENT_DAYS} days, and open: {', '.join(opened)}"
+    return ThreadState.LOOSE_ENDS, f"open and quiet for {int(quiet)} days: {', '.join(opened)}"
+
+
+def thought_state(last_active: float, now: float | None = None) -> tuple[ThreadState, str]:
+    """The state of a session with no data source (no PR, branch or ticket it wrote to), from its last activity.
+    thoughts: written in the last RECENT_DAYS. loose ends: quiet for RECENT_DAYS, then forgotten after FORGOTTEN_DAYS."""
+    now = now or time.time()
+    quiet = (now - last_active) / 86400
+    if quiet < RECENT_DAYS:
+        return ThreadState.THOUGHTS, f"a thought: no data source, written in the last {RECENT_DAYS} days"
+    if quiet < FORGOTTEN_DAYS:
+        return ThreadState.LOOSE_ENDS, f"a thought with no data source, quiet for {int(quiet)} days"
+    return ThreadState.FORGOTTEN, f"a thought with no data source, quiet for {int(quiet)} days"

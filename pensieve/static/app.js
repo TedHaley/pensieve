@@ -3921,8 +3921,8 @@ window.addEventListener('resize', debounce(() => { if (S.view === 'people') { pp
 /* ============================== threads tab ============================== */
 // Each thread: its data points from every source, newest first, and an AI note on how it stands and is moving.
 S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, asked: new Set(), menu: false,
-          states: new Set((() => { const v = store.get('threadStates', ['open', 'loose_ends']); return Array.isArray(v) ? v : [v]; })()),
-          view: store.get('workView', 'compact'), full: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a thread; full: the rows opened
+          states: new Set((() => { const v = store.get('threadStates2', ['open', 'thoughts', 'loose_ends']); return Array.isArray(v) ? v : [v]; })()),
+          view: store.get('workView', 'compact'), collapsed: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a thread; full: the rows opened
           details: new Set()};  // the threads whose problem, goal, state and sections are open
 const wkPageSize = () => S.work.view === 'compact' ? 40 : 10;
 const wkModel = s => (S.work.data?.states || []).find(m => m.state === s) || {label: s, color: '#8e8e93', meaning: ''};
@@ -3960,6 +3960,8 @@ const WK_IC = {
   folder: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>',
   copy: '<svg viewBox="0 0 24 24" width="15" height="15"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 8.5V6.2a1.7 1.7 0 0 0-1.7-1.7H6.2a1.7 1.7 0 0 0-1.7 1.7v7.6a1.7 1.7 0 0 0 1.7 1.7h2.3" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
   pr: '<svg viewBox="0 0 24 24" width="13" height="13"><circle cx="6.5" cy="5.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6.5" cy="18.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="17.5" cy="18.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6.5 7.7v8.6M17.5 16.3V10a3 3 0 0 0-3-3h-3.5m2-2.2L10.8 7l2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  ticket: '<svg viewBox="0 0 24 24" width="13" height="13"><path d="M4 8.5V6.5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2a2.5 2.5 0 0 0 0 5v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a2.5 2.5 0 0 0 0-5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9.5 9.5v5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  thread: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M9.5 4 7.5 20M16.5 4l-2 16M4.5 9h15.5M4 15h15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
   people: '<svg viewBox="0 0 24 24" width="15" height="15"><circle cx="9" cy="8.5" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6M15.5 5.8a3 3 0 0 1 0 5.4M17.5 14.6c1.6.6 2.7 2 3 4.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
   branch: '<svg viewBox="0 0 24 24" width="12" height="12"><circle cx="6.5" cy="5.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6.5" cy="18.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.5" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 7.5v9M17.5 10c0 4-6 3-11 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
 };
@@ -3990,57 +3992,22 @@ async function loadAgents() {
     S.agents = {...d, startName: by?.name};
   } catch {}
 }
-function wkActions(t) {
+function wkActions(t, d) {
   const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume last session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}New session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
-  const details = `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
-  return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
+  const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
+  const id = `<button class="wk-btn icon" data-wk-thread="${esc(d.history?.[t.id]?.id || t.id)}" data-wk-title="${esc(t.title)}" title="Thread ${esc(t.id)}: its saved versions">${WK_IC.thread}</button>`;
+  return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${id}${adj}${wkCardBtns(t)}</div>`;
 }
-// A thread on one line: where, its PRs and what is next. A click opens it in full, in place.
-function wkRow(t, n) {
-  const p = (t.places || [])[0] || {};
-  const where = [p.repo || (p.path || '').split('/').pop(), p.branch].filter(Boolean).join(' · ');
-  const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).slice(0, 2)
-    .map(r => `<a class="wk-st pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener">#${esc(prNum(r.url) || '')} ${esc(r.state || '')}</a>`).join('');
-  const next = wkNext(n, t);
-  return `<article class="wk-task wk-row-c" data-id="${esc(t.id)}" data-wk-row="${esc(t.id)}" style="--acc:${wkModel(t.state).color}" title="Show this thread in full">
-    <div class="c-main"><div class="c-l1"><h4 title="${esc(t.title)}">${esc(wkTitle(t, n))}</h4>${wkThread(S.work.data?.history?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active</span>' : ''}${prs}</div>
-      <div class="c-l2">${where ? `<span class="c-where">${esc(where)}</span>` : ''}${next ? `<span class="c-next">${esc(next)}</span>` : ''}</div></div>
-    <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>
-    <div class="c-btns">${t.resume ? `<button class="wk-btn icon" data-wk-resume="${esc(t.resume.session)}" title="Resume the last session in Terminal">${WK_IC.play}</button>` : ''}<button class="wk-btn icon" data-wk-revive="${esc(t.id)}" title="Start a new agent session that reads this thread first">${WK_IC.spark}</button>${wkCardBtns(t)}</div>
-  </article>`;
-}
-// The note's next step; before a note is written, the first item left to close the thread (see cardtext.pending)
-const wkNext = (n, t) => n?.question ? `Decide: ${n.question}` : n?.next || (t?.left?.[0]?.text || '');
 // A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
 // thread goes on; only a thread with no anchor title takes the note's (the same rule as cardtext.card_title)
 const wkCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
-const wkTitle = (t, n) => t.anchor?.title || wkCap((n?.title || '').trim()) || t.title;
+const wkTitle = t => t.title || t.anchor?.title || '';
 const WK_WHO = {agent: ['your agent', 'Your agent can do this in a session'], you: ['you', 'Only you can do this'],
   parent: ['tracker', 'A step in the system the item lives in: Pensieve only reads']};
-// What is left to close the thread, each with who can act
-const wkLeft = t => (t.left || []).map(x => `<div class="wk-row wk-left"><span class="ttl">${esc(x.text)}</span>
-    <span class="wk-st who-${esc(x.how)}" title="${esc(WK_WHO[x.how]?.[1] || '')}">${esc(WK_WHO[x.how]?.[0] || x.how)}</span></div>`).join('');
 const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
-function wkGlance(t, n, writing) {
-  const p = (t.places || [])[0] || {};
-  const where = [p.repo || (p.path || '').split('/').pop(), p.branch].filter(Boolean).join(' · ');
-  const flags = [p.worktree && 'worktree', p.changed && plural(p.changed, 'uncommitted file'), p.ahead && `${p.ahead} not pushed`,
-    p.behind && `${p.behind} behind`].filter(Boolean);
-  const next = wkNext(n, t);
-  const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).slice(0, 4)
-    .map(r => `<a class="wk-chip pr-${esc(r.state || '')}" href="${esc(r.url)}" target="_blank" rel="noopener" title="${esc(r.title || r.url)}">${WK_IC.pr}#${esc(prNum(r.url) || '')} ${esc(r.state || 'state unknown')}${r.checks === 'failing' ? ' · checks failing' : ''}</a>`).join('');
-  const tix = wkTickets(t).slice(0, 4).map(k => `<a class="wk-chip tk${k.ref ? ' ref' : ''}" ${k.url ? `href="${esc(k.url)}" target="_blank" rel="noopener"` : ''}
-    title="${esc(k.ref ? 'Named in its sessions, not linked to this work yet' : k.title || k.key)}">${esc(k.key)}${k.status ? ' · ' + esc(k.status) : ''}</a>`).join('');
-  const sess = t.sessions.length ? `<span class="wk-chip">${plural(t.sessions.length, 'session')}</span>` : '';
-  return `<div class="wk-glance">
-    ${where ? `<div class="wk-where1">${WK_IC.branch}<span>${esc(where)}</span>${flags.map(f => wkSt(f, 'warn')).join('')}</div>` : ''}
-    <p class="wk-next">${next ? `<b>Next</b> ${esc(next)}` : writing ? '<span class="shimmer-text">Writing a note…</span>' : ''}</p>
-    ${prs || tix || sess ? `<div class="wk-chips">${prs}${tix}${sess}</div>` : ''}</div>`;
-}
-const wkThread = th => th ? `<button class="wk-thread" data-wk-thread="${esc(th.id)}" title="Thread ${esc(th.id)}: one goal over time. Pensieve saves a version of the thread when it changes. Click to see its ${plural(th.saves, 'saved version')}.">${WK_IC.branch}${esc(th.id.slice(3, 9))}<span>${th.saves}</span></button>` : '';
 async function openThread(tid, title) {
   const m = document.createElement('div');
   m.className = 'modal'; m.id = 'threadmodal';
@@ -4137,23 +4104,45 @@ async function openShare(id) {
 }
 const wkSt = (text, kind = '') => `<span class="wk-st ${kind}">${esc(text)}</span>`;
 const PR_ORDER = {open: 0, draft: 1, merged: 2, closed: 3};
+// The chains of a thread, built by the server (pensieve/chains.py): each pair in one direction, branch → PR → ticket.
+// Open chains show first. Closed and unknown chains go under one dropdown, at most 20. An unknown state counts as closed.
+function wkChains(t) {
+  const pairs = t.chains || [];
+  if (!pairs.length) return '';
+  // A PR or ticket end links to its page; a branch end opens its folder.
+  const endLink = n => {
+    const body = `${WK_IC[n.kind] || ''}${esc(n.short)}`, tip = `${esc(n.name)}${n.title ? ' — ' + esc(n.title) : ''}`;
+    return n.url ? `<a class="ch-n" href="${esc(n.url)}" target="_blank" rel="noopener" title="${tip}">${body}</a>`
+      : n.path ? `<button class="ch-n wk-btn" data-wk-folder="${esc(n.path)}" data-act="open" title="${esc(n.path)}">${body}</button>`
+      : `<span class="ch-n" title="${tip}">${body}</span>`;
+  };
+  const endKind = n => /to ?do|not started|backlog/i.test(n.word) ? 'warn' : n.open ? 'ok' : '';
+  const line = p => `<div class="wk-row ch">${[p.a, p.b].filter(Boolean).map(n =>
+    `${endLink(n)}${wkSt(n.word, endKind(n))}`)
+    .join('<span class="ch-arrow">→</span>')}</div>`;
+  const open = pairs.filter(p => p.open), done = pairs.filter(p => !p.open), shown = done.slice(0, 20);
+  return (open.map(line).join('') || '<div class="wk-row muted">No open chains</div>') +
+    (done.length ? `<details class="ch-more"><summary>${plural(done.length, 'closed or unknown chain')}</summary>${shown.map(line).join('')}` +
+      `${done.length > shown.length ? `<div class="wk-row muted">+ ${done.length - shown.length} more not shown</div>` : ''}</details>` : '');
+}
 // The card's sections, each only when it has data: where the work is, PRs, tickets, sessions, and all activity
 function wkSections(t) {
   const sec = (name, body) => body ? `<section class="wk-sec"><h5>${name}</h5>${body}</section>` : '';
-  const places = (t.places || []).map(p => {
-    const st = [p.head ? wkSt(`checked out: ${p.head}`, 'warn') : '', p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : '',
+  const folders = (t.places || []).map(p => {
+    const commits = !p.commits ? '' : p.unmerged ? wkSt(`${plural(p.unmerged, 'commit')} not in main`, 'warn') : wkSt(`all ${plural(p.commits, 'commit')} in main`, 'ok');
+    const claim = t.claim && t.claim.branch === p.branch ? (t.claim.lost ? wkSt('lost the branch to another session', 'warn') : wkSt(`${Math.round(t.claim.share * 100)}% of the branch`, 'ok')) : '';
+    const st = [claim, commits, p.head ? wkSt(`checked out: ${p.head}`, 'warn') : '', p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : '',
       p.ahead ? wkSt(`${p.ahead} ahead`, 'warn') : '', p.behind ? wkSt(`${p.behind} behind`) : ''].join('');
     const clean = p.git && !p.head && !p.changed && !p.ahead && !p.behind ? wkSt('clean', 'ok') : '';
-    return `<div class="wk-row wk-where"><div class="l1"><span class="nm">${esc(p.repo || p.path.split('/').pop())}</span>
-      ${p.git && p.branch ? `<span class="wk-branch">${WK_IC.branch}${esc(p.branch)}</span>` : ''}${p.worktree ? wkSt('worktree') : ''}${st}${clean}</div>
-      <div class="l2"><span class="wk-path" title="${esc(p.path)}">${esc(homeTilde(p.path))}</span>
+    if (!p.git) return t.sessions[0] ? `<div class="wk-row"><button class="nm linkbtn subtle" data-wk-resume="${esc(t.sessions[0].id)}" title="Resume this session in Terminal">${WK_IC.play}${esc(t.sessions[0].title)}</button></div>` : '';
+    return `<div class="wk-row wk-where"><div class="l1">${p.branch ? (p.remote_url ? `<a class="wk-branch" href="${esc(p.remote_url)}" target="_blank" rel="noopener">${WK_IC.branch}${esc(p.branch)}</a>` : `<span class="wk-branch">${WK_IC.branch}${esc(p.branch)}</span>`) : ''}<span class="wk-path" title="${esc(p.path)}">${esc(p.path.split('/').pop())}</span>${p.worktree ? wkSt('worktree') : ''}${st}${clean}
       <span class="wk-icons"><button class="wk-btn icon" data-wk-folder="${esc(p.path)}" data-act="terminal" title="Open in Terminal">${WK_IC.term}</button><button class="wk-btn icon" data-wk-folder="${esc(p.path)}" data-act="open" title="Show in Finder">${WK_IC.folder}</button><button class="wk-btn icon" data-wk-copy="${esc(p.path)}" data-what="Path" title="Copy the path">${WK_IC.copy}</button></span></div></div>`;
   }).join('');
   const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).map(r => `<div class="wk-row">
       <a class="nm" href="${esc(r.url)}" target="_blank" rel="noopener">${WK_IC.pr}#${esc(prNum(r.url) || '')}</a><span class="ttl" title="${esc(r.title || r.url)}">${esc(r.title || r.url.replace(/^https:\/\//, ''))}</span>
       ${r.state ? wkSt(r.state, 'pr-' + r.state) : wkSt('state unknown')}${r.checks ? wkSt(`checks ${r.checks}`, r.checks === 'failing' ? 'bad' : r.checks === 'passing' ? 'ok' : 'warn') : ''}${r.review ? wkSt(r.review, r.review === 'approved' ? 'ok' : 'warn') : ''}</div>`).join('');
   const tickets = wkTickets(t).map(k => `<div class="wk-row">
-      <a class="nm" href="${esc(k.url || '#')}" target="_blank" rel="noopener">${esc(k.key)}</a><span class="ttl" title="${esc(k.title || '')}">${esc(k.ref ? 'Named in its sessions' : k.title || '')}</span>
+      <a class="nm" href="${esc(k.url || '#')}" target="_blank" rel="noopener">${WK_IC.ticket}${esc(k.key)}</a><span class="ttl" title="${esc(k.title || '')}">${esc(k.ref ? 'Named in its sessions' : k.title || '')}</span>
       ${k.ref ? wkSt('mentioned') : k.status ? wkSt(k.status, /done|closed|resolved/i.test(k.status) ? 'ok' : '') : wkSt('status unknown')}${k.assignee ? `<span class="who">${esc(k.assignee)}</span>` : ''}</div>`).join('');
   // what the card's sessions read through MCP: Slack threads, tickets, pages; each links to the original
   const seen = (t.seen || []).map(i => `<div class="wk-row">${wkSt(i.via || 'item')}
@@ -4161,48 +4150,21 @@ function wkSections(t) {
         : `<button class="ttl linkbtn subtle" data-wk-openfile="${esc(i.path)}" title="${esc(i.title)}">${esc(i.title)}</button>`}
       <span class="when">${i.updated ? wkDate(i.updated) : ''}</span></div>`).join('')
     + (t.seen_more ? `<div class="wk-row muted">and ${plural(t.seen_more, 'more item')} that its sessions read</div>` : '');
-  const sess = t.events.filter(e => e.source === 'session'), other = t.events.filter(e => e.source !== 'session');
-  const openS = S.work.open.has(t.id + ':s'), openA = S.work.open.has(t.id + ':a');
-  const arts = new Map(t.sessions.map(s => [s.id, s.artifacts || []]));
-  const sessions = (openS ? sess : sess.slice(0, 3)).map(e => {
-    const a = arts.get(e.ref) || [], key = 'art:' + e.ref, open = S.work.open.has(key);
-    const files = a.filter(x => x.kind === 'file').length, links = a.length - files;
-    const count = [files ? plural(files, 'file') : '', links ? plural(links, 'artifact') : ''].filter(Boolean).join(', ');
-    return `<div class="wk-row"><button class="nm linkbtn subtle" data-wk-resume="${esc(e.ref)}" title="Resume this session in Terminal">${WK_IC.play}</button>
-      <span class="ttl">${esc(e.title)}</span>${a.length ? `<button class="wk-arts" data-wk-open="${esc(key)}" aria-expanded="${open}" title="What this session made">${open ? '▾' : '▸'} ${count}</button>` : ''}
-      ${e.detail ? `<span class="who">${esc(e.detail)}</span>` : ''}<span class="when">${wkDate(e.ts)}</span></div>
-      ${open ? `<div class="wk-artlist">${a.map(x => x.kind === 'link'
-        ? `<a class="wk-art" href="${esc(x.url)}" target="_blank" rel="noopener"><span class="k">Artifact</span><span class="nm2">${esc(x.url.replace(/^https:\/\//, ''))}</span></a>`
-        : `<button class="wk-art" data-wk-openfile="${esc(x.path)}" title="Open ${esc(x.path)}"><span class="k">File</span><span class="nm2">${esc(x.name)}</span><span class="dir">${esc(homeTilde(x.path.slice(0, x.path.lastIndexOf('/'))))}</span></button>`).join('')}</div>` : ''}`;
-  }).join('')
-    + (sess.length > 3 ? `<button class="wk-more" data-wk-open="${esc(t.id)}:s">${openS ? 'Show less' : `Show ${sess.length - 3} more`}</button>` : '');
-  const activity = other.length ? `<button class="wk-more" data-wk-open="${esc(t.id)}:a">${openA ? 'Hide activity' : `All activity (${other.length})`}</button>
-      ${openA ? `<ol class="wk-tl">${other.map(wkEvent).join('')}</ol>` : ''}` : '';
-  const waiting = t.reply?.waiting && t.active ? '<div class="wk-row muted">The agent is working on your last message</div>' : '';
-  return sec('To close this thread', waiting + wkLeft(t)) + sec('Working in', places) +
-    sec(t.prs.length > 1 ? 'Pull requests' : 'Pull request', prs) +
-    sec(wkTickets(t).length > 1 ? 'Tickets' : 'Ticket', tickets) + sec('Messages and pages', seen) +
-    sec(sess.length > 1 ? 'Sessions' : 'Session', sessions) + activity;
+  const hideA = S.work.open.has(t.id + ':ah');
+  const artifacts = t.sessions.flatMap(s => (s.artifacts || []).filter(a => a.kind === 'link').map(a => `<div class="wk-row">
+      <a class="nm" href="${esc(a.url)}" target="_blank" rel="noopener">${WK_IC.share}${esc(a.url.replace(/^https:\/\//, ''))}</a></div>`)).join('');
+  const activity = t.events.length ? `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:ah" aria-expanded="${!hideA}">${hideA ? '▸' : '▾'} Activity <span class="muted">${t.events.length}</span></button></h5>${hideA ? '' : `<ol class="wk-tl">${t.events.map(wkEvent).join('')}</ol>`}</section>` : '';
+  return sec('Data Sources', folders + prs + tickets + seen + artifacts) + activity;
 }
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
   try { S.work.data = await api(`/api/threads?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
   if (first) S.work.asked.clear();
-  askNotes();
   if (S.view === 'work') renderWork();
   if (S.work.q.trim()) wkSearch();  // the threads changed: so can what matches
 }
 const wkPageTasks =() => wkShown().slice(S.work.page * wkPageSize(), (S.work.page + 1) * wkPageSize());
 // The notes of the page in view that are missing or out of date: written by the server in the background, once per page
-function askNotes() {
-  const d = S.work.data, key = `${S.work.days}:${[...S.work.states].sort()}:${S.work.page}`;
-  if (!d || S.work.asked.has(key)) return;
-  const ids = wkPageTasks().filter(t => !d.notes[t.id] || d.notes[t.id].stale).map(t => t.id);
-  if (!ids.length) return;
-  S.work.asked.add(key);
-  api(`/api/threads/notes?days=${S.work.days}&ids=${enc(ids.join(','))}`, {method: 'POST'})
-    .then(r => { if (r.started) { d.writing = ids; renderWork(); } else S.work.asked.delete(key); }).catch(() => S.work.asked.delete(key));
-}
 const wkDate = ts => new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
 function wkEvent(e) {
   const link = e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title)}</a>` :
@@ -4220,30 +4182,35 @@ function wkAdjacent(t) {
   return `<div class="wk-adj"><div><div class="h">Coworkers in the same folders</div>${people || '<div class="muted">No commits by others there in the last 3 weeks.</div>'}</div>
     <div><div class="h">Related tickets and threads</div>${rel || '<div class="muted">Nothing related among your connections.</div>'}</div></div>`;
 }
-const wkWriting = (t, d) => (Array.isArray(d.writing) ? d.writing : []).includes(t.id);
 function wkStateSel(t, d) {
   return `<select class="wk-state" data-wk-state="${esc(t.id)}" style="--c:${wkModel(t.state).color}" title="${esc(wkModel(t.state).meaning + ' ' + (t.state_by === 'auto' ? 'Set automatically: ' : 'Set by ' + t.state_by + ': ') + t.state_why)}">
-      ${d.states.map(m => `<option value="${m.state}" ${t.state === m.state ? 'selected' : ''}>${m.label}${t.state === m.state && t.state_by === 'auto' ? ' · auto' : ''}</option>`).join('')}
+      ${d.states.filter(m => m.state !== 'thoughts' || t.state === 'thoughts').map(m => `<option value="${m.state}" ${t.state === m.state ? 'selected' : ''}>${m.label}</option>`).join('')}
       ${t.state_by !== 'auto' ? '<option value="auto">Back to automatic</option>' : ''}</select>`;
 }
-function wkNote(t, d) {
-  const n = d.notes[t.id];
-  const done = n && /^(nothing|none|n\/a)\.?$/i.test((n.next || '').trim());
-  if (n) return `<div class="wk-note">${NOTE_ROWS.filter(([k]) => n[k] && (['problem', 'state'].includes(k) || (k === 'next' && n.question))).map(([k, l, tip]) => `<div class="nrow ${k === 'problem' ? 'recap' : k === 'next' ? (done ? 'done' : 'left') : ''}" title="${tip}"><span class="nlbl">${l}</span><p>${k === 'next' && done ? 'Nothing left' : esc(n[k])}</p></div>`).join('')}
-    ${wkWriting(t, d) ? '<div class="foot">Updating…</div>' : ''}</div>`;
-  return `<div class="wk-note empty-note">${wkWriting(t, d) ? '<span class="shimmer-text">Writing a note…</span>' : 'No note yet.'}</div>`;
-}
 // One thread of the Threads tab: a compact row, or the whole thread
+// A thread as a card, as on the cards page: its title, state, open and closed chains, when it was last active, and its
+// thread id. Compact shows the head only, and a click opens it in full. Expanded adds the chains, the actions, and details.
+// The line under a card's title: the folder where the work is, its branch (linked when pushed), uncommitted files.
+function wkWorking(t) {
+  const p = (t.places || [])[0];
+  if (!p) return '';
+  const repo = p.repo || p.path.split('/').pop();
+  const branch = p.branch ? (p.remote_url
+    ? `<a class="wk-branch" href="${esc(p.remote_url)}" target="_blank" rel="noopener">${WK_IC.branch}${esc(p.branch)}</a>`
+    : `<span class="wk-branch">${WK_IC.branch}${esc(p.branch)}</span>`) : '';
+  const changed = p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : '';
+  return `<div class="wk-working"><span class="muted">Working in</span><span class="wk-where-repo" title="${esc(p.path)}">${esc(repo)}</span>${branch}${changed}</div>`;
+}
 function wkCard(t, d) {
-  if (S.work.view === 'compact' && !S.work.full.has(t.id)) return wkRow(t, d.notes[t.id]);
-  return `<article class="wk-task${S.work.view === 'compact' ? ' opened' : ''}" data-id="${esc(t.id)}" ${S.work.view === 'compact' ? `data-wk-row="${esc(t.id)}"` : ''} style="--acc:${wkModel(t.state).color}">
-      <div class="wk-main">
-        <header><h4 title="${esc(t.title)}">${esc(wkTitle(t, d.notes[t.id]))}</h4>${wkThread(d.history?.[t.id])}${t.active ? '<span class="wk-tag live"><i></i>Active session</span>' : ''}${wkStateSel(t, d)}<time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time></header>
-        ${wkGlance(t, d.notes[t.id], wkWriting(t, d))}
-        ${S.work.details.has(t.id) ? `<div class="wk-detail">${wkNote(t, d)}${wkSections(t)}</div>` : ''}
+  const n = d.notes[t.id], open = S.work.view === 'expanded' ? !S.work.collapsed.has(t.id) : S.work.details.has(t.id);
+  const head = `<header class="wk-head">
+      <div class="wk-hcol"><h4 class="wk-title" title="${esc(t.title)}">${esc(wkTitle(t))}</h4>${wkWorking(t)}</div>
+      <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>${wkStateSel(t, d)}</header>`;
+  return `<article class="wk-task${open ? '' : ' wk-compact'}" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
+      <div class="wk-main">${head}
+        ${open ? `<div class="wk-detail"><section class="wk-sec"><h5>Summary</h5>${t.summary ? `<p class="wk-summary">${esc(t.summary)}</p>` : '<p class="wk-summary muted">No summary yet</p>'}</section>${wkSections(t)}${wkAdjacent(t)}</div>` : ''}
       </div>
-      ${wkActions(t)}
-      ${wkAdjacent(t)}
+      ${wkActions(t, d)}
     </article>`;
 }
 // The order of the server (work._order): by state, a running session first, then the newest
@@ -4295,7 +4262,7 @@ function renderWork() {
   if (!d) { el.innerHTML = S.work.err ? `<div class="empty">Could not load your threads: ${esc(S.work.err)}</div>` : '<div class="shimmer" style="height:160px"></div>'; return; }
   const fl = S.work.flash && Date.now() < S.work.flash.until ? S.work.flash : null;
   if (fl && !fl.shown) {  // a thread opened from the map: its state into the filter, its page in view
-    if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('threadStates', [...S.work.states]); }
+    if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('threadStates2', [...S.work.states]); }
     const at = wkShown().findIndex(x => x.id === fl.id);
     if (at >= 0) S.work.page = Math.floor(at / wkPageSize());
   }
@@ -4343,13 +4310,13 @@ function renderWork() {
     const dy = top - a.getBoundingClientRect().top;
     if (Math.abs(dy) > 2) a.animate([{transform: `translateY(${dy}px)`}, {transform: 'none'}], {duration: 450, easing: 'cubic-bezier(.2,.8,.2,1)'});
   });
-  $$('[data-wk-page]', el).forEach(b => b.onclick = () => { S.work.page += +b.dataset.wkPage; renderWork(); el.scrollTop = 0; askNotes(); });
+  $$('[data-wk-page]', el).forEach(b => b.onclick = () => { S.work.page += +b.dataset.wkPage; renderWork(); el.scrollTop = 0; });
   wkBind(el, d);
   const sb = $('#wksearch', el);
   if (box) { sb.focus(); sb.setSelectionRange(...box); }  // the page was drawn again while you typed
   sb.oninput = () => { S.work.q = sb.value; wkSearch(); };
   sb.onkeydown = e => { if (e.key === 'Escape' && sb.value) { e.stopPropagation(); sb.value = S.work.q = ''; wkSearch(); } };
-  const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('threadStates', [...S.work.states]); renderWork(); askNotes(); };
+  const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('threadStates2', [...S.work.states]); renderWork(); };
   $$('[data-wk-menu]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.menu = !S.work.menu; renderWork(); });
   $$('[data-wk-st]', el).forEach(c => c.onchange = () => pick(d.states.map(m => m.state).filter(s => s === c.dataset.wkSt ? c.checked : S.work.states.has(s))));
   $$('[data-wk-st-all]', el).forEach(b => b.onclick = () => pick(d.states.map(m => m.state)));
@@ -4357,7 +4324,7 @@ function renderWork() {
   $$('.wk-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
   $$('[data-wk-days]', el).forEach(s => s.onchange = () => { S.work.days = +s.value; S.work.page = 0; store.set('workDays', S.work.days); loadWork(true); });
   $$('[data-wk-view]', el).forEach(b => b.onclick = () => {
-    S.work.view = b.dataset.wkView; S.work.page = 0; S.work.full.clear(); store.set('workView', S.work.view); renderWork(); askNotes();
+    S.work.view = b.dataset.wkView; S.work.page = 0; store.set('workView', S.work.view); renderWork();
   });
 }
 // The handlers of the threads in `el`: the whole tab, or one thread that patchWork drew again
@@ -4376,8 +4343,7 @@ function wkBind(el, d) {
   $$('[data-wk-share]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openShare(b.dataset.wkShare); });
   $$('[data-wk-thread]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
-    const t = d.threads.find(x => d.history?.[x.id]?.id === b.dataset.wkThread);
-    openThread(b.dataset.wkThread, t ? t.title : 'Thread');
+    openThread(b.dataset.wkThread, b.dataset.wkTitle || 'Thread');
   });
   $$('[data-wk-details]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
@@ -4403,9 +4369,12 @@ function wkBind(el, d) {
     const t = d.threads.find(x => x.id === b.dataset.wkPreview);
     openPreview(() => fetch(`/api/thread?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Thread');
   });
-  $$('[data-wk-row]', el).forEach(r => r.onclick = e => {
-    if (e.target.closest('button, a, select')) return;
-    const id = r.dataset.wkRow; S.work.full[S.work.full.has(id) ? 'delete' : 'add'](id); renderWork();
+  $$('.wk-task[data-id]', el).forEach(a => a.onclick = e => {  // a click on the card, not on its controls or its open details
+    if (e.target.closest('button, a, select, input, .wk-detail')) return;
+    const id = a.dataset.id;
+    if (S.work.view === 'expanded') S.work.collapsed[S.work.collapsed.has(id) ? 'delete' : 'add'](id);
+    else S.work.details[S.work.details.has(id) ? 'delete' : 'add'](id);
+    renderWork();
   });
   $$('[data-wk-open]', el).forEach(b => b.onclick = () => { const id = b.dataset.wkOpen; S.work.open[S.work.open.has(id) ? 'delete' : 'add'](id); renderWork(); });
   $$('[data-wk-file]', el).forEach(b => b.onclick = () => openFile(b.dataset.wkFile));

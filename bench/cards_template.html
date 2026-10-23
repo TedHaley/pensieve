@@ -29,6 +29,9 @@ input[type=search] { flex:1 1 220px; }
 .name { font-weight:550; overflow-wrap:anywhere; }
 .link { color:var(--muted); font-size:12px; }
 .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:99px; background:var(--chip); white-space:nowrap; }
+.st { font-size:11px; white-space:nowrap; }
+.st::before { content:"● "; }
+.name { font-family: ui-monospace, Menlo, monospace; font-size:12px; }
 .s-open { color:var(--open); } .s-stale { color:var(--stale); } .s-closed { color:var(--closed); } .s-unknown { color:var(--unknown); }
 details.done { margin-top:8px; border-top:1px solid var(--line); padding-top:6px; }
 details.done summary { cursor:pointer; color:var(--muted); font-size:12px; }
@@ -36,6 +39,14 @@ details.done summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .source { margin-top:10px; padding-top:8px; border-top:1px dashed var(--line); font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
 .source code { font-size:11px; }
 .empty { color:var(--muted); font-size:12px; }
+details.card > summary { cursor:pointer; list-style:none; }
+details.card > summary::-webkit-details-marker { display:none; }
+details.card > summary .counts { color:var(--muted); font-size:12px; margin-left:auto; }
+details.card[open] > summary { margin-bottom:8px; }
+details.src { margin-top:10px; border-top:1px dashed var(--line); padding-top:8px; }
+details.src > summary { cursor:pointer; color:var(--muted); font-size:12px; }
+.actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.actions button { font:inherit; font-size:12px; color:var(--ink); background:var(--chip); border:1px solid var(--line); border-radius:8px; padding:4px 10px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -48,7 +59,7 @@ details.done summary { cursor:pointer; color:var(--muted); font-size:12px; }
     <select id="state" aria-label="Filter by state">
       <option value="">All states</option>
       <option value="open">Open</option>
-      <option value="stale">Stale</option>
+      <option value="stale">Loose ends</option>
       <option value="closed">Closed</option>
       <option value="unknown">Unknown</option>
     </select>
@@ -67,42 +78,78 @@ const CLOSED = new Set(["closed", "MERGED", "CLOSED", "DELETED", "done"]);
 const RANK = {open: 0, OPEN: 0, EXISTS: 0, stale: 1, unknown: 2, UNKNOWN: 2};
 const group = s => CLOSED.has(s) ? "closed" : (RANK[s] === 0 ? "open" : (s === "stale" ? "stale" : "unknown"));
 const cls = s => ({open:"s-open", OPEN:"s-open", EXISTS:"s-open", stale:"s-stale", closed:"s-closed", MERGED:"s-closed", CLOSED:"s-closed", DELETED:"s-closed", done:"s-closed"})[s] || "s-unknown";
-const label = s => ({open:"open", OPEN:"open", EXISTS:"exists", stale:"stale", closed:"closed", MERGED:"merged", CLOSED:"closed", DELETED:"deleted", done:"done", unknown:"unknown", UNKNOWN:"unknown"})[s] || s;
+const label = s => ({open:"open", OPEN:"open", EXISTS:"open", stale:"loose ends", closed:"closed", MERGED:"merged", CLOSED:"closed", DELETED:"deleted", done:"done", unknown:"unknown", UNKNOWN:"unknown"})[s] || s;
 const pill = s => `<span class="pill ${cls(s)}">${esc(label(s))}</span>`;
 
-// One line per sink, with its partners in the same line: a branch shows its PR and ticket; a PR shows its branch and ticket.
-function line(s) {
-  const bits = [];
-  if (s.kind === 'branch') {
-    bits.push(`<span class="kind">branch</span><span class="name">${esc(s.name)}</span>${pill(s.state)}`);
-    s.prs.forEach(p => bits.push(`<span class="link">→ PR ${esc(p.key)}</span>${pill(p.state)}`));
-    s.tickets.forEach(t => bits.push(`<span class="link">→ ${esc(t.key)}</span>${pill(t.state)}`));
-  } else if (s.kind === 'pr') {
-    bits.push(`<span class="kind">PR</span><span class="name">${esc(s.name)}</span>${pill(s.state)}`);
-    if (s.branch) bits.push(`<span class="link">← ${esc(s.branch.split('@').pop())}</span>`);
-    s.tickets.forEach(t => bits.push(`<span class="link">→ ${esc(t.key)}</span>${pill(t.state)}`));
-  } else {
-    bits.push(`<span class="kind">${esc(s.kind)}</span><span class="name">${esc(s.name)}</span>${pill(s.state)}`);
-  }
-  const title = s.title ? `<div class="link">${esc(s.title)}</div>` : '';
-  return `<div class="sink"><div class="line">${bits.join(' ')}</div>${title}</div>`;
+// Pairs in one direction: branch -> PR, then PR -> ticket. A ticket with no PR pairs with its branch.
+// Each pair is one line: left(state) -> right(state). Its rank is the better of its two ends.
+function pairsOf(c) {
+  const node = (kind, name, state, title) => ({kind, name, state, title: title || ''});
+  const seen = new Set(), out = [];
+  const add = (a, b) => {
+    const k = a.kind + ':' + a.name + '>' + (b ? b.kind + ':' + b.name : '');
+    if (seen.has(k)) return; seen.add(k);
+    out.push({a, b, rank: b ? Math.min(RANK_OF(a.state), RANK_OF(b.state)) : RANK_OF(a.state)});
+  };
+  const prs = new Map();
+  c.sinks.forEach(s => {
+    if (s.kind === 'pr') prs.set(s.name, {state: s.state, title: s.title, branch: s.branch, tickets: s.tickets});
+    s.prs.forEach(p => prs.set(p.key, {state: p.state, title: p.title, branch: s.name ? s.name : '', tickets: []}));
+  });
+  c.sinks.forEach(s => {
+    if (s.kind !== 'branch') return;
+    if (s.prs.length) s.prs.forEach(p => add(node('branch', s.name, s.state), node('pr', p.key, p.state, p.title)));
+    else if (s.tickets.length) s.tickets.forEach(t => add(node('branch', s.name, s.state), node('ticket', t.key, t.state)));
+    else add(node('branch', s.name, s.state), null);
+  });
+  prs.forEach((p, key) => p.tickets.forEach(t => add(node('pr', key, p.state, p.title), node('ticket', t.key, t.state))));
+  return out;
+}
+const RANK_OF = s => ({open:0, OPEN:0, EXISTS:0, stale:1})[s] ?? 3; // unknown counts as closed
+
+// Short names: the branch without its repo, the PR number, the ticket key. The full name is on hover.
+const short = n => n.kind === 'branch' ? n.name.split('@').pop() : n.kind === 'pr' ? '#' + n.name.split('#').pop() : n.name;
+const word = s => `<span class="st ${cls(s)}">${esc(label(s))}</span>`;
+
+function pairLine(p) {
+  const end = n => `<span class="name" title="${esc(n.name)}${n.title ? ' — ' + esc(n.title) : ''}">${esc(short(n))}</span>${word(n.state)}`;
+  const chain = p.b ? `${end(p.a)} <span class="link">→</span> ${end(p.b)}` : end(p.a);
+  return `<div class="sink"><div class="line">${chain}</div></div>`;
 }
 
 function card(c) {
-  const sorted = [...c.sinks].sort((a, b) => ['open', 'stale', 'unknown', 'closed'].indexOf(group(a.state)) - ['open', 'stale', 'unknown', 'closed'].indexOf(group(b.state)));
-  const active = sorted.filter(s => group(s.state) !== 'closed');
-  const done = sorted.filter(s => group(s.state) === 'closed');
+  const pairs = pairsOf(c).sort((x, y) => x.rank - y.rank);
+  const active = pairs.filter(p => p.rank < 2);
+  const done = pairs.filter(p => p.rank >= 2);
   const shown = done.slice(0, CAP), hidden = done.length - shown.length;
-  const doneBlock = done.length ? `<details class="done"><summary>${done.length} closed, merged or deleted</summary>
-      ${shown.map(line).join('')}${hidden > 0 ? `<div class="more">+ ${hidden} more not shown</div>` : ''}</details>` : '';
+  const doneBlock = done.length ? `<details class="done"><summary>${done.length} closed</summary>
+      ${shown.map(pairLine).join('')}${hidden > 0 ? `<div class="more">+ ${hidden} more not shown</div>` : ''}</details>` : '';
   const title = DATA.titles?.[c.id] || c.source.title || c.source.session;
-  return `<section class="card">
-    <div class="card-h"><span class="title">${esc(title)}</span>${pill(c.state)}</div>
-    <div class="sinks">${active.length ? active.map(line).join('') : '<div class="empty">No open sinks</div>'}</div>
+  const bare = c.sinks.filter(s => s.kind === 'pr' && !s.branch && !s.tickets.length);
+  const btn = (k, text) => `<button data-copy="${k}" data-id="${esc(c.id)}">${text}</button>`;
+  return `<details class="card" data-id="${esc(c.id)}">
+    <summary class="card-h"><span class="title">${esc(title)}</span>${pill(c.state)}<span class="counts">${active.length} open · ${done.length} closed</span></summary>
+    <div class="sinks">${active.length ? active.map(pairLine).join('') : '<div class="empty">No open pairs</div>'}</div>
+    ${bare.length ? `<div class="more">Alone: ${bare.map(s => esc(s.name) + ' ' + label(s.state)).join(', ')}</div>` : ''}
     ${doneBlock}
-    <div class="source">Source: session <code>${esc(c.source.session)}</code>${c.source.folder ? ' · folder <code>' + esc(c.source.folder) + '</code>' : ''} · last written ${esc(ago(c.source.written))}</div>
-  </section>`;
+    <div class="actions">${c.resume ? btn('resume', 'Copy resume command') : ''}${c.start ? btn('start', 'Copy start command') : ''}</div>
+    <details class="src"><summary>Source</summary>
+      <div class="source">Session <code>${esc(c.source.session)}</code>${c.source.folder ? ' · folder <code>' + esc(c.source.folder) + '</code>' : ''} · last written ${esc(ago(c.source.written))}</div>
+    </details>
+  </details>`;
 }
+
+// Copy a card's command. The text is in DATA, so nothing is read back from the page.
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  const c = DATA.cards.find(x => x.id === b.dataset.id);
+  const text = c && c[b.dataset.copy];
+  if (!text) return;
+  navigator.clipboard?.writeText(text);
+  b.textContent = 'Copied';
+  setTimeout(() => b.textContent = b.dataset.copy === 'resume' ? 'Copy resume command' : 'Copy start command', 1500);
+});
 
 function render() {
   const st = $("state").value, q = $("q").value.trim().toLowerCase();
@@ -117,7 +164,7 @@ function render() {
   $("cards").innerHTML = rows.map(card).join('') || '<div class="empty">No cards match.</div>';
 }
 
-$("built").textContent = "Built from " + DATA.cards.length + " sessions. Open first, then stale, then closed.";
+$("built").textContent = "Built from " + DATA.cards.length + " sessions. Open first, then loose ends, then closed.";
 $("state").addEventListener("input", render);
 $("q").addEventListener("input", render);
 render();
