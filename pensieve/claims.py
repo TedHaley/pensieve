@@ -1,9 +1,9 @@
 """Which session holds a branch's work, when several sessions wrote to it.
 
 A session claims the lines it wrote with its edit tools (Edit, Write, MultiEdit). A line counts when it is still on the
-branch's current version of the file. A surviving line belongs to the latest session that wrote it. A session with more
-than half of the surviving lines has the majority claim. A session without it loses the branch: the branch is not active
-on its thread, and the thread's other sinks still decide its state."""
+branch's current version of the file. A surviving line belongs to the latest session that wrote it. The session with the
+most surviving lines holds the branch (on a tie, the later one). The others lose it: the branch is not active on their
+threads, and each thread's other sinks still decide its state."""
 import subprocess
 from functools import lru_cache
 
@@ -28,7 +28,7 @@ def _at_branch(root: str, branch: str, rel: str) -> str:
 
 
 def shares(sessions: list[dict], root: str, branch: str, lines_of=None, text_of=None) -> dict:
-    """Each session's claim on a branch: {session id: {"surviving", "written", "majority"}}.
+    """Each session's claim on a branch: {session id: {"surviving", "written", "share", "holds"}}.
     `sessions` are dicts with id, path and updated. `lines_of(session)` gives its (file, line) pairs and
     `text_of(file)` gives the branch's text of a file. By default they read the transcript and git."""
     lines_of = lines_of or (lambda s: written(s.get("path", "")))
@@ -48,13 +48,15 @@ def shares(sessions: list[dict], root: str, branch: str, lines_of=None, text_of=
     for sid in owner.values():
         counts[sid] += 1
     total = sum(counts.values())
+    by_time = sorted(sessions, key=lambda x: x.get("updated") or 0)
+    holder = max(reversed(by_time), key=lambda s: counts[s["id"]])["id"] if total else None  # a tie: the later one
     return {s["id"]: dict(surviving=counts[s["id"]], written=mine[s["id"]], share=counts[s["id"]] / total if total else 0,
-                          majority=total > 0 and counts[s["id"]] * 2 > total)
+                          holds=s["id"] == holder)
             for s in sessions}
 
 
 def apply(threads: list[dict]) -> None:
-    """Settle the branches that several threads share. A thread without the majority claim loses the branch: the branch
+    """Settle the branches that several threads share. A thread that does not hold the branch loses it: the branch
     leaves its sinks, so the branch does not keep it open. Its other sinks still decide its state."""
     groups = {}
     for t in threads:
@@ -73,18 +75,18 @@ def apply(threads: list[dict]) -> None:
         res = shares(sessions, root, branch)
         if not any(r["surviving"] for r in res.values()):  # nothing of theirs is on the branch: no evidence either way
             continue
-        won = {t["_sessions"][0]["id"] for t in ts if res[t["_sessions"][0]["id"]]["majority"]}
+        won = {t["_sessions"][0]["id"] for t in ts if res[t["_sessions"][0]["id"]]["holds"]}
         won_tickets = {k["key"] for t in ts if t["_sessions"][0]["id"] in won for k in t.get("tickets", [])}
         # the session with the largest share of the branch's lines names the threads that share it
         lead = max(ts, key=lambda t: res[t["_sessions"][0]["id"]]["share"])["_sessions"][0]
         for t in ts:
             t["_lead_title"] = lead.get("title", "")
             r = res[t["_sessions"][0]["id"]]
-            claim = dict(branch=branch, lost=not r["majority"], **r)
+            claim = dict(branch=branch, lost=not r["holds"], **r)
             t.setdefault("claims", {})[branch] = claim  # one per branch the thread shares
             if not t.get("claim") or t["claim"]["lost"]:  # `claim`: the branch it holds, else the first it lost
                 t["claim"] = claim
-            if not r["majority"]:  # the loser keeps only what it holds on its own: its other sinks decide its state,
+            if not r["holds"]:  # the loser keeps only what it holds on its own: its other sinks decide its state,
                 # and what it contributed to decides when it has none (task_states.apply): a session that wrote to
                 # the branch is open while the branch is, not a thought
                 c = t.setdefault("contributed", dict(branches=[], prs=[], tickets=[]))

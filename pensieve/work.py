@@ -707,7 +707,7 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
     from pensieve import session_threads
     out = session_threads.split(out, inp.facts)  # one thread per writing session, each with only its own sinks
     from pensieve import claims
-    claims.apply(out)  # a branch shared by several threads goes to the session with the majority claim
+    claims.apply(out)  # a branch shared by several threads goes to the session with the most of its lines
     _adopt(out)  # the holder of a branch takes the activity of the other sessions that wrote to it
     manual = task_states.latest(store)
     if inp.until is None:

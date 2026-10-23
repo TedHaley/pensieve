@@ -26,22 +26,31 @@ def run():
     head = {"x.py": f"{A_LINE}\n{B_LINE}\n"}
     sessions = [dict(id="a", updated=1), dict(id="b", updated=2)]
     res = claims.shares(sessions, ROOT, "feat", lines_of=lambda s: lines[s["id"]], text_of=lambda rel: head[rel])
-    results.append(check("a holds the one line it still has, b holds one, tie: nobody has a majority",
-                         (res["a"]["surviving"], res["b"]["surviving"], res["a"]["majority"], res["b"]["majority"]),
-                         (1, 1, False, False)))
+    results.append(check("a and b keep one line each, a tie: the later session, b, holds the branch",
+                         (res["a"]["surviving"], res["b"]["surviving"], res["a"]["holds"], res["b"]["holds"]),
+                         (1, 1, False, True)))
 
     head["x.py"] = f"{A_LINE}\n{B_LINE}\n{GONE}\n"
     res = claims.shares(sessions, ROOT, "feat", lines_of=lambda s: lines[s["id"]], text_of=lambda rel: head[rel])
-    results.append(check("b with two surviving lines against a's one: b has the majority",
-                         (res["b"]["majority"], res["a"]["majority"]), (True, False)))
+    results.append(check("b with two surviving lines against a's one: b holds the branch",
+                         (res["b"]["holds"], res["a"]["holds"]), (True, False)))
+
+    lines3 = {"a": [(f"{ROOT}/x.py", "a1"), (f"{ROOT}/x.py", "a2")], "b": [(f"{ROOT}/x.py", "b1")],
+              "c": [(f"{ROOT}/x.py", "c1")]}
+    s3 = [dict(id="a", updated=1), dict(id="b", updated=2), dict(id="c", updated=3)]
+    res = claims.shares(s3, ROOT, "feat", lines_of=lambda s: lines3[s["id"]], text_of=lambda rel: "a1\na2\nb1\nc1\n")
+    results.append(check("the largest share holds the branch without more than half of it (2 of 4 lines)",
+                         [k for k, r in res.items() if r["holds"]], ["a"]))
+    res = claims.shares(s3, ROOT, "feat", lines_of=lambda s: lines3[s["id"]], text_of=lambda rel: "")
+    results.append(check("no surviving line: nobody holds the branch", any(r["holds"] for r in res.values()), False))
 
     threads = [dict(_sessions=[dict(id="a", path="", updated=1)], branches=[dict(repo="r", branch="feat")],
                     places=[dict(branch="feat", git=True, path=ROOT)]),
                dict(_sessions=[dict(id="b", path="", updated=2)], branches=[dict(repo="r", branch="feat")],
                     places=[dict(branch="feat", git=True, path=ROOT)])]
     claims.shares = lambda sessions, root, branch: {
-        "a": dict(surviving=1, written=1, share=0.25, majority=False),
-        "b": dict(surviving=3, written=3, share=0.75, majority=True)}
+        "a": dict(surviving=1, written=1, share=0.25, holds=False),
+        "b": dict(surviving=3, written=3, share=0.75, holds=True)}
     claims.apply(threads)
     results.append(check("the losing thread drops the branch from its sinks",
                          ([b["branch"] for b in threads[0]["branches"]], [b["branch"] for b in threads[1]["branches"]]),
