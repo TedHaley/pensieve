@@ -987,9 +987,19 @@ def _artifacts(s: dict, links: list[str], docs=(), read_docs=(), limit: int = 20
     out = [link(*d) for d in docs if d[2] == "made"]
     out += [dict(kind="link", url=u, name="Artifact", service="Claude", how="made") for u in links]
     out += [link(*d) for d in docs if d[2] != "made"]
-    files = [p for p in read_docs if Path(p).is_file() and "/scratchpad/" not in p]
+    files = [p for p in read_docs if Path(p).is_file() and not _agent_own(p)]
     out += [dict(kind="file", path=p, name=Path(p).name, how="read") for p in files]
     return out[:limit]
+
+
+AGENT_DIRS = [str(Path.home() / d) for d in (".claude", ".codex", ".gemini", ".qwen", ".agents", ".cursor", ".pensieve")]
+
+
+def _agent_own(path: str) -> bool:
+    """An agent's own file, not context about the work: its memory, skills, plugins and tool output (under the
+    agent's folder or a temp folder)."""
+    return path.startswith(tuple(AGENT_DIRS)) or path.startswith(("/tmp/", "/private/tmp/", "/var/folders/",
+                                                                   "/private/var/folders/"))
 
 
 _slack = []

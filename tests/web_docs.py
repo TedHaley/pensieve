@@ -77,7 +77,12 @@ def run():
     note.write_text("x")
     code = DATA / "retry.py"
     code.write_text("x")
+    results.append(check("an agent's memory or tool output is not context",
+                         (work._agent_own(str(Path.home() / ".claude/projects/x/memory/a.md")), work._agent_own(str(note))),
+                         (True, True)))
+    own, work._agent_own = work._agent_own, lambda p: False  # the test's files sit in a temp folder
     arts = work._artifacts({"edited": [str(code)]}, ["https://claude.ai/artifact/abc"], tf["docs"], [str(note)])
+    work._agent_own = own
     results.append(check("an edited code file is not on the list", any(a.get("path") == str(code) for a in arts), False))
     results.append(check("a document read as context is on the list", arts[-1].get("path"), str(note)))
     results.append(check("the Files list: made first, then Artifacts, then the others",
