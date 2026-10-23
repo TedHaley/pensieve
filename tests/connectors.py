@@ -48,6 +48,17 @@ def run():
     results.append(check("a profile without a plan adds no call", connectors.then("linear", [], when), []))
     results.append(check("the server name picks the profile", connectors.match("claude.ai Asana"), "asana"))
 
+    sites = json.dumps([{"id": "c1", "url": "https://acme.atlassian.net", "scopes": ["read:jira-work"]},
+                        {"id": "c2", "url": "https://acme.atlassian.net/wiki", "scopes": ["read:confluence-content.all"]}])
+    calls = connectors.then("jira", [("getAccessibleAtlassianResources", {}, sites)], when, keys=["DP-1", "DP-2", "nope"])
+    results.append(check("Jira: a search per Jira site, none for a Confluence-only site", {c[1]["cloudId"] for c in calls}, {"c1"}))
+    results.append(check("Jira: the user's issues that changed since the start time",
+                         calls[0][1]["jql"], 'assignee = currentUser() AND updated >= "2026-10-01" ORDER BY updated DESC'))
+    results.append(check("Jira: the tickets of open threads are read again", calls[1][1]["jql"], "key in (DP-1,DP-2)"))
+    results.append(check("Jira: no refresh search without open tickets",
+                         len(connectors.then("jira", [("getAccessibleAtlassianResources", {}, sites)], when)), 1))
+    results.append(check("an Atlassian server picks the Jira profile", connectors.match("claude.ai Atlassian"), "jira"))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 

@@ -1593,6 +1593,7 @@ async def add_connector(pid: str, req: ConnectorReq):
     except ValueError as e:
         raise HTTPException(400, str(e))
     sid = connections.slug(name)
+    settings.set_enabled(f"connections/{sid}", True)  # added by hand: collected from the first sign-in on
     out = {}
     if a["kind"] == "oauth":
         r = await asyncio.to_thread(connections.sign_in, sid)
@@ -1986,11 +1987,20 @@ CONNECTIONS_CHECK_SECONDS = 300
 DISCOVER_SECONDS = 6 * 3600
 
 
+wake_connections = asyncio.Event()  # set after a sign-in, so that the new connection collects at once
+
+
 async def connections_worker():
-    """Read the engine's MCP servers now and then, and collect from each connection that is on when it is due."""
+    """Read the agents' MCP servers now and then, and collect from each connection that is on when it is due."""
+    loop = asyncio.get_running_loop()
+    connections.signed_in_listeners.append(lambda sid: loop.call_soon_threadsafe(wake_connections.set))
     wait = 20  # soon after start, then every CONNECTIONS_CHECK_SECONDS
     while True:
-        await asyncio.sleep(wait)
+        try:
+            await asyncio.wait_for(wake_connections.wait(), wait)
+        except asyncio.TimeoutError:
+            pass
+        wake_connections.clear()
         wait = CONNECTIONS_CHECK_SECONDS
         if not settings.get("setup_done"):
             continue

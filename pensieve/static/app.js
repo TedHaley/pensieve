@@ -2040,7 +2040,7 @@ async function cxWait(pid) {
     const cat = await api('/api/sources').catch(() => null);
     const c = cat?.find(x => x.id === 'connections')?.connectors?.find(x => x.id === pid);
     if (c && c.state !== 'needs-auth' && c.state !== 'none' && !c.signin) {
-      srcState.cat = cat; srcState.cxSignin = null; renderSources(); toast(`${c.label} is connected. Switch it on to collect from it`); return;
+      srcState.cat = cat; srcState.cxSignin = null; renderSources(); toast(`${c.label} is connected. Pensieve collects from it now`); return;
     }
   }
 }
@@ -2263,7 +2263,7 @@ function renderSources() {
     if (r.sources) srcState.cat = r.sources;
     srcState.cxOpen = null; renderSources();
     if (r.signin_url) cxWait(pid);
-    else if (!r.error) { srcState.cxSignin = null; toast('Connected. Switch it on to collect from it'); }
+    else if (!r.error) { srcState.cxSignin = null; toast('Connected. Pensieve collects from it now'); }
   };
   $$('[data-cx-add]', box).forEach(b => b.onclick = async () => {
     const pid = b.dataset.cxAdd, kind = b.dataset.kind, k = `${pid}-${b.dataset.i}`;
@@ -2276,7 +2276,7 @@ function renderSources() {
     if (kind === 'oauth') return signedIn(pid, j);
     srcState.cat = j.sources; srcState.cxOpen = null; renderSources();
     const c = j.sources.find(x => x.id === 'connections')?.connectors?.find(x => x.id === pid);
-    toast(c && (c.state === 'found' || c.state === 'on') ? `${c.label} is connected. Switch it on to collect from it` : `Could not connect: ${c?.detail || 'see the list above'}`);
+    toast(c && (c.state === 'found' || c.state === 'on') ? `${c.label} is connected. Pensieve collects from it now` : `Could not connect: ${c?.detail || 'see the list above'}`);
   });
   $$('[data-cx-signin]', box).forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = 'Starting sign-in…';
@@ -2296,13 +2296,15 @@ const refetchSourcesSoon = debounce(async () => { if (S.view !== 'settings') ret
 const ENERGY_IC = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M13 2 4 14h7l-1 8 9-12h-7Z" fill="currentColor"/></svg>';
 // First run (and after a reset), in the same steps an agent takes through the MCP setup tools: what Pensieve is, the
 // user's profiles, permission to look, what to index, the search model, then start. No folder is read before "Look".
-const SETUP_STEPS = ['about', 'profile', 'look', 'choose', 'ai', 'start'];
+const SETUP_STEPS = ['about', 'profile', 'tickets', 'look', 'choose', 'ai', 'start'];
+// The trackers the tickets step offers: a ticket assigned to you is a to-do, and its status closes its thread
+const SETUP_TRACKERS = ['jira', 'linear', 'asana'];
 const SETUP_ADD = {files: 'Add folder…', repos: 'Add repo…', agents: 'Add session folder…'};
 const setupState = {step: 'about', guide: null, profiles: new Set(['session']), cands: null, chosen: new Set(), busy: false, err: null, adding: null};
 async function openSetup(mode = '') {  // with a mode: start at the mode step with it picked
   let el = $('#setupsheet');
   if (!el) { el = document.createElement('div'); el.id = 'setupsheet'; el.className = 'setup-sheet'; document.body.appendChild(el); }
-  Object.assign(setupState, {step: mode ? 'profile' : 'about', profiles: new Set([mode || 'session']), cands: null, chosen: new Set(), busy: false, err: null, adding: null});
+  Object.assign(setupState, {step: mode ? 'profile' : 'about', profiles: new Set([mode || 'session']), cands: null, chosen: new Set(), busy: false, err: null, adding: null, cx: null, cxWait: null, cxUrl: null});
   el.innerHTML = '<div class="setup-card"><div class="spinner" style="margin:24px auto"></div></div>';
   try { setupState.guide = await api('/api/setup?scan=0'); }
   catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
@@ -2324,7 +2326,7 @@ function setupGo(step) { setupState.step = step; setupState.err = null; renderSe
 function renderSetup() {
   const el = $('#setupsheet'), g = setupState.guide; if (!el || !g) return;
   const st = setupState, step = st.step, quick = !st.profiles.has('developer');  // threads mode: two steps, no index
-  const steps = quick ? SETUP_STEPS.slice(0, 2) : SETUP_STEPS, n = steps.indexOf(step);
+  const steps = quick ? SETUP_STEPS.slice(0, 3) : SETUP_STEPS, n = steps.indexOf(step);
   const dots = `<div class="setup-dots">${steps.map((s, i) => `<i class="${i < n ? 'done' : i === n ? 'on' : ''}"></i>`).join('')}</div>`;
   const cancel = g.done ? '<button class="btn" data-setup-cancel>Cancel</button>' : '';
   const btns = (next, label, ok = true) => `${st.err ? `<p class="err">${esc(st.err)}</p>` : ''}<div class="setup-btns">${cancel}<span style="flex:1"></span>${n > 0 ? '<button class="btn" data-setup-back>Back</button>' : ''}
@@ -2336,11 +2338,21 @@ function renderSetup() {
   if (step === 'about') {
     body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg>
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-      <p class="sub">Threads mode is ready in two clicks and indexes nothing. Developer mode also asks what to index and which search model to use.</p>${btns('profile', 'Get started')}`;
+      <p class="sub">Threads mode is ready in a minute and indexes nothing. Developer mode also asks what to index and which search model to use.</p>${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
     body = `<h1>Choose a mode</h1><p class="sub">Threads mode reads your agent sessions as they are, with git and gh: no index, no model. Developer mode also indexes your repos and files for search and the Map.</p>
       <div class="setup-profiles" role="radiogroup">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="radio" aria-checked="${st.profiles.has(p.id)}">
-        <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${quick ? btns('quick', st.busy ? 'Starting…' : 'Start Threads mode') : btns('look', 'Next', st.profiles.size > 0)}`;
+        <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${btns('tickets', 'Next', st.profiles.size > 0)}`;
+  } else if (step === 'tickets') {
+    const rows = SETUP_TRACKERS.map(id => (st.cx || []).find(c => c.id === id)).filter(Boolean);
+    const on = c => c.state === 'on' || c.state === 'found';
+    body = `<h1>Connect your tickets</h1><p class="sub">A ticket assigned to you becomes a to-do thread, and its status closes the thread when the ticket closes. Pensieve signs in with your account and only reads. You can skip this and connect later in Settings → Sources.</p>
+      <div class="setup-trackers">${st.cx ? rows.map(c => `<div class="setup-row setup-tracker"><b>${esc(c.label)}</b>
+        <span class="muted">${on(c) ? `Connected${c.items ? ` · ${srcCount(c.items, 'items')}` : ''}` : st.cxWait === c.id ? 'Waiting for the sign-in in your browser…' : c.state === 'needs-auth' ? 'Needs sign-in' : 'Not connected'}</span>
+        ${on(c) ? '<span class="setup-ok">✓</span>' : st.cxWait === c.id && st.cxUrl ? `<a class="btn" href="${esc(st.cxUrl)}" target="_blank" rel="noopener">Open sign-in</a>`
+          : `<button class="btn" data-setup-cx="${esc(c.id)}" ${st.cxWait ? 'disabled' : ''}>Sign in</button>`}</div>`).join('')
+        : '<p class="muted">Looking for your connections…</p>'}</div>
+      ${quick ? btns('quick', st.busy ? 'Starting…' : 'Start Threads mode') : btns('look', 'Next')}`;
   } else if (step === 'look') {
     body = `<h1>Allow Pensieve to look</h1><p class="sub">To suggest sources, Pensieve looks in these places. macOS may ask you to allow access to some folders. Pensieve reads them only on this Mac, and nothing is indexed until you choose.</p>
       ${setupCats().map(c => `<div class="setup-cat"><h3>${esc(c.label)}</h3><p>${esc(c.reads)}</p></div>`).join('')}
@@ -2377,6 +2389,8 @@ function renderSetup() {
   el.innerHTML = `<div class="setup-card">${dots}${body}</div>`;
   $('[data-setup-cancel]', el)?.addEventListener('click', () => el.remove());
   $('[data-setup-back]', el)?.addEventListener('click', () => setupGo(steps[n - 1]));
+  if (step === 'tickets' && !st.cx) setupTrackers();
+  $$('[data-setup-cx]', el).forEach(b => b.onclick = () => setupSignIn(b.dataset.setupCx));
   $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { st.profiles = new Set([b.dataset.setupProf]); st.cands = null; st.chosen.clear(); renderSetup(); });
   $$('[data-setup-id]', el).forEach(c => c.onchange = () => { st.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
   $$('[data-setup-embed]', el).forEach(b => b.onclick = () => {
@@ -2423,6 +2437,29 @@ function renderSetup() {
     await setView('settings'); renderSettings(); pollStatus();
     toast('Indexing started');
   });
+}
+async function setupTrackers() {
+  const cat = await api('/api/sources').catch(() => null);
+  setupState.cx = cat?.find(x => x.id === 'connections')?.connectors || [];
+  if (setupState.step === 'tickets') renderSetup();
+}
+async function setupSignIn(pid) {
+  const st = setupState;
+  st.cxWait = pid; st.cxUrl = null; st.err = null; renderSetup();
+  try {
+    const r = await api(`/api/connectors/${enc(pid)}/add`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: 'oauth'})});
+    if (r.error) throw new Error(r.error);
+    st.cxUrl = r.signin_url;
+    if (st.cxUrl) window.open(st.cxUrl, '_blank', 'noopener');
+    renderSetup();
+    for (let i = 0; i < 120 && st.cxWait === pid; i++) {
+      await new Promise(res => setTimeout(res, 3000));
+      await setupTrackers();
+      const c = st.cx.find(x => x.id === pid);
+      if (c && (c.state === 'on' || c.state === 'found')) { st.cxWait = null; renderSetup(); return; }
+    }
+    if (st.cxWait === pid) { st.cxWait = null; st.err = 'The sign-in did not finish. Try again, or skip it.'; renderSetup(); }
+  } catch (err) { st.cxWait = null; st.err = 'Could not start the sign-in: ' + err.message; renderSetup(); }
 }
 async function setupAdd(kind, path) {
   const st = setupState; if (!path) return;

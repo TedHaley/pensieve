@@ -1,5 +1,5 @@
 """Connector profiles: what Pensieve knows about the cloud services that people connect most (Slack, Notion, Google
-Drive, HubSpot, GitHub, Granola, Linear).
+Drive, HubSpot, GitHub, Granola, Linear, Jira, Asana).
 
 The collection itself is the generic one in connections.py. A profile adds what the generic code can not guess:
 - the read tools of the service's MCP servers, also the ones whose names fail the verb rule (`API-post-search`);
@@ -338,7 +338,40 @@ def asana_follow(d: dict, names: set) -> tuple | None:
     return None
 
 
-def asana_then(results: list[tuple]) -> list[tuple]:
+JIRA_FIELDS = ["summary", "status", "assignee", "reporter", "created", "updated", "resolution", "description",
+               "issuetype", "priority", "parent"]
+
+
+def jira_then(results: list[tuple], keys=()) -> list[tuple]:
+    """After the recipe: in each Jira site that `getAccessibleAtlassianResources` listed, the issues assigned to the
+    user that changed since the start time, and the issues `keys` (the tickets of threads that are not closed), so
+    that a ticket closed since the last collection closes its thread."""
+    calls = []
+    for tool, args, text in results:
+        if tool != "getAccessibleAtlassianResources":
+            continue
+        try:
+            sites = json.loads(text)
+        except ValueError:
+            continue
+        sites = sites if isinstance(sites, list) else sites.get("resources", []) if isinstance(sites, dict) else []
+        for s in sites:
+            if not isinstance(s, dict) or not s.get("id") or not any("jira" in str(x) for x in s.get("scopes") or ["jira"]):
+                continue
+            q = dict(cloudId=s["id"], fields=JIRA_FIELDS, maxResults=50)
+            calls.append(("searchJiraIssuesUsingJql",
+                          {**q, "jql": 'assignee = currentUser() AND updated >= "{day}" ORDER BY updated DESC'}))
+            ks = sorted({k for k in keys if re.fullmatch(r"[A-Z][A-Z0-9]{1,9}-\d{1,6}", k)})
+            for i in range(0, len(ks), 50):
+                calls.append(("searchJiraIssuesUsingJql", {**q, "jql": f"key in ({','.join(ks[i:i + 50])})"}))
+    return calls
+
+
+def jira_follow(d: dict, names: set) -> tuple | None:
+    return None  # the searches ask for every field a card reads, the description too
+
+
+def asana_then(results: list[tuple], keys=()) -> list[tuple]:
     """After the recipe: a task search in each workspace that `asana_get_user` listed, for the user's tasks that
     changed since the start time."""
     calls = []
@@ -512,6 +545,19 @@ PROFILES = {
                   prefix="Bearer ", placeholder="lin_api_…",
                   help="Linear's own MCP server with a personal API key.",
                   docs="https://linear.app/settings/account/security")]),
+    "jira": dict(
+        label="Jira", match=r"atlassian|jira",
+        reads={"getAccessibleAtlassianResources", "atlassianUserInfo", "searchJiraIssuesUsingJql", "getJiraIssue",
+               "getJiraIssueRemoteIssueLinks", "getVisibleJiraProjects", "getTransitionsForJiraIssue",
+               "lookupJiraAccountId", "getConfluencePage", "searchConfluenceUsingCql", "search", "fetch"},
+        recipe=[("getAccessibleAtlassianResources", {})],
+        then=jira_then,
+        hint="Find the user's Jira sites, then search each one with JQL for the issues assigned to the user that "
+             "changed since {day}, with their summary, status, assignee and description.",
+        follow=jira_follow,
+        add=[dict(kind="oauth", label="Sign in to Jira", url="https://mcp.atlassian.com/v1/mcp",
+                  help="Atlassian's own MCP server. You sign in with your Atlassian account in the browser. "
+                       "Pensieve only calls its read tools.")]),
     "asana": dict(
         label="Asana", match=r"asana",
         reads={"asana_list_workspaces", "asana_search_tasks", "asana_get_task", "asana_get_task_stories",
@@ -563,11 +609,11 @@ def parse(pid: str | None, tool: str, args: dict, data) -> list[dict] | None:
     return fn(tool.rsplit(".", 1)[-1], args or {}, data) if fn else None
 
 
-def then(pid: str | None, results: list[tuple], when: datetime) -> list[tuple]:
+def then(pid: str | None, results: list[tuple], when: datetime, keys=()) -> list[tuple]:
     """The calls that a profile plans from the recipe's results (a search per workspace the user is in), with the
-    start time put in."""
+    start time put in. `keys`: the ticket keys of threads that are not closed, whose status the calls read again."""
     fn = PROFILES[pid].get("then") if pid else None
-    return [(t, fill(a, when)) for t, a in fn(results)] if fn else []
+    return [(t, fill(a, when)) for t, a in fn(results, keys)] if fn else []
 
 
 def follow(pid: str | None, item: dict, names: set) -> tuple | None:

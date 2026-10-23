@@ -11,8 +11,8 @@ from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
     "Pensieve follows your work across AI agent sessions, and helps you organize and track all of your ideas.",
-    "Threads mode, the default, reads your agent sessions as they are, with git and gh. No index, no model, "
-    "ready in two clicks.",
+    "Threads mode, the default, reads your agent sessions as they are, with git and gh, and your tickets from Jira, "
+    "Linear or Asana. No index, no model, ready in a minute.",
     "Developer mode also indexes your git repos and files, and unlocks search, the Map, People and Insights.",
     "Everything runs on this Mac. Nothing is uploaded.",
 ]
@@ -22,7 +22,7 @@ ABOUT = [
 PROFILES = [
     dict(id="session", label="Threads mode", categories=["agents"],
          description="Reads your agent sessions (Claude Code, Codex, Qwen Code) as they are, with git and gh, and "
-                     "builds threads from them. No index, no model: ready in two clicks."),
+                     "builds threads from them. No index, no model: ready in a minute."),
     dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
          description="Also reads your git repos and your files into an index, for search, the Map, People and "
                      "Insights. It is more compute intensive: indexing uses the Mac's GPU and takes a while."),

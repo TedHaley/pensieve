@@ -1375,6 +1375,11 @@ body.native #top{pointer-events:auto}  /* the whole top bar drags the window, li
 .setup-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:7px 10px;border-radius:10px;cursor:pointer}
 .setup-row:hover{background:var(--surface-2)}
 .setup-row.na{opacity:.5;cursor:default}
+.setup-trackers{display:flex;flex-direction:column;gap:4px;margin:14px 0 6px}
+.setup-tracker{grid-template-columns:90px 1fr auto;cursor:default;border:1px solid var(--line);padding:10px 12px}
+.setup-tracker:hover{background:none}
+.setup-tracker .muted{font-size:12.5px}
+.setup-ok{color:var(--good);font-weight:600;padding:0 10px}
 .setup-row input{accent-color:var(--accent);width:15px;height:15px;margin:0}
 .setup-row .tx{display:flex;flex-direction:column;min-width:0}
 .setup-row .tx b{font-size:13px;font-weight:600}

@@ -1054,7 +1054,10 @@ def setup_guide() -> dict:
     6. Ask what writes Pensieve's notes, summaries and insights in the background: one of `engines` (its `about`
        says what it costs; leave out the ones with `unavailable`). `text_engine` is the default. They can change it
        later in Settings → Models.
-    7. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
+    7. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start.
+    8. Ask whether they track work in Jira, Linear or Asana. The sign-in is in the browser: send them to
+       Settings → Sources → Cloud connectors in the app. Their tickets then become to-do threads, and a ticket's
+       status closes its thread."""
     return onboarding.guide()
 
 
