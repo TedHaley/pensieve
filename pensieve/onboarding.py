@@ -12,7 +12,8 @@ from pensieve import actions, apps, config, content, settings, sources
 ABOUT = [
     "Pensieve tracks your work across agent sessions, branches, PRs and tickets.",
     "Threads mode reads your agent sessions, git, and issue tracker to give them structure.",
-    "Developer mode also indexes the repos and files you choose, so your agents can search them.",
+    "Developer mode extends Threads mode and indexes the repos and files you choose, so your agents can search them "
+    "and gain valuable insights.",
     "Everything stays on this Mac.",
 ]
 
@@ -22,8 +23,8 @@ PROFILES = [
     dict(id="session", label="Threads mode", categories=["agents"],
          description="Reads your agent sessions, git, and issue tracker to give them structure. No index."),
     dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
-         description="Also indexes the repos and files you choose, so your agents can search them. Adds the Map, "
-                     "People and Insights."),
+         description="Extends Threads mode and indexes the repos and files you choose, so your agents can search "
+                     "them and gain valuable insights. Adds the Map, People and Insights."),
 ]
 
 ENERGY_NOTE = ("Indexing uses a lot of power: it runs the embedding model on your Mac's GPU until it finishes, so the Mac "
