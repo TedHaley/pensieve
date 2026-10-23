@@ -20,12 +20,12 @@ from pathlib import Path
 from pensieve import cardtext, connections, repos as repos_mod, task_states
 
 KEY = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
-BRANCH_KEY = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,9})[-_](\d{1,6})(?![0-9])")  # dp-4575-x, feat/DP_12
+BRANCH_KEY = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,9})[-_](\d{1,6})(?![0-9])")  # abc-123-x, feat/ABC_12
 
 
 def branch_keys(branch: str, known=()) -> list[str]:
-    """The ticket keys in a branch name. Upper case (DP-4575) as in text; another case or an underscore (dp-4575,
-    Dp_4575) only for a ticket in `known`, since `fix-2-bugs` or `sha-256` look like keys too."""
+    """The ticket keys in a branch name. Upper case (ABC-123) as in text; another case or an underscore (abc-123,
+    Abc_123) only for a ticket in `known`, since `fix-2-bugs` or `sha-256` look like keys too."""
     out = [f"{a}-{b}" for a, b in KEY.findall(branch)]
     out += [k for a, b in BRANCH_KEY.findall(branch) if (k := f"{a.upper()}-{b}") in known and k not in out]
     return out
