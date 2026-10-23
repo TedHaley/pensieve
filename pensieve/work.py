@@ -1620,17 +1620,22 @@ def _signature(task: dict) -> str:
 
 
 def resume_command(store, session_id: str) -> str | None:
-    """The shell command that resumes an agent session in its folder, built from the index (never from client text)."""
+    """The shell command that resumes an agent session in its folder. The folder comes from the session's transcript
+    (the threads' own reading), else from the index (never from client text)."""
     import shlex
+    from pensieve import agents, transcripts
     source, _, sid = session_id.partition(":")
     if not re.fullmatch(r"[A-Za-z0-9-]{8,80}", sid or ""):
         return None
-    row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
-    if not row or not row[0] or not Path(row[0]).is_dir():
+    f = transcripts.find(session_id)
+    folder = f.project if f else ""
+    if not folder and store is not None:
+        row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
+        folder = row[0] if row and row[0] else ""
+    if not folder or not Path(folder).is_dir():
         return None
-    from pensieve import agents
     cmd = agents.resume(source, sid)  # only the agent that wrote a session can resume it
-    return f"cd {shlex.quote(row[0])} && {cmd}" if cmd else None
+    return f"cd {shlex.quote(folder)} && {cmd}" if cmd else None
 
 
 def _me(root: str) -> set[str]:

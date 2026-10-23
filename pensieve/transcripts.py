@@ -228,6 +228,14 @@ def sessions_since(since: float) -> list[Facts]:
     return out
 
 
+def find(sid: str) -> Facts | None:
+    """The facts of one session by its id (source:uuid, as the cards name sessions), loaded from disk as needed."""
+    with _lock:
+        _load_index()
+        path, source = next(((p, row[3]) for p, row in _index.items() if row[2] == sid), (None, ""))
+    return (_facts.get(path) or facts(path, source)) if path else None
+
+
 def all_facts() -> dict[str, Facts]:
     with _lock:
         return dict(_facts)
