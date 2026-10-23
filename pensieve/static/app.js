@@ -3953,18 +3953,38 @@ const wkShown = () => {
   const rank = new Map(wkStateList().map((m, i) => [m.state, i]));  // the list's groups follow the filter's order
   return ts.filter(t => !S.work.states.size || S.work.states.has(t.state)).sort((a, b) => (rank.get(a.state) ?? 0) - (rank.get(b.state) ?? 0));
 };
-let wkSeq = 0;
-const wkSearch = debounce(async () => {
-  const q = S.work.q.trim(), seq = ++wkSeq;
-  let hits = null;
-  if (q) {
-    try { hits = (await api(`/api/threads/search?days=${S.work.days}&q=${encodeURIComponent(q)}`)).results.map(r => r.id); }
-    catch { hits = []; }
+// The words of a thread, lowercased: `head` names it (title, repo, branch), `body` is the rest it carries
+const wkText = t => {
+  const head = [t.title, ...(t.places || []).flatMap(p => [p.repo, p.branch]), ...(t.branches || []).map(b => b.branch)];
+  const body = [...(t.prs || []).flatMap(p => [`#${prNum(p.url) || ''}`, p.title, p.head]),
+    ...(t.tickets || []).flatMap(k => [k.key, k.title]), ...(t.sessions || []).map(s => s.title),
+    ...(t.mine || []), t.reply?.text, ...(t.files || []).map(f => f.split('/').pop()),
+    ...(t.kin || []).map(k => `${k.title} ${k.did}`), ...(t.closeout || []).map(s => s.text)];
+  return {head: head.filter(Boolean).join('\n').toLowerCase(), body: body.filter(Boolean).join('\n').toLowerCase()};
+};
+// The thread ids that match a query, best first, with no model and no round trip: "exact phrases" must appear,
+// -words exclude, every other word must appear somewhere (as a prefix or inside a word), and the words rank (a head
+// hit counts 2, a body hit 1), ties newest first.
+function wkRank(ts, q) {
+  const exact = [...q.matchAll(/"([^"]+)"/g)].map(m => m[1].toLowerCase());
+  const rest = q.replace(/"[^"]*"/g, ' ');
+  const excl = [...rest.matchAll(/(?:^|\s)-(\S+)/g)].map(m => m[1].toLowerCase());
+  const words = rest.replace(/(?:^|\s)-\S+/g, ' ').toLowerCase().split(/[^a-z0-9#_./-]+/).filter(w => w.length > 1);
+  const scored = [];
+  for (const t of ts) {
+    const {head, body} = wkText(t), all = `${head}\n${body}`;
+    if (exact.some(p => !all.includes(p)) || excl.some(w => all.includes(w))) continue;
+    if (words.some(w => !all.includes(w))) continue;
+    const s = words.reduce((n, w) => n + (head.includes(w) ? 2 : 1), 0);
+    scored.push([s, t.updated, t.id]);
   }
-  if (seq !== wkSeq) return;  // a newer query is on its way
-  S.work.hits = hits; S.work.page = 0;
+  return scored.sort((a, b) => b[0] - a[0] || b[1] - a[1]).map(x => x[2]);
+}
+const wkSearch = debounce(() => {
+  const q = S.work.q.trim();
+  S.work.hits = q ? wkRank(S.work.data?.threads || [], q) : null; S.work.page = 0;
   if (S.view === 'work') renderWork();
-}, 220);
+}, 120);
 const closeWkMenu = () => { if (S.work.menu || S.work.wrap) { S.work.menu = false; S.work.wrap = null; renderWork(); } };
 document.addEventListener('click', closeWkMenu);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeWkMenu(); });
@@ -4021,8 +4041,7 @@ function wkActions(t, d) {
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
-  const id = `<button class="wk-btn icon" data-wk-thread="${esc(d.history?.[t.id]?.id || t.id)}" data-wk-title="${esc(t.title)}" title="Thread ${esc(t.id)}: its saved versions">${WK_IC.thread}</button>`;
-  return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${id}${adj}${wkCardBtns(t)}</div>`;
+  return `<div class="wk-bar">${resume}${fresh}${details}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
 }
 // A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
 // thread goes on; only a thread with no anchor title takes the note's (the same rule as cardtext.card_title)
@@ -4031,35 +4050,6 @@ const wkTitle = t => t.title || t.anchor?.title || '';
 const WK_WHO = {agent: ['agent', 'An agent can do this in a session'], you: ['you', 'Only you can do this'],
   parent: ['tracker', 'A step in the system the item lives in: Pensieve only reads']};
 const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
-async function openThread(tid, title) {
-  const m = document.createElement('div');
-  m.className = 'modal'; m.id = 'threadmodal';
-  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>${esc(title)}</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
-    <div class="sh-body"><div class="shimmer" style="height:120px"></div></div></div>`;
-  document.body.append(m);
-  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
-  let saves;
-  try { saves = await api(`/api/thread/versions?id=${enc(tid)}`); }
-  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">No saved versions yet: ${esc(e.message)}</div>`; return; }
-  $('.sh-body', m).innerHTML = `<p class="cap">Thread <code>${esc(tid)}</code>. Pensieve saves a version of this thread when its PRs, commits, sessions, state or next step change.</p>`
-    + saves.map((s, i) => ({s, i})).reverse().map(({s, i}) => `<div class="sh-r th-save">
-      <label><b>${esc(new Date(s.at * 1000).toLocaleString())}</b><span class="muted">${esc(s.reasons.join(', '))} · ${esc(wkModel(s.thread.state?.value || '').label || s.thread.state?.value || '')}</span></label>
-      <p class="cap">${esc((s.thread.core?.next || s.thread.core?.state || '').slice(0, 220))}</p>
-      <div class="th-btns"><button class="btn" data-th-preview="${i}">Preview</button><button class="btn" data-th-revive="${i}">New session from this version</button><button class="btn" data-th-copy="${i}" title="Copy a prompt with this version in it, to start the work in any agent">Copy prompt</button></div></div>`).join('')
-    + `<p class="cap">${plural(saves.length, 'saved version')}.</p>`;
-  $$('[data-th-preview]', m).forEach(b => b.onclick = () => openPreview(() => fetch(`/api/thread?id=${enc(tid)}&format=html&version=${b.dataset.thPreview}`),
-    `${title} · ${new Date(saves[+b.dataset.thPreview].at * 1000).toLocaleDateString()}`));
-  $$('[data-th-revive]', m).forEach(b => b.onclick = async () => {
-    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, version: +b.dataset.thRevive})}); toast('Starting a new session from this version in Terminal'); }
-    catch (err) { toast('Could not start it: ' + err.message); }
-  });
-  $$('[data-th-copy]', m).forEach(b => b.onclick = async () => {
-    try {
-      const r = await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({thread: tid, version: +b.dataset.thCopy, run: false})});
-      await navigator.clipboard.writeText(r.prompt); toast('Prompt with the thread copied: paste it into any agent');
-    } catch (err) { toast('Could not copy it: ' + err.message); }
-  });
-}
 function wkCardBtns(t) {
   return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this thread as a page">${WK_IC.eye}</button>`;
 }
@@ -4157,11 +4147,9 @@ function wkEvent(e) {
 function wkAdjacent(t) {
   const a = S.work.adj[t.id];
   if (!a) return '';
-  if (a.loading) return '<div class="wk-adj muted">Looking at coworkers’ commits and related tickets…</div>';
+  if (a.loading) return '<div class="wk-adj muted">Looking at coworkers’ commits…</div>';
   const people = a.coworkers.map(p => `<div class="row"><b>${esc(p.name)}</b> <small>${plural(p.commits, 'commit')} · ${fmtWhen(p.last)}${p.branches.length ? ' · ' + esc(p.branches.join(', ')) : ''}</small><br><small>${esc(p.subjects[0] || '')}</small></div>`).join('');
-  const rel = a.related.map(r => `<div class="row">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : `<button class="linkbtn subtle" data-wk-file="${esc(r.path)}">${esc(r.title)}</button>`}<br><small>${esc([r.status, r.assignee].filter(Boolean).join(' · '))}</small></div>`).join('');
-  return `<div class="wk-adj"><div><div class="h">Coworkers in the same folders</div>${people || '<div class="muted">No commits by others there in the last 3 weeks.</div>'}</div>
-    <div><div class="h">Related tickets and threads</div>${rel || '<div class="muted">Nothing related among your connections.</div>'}</div></div>`;
+  return `<div class="wk-adj"><div><div class="h">Coworkers in the same folders</div>${people || '<div class="muted">No commits by others there in the last 3 weeks.</div>'}</div></div>`;
 }
 function wkStateSel(t, d) {
   return `<select class="wk-state" data-wk-state="${esc(t.id)}" style="--c:${wkModel(t.state).color}" title="${esc(wkModel(t.state).meaning + ' ' + (t.state_by === 'auto' ? 'Set automatically: ' : 'Set by ' + t.state_by + ': ') + t.state_why)}">
@@ -4309,15 +4297,13 @@ async function patchWork(ids = [], removed = []) {
   if (!d || S.work.hits) return loadWork();
   const page = () => wkPageTasks().map(t => `${t.id}:${t.state}`).join('\n');
   const before = page();
-  let got = {threads: [], history: {}};
+  let got = {threads: []};
   if (ids.length) {
     try { got = await api(`/api/threads?days=${S.work.days}&ids=${enc(ids.join(','))}`); } catch { return loadWork(); }
   }
   if (S.work.data !== d) return;  // a full load came in meanwhile
   const drop = new Set([...ids, ...removed]);
   d.threads = d.threads.filter(t => !drop.has(t.id)).concat(got.threads).sort(wkOrder(d));
-  for (const i of drop) if (d.history) delete d.history[i];
-  d.history = Object.assign(d.history || {}, got.history || {});
   S.work.patched = (S.work.patched || 0) + 1;
   const el = $('#work');
   if (S.view !== 'work' || !el) return;
@@ -4448,10 +4434,6 @@ function wkBind(el, d) {
     catch (e) { toast('Could not resume it: ' + e.message); }
   });
   $$('[data-wk-jump]', el).forEach(b => b.onclick = e => { e.stopPropagation(); goThread(b.dataset.wkJump); });
-  $$('[data-wk-thread]', el).forEach(b => b.onclick = e => {
-    e.stopPropagation();
-    openThread(b.dataset.wkThread, b.dataset.wkTitle || 'Thread');
-  });
   $$('[data-wk-details]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
     const id = b.dataset.wkDetails; S.work.details[S.work.details.has(id) ? 'delete' : 'add'](id); renderWork();
@@ -4524,7 +4506,7 @@ function wkBind(el, d) {
     if (S.work.view !== 'expanded') S.work.details.add(id);  // the panel draws in the card's details: open them
     S.work.adj[id] = {loading: true}; renderWork();
     try { S.work.adj[id] = await api(`/api/thread/adjacent?id=${enc(id)}&days=${S.work.days}`); }
-    catch (e) { S.work.adj[id] = {coworkers: [], related: []}; toast('Could not look: ' + e.message); }
+    catch (e) { S.work.adj[id] = {coworkers: []}; toast('Could not look: ' + e.message); }
     renderWork();
   });
 }

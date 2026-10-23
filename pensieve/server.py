@@ -487,26 +487,6 @@ async def enricher():
             await asyncio.sleep(30)
 
 
-async def card_keeper():
-    """Every history.CHECK seconds: link the cards to threads (history.current) and save the ones that changed;
-    once a day, prune the history."""
-    from pensieve import history, work
-    await asyncio.sleep(60)  # after the first index pass has settled
-    history.current, pruned = history.Keeper(store), 0.0
-    while True:
-        try:
-            saved = await asyncio.to_thread(history.current.run_once)
-            if saved:
-                print(f"Saved {len(saved)} context cards to their threads' history", flush=True)
-            if time.time() - pruned > 86400:
-                await asyncio.to_thread(history.prune)
-                pruned = time.time()
-        except Exception:
-            import traceback
-            traceback.print_exc()
-        await asyncio.sleep(history.CHECK)
-
-
 def _drop_plugin_duplicates():
     from pensieve import integrations
     try:
@@ -560,8 +540,7 @@ async def lifespan(app):
     loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
     threading.Thread(target=store.backfill_usage, daemon=True, name="usage-backfill").start()
-    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(card_keeper()),
-             asyncio.create_task(engine_worker())]
+    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(engine_worker())]
     async with mcp_server.mcp.session_manager.run():
         yield
     for t in tasks:
@@ -1651,47 +1630,26 @@ def remove_mcp_server(path: str):
 
 @app.get("/api/threads")
 def get_threads(days: int = 30, ids: str = ""):
-    """The Threads tab: the threads with their state, their data points from every source, and each one's saved
-    history (id and number of saved versions) once the keeper has linked it. With `ids` (comma-separated), only
-    those threads: the page asks for them after a `thread` event."""
-    from pensieve import history
+    """The Threads tab: the threads with their state and their data points from every source. With `ids`
+    (comma-separated), only those threads: the page asks for them after a `thread` event."""
     only = set(_csv(ids)) if ids else None
     ts = work.tasks(store, days, ids=only)
-    of = {t["id"]: history.thread_of(t["id"]) for t in ts}
-    if only is None:
-        work.warm_card_search(ts)
-    return dict(threads=ts, history={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
-                states=task_states.models())
-
-
-@app.get("/api/threads/search")
-def search_threads(q: str, days: int = 30):
-    """The threads of the last `days` days that match `q`, best first: {results: [{id, score}]}. Meaning words rank
-    the threads, "exact phrases" and -words filter them."""
-    ts = work.tasks(store, days)
-    return dict(results=work.search_cards(ts, q))
+    return dict(threads=ts, states=task_states.models())
 
 
 @app.get("/api/thread")
-def get_thread(id: str = "", format: str = "html", days: int = 30, version: int | None = None, ids: str = "", branch: str = ""):
-    """One thread (pensieve-thread/2): the id of a thread on the Threads tab, or a th_ id. `format`: html (the page
-    for people, which holds the JSON), agent (compact JSON with a line on how to read it) or json. `version`: a saved
-    version instead of the thread now (-1 is the last). `ids` (comma-separated) with `branch`: the threads of one
-    branch on one page, newest first."""
+def get_thread(id: str = "", format: str = "html", days: int = 30, ids: str = "", branch: str = ""):
+    """One thread (pensieve-thread/2): the id of a thread on the Threads tab. `format`: html (the page for people,
+    which holds the JSON), agent (compact JSON with a line on how to read it) or json. `ids` (comma-separated) with
+    `branch`: the threads of one branch on one page, newest first."""
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-    from pensieve import cards, history
+    from pensieve import cards
     if ids:
         got = [_local_card(i, days) for i in _csv(ids)]
         if format == "html":
             return HTMLResponse(cards.render_cluster_html(got, branch))
         return PlainTextResponse(cards._cluster_text(got)) if format == "agent" else JSONResponse(got)
-    if version is not None:
-        saves = history.history(id if id.startswith("th_") else history.thread_of(id) or "")
-        if not saves:
-            raise HTTPException(404, f"no saved versions of {id}")
-        card = saves[version]["card"]
-    else:
-        card = _local_card(history.task_of(id) or id if id.startswith("th_") else id, days)
+    card = _local_card(id, days)
     if format == "html":
         return HTMLResponse(cards.render_html(card))
     return PlainTextResponse(cards.render_agent(card)) if format == "agent" else JSONResponse(card)
@@ -1877,34 +1835,6 @@ async def fetch_people_profiles():
     return res
 
 
-@app.get("/api/threads/history")
-def get_thread_history_index():
-    """The threads with saved versions: id, title, number of saves, first and last save; and which saved thread each
-    current thread belongs to (`of`)."""
-    from pensieve import history
-    return {"threads": history.listing(), "of": history.current.of_task if history.current else {}}
-
-
-@app.post("/api/threads/save")
-async def save_threads():
-    """Save the threads that changed now, as the keeper does every history.CHECK seconds. Returns what was saved."""
-    from pensieve import history
-    if history.current is None:
-        raise HTTPException(503, "the thread keeper starts a minute after Pensieve")
-    return {"saved": await asyncio.to_thread(history.current.run_once)}
-
-
-@app.get("/api/thread/versions")
-def get_thread_versions(id: str):
-    """A thread's saved versions, oldest first: {at, reasons, snapshot, thread}. GET /api/thread?version=n gives one
-    as a page."""
-    from pensieve import history
-    saves = history.history(id if id.startswith("th_") else history.thread_of(id) or "")
-    if not saves:
-        raise HTTPException(404, f"no saved versions of {id}")
-    return [{**{k: v for k, v in s.items() if k != "card"}, "thread": s["card"]} for s in saves]
-
-
 class TaskStateReq(BaseModel):
     id: str
     state: str  # todo | open | loose_ends | complete | forgotten | auto
@@ -1968,8 +1898,6 @@ class ReviveReq(BaseModel):
     branch: str = ""  # the cluster's branch
     intent: str = ""  # "wrap_up": the new session closes the cluster's steps left, instead of picking the work up
     days: int = 30
-    thread: str = ""  # or a saved version of a thread (th_ id), number `version` (default the last)
-    version: int = -1
     run: bool = True  # false: only the prompt with the thread in it, to paste into any agent
     agent: str = ""  # the agent to start (agents.AGENTS); "" = the user's default agent
 
@@ -1985,7 +1913,7 @@ def list_agents():
 def revive_thread(req: ReviveReq):
     """Start a new agent session in Terminal with a thread as its first context: the thread now, or a version that
     the history saved, such as one from work that ended. With run=false, the prompt with the thread in it."""
-    from pensieve import cards, history
+    from pensieve import cards
     if req.ids:
         got = [_local_card(i, req.days) for i in req.ids]
         if req.intent == "wrap_up":
@@ -2001,13 +1929,7 @@ def revive_thread(req: ReviveReq):
         cmd = cards.revive_cluster_command(got, req.branch, config.V2_DIR / "revive", req.agent)
         _terminal(cmd)
         return {"ok": True, "command": cmd}
-    if req.thread:
-        saves = history.history(req.thread)
-        if not saves:
-            raise HTTPException(404, f"no saved versions of {req.thread}")
-        card = saves[req.version]["card"]
-    else:
-        card = _local_card(req.id, req.days)
+    card = _local_card(req.id, req.days)
     if not req.run:
         return {"ok": True, "prompt": cards.revive_prompt(card)}
     cmd = cards.revive_command(card, config.V2_DIR / "revive", req.agent)
@@ -2017,12 +1939,11 @@ def revive_thread(req: ReviveReq):
 
 @app.get("/api/thread/adjacent")
 async def thread_adjacent(id: str, days: int = 30):
-    """For one thread: coworkers' recent commits in the same folders, and tickets and pages on the same subject."""
+    """For one thread: coworkers' recent commits in the same folders, from git."""
     t = next((t for t in work.tasks(store, days) if t["id"] == id), None)
     if not t:
         raise HTTPException(404, f"unknown thread {id!r}")
-    people, rel = await asyncio.gather(asyncio.to_thread(work.coworkers, t), asyncio.to_thread(work.related, t, searcher))
-    return dict(coworkers=people, related=rel)
+    return dict(coworkers=await asyncio.to_thread(work.coworkers, t))
 
 
 CONNECTIONS_CHECK_SECONDS = 300

@@ -5,9 +5,7 @@ A task joins agent sessions, git branches, commits and connection items (tickets
 - the git branch a session ran on (feature branches only: a default or long-lived branch holds many tasks);
 - for work without a ticket: sessions in the same repo, a few days apart, that edited the same specific files.
 
-`adjacent` finds what coworkers did near a task: their recent commits on remote branches in the same folders, and
-tickets and threads about the same subject."""
-import hashlib
+`coworkers` finds what coworkers did near a task: their recent commits on remote branches in the same folders."""
 from dataclasses import asdict
 from functools import lru_cache
 import json
@@ -18,8 +16,6 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-import numpy as np
 
 from pensieve import cardtext, connections, repos as repos_mod, task_states
 
@@ -677,7 +673,7 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
         task_states.apply(t, manual.get(t["id"]))
         _title(t)
     _kin(out)
-    _related_cards(out, store)
+    _related_cards(out)
     for t in out:
         t.pop("_sessions")
         t.pop("_shared", None)
@@ -792,8 +788,6 @@ def _share(o: dict) -> float | None:
 
 RELATED_MAX = 5          # the related threads a card lists
 RELATED_FILES = 0.25     # the weighted share of edited files two sessions have in common that relates their threads
-RELATED_SESSIONS = 0.93  # cosine of two sessions' centroid vectors that relates their threads (the top tenth of pairs)
-RELATED_SESSIONS_K = 2   # the nearest sessions a thread lists at most
 
 
 def _sinks(t: dict) -> dict[str, str]:
@@ -810,10 +804,9 @@ def _sinks(t: dict) -> dict[str, str]:
     return out
 
 
-def _related_cards(tasks_: list[dict], store=None) -> None:
+def _related_cards(tasks_: list[dict]) -> None:
     """Each card's `related`: the other cards that share a sink (the reason names it), then the cards whose sessions
-    edited the same files (the reason names the rarest ones), then the cards whose session is close in meaning (the
-    cosine of the sessions' centroid vectors, from `store`). At most RELATED_MAX, in that order."""
+    edited the same files (the reason names the rarest ones). At most RELATED_MAX, in that order."""
     if len(tasks_) < 2:
         for t in tasks_:
             t["related"] = []
@@ -825,7 +818,6 @@ def _related_cards(tasks_: list[dict], store=None) -> None:
         for key in ss:
             holders[key].append(tid)
     files = _file_kin(tasks_)
-    near = _session_kin(tasks_, store)
     for tid in by_id:
         rel, seen = [], {tid}
         for key, why in sinks[tid].items():
@@ -834,10 +826,6 @@ def _related_cards(tasks_: list[dict], store=None) -> None:
                     seen.add(other)
                     rel.append(dict(id=other, reason=why))
         for other, why in files.get(tid, []):
-            if other not in seen:
-                seen.add(other)
-                rel.append(dict(id=other, reason=why))
-        for other, why in near.get(tid, []):
             if other not in seen:
                 seen.add(other)
                 rel.append(dict(id=other, reason=why))
@@ -876,28 +864,6 @@ def _file_kin(tasks_: list[dict]) -> dict[str, list[tuple[str, str]]]:
     return {k: [(other, why) for _, other, why in sorted(v, key=lambda x: -x[0])] for k, v in out.items()}
 
 
-def _session_kin(tasks_: list[dict], store) -> dict[str, list[tuple[str, str]]]:
-    """For each thread, the threads whose session is nearest in meaning (the cosine of the sessions' centroid vectors,
-    indexer.Store.centroids), at most RELATED_SESSIONS_K and at least RELATED_SESSIONS, with the reason "similar
-    session". Nothing when `store` has no session vectors."""
-    if store is None or not hasattr(store, "centroids"):
-        return {}
-    try:
-        ids, C = store.centroids()
-    except Exception:
-        return {}
-    at = {sid: n for n, sid in enumerate(ids)}
-    rows = [(t["id"], at[(t.get("_sessions") or [{}])[0].get("id")]) for t in tasks_
-            if (t.get("_sessions") or [{}])[0].get("id") in at]
-    if len(rows) < 2:
-        return {}
-    M = np.stack([C[n] for _, n in rows])
-    sims = M @ M.T
-    out = {}
-    for i, (tid, _) in enumerate(rows):
-        best = sorted(((float(sims[i, j]), other) for j, (other, _) in enumerate(rows) if j != i), reverse=True)
-        out[tid] = [(other, "similar session") for s, other in best[:RELATED_SESSIONS_K] if s >= RELATED_SESSIONS]
-    return out
 
 
 def _thread(t: dict, inp: "Inputs"):
@@ -1609,64 +1575,6 @@ def _task_id(keys, branches, sessions, items=()) -> str:
     return f"p:{min(i['url'] for i in items if i['pr'])}"
 
 
-def card_text(t: dict) -> str:
-    """The words of one card that a search reads: its titles, where the work is, its PRs, tickets and sessions."""
-    places = [" ".join(x for x in (p.get("repo"), p.get("branch")) if x) for p in t.get("places", [])]
-    branches = [" ".join(x for x in (b.get("repo"), b.get("branch")) if x) for b in t.get("branches", [])]
-    return "\n".join(x for x in [t["title"], *places, *branches,
-                                 *(f"#{p['url'].rstrip('/').rsplit('/', 1)[-1]} {p.get('title') or ''} {p.get('head') or ''}"
-                                   for p in t["prs"]),
-                                 *(f"{k['key']} {k.get('title') or ''}" for k in t.get("tickets", [])),
-                                 *(f"{s.get('title') or ''} {s.get('branch') or ''} {s.get('summary') or ''}"
-                                   for s in t["sessions"][:8])] if x.strip())
-
-
-_card_vecs: dict[str, np.ndarray] = {}  # card text hash -> embedding
-# Meaning scores of cards are close together (0.6 to 0.8 on real cards), so a share of the best keeps almost all.
-# A card stays when it is this close to the best one; the best few always stay.
-CARD_SEARCH_MARGIN, CARD_SEARCH_MIN = 0.06, 3
-CARD_SEARCH_WORDS = 0.08  # added to the meaning score when a card has all the query's words, a share for some
-
-
-def _card_vectors(tasks: list[dict]) -> dict[str, np.ndarray]:
-    """Each task's card vector, by task id. A card's vector is made again only when its text changes."""
-    from pensieve import indexer
-    keys = {t["id"]: hashlib.sha1(card_text(t).encode()).hexdigest() for t in tasks}
-    todo = {keys[t["id"]]: card_text(t) for t in tasks if keys[t["id"]] not in _card_vecs}
-    if todo:
-        for k, v in zip(todo, indexer.embed(list(todo.values()))):
-            _card_vecs[k] = v
-    return {i: _card_vecs[k] for i, k in keys.items()}
-
-
-def warm_card_search(tasks: list[dict]) -> None:
-    """Make the card vectors in the background, so the first card search does not wait for them."""
-    threading.Thread(target=_card_vectors, args=(tasks,), daemon=True).start()
-
-
-def search_cards(tasks: list[dict], q: str) -> list[dict]:
-    """The cards that match a query, best first: {id, score}. The query is read as in search.parse: "exact phrases"
-    and -excluded words filter the cards, the other words rank them by meaning. With no other words, the cards
-    keep their order."""
-    from pensieve import indexer, search
-    pq = search.parse(q)
-    if not (pq["semantic"] or pq["exact"] or pq["exclude"]):
-        return []
-    texts = {t["id"]: card_text(t) for t in tasks}
-    low = {k: v.lower() for k, v in texts.items()}
-    keep = [t for t in tasks if all(p.lower() in low[t["id"]] for p in pq["exact"])
-            and not any(x.lower() in low[t["id"]] for x in pq["exclude"])]
-    if not pq["semantic"] or not keep:
-        return [dict(id=t["id"], score=1.0) for t in keep]
-    vecs = _card_vectors(keep)
-    qv = indexer.embed([pq["semantic"]], query=True)[0]
-    # a card that has the query's words goes up: a near-empty card ("hello") is close in meaning to almost anything
-    words = [w for w in re.findall(r"\w+", pq["semantic"].lower()) if len(w) >= 3]
-    lex = {t["id"]: sum(w in low[t["id"]] for w in words) / len(words) if words else 0 for t in keep}
-    scored = sorted(((float(vecs[t["id"]] @ qv) + CARD_SEARCH_WORDS * lex[t["id"]], t["id"]) for t in keep), reverse=True)
-    best = scored[0][0]
-    return [dict(id=i, score=round(s, 4)) for n, (s, i) in enumerate(scored)
-            if n < CARD_SEARCH_MIN or s >= best - CARD_SEARCH_MARGIN]
 SIGNATURE_VERSION = 11  # in each card's signature: a new version marks every card as changed
 
 
@@ -1753,29 +1661,3 @@ def coworkers(task: dict, days: int = 21) -> list[dict]:
             for p in sorted(people.values(), key=lambda p: -p["last"])][:12]
 
 
-def related(task: dict, searcher, limit: int = 8) -> list[dict]:
-    """Tickets, threads and pages about the same subject as the task that are not part of it."""
-    from pensieve import scopes
-    mine = {t["path"] for t in task["tickets"]} | {i["path"] for i in task["items"]}
-    q = " ".join([task["title"]] + task["keys"][:3])
-    try:
-        hits = searcher.find(q, limit=limit * 3, kinds=["doc"], scope=scopes._build("data-tab", ["connections"]),
-                             retry=False)
-    except Exception:
-        return []
-    hits = hits.get("results", hits) if isinstance(hits, dict) else hits
-    from pensieve import store as v2
-    from pensieve.store import documents
-    out = []
-    for h in hits:
-        p = h.get("id") or h.get("path", "")
-        if p.startswith("doc:") and p not in mine:
-            d = documents.get(v2.store_db(), int(p[4:]))
-            if d is None:
-                continue
-            it = _item(d, _assignees(v2.store_db(), [d.id])[0])
-            out.append(dict(path=p, title=it["title"], url=it["url"], status=it["status"], assignee=it["assignee"],
-                            server=it["server"], snippet=h.get("snippet", "")))
-        if len(out) >= limit:
-            break
-    return out

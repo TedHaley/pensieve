@@ -740,14 +740,13 @@ def threads(state: str = "open,loose_ends", query: str = "", limit: int = 10) ->
     or "all". query: words, a ticket key, branch or PR number; threads that match more of them come first, and the
     others are left out. Within this connection's scope (its repo by default). Call thread(id) before you pick one
     up. At a natural pause, offer the user to close the first one."""
-    from pensieve import history, work
+    from pensieve import work
     want = None if state.strip() == "all" else {task_states_name(s) for s in state.split(",") if s.strip()}
     ts = [t for t in _tasks_in_scope() if not want or t["state"] in want]
     ts = work.matching(ts, query) if query.strip() else sorted((t for t in ts if _material(t)), key=_closest)
     out = []
     for t in ts[:max(1, min(limit, 50))]:
-        th = history.thread_of(t["id"])
-        out.append(work.brief(t) + (f" · {th}" if th else ""))
+        out.append(work.brief(t))
         out += [f"  - {x['text']} ({WHO.get(x['how'], x['how'])}{', ' + x['ref'] if x.get('ref') else ''})"
                 for x in t.get("left") or []]
     return "\n".join(out) or f"No threads in state {state}."
@@ -760,33 +759,16 @@ def task_states_name(s: str) -> str:
 
 
 @tool()
-def thread(id: str, full: bool = False, version: str = "") -> str:
-    """One thread: its state and why, where the work is (folder, branch, uncommitted files), PRs, tickets, what
-    changed since the last session, the steps left, where that session stopped, its main files and the command that
-    resumes it. id: a thread id (th_…) or an id from threads. full=true adds every file its sessions made and its
-    timeline. version: Pensieve saves a thread when it changes (a PR, a commit, a state, what is next); "list" lists
-    the saved versions, oldest first (number, date, why it was saved, state, what was next then), and a number gives
-    that version whole (-1 is the last). Use the versions to see how work got where it is, or to start ended work
-    again from its last version."""
-    from datetime import datetime
-    from pensieve import cards, history, task_states, work
-    if version:
-        th = id if id.startswith("th_") else history.thread_of(id)
-        saves = history.history(th) if th else []
-        if not saves:
-            raise KeyError(f"{id}: no saved versions")
-        if version != "list":
-            return cards.render_agent(saves[int(version)]["card"])
-        return "\n".join(f"{i} · {datetime.fromtimestamp(s['at']).strftime('%Y-%m-%d %H:%M')} · {', '.join(s['reasons'])} · "
-                         f"{task_states_name(s['card'].get('state', {}).get('value', ''))} · next: "
-                         f"{(s['card'].get('core', {}).get('next') or '')[:140]}" for i, s in enumerate(saves))
-    tid = (history.task_of(id) or id) if id.startswith("th_") else id
-    t = next((x for x in _tasks_in_scope() if x["id"] == tid), None)
+def thread(id: str, full: bool = False) -> str:
+    """One thread: its state and why, where the work is (folder, branch, uncommitted files), PRs, tickets, the
+    sessions of the same work, the steps left, where its session stopped, its main files and the command that
+    resumes it. id: a thread id (th_…) from threads or cluster. full=true adds every file its session made and its
+    timeline."""
+    from pensieve import task_states, work
+    t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
     if not t:
-        raise KeyError(f"{id}: not a current thread; thread(id, version=\"list\") lists its saved versions")
-    text = (work.detail if full else work.compact)(t, task_states.history(_c()["store"], tid))
-    th = history.thread_of(tid)
-    return text + (f"\nThread: {th} · {history.saves(th)} saved versions (thread(id, version=\"list\"))" if th else "")
+        raise KeyError(f"{id}: not a current thread; threads lists the current ones")
+    return (work.detail if full else work.compact)(t, task_states.history(_c()["store"], id))
 
 
 def _on_branch(t: dict, branch: str) -> bool:
@@ -835,7 +817,7 @@ def thread_page(id: str = "", branch: str = "") -> dict:
     in ~/Downloads. The page holds the threads' JSON too, so agents read it as data. Give `id` (a thread) or `branch`
     (its name). Returns the file's path and the thread ids on it. To send it, attach the file with your own tool and
     write your own message: the user approves what you send."""
-    from pensieve import cards, history, task_states
+    from pensieve import cards, task_states
     store = _c()["store"]
     build = lambda t: cards.build(t, task_states.history(store, t["id"]))
     if branch:
@@ -844,8 +826,7 @@ def thread_page(id: str = "", branch: str = "") -> dict:
             raise KeyError(f"no thread of the last 30 days wrote to branch {branch!r}")
         page, name = cards.render_cluster_html([build(t) for t in ts], branch), branch
     else:
-        tid = (history.task_of(id) or id) if id.startswith("th_") else id
-        t = next((x for x in _tasks_in_scope() if x["id"] == tid), None)
+        t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
         if not t:
             raise KeyError(id)
         ts, page, name = [t], cards.render_html(build(t)), t["title"]
@@ -857,11 +838,10 @@ def set_thread_state(id: str, state: str, reason: str = "") -> dict:
     """Set a thread's state by hand, as the user can on the Threads tab: todo, open, loose_ends, complete, forgotten,
     or "auto" to let Pensieve decide again. Pensieve sets each state from the evidence, so a thread closes when its PR
     merges or its ticket closes: use this only when the user asks for it."""
-    from pensieve import history, work
-    tid = (history.task_of(id) or id) if id.startswith("th_") else id
-    if not any(x["id"] == tid for x in _tasks_in_scope()):
+    from pensieve import work
+    if not any(x["id"] == id for x in _tasks_in_scope()):
         raise KeyError(id)
-    return work.set_state(_c()["store"], tid, state, "agent", reason)
+    return work.set_state(_c()["store"], id, state, "agent", reason)
 
 
 @tool()

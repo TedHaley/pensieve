@@ -110,50 +110,13 @@ The main goal is the newest goal that a session did work toward: it changed code
 
 `bench/goals.py` measures this rule on labelled examples: is the main goal right, and do the PRs, tickets and commits land in the right goals?
 
-Pensieve finds the goals in the note that the agent writes for each thread: each goal names its evidence (PR numbers, ticket keys, commit hashes). Pensieve keeps only the evidence that is real: a PR or ticket of the thread, or a commit that git has in the thread's repos. A model cannot add a member.
+## Starting a thread again
 
-## History
+To start a thread again, start a new agent session from it (Fork session). Pensieve writes the thread to a file and opens the agent in the work's folder. The prompt tells the agent to read the thread, to get the live state of its branch, PRs and tickets, and to report before it changes anything. A cluster (the threads of one branch) forks a session that reads them all, or a session that does the steps left to wrap the branch up.
 
-The snapshots of a thread form its history, as commits form the history of a branch. The history shows how the goal, the state and the next step changed over time.
+## What threads read
 
-To start a thread again, start a new agent session from it: the thread now, or a saved version. Pensieve writes the thread to a file and opens the agent in the work's folder. The prompt tells the agent to read the thread, to get what changed since (the thread's refresh commands), and to report before it changes anything. When the folder is gone, the thread's start commands get the work back.
-
-## How Pensieve links snapshots
-
-1. Pensieve builds the snapshots from the sessions, git, PRs, tickets and connections, as for the Threads tab.
-2. For each snapshot, it calculates the weighted overlap of members with the snapshots that it built before:
-
-   | Member | Weight |
-   |---|---|
-   | Ticket key, PR, feature branch | Strong |
-   | Commit, session | Medium |
-   | Specific edited file | Weak |
-
-3. It finds the best match for each snapshot, not the full connected component. A full component joins everything on a long-lived branch.
-4. It compares the embeddings of problem and goal for each match, and applies rule 6.
-5. It records the event (rule 7), and keeps the thread id.
-
-The thresholds for overlap and for embedding distance come from a replay of past days (`bench/threads_replay.py`). Pensieve builds the snapshots as of each day, links them, and compares the links with labels of "same work" and "different work". On one Mac, over 30 days and 551 labelled pairs:
-
-| Linker | Wrong joins | Wrong splits | F1 for "same goal" |
-|---|---:|---:|---:|
-| Members only (overlap 0.4) | 9 | 7 | 0.74 |
-| Goals only (similarity 0.8) | 6 | 10 | 0.71 |
-| Both (overlap 0.4, similarity 0.6) | 9 | 7 | 0.74 |
-
-Members do the work. The goal check adds nothing on this data, and it stays as a guard for forks. A suggestion at similarity 0.85 finds one missed link, with no wrong suggestion. Most wrong joins come from snapshots that join two goals on one branch before the linker sees them.
-
-## Local history
-
-Pensieve saves a version of each thread when it changes (`pensieve/history.py`). It checks every 10 minutes, and it saves a version when:
-
-- the linker records an event (start, fork, split, merge, revive);
-- the state of the thread changes;
-- a ticket, PR, branch, commit or session comes or goes (edited files alone do not count);
-- a push: the remote branch of one of its folders moves;
-- the embedding of the problem and goal moves 0.05 or more since the last save.
-
-A thread is saved at most once in 30 minutes, except for an event, a state change or a push. A save on a timer alone gives no new information: in the replay, a save at every 12-hour build made 1,365 copies, and the rules above made 29. After 30 days, one save a day is kept for each thread, with every event and state change.
+Threads read the transcript folders of the agents, git and gh, and the tickets, PRs and messages that connections collected when there are any (`pensieve/transcripts.py`). They read no index and no model. A transcript is read once, and only its new lines after that; the facts persist on disk, so a restart reads nothing twice.
 
 ## Examples
 

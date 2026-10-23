@@ -169,7 +169,7 @@ class ThreadEvent(StrEnum):
 
 
 class SaveReason(StrEnum):
-    """Why a thread's card was saved (pensieve/history.py)."""
+    """Why a thread's card was saved, from the versions that kept a thread history. Kept for the table."""
     START = "start"
     FORK = "fork"
     SPLIT = "split"
