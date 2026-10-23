@@ -1905,7 +1905,7 @@ class ReviveReq(BaseModel):
     id: str = ""  # a thread on the Threads tab, as it is now
     ids: list[str] = []  # or a cluster: the threads of one branch, newest first
     branch: str = ""  # the cluster's branch
-    intent: str = ""  # "merge" or "discard": the new session closes the work that way, instead of picking it up
+    intent: str = ""  # "ship" or "discard": the new session closes the work that way, instead of picking it up
     days: int = 30
     run: bool = True  # false: only the prompt with the thread in it, to paste into any agent
     agent: str = ""  # the agent to start (agents.AGENTS); "" = the user's default agent
@@ -1951,8 +1951,8 @@ def revive_thread(req: ReviveReq):
     from pensieve import cards
     if req.ids:
         got = [_local_card(i, req.days) for i in req.ids]
-        intent = {"wrap_up": "merge"}.get(req.intent, req.intent)
-        if intent in ("merge", "discard"):
+        intent = {"wrap_up": "ship", "merge": "ship"}.get(req.intent, req.intent)  # the names of older pages
+        if intent in ("ship", "discard"):
             ts = [t for t in work.tasks(store, req.days) if t["id"] in set(req.ids)]
             steps = cards.resolve_steps(sorted(ts, key=lambda t: req.ids.index(t["id"])), intent)
             if not req.run:

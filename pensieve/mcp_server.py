@@ -787,7 +787,7 @@ def _branch_threads(branch: str) -> list[dict]:
 def cluster(branch: str) -> str:
     """The threads of one branch (the last 30 days, within this connection's scope), newest session first: what
     each session did on the branch and its share of the lines, each thread's state, and the two ways to close the
-    work, each as steps with who can do each (you, the agent; the user; or the tracker): merge it (commit, push,
+    work, each as steps with who can do each (you, the agent; the user; or the tracker): ship it (commit, push,
     open and merge the PR, close the ticket) or discard it (drop the changes, close the PR, delete the branch,
     cancel the ticket). Pensieve only reads: do the steps in git, GitHub or the tracker, and ask the user before
     each step that deletes or closes. branch: its name as `threads` and `thread` print it. thread(id) gives one
@@ -806,7 +806,7 @@ def cluster(branch: str) -> str:
         at = (t.get("sessions") or [{}])[0].get("updated") or t["updated"]
         out.append(f"- {day(at)} {t['title']} [{t['id']} {t['state']}]: {me.get('did') or 'no changes'}{share}")
     can = any(t["state"] in ("open", "loose_ends", "forgotten") for t in ts)
-    for intent, label in (("merge", "To merge this work and close it"), ("discard", "To discard this work and close it")):
+    for intent, label in (("ship", "To ship this work and close it"), ("discard", "To discard this work and close it")):
         steps = cards.resolve_steps(ts, intent)
         out += ["", f"{label} (Pensieve only reads: these are steps, not changes it made):"]
         out += [f"- {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for s in steps] or ["- nothing: every step is done"]

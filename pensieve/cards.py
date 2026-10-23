@@ -351,7 +351,7 @@ def revive_cluster_command(cards: list[dict], branch: str, folder, agent: str = 
 
 
 RESOLVE_PROMPTS = {
-    "merge": ("Merge the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+    "ship": ("Ship the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
               "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
               "{copy}. The steps that take this work to merged and closed, in order:\n{steps}\n"
               "Do the agent's steps with your own tools, in this order, and stop before each step that is mine or "
@@ -368,8 +368,8 @@ RESOLVE_PROMPTS = {
 }
 
 
-def resolve_steps(threads: list[dict], intent: str = "merge") -> list[dict]:
-    """The steps left to close a cluster one way: `merge` takes each thread's closeout steps that are not done,
+def resolve_steps(threads: list[dict], intent: str = "ship") -> list[dict]:
+    """The steps left to close a cluster one way: `ship` takes each thread's closeout steps that are not done,
     `discard` its discard steps; one of each text, in order."""
     out, seen = [], set()
     for t in threads:
@@ -389,11 +389,11 @@ def _resolve_head(cards: list[dict], branch: str, steps: list[dict], copy: str, 
                                           copy=copy, steps="\n".join(lines))
 
 
-def resolve_prompt(cards: list[dict], branch: str, steps: list[dict], intent: str = "merge") -> str:
+def resolve_prompt(cards: list[dict], branch: str, steps: list[dict], intent: str = "ship") -> str:
     return _resolve_head(cards, branch, steps, "their copies below", intent) + "\n\n" + _cluster_text(cards)
 
 
-def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "", intent: str = "merge") -> str:
+def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "", intent: str = "ship") -> str:
     """The shell command that starts a new agent session to merge or discard a cluster: the steps lead its prompt."""
     path = _revive_copy(folder, f"{intent}-{branch or 'branch'}", _cluster_text(cards))
     return _revive_start(cards, agent, _resolve_head(cards, branch, steps, f"their copies in {path}", intent))

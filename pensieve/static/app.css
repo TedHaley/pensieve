@@ -773,21 +773,18 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-twig::after{content:"";position:absolute;left:-19px;top:21px;width:6px;height:6px;border-radius:50%;background:var(--card-2);border:2px solid var(--acc)}
 .wk-cluster-h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:4px 12px 10px;font-size:12.5px;color:var(--text-2)}
 .wk-cluster-h .wk-cl-btns{margin-left:auto;display:inline-flex;align-items:center;gap:8px}
-.wk-wrap{position:relative}
-.wk-wrap .wk-btn.on{background:var(--accent-soft);color:var(--text)}
-.wk-wrap .wk-n{margin-left:6px;font-size:11px;padding:0 6px;border-radius:999px;background:var(--card);color:var(--text-3)}
-.wk-wrap-menu{top:36px;width:480px;max-width:calc(100vw - 48px);padding:14px 16px 12px;text-align:left;cursor:default}
-.wk-bar .wk-wrap-menu{left:0;right:auto;top:34px}
-.wk-wrap-menu span{margin-left:0;font-size:inherit;color:inherit}
-.wk-wrap-h{display:flex;align-items:center;gap:5px;font:600 11px var(--sans);text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);padding:0 0 2px}
-.wk-wrap-h .wk-branch{text-transform:none;letter-spacing:0;font:600 12px var(--mono);color:var(--text-2)}
+.wk-resolve .wk-n{margin-left:6px;font-size:11px;padding:0 6px;border-radius:999px;background:var(--card);color:var(--text-3)}
+.wk-resolve-dlg{width:min(560px,calc(100vw - 32px))}
+.wk-resolve-dlg .sh-head h3{display:flex;align-items:center;gap:6px;white-space:normal}
+.wk-resolve-dlg .wk-branch{display:inline-flex;align-items:center;gap:4px;font:600 14px var(--mono);color:var(--text-2);min-width:0;overflow:hidden;text-overflow:ellipsis}
+.wk-resolve-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 22px 16px;border-top:1px solid var(--line)}
+.wk-resolve-foot .muted{font-size:12px}
+.wk-resolve-foot .wk-btn.primary.danger{background:var(--critical);color:#fff}
 .wk-wrap-steps{margin:8px 0 0;padding:0 0 0 18px;font-size:13.5px;line-height:1.45;color:var(--text)}
 .wk-wrap-steps li{padding:3px 0}
 .wk-wrap-steps li::marker{color:var(--text-3)}
 .wk-wrap-steps li a{color:var(--accent)}
 .wk-wrap-steps li.muted{list-style:none;margin-left:-18px;color:var(--text-3)}
-.wk-wrap-menu .wk-menu-foot{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 0 2px;margin-top:4px}
-.wk-wrap-menu .wk-menu-foot .muted{font-size:12px}
 .wk-cluster .wk-task{margin-bottom:6px;border-radius:14px}
 .wk-cluster .wk-main{padding:12px 16px 10px 20px}
 .wk-cluster .wk-main h4{font-size:14px}

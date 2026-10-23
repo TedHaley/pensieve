@@ -3992,7 +3992,7 @@ const wkSearch = debounce(() => {
   S.work.hits = q ? wkRank(S.work.data?.threads || [], q) : null; S.work.page = 0;
   if (S.view === 'work') renderWork();
 }, 120);
-const closeWkMenu = () => { if (S.work.menu || S.work.wrap) { S.work.menu = false; S.work.wrap = null; renderWork(); } };
+const closeWkMenu = () => { if (S.work.menu) { S.work.menu = false; renderWork(); } };
 document.addEventListener('click', closeWkMenu);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeWkMenu(); });
 const WK_SRC = {session: 'Session', commit: 'Commit', ticket: 'Ticket', pr: 'PR', message: 'Message', change: 'Change', branch: 'Branch'};
@@ -4257,17 +4257,18 @@ function wkKin(t) {
   const n = rows.filter(k => !k.me).length;
   return `<section class="wk-sec wk-kin"><h5>Related sessions${branch && kin.length ? ` · <span class="wk-kin-b">${WK_IC.branch}${esc(branch)}</span>` : ''} <span class="muted">${n}</span></h5><ol class="wk-kin-list">${html}</ol></section>`;
 }
-// The two ways to close work, each a button with a dropdown: Merge lists the steps that take every data source of the
-// threads to merged and done (commit, push, the PR's review and merge, the ticket closed after it); Discard lists the
-// steps that close them without a merge (drop the changes, close the PR, delete the branch, cancel the ticket). The
-// button at the bottom starts a session that does those steps, when the work is not closed yet.
+// The two ways to close work, each a button that opens a modal: Ship lists the steps that take every data source of
+// the threads to merged and done (commit, push, the PR's review and merge, the ticket closed after it); Discard lists
+// the steps that close them without a merge (drop the changes, close the PR, delete the branch, cancel the ticket).
+// The modal's button starts a session that does those steps, when the work is not closed yet.
 const WRAP_STATES = new Set(['open', 'todo', 'loose_ends', 'forgotten']);
 const RESOLVE = {
-  merge: {label: 'Merge', head: 'To merge the work on', single: 'To merge this thread', start: 'Start merge', field: 'closeout',
+  ship: {label: 'Ship', head: 'Ship the work on', single: 'Ship this thread', start: 'Start shipping', field: 'closeout', verb: 'ship',
     title: 'The steps that take this work to merged and done'},
-  discard: {label: 'Discard', head: 'To discard the work on', single: 'To discard this thread', start: 'Start discard', field: 'discard',
+  discard: {label: 'Discard', head: 'Discard the work on', single: 'Discard this thread', start: 'Start discarding', field: 'discard', verb: 'discard',
     title: 'The steps that close this work without merging it'},
 };
+const WK_RESOLVE = new Map();  // button key -> the cluster or thread it closes, from the last render
 function wkResolveSteps(tasks, intent) {
   const seen = new Set(), out = [];
   for (const t of tasks) for (const s of t[RESOLVE[intent].field] || []) {
@@ -4277,18 +4278,39 @@ function wkResolveSteps(tasks, intent) {
   return out;
 }
 function wkResolve(c, intent) {
-  const r = RESOLVE[intent], key = `${intent}|${c.key || `${c.state}|${c.branch}`}`, open = S.work.wrap === key;
-  const steps = wkResolveSteps(c.tasks, intent), ids = c.tasks.map(t => t.id).join(',');
-  const menu = !open ? '' : `<div class="wk-menu wk-wrap-menu" role="menu">
-      <div class="wk-wrap-h">${c.branch ? `${r.head} <span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span>` : r.single}</div>
-      <ul class="wk-wrap-steps">${steps.length ? steps.map(s => `<li>${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</li>`).join('')
-        : '<li class="muted">Nothing left: every step is done</li>'}</ul>
-      <div class="wk-menu-foot">${WRAP_STATES.has(c.state)
-        ? `<button class="wk-btn primary" data-wk-resolve-start="${esc(ids)}" data-intent="${intent}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does these steps, asking you before each of yours">${WK_IC.spark}${r.start}</button>`
-        : `<span class="muted">${esc(wkModel(c.state).label)}: nothing left</span>`}</div></div>`;
-  return `<span class="wk-wrap"><button class="wk-btn ${open ? 'on' : ''}" data-wk-wrap="${esc(key)}" aria-haspopup="menu" aria-expanded="${open}" title="${r.title}">${r.label}<span class="wk-n">${steps.length}</span></button>${menu}</span>`;
+  const key = `${intent}|${c.key || `${c.state}|${c.branch}`}`;
+  WK_RESOLVE.set(key, c);
+  return `<button class="wk-btn wk-resolve" data-wk-resolve="${esc(key)}" data-intent="${intent}" aria-haspopup="dialog" title="${RESOLVE[intent].title}">${RESOLVE[intent].label}<span class="wk-n">${wkResolveSteps(c.tasks, intent).length}</span></button>`;
 }
-const wkResolveBtns = c => wkResolve(c, 'merge') + wkResolve(c, 'discard');
+const wkResolveBtns = c => wkResolve(c, 'ship') + wkResolve(c, 'discard');
+function openResolve(key, intent) {
+  const c = WK_RESOLVE.get(key);
+  if (!c) return;
+  const r = RESOLVE[intent], steps = wkResolveSteps(c.tasks, intent);
+  document.getElementById('resolvemodal')?.remove();
+  const m = document.createElement('div');
+  m.className = 'modal'; m.id = 'resolvemodal';
+  const head = c.branch ? `${r.head} <span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span>` : r.single;
+  m.innerHTML = `<div class="palette share-dlg wk-resolve-dlg" role="dialog" aria-modal="true"><div class="sh-head"><h3>${head}</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+    <div class="sh-body"><p class="cap">${r.title}${c.tasks.length > 1 ? `, for ${plural(c.tasks.length, 'thread')}` : ''}.</p>
+      <ul class="wk-wrap-steps">${steps.length ? steps.map(s => `<li>${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</li>`).join('')
+        : '<li class="muted">Nothing left: every step is done</li>'}</ul></div>
+    <div class="wk-resolve-foot"><button class="wk-btn" data-close>Cancel</button>${WRAP_STATES.has(c.state)
+      ? `<button class="wk-btn primary${intent === 'discard' ? ' danger' : ''}" data-go title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does these steps, asking you before each of yours">${WK_IC.spark}${r.start}</button>`
+      : `<span class="muted">${esc(wkModel(c.state).label)}: nothing left</span>`}</div></div>`;
+  document.body.append(m);
+  const close = () => { m.remove(); document.removeEventListener('keydown', esc_); };
+  const esc_ = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc_);
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) close(); };
+  const go = m.querySelector('[data-go]');
+  if (go) go.onclick = async () => {
+    go.disabled = true;
+    const body = {ids: c.tasks.map(t => t.id), branch: c.branch, days: S.work.days, intent};
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}); close(); toast(`Starting a session to ${r.verb} ${c.branch || 'this thread'} in Terminal`); }
+    catch (err) { go.disabled = false; toast('Could not start it: ' + err.message); }
+  };
+}
 // Start a to-do: the server makes the worktree and opens Terminal. The first to-do of a ticket project asks which
 // repo its work lives in; the choice is remembered for the project.
 async function startTodo(id, repo = '') {
@@ -4496,16 +4518,9 @@ function wkBind(el, d) {
   $$('[data-wk-resume-copy]', el).forEach(b => b.onclick = e => {
     e.stopPropagation(); navigator.clipboard?.writeText(b.dataset.wkResumeCopy); toast('Resume command copied');
   });
-  const cluster = b => ({ids: (b.dataset.wkReviveCluster || b.dataset.wkReviveClusterCopy || b.dataset.wkResolveStart || b.dataset.wkPreviewCluster).split(','), branch: b.dataset.branch, days: S.work.days});
-  $$('[data-wk-wrap]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.wrap = S.work.wrap === b.dataset.wkWrap ? null : b.dataset.wkWrap; S.work.menu = false; renderWork(); });
-  $$('.wk-wrap-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
+  const cluster = b => ({ids: (b.dataset.wkReviveCluster || b.dataset.wkReviveClusterCopy || b.dataset.wkPreviewCluster).split(','), branch: b.dataset.branch, days: S.work.days});
+  $$('[data-wk-resolve]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openResolve(b.dataset.wkResolve, b.dataset.intent); });
   $$('[data-wk-start-todo]', el).forEach(b => b.onclick = e => { e.stopPropagation(); startTodo(b.dataset.wkStartTodo); });
-  $$('[data-wk-resolve-start]', el).forEach(b => b.onclick = async e => {
-    e.stopPropagation();
-    const intent = b.dataset.intent;
-    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({...cluster(b), intent})}); S.work.wrap = null; renderWork(); toast(`Starting a session to ${intent} ${b.dataset.branch || 'this thread'} in Terminal`); }
-    catch (err) { toast('Could not start it: ' + err.message); }
-  });
   $$('[data-wk-preview-cluster]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
     const q = cluster(b);
