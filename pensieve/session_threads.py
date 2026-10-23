@@ -117,11 +117,22 @@ def thread_id(sid: str) -> str:
 
 def split(tasks: list[dict], facts: dict | None = None) -> list[dict]:
     """One thread per session of each task. A session with no write has no sinks: its thread is a thought. A session
-    that edited files still uncommitted on the task's branch wrote to that branch. `facts`: {session id: text facts}."""
+    that edited files still uncommitted on the task's branch wrote to that branch. A task with no session (a ticket
+    of the user's that nothing picked up yet) is one thread of its own, a to-do. `facts`: {session id: text facts}."""
     out = []
     for t in tasks:
+        if not t.get("_sessions"):
+            out.append(todo_thread(t))
+            continue
         for s in t.get("_sessions", []):
             ws = writes(s.get("path", ""))
             ws += [w for w in uncommitted(t, s) if w not in ws]
             out.append(_thread(t, s, ws, (facts or {}).get(s["id"])))
     return out
+
+
+def todo_thread(t: dict) -> dict:
+    """The thread of a task with no session: its tickets and PRs, nothing a session would bring."""
+    return {**t, "sessions": [], "_sessions": [], "_writes": [], "_shared": [], "shared_sessions": [], "seen": [],
+            "seen_more": 0, "summary": "", "last_words": "", "ending": "", "last_summary": "", "earlier": [],
+            "files": [], "kind": "ticket" if t.get("tickets") else t.get("kind", "work")}

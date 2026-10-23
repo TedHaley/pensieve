@@ -114,6 +114,34 @@ def _items(since: float = 0, until: float | None = None) -> list[dict]:
     return [_item(d, ppl) for d, ppl in zip(docs, _assignees(db, [d.id for d in docs]))]
 
 
+def _merge_tickets(tickets: list[dict]) -> list[dict]:
+    """One entry per key, newest first. Several rows hold one ticket (the keeper's copy and the copies an agent's
+    tool calls returned): the newest row gives the status, and each other field comes from the newest row that has
+    it, since a copy from a tool call often has the key for a title and no description."""
+    fields = ("key", "title", "status", "assignee", "url", "server", "path", "updated")
+    by_key: dict[str, list[dict]] = {}
+    for i in sorted(tickets, key=lambda i: -i["updated"]):
+        by_key.setdefault(i["key"], []).append(i)
+    out = []
+    for key, rows in by_key.items():
+        t = {**{k: rows[0][k] for k in fields}, "text": ""}
+        for k in ("title", "assignee", "url", "server"):
+            t[k] = next((r.get(k) for r in rows if r.get(k) and (k != "title" or r[k] != key)), rows[0].get(k) or "")
+        t["text"] = _ticket_body(max((r.get("text") or "" for r in rows), key=len))[:2000]  # the fullest description
+        out.append(t)
+    return out
+
+
+def _ticket_body(text: str) -> str:
+    """The ticket's description out of a stored item's text, which starts with a heading and a list of fields (key,
+    URL, author, status), and holds the description after a `description:` line."""
+    m = re.search(r"^description:\s*", text, re.M)
+    if m:
+        return text[m.end():].strip()
+    lines = [ln for ln in text.splitlines() if not ln.startswith(("# ", "- ")) and ":" not in ln[:12]]
+    return "\n".join(lines).strip()
+
+
 def _older_items(items: list[dict], prefixes: set, S: dict, facts: dict, commits, until) -> list[dict]:
     """Items from before the window that the window's work names: tickets by their keys (in session titles, branches
     and text, commit subjects, and the window's own tickets) and pull requests by their head branches. A ticket that last changed 40 days ago
@@ -604,8 +632,7 @@ def group(inp: Inputs) -> list[dict]:
                          if n >= 2 and k not in keys][:3],
             repos=sorted({s["repo"] for s in ss if s["repo"]} | {c["repo"] for c in cs}),
             branches=[dict(repo=b.split("@", 1)[0], branch=b.split("@", 1)[1]) for b in brs],
-            tickets=[{k: i[k] for k in ("key", "title", "status", "assignee", "url", "server", "path", "updated")}
-                     for i in sorted(tickets, key=lambda i: -i["updated"])] +
+            tickets=_merge_tickets(tickets) +
                     [dict(key=k, title="", status="", assignee="", url=f"{sites[k.split('-')[0]]}/{k}", server="",
                           path="", updated=0) for k in keys
                      if k not in {i["key"] for i in tickets} and k.split("-")[0] in sites],  # known only by its key

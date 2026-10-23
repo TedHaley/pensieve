@@ -48,6 +48,7 @@ DEFAULTS = {
     "search_gate_holdout": 5,  # the search gate (gate.py) leaves 1 session in this many unblocked, as a control; 0 = none
     # What writes the notes, summaries and insights (engine.py): cli | server. "" = not chosen: load() picks one
     "mode": "session",  # session: threads only; developer: also indexing, Map, People and Insights
+    "ticket_repos": {},  # ticket project prefix (ABC) -> the repo its work starts in (a to-do's worktree)
     "text_engine": "",
     "cli_command": "",         # cli: a command-line agent, run once per job (templates: engine.TEMPLATES)
     "llm_url": "http://localhost:1234/v1",  # server: an OpenAI-compatible URL that the user runs (LM Studio here)
@@ -83,6 +84,7 @@ DESCRIPTIONS = {
     "chunk_chars": "Characters in each piece of a document. Larger pieces keep more context together in one result.",
     "max_chunks": "Pieces read from each document (0 = all). Text after this limit is not searchable.",
     "session_folders": "More folders of agent sessions, as agent:path (claude, codex or qwen). Easier to add from Sources.",
+    "ticket_repos": "Which repo a ticket project's work starts in, by its key prefix (ABC): a to-do's worktree is made there. Set the first time you start one.",
     "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
     "default_scope": "Scope used by the search panel and Map search; empty means everything.",

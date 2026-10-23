@@ -59,6 +59,19 @@ def run():
     results.append(check("sink label", PR.label, "pr org/repo#12"))
     results.append(check("component id", tm.Component("s", 0, (3, 5)).id, "s#3-5"))
 
+    from pensieve import work
+    row = dict(key="ABC-1", title="", status="", assignee="", url="", server="", path="", updated=0, text="")
+    keeper = {**row, "title": "Fix the gate", "status": "In Progress", "assignee": "Me", "url": "https://j/ABC-1",
+              "server": "jira", "updated": 10, "text": "the whole description"}
+    seen = {**row, "title": "ABC-1", "status": "Closed", "updated": 20, "text": "short"}  # from an agent's tool call
+    merged = work._merge_tickets([keeper, seen])
+    results.append(check("one ticket from two rows", len(merged), 1))
+    results.append(check("the newest row gives the status", merged[0]["status"], "Closed"))
+    results.append(check("a key for a title does not hide the real title", merged[0]["title"], "Fix the gate"))
+    results.append(check("the fullest description wins", merged[0]["text"], "the whole description"))
+    results.append(check("other fields come from the row that has them", (merged[0]["assignee"], merged[0]["url"]),
+                         ("Me", "https://j/ABC-1")))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 

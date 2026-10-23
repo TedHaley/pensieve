@@ -11,6 +11,7 @@ from enum import Enum
 
 class State(str, Enum):
     OPEN = "open"
+    TODO = "todo"
     THOUGHTS = "thoughts"
     LOOSE_ENDS = "loose_ends"
     CLOSED = "closed"
@@ -30,6 +31,9 @@ MODELS = {m.state: m for m in [
     StateModel(State.OPEN, "Open", "You are working on it now.",
                "A session is running, or the thread has material work (edits, commits, a branch or a PR) and activity "
                "in the last 3 days, and it is not done.", "#34c759"),
+    StateModel(State.TODO, "To-do", "A ticket of yours that no session, branch or PR has picked up.",
+               "A ticket assigned to you, or yours, that is not done, with no session, branch or PR of yours on it. "
+               "Open once one starts.", "#bf5af2"),
     StateModel(State.THOUGHTS, "Thoughts", "A session with no data source: no PR, branch or ticket it wrote to.",
                "A session with no data source, active in the last 2 days. Forgotten after 2 days quiet.", "#5ac8fa"),
     StateModel(State.LOOSE_ENDS, "Loose ends","Work that is not done and has gone quiet: close it out.",
@@ -45,10 +49,10 @@ MODELS = {m.state: m for m in [
                "conversation with no ticket and no edits, once its session has ended.",
                "#ff453a"),
 ]}
-ORDER = [State.OPEN, State.THOUGHTS, State.LOOSE_ENDS, State.CLOSED, State.FORGOTTEN]
+ORDER = [State.OPEN, State.TODO, State.THOUGHTS, State.LOOSE_ENDS, State.CLOSED, State.FORGOTTEN]
 RENAMED = {"discarded": "forgotten", "latent": "loose_ends", "conscious": "open", "subconscious": "loose_ends",
-           "etched": "closed", "complete": "closed", "todo": "loose_ends", "closing": "loose_ends"}  # earlier names
-STORED = {"closed": "complete", "todo": "loose_ends", "closing": "loose_ends"}  # the names the store's CHECK accepts
+           "etched": "closed", "complete": "closed", "closing": "loose_ends"}  # earlier names
+STORED = {"closed": "complete", "closing": "loose_ends"}  # the names the store's CHECK accepts
 
 
 def stored(value: str) -> str:
@@ -100,6 +104,12 @@ def set_state(store, task_id: str, state: str, by: str = "user", reason: str = "
     return ch
 
 
+def _todo(task: dict) -> bool:
+    """A to-do: a ticket that is not done, and no session, branch, PR or commit of the user on it."""
+    return bool(task.get("tickets")) and not task.get("sessions") and not task.get("branches") \
+        and not task.get("prs") and not task.get("commits")
+
+
 def apply(task: dict, manual: StateChange | None):
     """Set task["state"] and why: by hand while no activity is newer than that change, else automatically."""
     from pensieve import chains, sink_status, thread_model as tm
@@ -113,6 +123,8 @@ def apply(task: dict, manual: StateChange | None):
     else:
         why = reason
     auto = State(by_sinks.value)
+    if auto in (State.OPEN, State.LOOSE_ENDS) and _todo(task):
+        auto, why = State.TODO, "a ticket of yours with no session, branch or PR on it yet"
     task["chains"] = chains.build(task, status)
     if manual and manual.state != "auto" and manual.at >= task.get("updated", 0):
         state = RENAMED.get(manual.state, manual.state)

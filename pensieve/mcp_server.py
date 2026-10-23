@@ -16,7 +16,7 @@ from pensieve import actions, migrate, onboarding, scopes, settings, sources, us
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "people", "repo", "projects", "list_repos", "current_scope", "open",
-               "index_path", "report_feedback", "stale", "threads", "thread", "cluster", "thread_page"}
+               "index_path", "report_feedback", "stale", "threads", "thread", "cluster", "thread_page", "start_todo"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -730,7 +730,7 @@ WHO = {"you": "you", "agent": "agent", "parent": "tracker"}  # who can do a step
 
 
 @tool()
-def threads(state: str = "open,loose_ends", query: str = "", limit: int = 10) -> str:
+def threads(state: str = "open,todo,loose_ends", query: str = "", limit: int = 10) -> str:
     """The user's threads of work of the last 30 days, joined across agent sessions, commits, PRs and tickets, the
     closest to done first (fewest steps left). Under each thread, the steps left to close it: who can do each one
     ("you": only the user, such as an answer, a review or a merge; "agent": you can, in a session; "tracker": a change
@@ -834,6 +834,20 @@ def thread_page(id: str = "", branch: str = "") -> dict:
             raise KeyError(id)
         ts, page, name = [t], cards.render_html(build(t)), t["title"]
     return {"file": cards.save_page(page, name, Path.home() / "Downloads"), "threads": [t["id"] for t in ts]}
+
+
+@tool()
+def start_todo(id: str, repo: str = "") -> dict:
+    """Start a to-do (a thread in state todo: a ticket of the user's that nothing picked up yet): makes a worktree
+    on a branch named from the ticket's key in the ticket project's repo, from its default branch, and returns
+    {path, branch, repo, key, prompt}: cd to `path` and do what `prompt` says. `repo`: the repo to use; without one
+    Pensieve takes the one remembered for the project, else returns {choose: [repos]} to ask the user."""
+    from pensieve import todo
+    t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
+    if not t:
+        raise KeyError(id)
+    res = todo.start(t, repo or None)
+    return {k: v for k, v in res.items() if k != "command"}
 
 
 @tool()

@@ -109,6 +109,7 @@ class State(StrEnum):
     """A thread's state as the store saves it (pensieve/task_states.py says what each one means). Closed is saved
     as complete, the name the store's CHECK allows (task_states.stored)."""
     OPEN = "open"
+    TODO = "todo"
     THOUGHTS = "thoughts"
     LOOSE_ENDS = "loose_ends"
     CLOSED = "complete"

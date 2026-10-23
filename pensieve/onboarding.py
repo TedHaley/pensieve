@@ -295,7 +295,7 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     unknown = chosen - known
     if unknown:
         raise ValueError(f"unknown sources: {', '.join(sorted(unknown))}; scan lists them")
-    all_cats = [c for c, _, _ in sources.CATEGORIES]
+    all_cats = [c for c, _, _ in sources.CATEGORIES if c != "connections"]  # a connection has its own switch
     off = [d for d in settings.get("disabled") if d not in known and d not in all_cats]
     off += [i for i in known if i not in chosen]
     off += [c for i in items if i["id"] not in chosen for c in i.get("clones", [])]  # else another clone stands in

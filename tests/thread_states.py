@@ -39,8 +39,12 @@ def run():
                          state_of(task(0, prs=open_pr)), "open"))
     results.append(check("open PR, quiet 10 days: loose ends",
                          state_of(task(10, prs=open_pr)), "loose_ends"))
-    results.append(check("ticket in progress, quiet 10 days: loose ends",
-                         state_of(task(10, tickets=[dict(key="ABC-1", status="In Progress")])), "loose_ends"))
+    results.append(check("ticket in progress, quiet 10 days, a session on it: loose ends",
+                         state_of(task(10, tickets=[dict(key="ABC-1", status="In Progress")], sessions=[dict(id="s1")])), "loose_ends"))
+    results.append(check("ticket in progress with no session, branch or PR: a to-do, however quiet",
+                         state_of(task(10, tickets=[dict(key="ABC-1", status="In Progress")])), "todo"))
+    results.append(check("a to-do with a branch is open work",
+                         state_of(task(0, tickets=[dict(key="ABC-1", status="In Progress")], branches=[dict(repo="/r", branch="abc-1")])), "open"))
     results.append(check("ticket with no status: unknown, so closed",
                          state_of(task(0, tickets=[dict(key="ABC-2")])), "closed"))
     results.append(check("merged PR: closed",
@@ -70,10 +74,9 @@ def run():
     results.append(check("new activity after a state set by hand: automatic again",
                          newer["state"], "open"))
 
-    results.append(check("five states in order", [s.value for s in ts.ORDER],
-                         ["open", "thoughts", "loose_ends", "closed", "forgotten"]))
-    results.append(check("todo and closing fold into loose ends", (ts.RENAMED["todo"], ts.RENAMED["closing"]),
-                         ("loose_ends", "loose_ends")))
+    results.append(check("six states in order", [s.value for s in ts.ORDER],
+                         ["open", "todo", "thoughts", "loose_ends", "closed", "forgotten"]))
+    results.append(check("closing folds into loose ends", ts.RENAMED["closing"], "loose_ends"))
     results.append(check("complete becomes closed", ts.RENAMED["complete"], "closed"))
 
     print(f"\n{sum(results)} of {len(results)} passed")

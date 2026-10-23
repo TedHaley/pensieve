@@ -3939,7 +3939,7 @@ window.addEventListener('resize', debounce(() => { if (S.view === 'people') { pp
 /* ============================== threads tab ============================== */
 // Each thread: its data points from every source, newest first, and an AI note on how it stands and is moving.
 S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, menu: false,
-          states: new Set((() => { const v = store.get('threadStates2', ['open', 'thoughts', 'loose_ends']); return Array.isArray(v) ? v : [v]; })()),
+          states: new Set((() => { const v = store.get('threadStates3', ['open', 'todo', 'thoughts', 'loose_ends']); return Array.isArray(v) ? v : [v]; })()),
           view: store.get('workView', 'compact'), collapsed: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a thread; full: the rows opened
           details: new Set()};  // the threads whose problem, goal, state and sections are open
 const wkPageSize = () => S.work.view === 'compact' ? 40 : 10;
@@ -4048,7 +4048,12 @@ function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header 
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
-  const wrap = cluster ? '' : wkResolveBtns({key: `thread|${t.id}`, state: t.state, branch: t.branches?.[0]?.branch || t.claim?.branch || '', tasks: [t]});
+  const own = {key: `thread|${t.id}`, state: t.state, branch: t.branches?.[0]?.branch || t.claim?.branch || '', tasks: [t]};
+  if (t.state === 'todo') {  // a ticket nothing picked up yet: it starts in a worktree, or gets cancelled
+    const start = `<button class="wk-btn primary" data-wk-start-todo="${esc(t.id)}" title="Make a worktree on a branch named from the ticket, in its project's repo, and start a new ${esc(S.agents?.startName || 'agent')} session there that reads the ticket first">${WK_IC.play}Start session in worktree</button>`;
+    return `<div class="wk-bar">${start}${details}${wkResolve(own, 'discard')}<span class="wk-loc"></span>${wkCardBtns(t)}</div>`;
+  }
+  const wrap = cluster ? '' : wkResolveBtns(own);
   return `<div class="wk-bar">${resume}${fresh}${details}${wrap}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
 }
 // A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
@@ -4217,6 +4222,8 @@ function wkAbout(t) {
   const rows = [asked ? `<div class="wk-said you"><span class="who">You</span><span class="txt" title="${esc(asked)}">${esc(cut(asked, 220))}</span></div>` : '',
     reply ? `<div class="wk-said agent"><span class="who">Agent</span><span class="txt" title="${esc(reply)}">${esc(cut(reply, 260))}</span></div>` : '',
     question ? `<div class="wk-said ask"><span class="who">Asks</span><span class="txt">${esc(cut(question, 200))}</span></div>` : ''].join('');
+  const ticket = (t.tickets || []).find(k => k.text);
+  if (!rows && ticket) return `<section class="wk-sec wk-about"><h5>Ticket</h5><div class="wk-said"><span class="who">${esc(ticket.key)}</span><span class="txt" title="${esc(ticket.text)}">${esc(cut(ticket.text, 400))}</span></div></section>`;
   const body = t.summary ? `<p class="wk-summary">${esc(t.summary)}</p>${rows}` : rows || '<p class="wk-summary muted">No words from this session yet</p>';
   return `<section class="wk-sec wk-about"><h5>Conversation snippet</h5>${body}</section>`;
 }
@@ -4248,7 +4255,7 @@ function wkKin(t) {
 // threads to merged and done (commit, push, the PR's review and merge, the ticket closed after it); Discard lists the
 // steps that close them without a merge (drop the changes, close the PR, delete the branch, cancel the ticket). The
 // button at the bottom starts a session that does those steps, when the work is not closed yet.
-const WRAP_STATES = new Set(['open', 'loose_ends', 'forgotten']);
+const WRAP_STATES = new Set(['open', 'todo', 'loose_ends', 'forgotten']);
 const RESOLVE = {
   merge: {label: 'Merge', head: 'To merge the work on', single: 'To merge this thread', start: 'Start merge', field: 'closeout',
     title: 'The steps that take this work to merged and done'},
@@ -4276,6 +4283,27 @@ function wkResolve(c, intent) {
   return `<span class="wk-wrap"><button class="wk-btn ${open ? 'on' : ''}" data-wk-wrap="${esc(key)}" aria-haspopup="menu" aria-expanded="${open}" title="${r.title}">${r.label}<span class="wk-n">${steps.length}</span></button>${menu}</span>`;
 }
 const wkResolveBtns = c => wkResolve(c, 'merge') + wkResolve(c, 'discard');
+// Start a to-do: the server makes the worktree and opens Terminal. The first to-do of a ticket project asks which
+// repo its work lives in; the choice is remembered for the project.
+async function startTodo(id, repo = '') {
+  try {
+    const r = await api('/api/thread/start', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, days: S.work.days, repo})});
+    if (r.choose) return chooseRepo(id, r);
+    toast(`Starting ${r.key} on ${r.branch} in Terminal`);
+  } catch (err) { toast('Could not start it: ' + err.message); }
+}
+function chooseRepo(id, r) {
+  const m = document.createElement('div');
+  m.className = 'modal'; m.id = 'repomodal';
+  const project = r.key.split('-')[0];
+  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>Where does ${esc(project)} work live?</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+    <div class="sh-body"><p class="cap">The worktree for ${esc(r.key)} is made in this repo, on a branch named from the ticket. Pensieve remembers the choice for ${esc(project)}.</p>
+    <div class="list">${r.choose.map(c => `<button class="item" data-repo="${esc(c.path)}"><div class="t"><span class="grow">${esc(c.name)}</span>${c.last ? `<span class="muted" style="font-size:11px">${esc(fmtWhen(c.last))}</span>` : ''}</div><div class="s">${esc(homeTilde(c.path))}</div></button>`).join('')
+      || '<div class="empty">No repo found on this Mac. Add one in Settings → Sources, or run a session in it.</div>'}</div></div></div>`;
+  document.body.append(m);
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
+  $$('[data-repo]', m).forEach(b => b.onclick = () => { m.remove(); startTodo(id, b.dataset.repo); });
+}
 // A thread's session's own time: the holder of a branch adopts the time of the newest session on it (t.updated)
 const wkOwnTime = t => t.sessions?.[0]?.updated || t.updated;
 // The threads of a page as clusters: the threads of one state that wrote to the same branch sit together, the
@@ -4339,7 +4367,7 @@ function renderWork() {
   if (!d) { el.innerHTML = S.work.err ? `<div class="empty">Could not load your threads: ${esc(S.work.err)}</div>` : '<div class="shimmer" style="height:160px"></div>'; return; }
   const fl = S.work.flash && Date.now() < S.work.flash.until ? S.work.flash : null;
   if (fl && !fl.shown) {  // a thread opened from the map: its state into the filter, its page in view
-    if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('threadStates2', [...S.work.states]); }
+    if (S.work.states.size && !S.work.states.has(fl.state)) { S.work.states.add(fl.state); store.set('threadStates3', [...S.work.states]); }
     const at = wkShown().findIndex(x => x.id === fl.id);
     if (at >= 0) S.work.page = Math.floor(at / wkPageSize());
   }
@@ -4402,7 +4430,7 @@ function renderWork() {
   if (box) { sb.focus(); sb.setSelectionRange(...box); }  // the page was drawn again while you typed
   sb.oninput = () => { S.work.q = sb.value; wkSearch(); };
   sb.onkeydown = e => { if (e.key === 'Escape' && sb.value) { e.stopPropagation(); sb.value = S.work.q = ''; wkSearch(); } };
-  const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('threadStates2', [...S.work.states]); renderWork(); };
+  const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('threadStates3', [...S.work.states]); renderWork(); };
   $$('[data-wk-menu]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.menu = !S.work.menu; renderWork(); });
   $$('[data-wk-st]', el).forEach(c => c.onchange = () => pick(d.states.map(m => m.state).filter(s => s === c.dataset.wkSt ? c.checked : S.work.states.has(s))));
   $$('[data-wk-st-all]', el).forEach(b => b.onclick = () => pick(wkStateList().map(m => m.state)));
@@ -4465,6 +4493,7 @@ function wkBind(el, d) {
   const cluster = b => ({ids: (b.dataset.wkReviveCluster || b.dataset.wkReviveClusterCopy || b.dataset.wkResolveStart || b.dataset.wkPreviewCluster).split(','), branch: b.dataset.branch, days: S.work.days});
   $$('[data-wk-wrap]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.wrap = S.work.wrap === b.dataset.wkWrap ? null : b.dataset.wkWrap; S.work.menu = false; renderWork(); });
   $$('.wk-wrap-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
+  $$('[data-wk-start-todo]', el).forEach(b => b.onclick = e => { e.stopPropagation(); startTodo(b.dataset.wkStartTodo); });
   $$('[data-wk-resolve-start]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
     const intent = b.dataset.intent;

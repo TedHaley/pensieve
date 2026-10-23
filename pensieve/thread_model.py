@@ -40,6 +40,7 @@ class Completion(str, Enum):
 
 class ThreadState(str, Enum):
     OPEN = "open"
+    TODO = "todo"
     THOUGHTS = "thoughts"
     LOOSE_ENDS = "loose_ends"
     CLOSED = "closed"

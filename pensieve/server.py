@@ -1918,6 +1918,32 @@ def list_agents():
     return {"agents": agents.listing(settings.get("default_agent")), "default": settings.get("default_agent") or ""}
 
 
+class StartReq(BaseModel):
+    id: str  # a to-do thread
+    days: int = 30
+    repo: str = ""  # the repo the work starts in; remembered for the ticket's project after the first start
+    agent: str = ""
+
+
+@app.post("/api/thread/start")
+def start_thread(req: StartReq):
+    """Start a to-do in Terminal: a worktree on a branch named from the ticket, in the ticket project's repo, and an
+    agent session there that reads the ticket first. Without a repo for the project, returns {choose: [repos]} for
+    the page to ask."""
+    from pensieve import cardbuild, todo
+    t = next((x for x in work.tasks(store, req.days) if x["id"] == req.id), None)
+    if not t:
+        raise HTTPException(404, f"unknown thread {req.id!r}")
+    try:
+        res = todo.start(t, req.repo or None, req.agent)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if res.get("command"):
+        _terminal(res["command"])
+        cardbuild.emit(cardbuild.REFRESH, [req.id])  # the new branch and worktree reach the card
+    return {k: v for k, v in res.items() if k != "command"}
+
+
 @app.post("/api/thread/revive")
 def revive_thread(req: ReviveReq):
     """Start a new agent session in Terminal with a thread as its first context: the thread now, or a version that

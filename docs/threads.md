@@ -114,6 +114,8 @@ The main goal is the newest goal that a session did work toward: it changed code
 
 To start a thread again, start a new agent session from it (Fork session). Pensieve writes the thread to a file and opens the agent in the work's folder. The prompt tells the agent to read the thread, to get the live state of its branch, PRs and tickets, and to report before it changes anything. A cluster (the threads of one branch) forks a session that reads them all, or a session that does the steps left to wrap the branch up.
 
+A to-do (a ticket of yours with no session, branch or PR) starts in a worktree: `<repo>/.claude/worktrees/<branch>`, on a branch named from the ticket's key and title, made from the repo's default branch. The agent starts there with the ticket's title, URL and description, and reads the ticket's page before it plans. The repo of a ticket project is asked once and kept in the `ticket_repos` setting.
+
 ## What threads read
 
 Threads read the transcript folders of the agents, git and gh, and the tickets, PRs and messages that connections collected when there are any (`pensieve/transcripts.py`). They read no index and no model. A transcript is read once, and only its new lines after that; the facts persist on disk, so a restart reads nothing twice.
