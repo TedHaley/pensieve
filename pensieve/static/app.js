@@ -4185,7 +4185,7 @@ function wkSections(t) {
   const wrapUp = sec('Wrap-up',(t.closeout || []).map(s => `<div class="wk-step${s.done ? ' done' : ''}"><span class="box" aria-hidden="true">${s.done ? '✓' : ''}</span>
       <span class="what">${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</span>
       ${s.who ? `<span class="who">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join(''));
-  return sec('Data Sources', folders + prs + tickets + seen + artifacts) + activity + wrapUp;
+  return sec('Data sources in session', folders + prs + tickets + seen + artifacts) + activity + wrapUp;
 }
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
