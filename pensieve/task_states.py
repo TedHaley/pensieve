@@ -109,6 +109,10 @@ def apply(task: dict, note: dict, manual: StateChange | None):
     """Set task["state"] and why: by hand while no activity is newer than that change, else automatically."""
     from pensieve import chains, sink_status, thread_model as tm
     by_sinks, reason, status = sink_status.task_state(task)
+    if by_sinks is None and task.get("contributed"):  # it wrote to sinks another thread holds: their state is its state
+        c = task["contributed"]
+        by_sinks, reason, status = sink_status.task_state({**task, "branches": c["branches"], "prs": c["prs"], "tickets": c["tickets"]})
+        reason = f"contributed to {', '.join(b['branch'] for b in c['branches']) or 'its sinks'}: {reason}"
     if by_sinks is None:  # no data source: a thought, by its last activity
         by_sinks, why = tm.thought_state(task.get("updated", 0))
     else:

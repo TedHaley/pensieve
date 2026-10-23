@@ -47,6 +47,9 @@ def run():
                          ([b["branch"] for b in threads[0]["branches"]], [b["branch"] for b in threads[1]["branches"]]),
                          ([], ["feat"])))
     results.append(check("the losing thread keeps its claim record", threads[0]["claim"]["lost"], True))
+    results.append(check("the losing thread keeps the branch as what it contributed to",
+                         [b["branch"] for b in threads[0]["contributed"]["branches"]], ["feat"]))
+    results.append(check("the winner contributed nothing to another thread", "contributed" in threads[1], False))
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)

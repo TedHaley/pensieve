@@ -48,6 +48,15 @@ def run():
     results.append(check("ticket done: closed",
                          state_of(task(0, tickets=[dict(key="ABC-3", status="Done")])), "closed"))
     results.append(check("no sink, written now: thoughts", state_of(task(0)), "thoughts"))
+    gave = dict(branches=[], prs=open_pr, tickets=[])  # it wrote to a PR that another thread holds (claims.apply)
+    results.append(check("a session that contributed to an open PR is open, not a thought",
+                         state_of(task(0, contributed=gave)), "open"))
+    done = dict(branches=[], prs=[dict(url=PR_URL, state="merged", head="feat")], tickets=[])
+    results.append(check("a session that contributed to a merged PR is closed",
+                         state_of(task(1, contributed=done)), "closed"))
+    t = task(0, contributed=gave)
+    ts.apply(t, {}, None)
+    results.append(check("the reason says it contributed", t["state_why"].startswith("contributed to"), True))
     results.append(check("no sink, quiet 5 days: forgotten", state_of(task(5)), "forgotten"))
     results.append(check("no sink, quiet 30 days: forgotten", state_of(task(30)), "forgotten"))
 

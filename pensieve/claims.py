@@ -115,7 +115,13 @@ def apply(threads: list[dict]) -> None:
             t["_lead_title"] = lead.get("title", "")
             r = res[t["_sessions"][0]["id"]]
             t["claim"] = dict(branch=branch, lost=not r["majority"], **r)
-            if not r["majority"]:  # the loser keeps only what it holds on its own: its other sinks decide its state
+            if not r["majority"]:  # the loser keeps only what it holds on its own: its other sinks decide its state,
+                # and what it contributed to decides when it has none (task_states.apply): a session that wrote to
+                # the branch is open while the branch is, not a thought
+                c = t.setdefault("contributed", dict(branches=[], prs=[], tickets=[]))
+                c["branches"] += [b for b in t["branches"] if b["branch"] == branch]
+                c["prs"] += [p for p in t.get("prs", []) if p.get("head") == branch]
+                c["tickets"] += [k for k in t.get("tickets", []) if k["key"] in won_tickets]
                 t["branches"] = [b for b in t["branches"] if b["branch"] != branch]
                 t["prs"] = [p for p in t.get("prs", []) if p.get("head") != branch]
                 t["tickets"] = [k for k in t.get("tickets", []) if k["key"] not in won_tickets]
