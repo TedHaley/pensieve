@@ -199,8 +199,10 @@ class Builder:
                     int(t["updated"] or 0), now, work._signature(t), view)
 
     def _log(self, kind, t0, changed):
-        self.builds = (self.builds + [dict(at=time.time(), kind=kind, ms=round((time.perf_counter() - t0) * 1000),
-                                           changed=len(changed))])[-50:]
+        ms = round((time.perf_counter() - t0) * 1000)
+        self.builds = (self.builds + [dict(at=time.time(), kind=kind, ms=ms, changed=len(changed))])[-50:]
+        if kind == "full" or ms >= 2000:  # a full build, or a slow update: worth a line in the log
+            print(f"threads: {kind} build in {ms} ms, {len(changed)} cards changed, {len(self.tasks)} threads", flush=True)
 
 
 def _members(t: dict) -> list[CardMember]:
