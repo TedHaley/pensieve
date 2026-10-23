@@ -1976,12 +1976,27 @@ def resume_session(req: ResumeReq):
     return {"ok": True, "command": cmd}
 
 
+AGENT_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_BRIDGE_SESSION_ID",
+                 "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_ENTRYPOINT",
+                 "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_EFFORT", "CLAUDE_CODE_EXECPATH")
+
+
+def _outside_env() -> dict:
+    """This process's environment without the marks of an agent session. A Pensieve server that an agent started
+    (a dev server from a Claude Code session, say) carries CLAUDE_CODE_CHILD_SESSION and the session's id; a new
+    agent that inherits them takes itself for a child of that session and does not save its transcript. The
+    PENSIEVE_* variables of such a server (its data folder, its port) are its own, not the new session's."""
+    return {k: v for k, v in os.environ.items() if k not in AGENT_MARKERS and not k.startswith("PENSIEVE_")}
+
+
 def _terminal(cmd: str):
-    """Run a shell command in a new Terminal window."""
+    """Run a shell command in a new Terminal window, as a session of its own: not a child of the agent that started
+    this server (see _outside_env)."""
     import subprocess
+    cmd = f"unset {' '.join(AGENT_MARKERS)}; {cmd}"
     script = cmd.replace("\\", "\\\\").replace('"', '\\"')
     subprocess.run(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
-                    "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True)
+                    "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True, env=_outside_env())
 
 
 class ReviveReq(BaseModel):

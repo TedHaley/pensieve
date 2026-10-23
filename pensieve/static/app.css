@@ -812,6 +812,8 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-kin-list li{position:relative;display:flex;align-items:center;gap:8px;min-height:28px;font-size:12.5px;padding:2px 6px 2px 4px;border-radius:8px;min-width:0}
 .wk-kin-list li::before{content:"";position:absolute;left:-16px;top:50%;margin-top:-4px;width:7px;height:7px;border-radius:50%;background:var(--c);box-shadow:0 0 0 3px var(--card)}
 .wk-kin-list li.me{background:var(--card-2)}
+.wk-kin-list li.ctx::before{background:var(--card);border:1.5px solid var(--c)}
+.wk-kin-list li.ctx .did{color:var(--text-3)}
 .wk-kin-list li.me::before{width:9px;height:9px;margin-top:-5px;left:-17px;box-shadow:0 0 0 3px var(--card),0 0 0 4px var(--c)}
 .wk-kin-list time{flex:none;min-width:44px;font-size:11.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
 .wk-kin-list .nm{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--text);text-align:left}

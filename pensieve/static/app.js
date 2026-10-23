@@ -4185,11 +4185,7 @@ function wkSections(t) {
   const wrapUp = sec('Wrap-up',(t.closeout || []).map(s => `<div class="wk-step${s.done ? ' done' : ''}"><span class="box" aria-hidden="true">${s.done ? '✓' : ''}</span>
       <span class="what">${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</span>
       ${s.who ? `<span class="who">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join(''));
-  const kin = new Set((t.kin || []).map(k => k.id));  // the sessions of the same work have their own section
-  const related = sec('Related by context', (t.related || []).filter(r => !kin.has(r.id)).map(r => `<div class="wk-rel">
-      <button class="wk-rel-t linkbtn subtle" data-wk-jump="${esc(r.id)}" title="Go to this thread’s card">${esc(r.title)}</button>
-      <div class="wk-rel-m">${wkSt(wkModel(r.state).label)}<span>${esc(r.reason)}</span></div></div>`).join(''));
-  return sec('Data Sources', folders + prs + tickets + seen + artifacts) + activity + wrapUp + related;
+  return sec('Data Sources', folders + prs + tickets + seen + artifacts) + activity + wrapUp;
 }
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
@@ -4265,21 +4261,29 @@ function wkAbout(t) {
   const body = t.summary ? `<p class="wk-summary">${esc(t.summary)}</p>${rows}` : rows || '<p class="wk-summary muted">No words from this session yet</p>';
   return `<section class="wk-sec wk-about"><h5>About</h5>${body}</section>`;
 }
-// The sessions of one piece of work, oldest first: each with what it did on the shared branch, PR or ticket, its
-// thread's state and its share of the branch. This session is marked. A click goes to that session's card.
+// The sessions related to this one, oldest first, each with how it relates: the kin (the sessions of the same work:
+// what each did on the shared branch, PR or ticket, and its share of the branch) and the threads whose context is
+// close in meaning. This session is marked. A click goes to that session's card.
 function wkKin(t) {
-  const kin = t.kin || [];
-  if (!kin.length) return '';
+  const kin = t.kin || [], seen = new Set(kin.map(k => k.id));
+  const ctx = (t.related || []).filter(r => !seen.has(r.id)).map(r => {
+    const m = /\(([\d.]+)\)/.exec(r.reason || '');
+    return {id: r.id, title: r.title, state: r.state, updated: r.updated || 0, context: true,
+            did: m ? `similar context, ${Math.round(+m[1] * 100)}%` : r.reason};
+  });
+  const rows = [...kin, ...ctx].sort((a, b) => a.updated - b.updated);
+  if (!rows.length) return '';
   const branch = t.claim?.branch || t.branches?.[0]?.branch || '';
-  const rows = kin.map(k => {
+  const html = rows.map(k => {
     const m = wkModel(k.state);
     const share = k.share != null && k.share > 0 ? `<span class="share" title="Share of the branch’s lines that this session wrote">${Math.round(k.share * 100)}%</span>` : '';
     const live = k.active ? `<span class="wk-st ok" title="A session is running">running</span>` : '';
     const name = k.me ? `<span class="nm me">This session</span>` : `<button class="nm linkbtn subtle" data-wk-jump="${esc(k.id)}" title="Go to this session’s card">${esc(k.title)}</button>`;
-    return `<li class="${k.me ? 'me' : ''}" style="--c:${m.color}"><time title="${esc(new Date(k.updated * 1000).toLocaleString())}">${wkDate(k.updated)}</time>
-      ${name}<span class="did">${esc(k.did)}</span>${share}${live}${wkSt(m.label)}</li>`;
+    return `<li class="${k.me ? 'me' : ''}${k.context ? ' ctx' : ''}" style="--c:${m.color}"><time title="${k.updated ? esc(new Date(k.updated * 1000).toLocaleString()) : ''}">${k.updated ? wkDate(k.updated) : ''}</time>
+      ${name}<span class="did">${k.context ? '≈ ' : ''}${esc(k.did)}</span>${share}${live}${wkSt(m.label)}</li>`;
   }).join('');
-  return `<section class="wk-sec wk-kin"><h5>Same work${branch ? ` · <span class="wk-kin-b">${WK_IC.branch}${esc(branch)}</span>` : ''} <span class="muted">${kin.length} sessions</span></h5><ol class="wk-kin-list">${rows}</ol></section>`;
+  const n = rows.filter(k => !k.me).length;
+  return `<section class="wk-sec wk-kin"><h5>Related sessions${branch && kin.length ? ` · <span class="wk-kin-b">${WK_IC.branch}${esc(branch)}</span>` : ''} <span class="muted">${n}</span></h5><ol class="wk-kin-list">${html}</ol></section>`;
 }
 // The order of the server (work._order): by state, a running session first, then the newest
 function wkOrder(d) {

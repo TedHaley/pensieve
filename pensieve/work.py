@@ -839,8 +839,8 @@ def _related_cards(tasks_: list[dict], have: dict) -> None:
                           and float(sims[n, m]) >= RELATED_SIMILAR), reverse=True)
         rel += [dict(id=other, reason=f"similar context ({score:.2f})") for score, other in similar]
         t = by_id[tid]
-        t["related"] = [dict(id=r["id"], title=by_id[r["id"]]["title"], state=by_id[r["id"]]["state"], reason=r["reason"])
-                        for r in rel[:RELATED_MAX]]
+        t["related"] = [dict(id=r["id"], title=by_id[r["id"]]["title"], state=by_id[r["id"]]["state"], reason=r["reason"],
+                             updated=by_id[r["id"]]["updated"]) for r in rel[:RELATED_MAX]]
 
 
 def _thread(t: dict, inp: "Inputs", note: dict):
