@@ -4254,14 +4254,10 @@ function wkWrapSteps(tasks) {
 }
 function wkWrapUp(c) {
   const key = `${c.state}|${c.branch}`, open = S.work.wrap === key, steps = wkWrapSteps(c.tasks), ids = c.tasks.map(t => t.id).join(',');
-  const yours = steps.filter(s => s.who === 'you').length, agents = steps.filter(s => s.who === 'agent').length, rest = steps.length - yours - agents;
-  const sub = steps.length ? [agents && `${agents} for the agent`, yours && `${yours} for you`, rest && `${rest} in the tracker`].filter(Boolean).join(' · ') : '';
   const menu = !open ? '' : `<div class="wk-menu wk-wrap-menu" role="menu">
       <div class="wk-wrap-h">To close the work on <span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span></div>
-      ${sub ? `<div class="wk-wrap-sub">${plural(steps.length, 'step')} left · ${esc(sub)}</div>` : ''}
-      ${steps.length ? steps.map(s => `<div class="wk-step"><span class="box" aria-hidden="true"></span>
-        <span class="what">${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</span>
-        ${s.who ? `<span class="who" title="${esc(WK_WHO[s.who]?.[1] || '')}">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join('') : '<div class="wk-step muted">Nothing left: every step is done</div>'}
+      <ul class="wk-wrap-steps">${steps.length ? steps.map(s => `<li>${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</li>`).join('')
+        : '<li class="muted">Nothing left: every step is done</li>'}</ul>
       <div class="wk-menu-foot">${WRAP_STATES.has(c.state)
         ? `<button class="wk-btn primary" data-wk-wrapup-start="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does the agent's steps, asking you before each of yours">${WK_IC.spark}Start a session to wrap up</button>`
         : `<span class="muted">${esc(wkModel(c.state).label)}: nothing to wrap up</span>`}</div></div>`;

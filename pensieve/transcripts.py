@@ -81,6 +81,11 @@ def _cache_path(path: str) -> Path:
 
 _facts: dict[str, Facts] = {}
 _lock = threading.RLock()
+# path -> [mtime, size, id, source, updated, n_turns, own]: enough to skip an unchanged transcript and to pick the
+# sessions of a window without opening each facts file (index.json next to them)
+_index: dict[str, list] = {}
+_index_loaded = False
+_index_dirty = False
 
 
 def _load(path: str) -> Facts | None:
@@ -99,19 +104,64 @@ def _save(f: Facts):
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(asdict(f), ensure_ascii=False))
     os.replace(tmp, p)
+    _note(f)
+
+
+def _note(f: Facts):
+    """The index row of a transcript's facts."""
+    global _index_dirty
+    row = [f.mtime, f.size, f.id, f.source, f.updated, f.n_turns, bool(f.state.get("own"))]
+    if _index.get(f.path) != row:
+        _index[f.path] = row
+        _index_dirty = True
+
+
+def _index_path() -> Path:
+    return cache_dir() / "index.json"
+
+
+def _load_index():
+    global _index_loaded
+    if _index_loaded:
+        return
+    try:
+        d = json.loads(_index_path().read_text())
+        if d.get("v") == VERSION:
+            _index.update(d.get("files", {}))
+    except (OSError, ValueError):
+        pass
+    _index_loaded = True
+
+
+def _save_index():
+    global _index_dirty
+    if not _index_dirty:
+        return
+    p = _index_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"v": VERSION, "files": _index}))
+    os.replace(tmp, p)
+    _index_dirty = False
 
 
 def facts(path: str, source: str = "claude") -> Facts | None:
     """One transcript's facts, read up to date. None when the file is gone."""
     with _lock:
-        f = _facts.get(path) or _load(path)
+        _load_index()
         try:
             st = os.stat(path)
         except OSError:
             _facts.pop(path, None)
             return None
+        f = _facts.get(path)
+        if f is None and _index.get(path, [None, None])[:2] == [st.st_mtime, st.st_size]:
+            f = _load(path)  # unchanged since its facts were written: the file is enough
+        elif f is None:
+            f = _load(path)
         if f and (f.mtime, f.size) == (st.st_mtime, st.st_size):
             _facts[path] = f
+            _note(f)
             return f
         if f is None or st.st_size < f.offset:  # a new transcript, or one written again from the start
             f = Facts(id=f"{source}:{Path(path).stem}", source=source, path=path)
@@ -124,12 +174,13 @@ def facts(path: str, source: str = "claude") -> Facts | None:
 
 def sync(limit_seconds: float | None = None) -> tuple[list[str], int]:
     """Read every transcript that changed since the last call. Returns (the paths that changed, the transcripts
-    seen). Stops after `limit_seconds` and goes on at the next call."""
+    seen). An unchanged transcript costs one stat: its facts stay on disk until a window needs them. Stops after
+    `limit_seconds` and goes on at the next call."""
     end = time.monotonic() + limit_seconds if limit_seconds else None
     changed, seen = [], 0
-    for source, p in parsers.discover():
-        if p.suffix != ".jsonl":
-            continue
+    with _lock:
+        _load_index()
+    for source, p in discover():
         seen += 1
         if end and time.monotonic() > end:
             break
@@ -142,14 +193,39 @@ def sync(limit_seconds: float | None = None) -> tuple[list[str], int]:
             have = _facts.get(path)
             if have and (have.mtime, have.size) == (st.st_mtime, st.st_size):
                 continue
-            if have is None:
-                cached = _load(path)
-                if cached and (cached.mtime, cached.size) == (st.st_mtime, st.st_size):
-                    _facts[path] = cached
-                    continue
+            if have is None and _index.get(path, [None, None])[:2] == [st.st_mtime, st.st_size]:
+                continue
         if facts(path, source) is not None:
             changed.append(path)
+    with _lock:
+        _save_index()
     return changed, seen
+
+
+def discover():
+    """(agent, path) of every transcript of the agents switched on in Sources: the transcript files only, not the
+    memory files or subagents' transcripts, with one directory listing per agent folder."""
+    from pensieve import settings
+    for sid, name, root, pattern in config.session_sources():
+        if not (settings.enabled(sid) and settings.enabled(f"agents/{name}") and root.exists()):
+            continue
+        for p in root.glob(pattern):
+            if p.suffix == ".jsonl" and "subagents" not in p.parts and p.is_file():
+                yield name, p
+
+
+def sessions_since(since: float) -> list[Facts]:
+    """The facts of every transcript with a turn after `since` (a time), loaded from disk as needed: the sessions
+    of a window. Pensieve's own engine sessions and empty transcripts are left out."""
+    with _lock:
+        _load_index()
+        want = [p for p, row in _index.items() if row[5] and not row[6] and _ts(row[4] or "") > since]
+    out = []
+    for p in want:
+        f = _facts.get(p) or facts(p, _index[p][3])
+        if f is not None:
+            out.append(f)
+    return out
 
 
 def all_facts() -> dict[str, Facts]:
@@ -158,8 +234,12 @@ def all_facts() -> dict[str, Facts]:
 
 
 def forget(path: str):
+    global _index_dirty
     with _lock:
         _facts.pop(path, None)
+        if _index.pop(path, None) is not None:
+            _index_dirty = True
+            _save_index()
     try:
         _cache_path(path).unlink()
     except OSError:

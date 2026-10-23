@@ -43,13 +43,24 @@ def uncommitted(t: dict, s: dict) -> list[tuple[str, str]]:
             continue  # the session ended before the last commit: what it wrote is committed, or was dropped
         prefix = root.rstrip("/") + "/"
         mine = [(f[len(prefix):], line) for f, line in pairs if f.startswith(prefix)]
-        added: dict[str, set] = {}
-        for rel in {f for f, _ in mine}:
-            diff = work._git(root, "diff", "HEAD", "--", rel, ttl=30)
-            added[rel] = {ln[1:].strip() for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++")}
+        added = _added_lines(root)
         if any(line in added.get(rel, ()) for rel, line in mine):
             slug = sink_status.github_repo(root)
             out.append(("branch", f"{slug}@{branch}" if slug else branch))
+    return out
+
+
+def _added_lines(root: str) -> dict[str, set]:
+    """{file: the lines its uncommitted diff adds} of a checkout, from one `git diff HEAD` per build (work._git
+    caches it for a while), not one per file and session."""
+    from pensieve import work
+    out: dict[str, set] = {}
+    rel = ""
+    for ln in work._git(root, "diff", "HEAD", "--unified=0", "--no-color", ttl=30).splitlines():
+        if ln.startswith("+++ "):
+            rel = ln[4:].removeprefix("b/").strip()
+        elif ln.startswith("+") and rel:
+            out.setdefault(rel, set()).add(ln[1:].strip())
     return out
 
 

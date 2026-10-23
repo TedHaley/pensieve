@@ -68,7 +68,8 @@ def run():
     from pensieve import transcripts, work
     ROOT = "/code/app"
     transcripts.written = lambda path: ((f"{ROOT}/x.py", "a line the session wrote"),) if path == "/x/s4.jsonl" else ()
-    gits = {("log", "-1", "--format=%ct"): "100", ("diff", "HEAD", "--", "x.py"): "+++ b/x.py\n+a line the session wrote\n-old"}
+    gits = {("log", "-1", "--format=%ct"): "100",
+            ("diff", "HEAD", "--unified=0", "--no-color"): "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n+a line the session wrote\n-old"}
     work._git = lambda root, *args, ttl=60: gits.get(args, "")
     place = dict(path=ROOT, branch="feat", git=True, changed=1)
     results.append(check("edits in the uncommitted diff write the branch",

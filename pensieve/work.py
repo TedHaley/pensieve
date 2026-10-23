@@ -337,7 +337,9 @@ class Inputs:
         from pensieve import transcripts
         if ids is None:
             transcripts.sync()
-        by_id = {f.id: f for f in transcripts.all_facts().values()}
+            by_id = {f.id: f for f in transcripts.sessions_since(self.since)}
+        else:
+            by_id = {f.id: f for f in transcripts.all_facts().values()}
         for sid in (list(ids) if ids is not None else list(by_id)):
             self.sessions.pop(sid, None)
             self.facts.pop(sid, None)

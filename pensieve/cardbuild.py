@@ -16,7 +16,8 @@ A full build runs at the start and every FULL_SECONDS: it moves the window, and 
 import copy
 import hashlib
 import json
-from pensieve import task_states
+import os
+from pensieve import config, task_states
 import queue
 import threading
 import time
@@ -28,7 +29,7 @@ from pensieve.models import Card, CardKind, CardMember, MemberKind, State
 from pensieve.store import cards as store_cards
 
 DAYS = 30            # the window of the built cards; /api/work filters it for a shorter one
-FULL_SECONDS = 300   # a full build: the window moves, and gh gives the PR states
+FULL_SECONDS = 600   # a full build: the window moves, and gh gives the PR states (cached 10 minutes anyway)
 COALESCE = 0.2       # events this close together make one build
 
 SESSION, DOCUMENT, COMMIT, PR, STATE, REFRESH = "session", "document", "commit", "pr", "state", "refresh"
@@ -114,7 +115,7 @@ class Builder:
         inp = work.Inputs(self.days)
         inp.load(self.store)
         self.inp = inp
-        changed = self._build(force=None, net=net)
+        changed = self._profiled(lambda: self._build(force=None, net=net))
         self.last_full = time.time()
         self._log("full", t0, changed)
 
@@ -136,7 +137,7 @@ class Builder:
         if kinds.get(PR):
             force |= store_cards.with_members(db, MemberKind.PULL_REQUEST, kinds[PR])
         net = bool(kinds.get(REFRESH) or kinds.get(PR))
-        changed = self._build(force=force, net=net)
+        changed = self._profiled(lambda: self._build(force=force, net=net))
         self._log("+".join(sorted(kinds)), t0, changed)
         # a changed card with an open PR, or a PR of unknown state: ask gh at once, in a build of its own
         ask = [i for i in changed if i in self.tasks and not net and any(
@@ -148,8 +149,6 @@ class Builder:
         """Group, pick up and finish every card; write the ones whose view changed. `force`: the cards whose folders
         and PRs are read again even when their members did not change (None: every card)."""
         inp = self.inp
-        out = work.group(inp)
-        fps = {t["id"]: _fingerprint(t) for t in out}
         picked = {}
 
         def pick(t):
@@ -162,8 +161,10 @@ class Builder:
                 work._pickup(t, inp.wts)
             picked[t["id"]] = (fp, copy.deepcopy(t["places"]), copy.deepcopy(t["prs"]), t.get("resume"))
         was = work._net["off"]
-        work._net["off"] = not net
+        work._net["off"] = not net  # grouping asks gh about the PRs the sessions name: from the cache when offline
         try:
+            out = work.group(inp)
+            fps = {t["id"]: _fingerprint(t) for t in out}
             final = work.finish(out, inp, self.store, pickup=pick)
         finally:
             work._net["off"] = was
@@ -203,6 +204,26 @@ class Builder:
         self.builds = (self.builds + [dict(at=time.time(), kind=kind, ms=ms, changed=len(changed))])[-50:]
         if kind == "full" or ms >= 2000:  # a full build, or a slow update: worth a line in the log
             print(f"threads: {kind} build in {ms} ms, {len(changed)} cards changed, {len(self.tasks)} threads", flush=True)
+
+    def _profiled(self, fn):
+        """Run one build step; with PENSIEVE_PROFILE_BUILDS set, write where its time went to DATA_DIR/threads/profile.txt
+        (the last build only), for a look at a slow build on a live server."""
+        if not os.environ.get("PENSIEVE_PROFILE_BUILDS"):
+            return fn()
+        import cProfile
+        import io
+        import pstats
+        pr = cProfile.Profile()
+        pr.enable()
+        try:
+            return fn()
+        finally:
+            pr.disable()
+            s = io.StringIO()
+            pstats.Stats(pr, stream=s).sort_stats("cumulative").print_stats(40)
+            p = config.DATA_DIR / "threads" / "profile.txt"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(s.getvalue())
 
 
 def _members(t: dict) -> list[CardMember]:

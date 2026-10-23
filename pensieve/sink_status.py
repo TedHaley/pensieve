@@ -6,8 +6,8 @@ A sink is verified done when its system says so (thread_model.sink_complete). Th
   ticket  from the user's agent: the agent answers a job with the Atlassian connector it already has (agent_jobs)
 
 Statuses are cached in DATA_DIR/sink_status.json with the time they were read. A cached branch status is used for
-BRANCH_TTL seconds; a ticket status for TICKET_TTL seconds. A status that is not in the cache yet is UNKNOWN, and an
-unknown sink does not close a thread."""
+BRANCH_TTL seconds, and whatever its age while a build is offline. A status that is not in the cache yet is UNKNOWN,
+and an unknown sink does not close a thread."""
 import json
 import os
 import re
@@ -20,12 +20,7 @@ from pensieve import thread_model as tm
 
 CACHE = config.DATA_DIR / "sink_status.json"
 BRANCH_TTL = 15 * 60
-TICKET_TTL = 60 * 60
 PR_URL = re.compile(r"https?://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
-TICKET_SYS = ("You read the status of Jira tickets with the Atlassian tools you have. Answer with the current status "
-              "name of each key, exactly as Jira shows it. A key you cannot read gets an empty string.")
-TICKET_SCHEMA = {"type": "object", "properties": {"statuses": {"type": "object", "additionalProperties": {"type": "string"}}},
-                 "required": ["statuses"]}
 
 
 def pr_key(url: str) -> str:
@@ -67,16 +62,6 @@ def branch_status(repo: str, branch: str, env: dict | None = None) -> str:
     return "EXISTS"
 
 
-def ticket_statuses(keys: list[str]) -> dict[str, str]:
-    """Ticket key -> status name, asked of the user's agent. Raises llm.Queued while the agent has not answered."""
-    from pensieve import llm
-    if not keys:
-        return {}
-    prompt = "Ticket keys: " + ", ".join(sorted(keys))
-    answer = llm.complete(prompt, TICKET_SYS, max_tokens=400, schema=TICKET_SCHEMA, kind="ticket status")
-    return {k: str(v) for k, v in (answer.get("statuses") or {}).items()}
-
-
 _tedhaley: list = []  # the gh env with TedHaley's token, found once (repos the default account cannot read)
 
 
@@ -89,11 +74,15 @@ def _fallback_env() -> dict | None:
 
 
 def pr_info(key: str) -> dict:
-    """{state, head} of a PR, from gh, cached for BRANCH_TTL. state is MERGED, CLOSED or OPEN; {} when gh cannot answer."""
+    """{state, head} of a PR, from gh, cached for BRANCH_TTL (and whatever its age while the build is offline,
+    work._net). state is MERGED, CLOSED or OPEN; {} when gh cannot answer, or offline with nothing cached."""
+    from pensieve import work
     cache = _load()
     entry = cache.get(f"pr {key}")
-    if entry and time.time() - entry["at"] < BRANCH_TTL:
+    if entry and (time.time() - entry["at"] < BRANCH_TTL or work._net["off"]):
         return entry["value"]
+    if work._net["off"]:
+        return {}
     repo, _, num = key.partition("#")
     value = {}
     for env in (None, _fallback_env()):
@@ -110,44 +99,34 @@ def pr_info(key: str) -> dict:
 
 
 def statuses_for(sinks: list[tm.Sink]) -> dict[str, str]:
-    """The status of each sink, label -> status. Uses the cache where it is fresh, else asks GitHub or the agent."""
+    """The status of each sink, label -> status. A branch's state comes from GitHub, cached for BRANCH_TTL; while
+    the build is offline (work._net, the first build after a start) the cached state serves whatever its age, and
+    a branch with none stays unknown until the next build. A ticket's status comes from the task's own data
+    (status_of_task) or the cache; nothing asks a model."""
+    from pensieve import work
     cache = _load()
     now = time.time()
-    out = {}
-    stale_tickets = []
+    out, dirty = {}, False
     for s in sinks:
+        entry = cache.get(s.label)
         if s.kind == tm.SinkKind.PR:
-            entry = cache.get(s.label)
             if entry and now - entry["at"] < BRANCH_TTL:
                 out[s.label] = entry["value"]
         elif s.kind == tm.SinkKind.BRANCH:
-            entry = cache.get(s.label)
-            if entry and now - entry["at"] < BRANCH_TTL:
+            if entry and (now - entry["at"] < BRANCH_TTL or work._net["off"]):
                 out[s.label] = entry["value"]
-            else:
+            elif not work._net["off"]:
                 repo, _, branch = s.key.partition("@")
                 value = branch_status(github_repo(repo), branch)
                 if value == "UNKNOWN" and _fallback_env():  # the active account cannot read this repo
                     value = branch_status(github_repo(repo), branch, env=_fallback_env())
                 cache[s.label] = dict(value=value, at=now)
                 out[s.label] = value
+                dirty = True
         elif s.kind == tm.SinkKind.TICKET:
-            entry = cache.get(s.label)
-            if entry and now - entry["at"] < TICKET_TTL:
+            if entry:
                 out[s.label] = entry["value"]
-            else:
-                stale_tickets.append(s)
-    _save(cache)
-    if stale_tickets:
-        try:
-            fresh = ticket_statuses([s.key for s in stale_tickets])
-        except Exception:  # the agent has not answered: the tickets stay unknown until it does
-            fresh = {}
-        cache = _load()
-        for s in stale_tickets:
-            if s.key in fresh and fresh[s.key]:
-                cache[s.label] = dict(value=fresh[s.key], at=now)
-                out[s.label] = fresh[s.key]
+    if dirty:
         _save(cache)
     return out
 
