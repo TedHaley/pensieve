@@ -3975,7 +3975,7 @@ window.addEventListener('resize', debounce(() => { if (S.view === 'people') { pp
 
 /* ============================== threads tab ============================== */
 // Each thread: its data points from every source, newest first, and an AI note on how it stands and is moving.
-S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, menu: false,
+S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), menu: false,
           states: new Set((() => { const v = store.get('threadStates3', ['open', 'todo', 'thoughts', 'loose_ends']); return Array.isArray(v) ? v : [v]; })()),
           view: store.get('workView', 'compact'), collapsed: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a thread; full: the rows opened
           details: new Set()};  // the threads whose problem, goal, state and sections are open
@@ -4053,7 +4053,7 @@ const WK_IC = {
   branch: '<svg viewBox="0 0 24 24" width="12" height="12"><circle cx="6.5" cy="5.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6.5" cy="18.5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.5" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 7.5v9M17.5 10c0 4-6 3-11 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
 };
 const prNum = url => (url.match(/(\d+)\/?$/) || [])[1];
-// The bar at the foot of a thread: resume the last session, and see coworkers and related work
+// The bar at the foot of a thread: resume the last session, fork, close the work, and the thread's id and page
 // The coding agents Pensieve can start (/api/agents): a session resumes only in the agent that wrote it
 const wkAgentName = sid => S.agents?.agents.find(a => a.id === sid.split(':')[0])?.name || sid.split(':')[0];
 const wkAgentMissing = sid => {
@@ -4082,7 +4082,6 @@ async function loadAgents() {
 function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header wraps up: the card has no button
   const lead = cluster && wkHolds(t, cluster) ? ' lead' : '';  // the session to pick the branch up from
   const resume = t.resume ? `<span class="wk-split${lead}"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
-  const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
@@ -4092,7 +4091,7 @@ function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header 
     return `<div class="wk-bar">${start}${details}${wkResolve(own, 'discard')}<span class="wk-loc"></span>${wkCardBtns(t)}</div>`;
   }
   const wrap = cluster ? '' : wkResolveBtns(own);
-  return `<div class="wk-bar">${resume}${fresh}${details}${wrap}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
+  return `<div class="wk-bar">${resume}${fresh}${details}${wrap}<span class="wk-loc"></span>${wkCardBtns(t)}</div>`;
 }
 // A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
 // thread goes on; only a thread with no anchor title takes the note's (the same rule as cardtext.card_title)
@@ -4102,7 +4101,8 @@ const WK_WHO = {agent: ['agent', 'An agent can do this in a session'], you: ['yo
   parent: ['tracker', 'A step in the system the item lives in: Pensieve only reads']};
 const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
 function wkCardBtns(t) {
-  return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this thread as a page">${WK_IC.eye}</button>`;
+  return `<button class="wk-btn icon" data-wk-copy-id="${esc(t.id)}" title="Thread ${esc(t.id)}: copy its id, for Pensieve's thread tool">${WK_IC.thread}</button>`
+    + `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this thread as a page">${WK_IC.eye}</button>`;
 }
 // The page in an iframe's srcdoc: the Mac app's web view can't open a second window
 async function openPreview(load, title) {
@@ -4198,13 +4198,6 @@ function wkEvent(e) {
   return `<li class="${e.source}"><span class="what" title="${esc(e.title + (e.detail ? ' · ' + e.detail : ''))}">${link}</span>
     <span class="src">${WK_SRC[e.source] || e.source}</span><span class="when">${wkDate(e.ts)}</span></li>`;
 }
-function wkAdjacent(t) {
-  const a = S.work.adj[t.id];
-  if (!a) return '';
-  if (a.loading) return '<div class="wk-adj muted">Looking at coworkers’ commits…</div>';
-  const people = a.coworkers.map(p => `<div class="row"><b>${esc(p.name)}</b> <small>${plural(p.commits, 'commit')} · ${fmtWhen(p.last)}${p.branches.length ? ' · ' + esc(p.branches.join(', ')) : ''}</small><br><small>${esc(p.subjects[0] || '')}</small></div>`).join('');
-  return `<div class="wk-adj"><div><div class="h">Coworkers in the same folders</div>${people || '<div class="muted">No commits by others there in the last 3 weeks.</div>'}</div></div>`;
-}
 function wkStateSel(t, d) {
   return `<select class="wk-state" data-wk-state="${esc(t.id)}" style="--c:${wkModel(t.state).color}" title="${esc(wkModel(t.state).meaning + ' ' + (t.state_by === 'auto' ? 'Set automatically: ' : 'Set by ' + t.state_by + ': ') + t.state_why)}">
       ${d.states.filter(m => m.state !== 'thoughts' || t.state === 'thoughts').map(m => `<option value="${m.state}" ${t.state === m.state ? 'selected' : ''}>${m.label}</option>`).join('')}
@@ -4250,7 +4243,7 @@ function wkCard(t, d, cluster = '') {
       <time title="${esc(new Date(when * 1000).toLocaleString())}">${fmtWhen(when)}</time>${wkStateSel(t, d)}</header>`;
   return `<article class="wk-task${open ? '' : ' wk-compact'}" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
       <div class="wk-main">${head}
-        ${open ? `<div class="wk-detail">${wkAbout(t)}${wkKin(t)}${wkSections(t)}${wkAdjacent(t)}</div>` : ''}
+        ${open ? `<div class="wk-detail">${wkAbout(t)}${wkKin(t)}${wkSections(t)}</div>` : ''}
       </div>
       ${wkActions(t, d, cluster)}
     </article>`;
@@ -4604,14 +4597,8 @@ function wkBind(el, d) {
     try { await navigator.clipboard.writeText(b.dataset.wkCopy); toast(`${b.dataset.what || 'Text'} copied`); }
     catch { toast('Could not copy'); }
   });
-  $$('[data-wk-adj]', el).forEach(b => b.onclick = async () => {
-    const id = b.dataset.wkAdj;
-    if (S.work.adj[id] && !S.work.adj[id].loading) { delete S.work.adj[id]; return renderWork(); }  // a second click hides it
-    if (S.work.view !== 'expanded') S.work.details.add(id);  // the panel draws in the card's details: open them
-    S.work.adj[id] = {loading: true}; renderWork();
-    try { S.work.adj[id] = await api(`/api/thread/adjacent?id=${enc(id)}&days=${S.work.days}`); }
-    catch (e) { S.work.adj[id] = {coworkers: []}; toast('Could not look: ' + e.message); }
-    renderWork();
+  $$('[data-wk-copy-id]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation(); navigator.clipboard?.writeText(b.dataset.wkCopyId); toast(`Copied ${b.dataset.wkCopyId}`);
   });
 }
 
@@ -5180,11 +5167,11 @@ function renderStatus() {
   const st = S.status, pill = $('#statuspill'), label = $('span', pill);
   const mig = st.migration?.phase, moving = mig === 'importing' || mig === 'cleanup';
   // summaries and topic names wait for the user's agent, so they don't make Pensieve look busy
-  const busy = moving || st.layout || st.insights_running || st.indexing;
+  const busy = moving || st.layout || st.insights_running || st.indexing || st.collecting;
   const state = st.message?.startsWith('error') ? 'off' : busy ? 'busy' : 'live';
   pill.className = 'menu-status ' + state; $('#gearbtn').dataset.state = state;
   label.textContent = mig === 'importing' ? `Moving to new storage ${st.migration.done || 0}/${st.migration.total || 0}…` : mig === 'cleanup' ? 'Removing old data…' : st.layout ? 'Laying out map…' :
-    st.insights_running ? 'Generating insights…' : st.indexing && st.message && st.message !== 'idle' ? st.message[0].toUpperCase() + st.message.slice(1) + '…' : `Live · ${plural(st.files || 0, 'file')} · ${plural(st.sessions || 0, 'session')}`;
+    st.insights_running ? 'Generating insights…' : st.collecting ? `Collecting from ${st.collecting}…` : st.indexing && st.message && st.message !== 'idle' ? st.message[0].toUpperCase() + st.message.slice(1) + '…' : `Live · ${plural(st.files || 0, 'file')} · ${plural(st.sessions || 0, 'session')}`;
   $('#gearbtn').title = label.textContent;
   pill.title = `${(st.files || 0).toLocaleString()} files · ${(st.repos || 0)} repos · ${(st.sessions || 0)} sessions · ${(st.chunks || 0).toLocaleString()} moments · ${(st.code_chunks || 0).toLocaleString()} code chunks\nSummaries by your agent: ${st.summarized_sessions}/${st.sessions} sessions\nSearch model: ${st.embed}${migrationLine(st.migration)}`;
 }

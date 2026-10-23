@@ -25,7 +25,8 @@ files: Files | None = None
 datamap: DataMap | None = None
 searcher: search_mod.Searcher | None = None
 subscribers: set[asyncio.Queue] = set()
-status = {"indexing": False, "message": "starting", "layout": False, "insights_running": False, "insights_scope": None}
+status = {"indexing": False, "message": "starting", "layout": False, "insights_running": False, "insights_scope": None,
+          "collecting": None}  # collecting: the name of the connection that collects now
 wake_files = asyncio.Event()  # set (thread-safely) by the file watcher
 wake_repos = asyncio.Event()
 wake_sessions = asyncio.Event()
@@ -1530,9 +1531,21 @@ async def collect_connection(sid: str):
     """Collect from one connection now, with its read-only tools."""
     if sid not in {r["id"] for r in connections.servers()}:
         raise HTTPException(404, f"unknown connection {sid!r}")
-    run = await asyncio.to_thread(connections.collect, sid)
+    run = await _collect(sid)
     wake_files.set()
     return {"run": run, "sources": sources.catalog(store, repos, files)}
+
+
+async def _collect(sid: str):
+    """Collect from one connection, with its name in the status while it runs."""
+    name = next((r["name"] for r in connections.servers() if r["id"] == sid), sid)
+    status["collecting"] = name.removeprefix("claude.ai ")
+    broadcast({"type": "status", **status})
+    try:
+        return await asyncio.to_thread(connections.collect, sid)
+    finally:
+        status["collecting"] = None
+        broadcast({"type": "status", **status})
 
 
 class McpServerReq(BaseModel):
@@ -1974,15 +1987,6 @@ def revive_thread(req: ReviveReq):
     return {"ok": True, "command": cmd}
 
 
-@app.get("/api/thread/adjacent")
-async def thread_adjacent(id: str, days: int = 30):
-    """For one thread: coworkers' recent commits in the same folders, from git."""
-    t = next((t for t in work.tasks(store, days) if t["id"] == id), None)
-    if not t:
-        raise HTTPException(404, f"unknown thread {id!r}")
-    return dict(coworkers=await asyncio.to_thread(work.coworkers, t))
-
-
 CONNECTIONS_CHECK_SECONDS = 300
 DISCOVER_SECONDS = 6 * 3600
 
@@ -2015,7 +2019,7 @@ async def connections_worker():
                 await asyncio.to_thread(connections.discover)
                 broadcast({"type": "repos"})  # the Sources list changed
             for sid in connections.due():
-                await asyncio.to_thread(connections.collect, sid)
+                await _collect(sid)
                 wake_files.set()
                 broadcast({"type": "repos"})
             await asyncio.to_thread(migrate.mark_indexed, "documents")  # each connection that is due was collected
