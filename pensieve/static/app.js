@@ -4105,7 +4105,10 @@ function wkSections(t) {
   const sec = (name, body) => body ? `<section class="wk-sec"><h5>${name}</h5>${body}</section>` : '';
   const folders = (t.places || []).map(p => {
     const commits = !p.commits ? '' : p.unmerged ? wkSt(`${plural(p.unmerged, 'commit')} not in main`, 'warn') : wkSt(`all ${plural(p.commits, 'commit')} in main`, 'ok');
-    const claim = t.claim && t.claim.branch === p.branch ? (t.claim.lost ? wkSt('lost the branch to another session', 'warn') : wkSt(`${Math.round(t.claim.share * 100)}% of the branch`, 'ok')) : '';
+    const holder = (t.kin || []).filter(k => !k.me && k.share != null).sort((a, b) => b.share - a.share)[0];  // the session with most of the branch
+    const claim = t.claim && t.claim.branch === p.branch ? (t.claim.lost
+      ? wkSt('lost the branch to', 'warn') + (holder ? `<button class="linkbtn subtle wk-holder" data-wk-jump="${esc(holder.id)}" title="Go to the thread that holds the branch">${esc(holder.title)}</button>` : wkSt('another session', 'warn'))
+      : wkSt(`${Math.round(t.claim.share * 100)}% of the branch`, 'ok')) : '';
     const st = [claim, commits, p.head ? wkSt(`checked out: ${p.head}`, 'warn') : '', p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : '',
       p.ahead ? wkSt(`${p.ahead} ahead`, 'warn') : '', p.behind ? wkSt(`${p.behind} behind`) : ''].join('');
     const clean = p.git && !p.head && !p.changed && !p.ahead && !p.behind ? wkSt('clean', 'ok') : '';

@@ -913,6 +913,7 @@ a.ch-n{color:var(--accent);text-decoration:none}a.ch-n:hover{text-decoration:und
 .wk-row button.nm{color:var(--accent);padding:0 2px}
 .wk-row .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)}
 .wk-row button.ttl{text-align:left}
+.wk-holder{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
 .wk-row .wk-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;font:11.5px var(--mono);color:var(--text-3)}
 .wk-row .who,.wk-row .when{color:var(--text-3);font-size:11.5px;white-space:nowrap;flex:none}
 .wk-arts{flex:none;border:0;background:var(--card-2);color:var(--text-2);font:600 10.5px var(--sans);padding:2px 8px;border-radius:999px;cursor:pointer}
