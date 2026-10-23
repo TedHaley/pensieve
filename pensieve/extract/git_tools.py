@@ -48,6 +48,18 @@ def _results(records: list) -> dict[str, str]:
     return out
 
 
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2\s*(?:\n|$)", re.S)
+QUOTED = re.compile(r"""(?<!-c )(?<!-c)("(?:[^"\\\n]|\\.)*"|'[^'\n]*')""")
+
+
+def shell_code(cmd: str) -> str:
+    """A command without the text that it only passes along: heredoc bodies (a commit message, a PR body, a script)
+    and quoted strings that hold a git command (a hook's test input). A git command there runs nowhere. A string
+    after `-c` (bash -c "…") is code, and stays."""
+    cmd = HEREDOC.sub("\n", cmd)
+    return QUOTED.sub(lambda m: '""' if re.search(r"\b(?:git|gh) ", m.group(1)) else m.group(1), cmd)
+
+
 def _bash_calls(records: list):
     """(tool_use id, command, cwd, branch) for each Bash call, in order. The branch is the one Claude Code recorded
     with the call (`gitBranch`), or empty."""
@@ -57,7 +69,7 @@ def _bash_calls(records: list):
             continue
         for b in content:
             if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Bash":
-                yield (b.get("id", ""), (b.get("input") or {}).get("command", ""), rec.get("cwd", ""),
+                yield (b.get("id", ""), shell_code((b.get("input") or {}).get("command", "")), rec.get("cwd", ""),
                        rec.get("gitBranch") or "")
 
 

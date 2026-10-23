@@ -30,7 +30,7 @@ PR_URL = re.compile(r"https://(?:github\.com/[\w.-]+/[\w.-]+/pull/\d+|[\w.-]*git
                     r"|bitbucket\.org/[\w.-]+/[\w.-]+/pull-requests/\d+|dev\.azure\.com/[\w./%-]+?/pullrequest/\d+)")
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 OWN_MARK = "[pensieve text job]"  # the first line of every prompt Pensieve's text engine sends (engine.MARK)
-VERSION = 2  # of the cache files: a new version reads every transcript again
+VERSION = 3  # of the cache files: a new version reads every transcript again
 
 
 @dataclass
@@ -292,7 +292,7 @@ def _read(f: Facts, path: Path):
                     cmd, bcwd, recorded = pending.pop(blk["tool_use_id"])
                     rc = blk.get("content")
                     out = " ".join(x.get("text", "") for x in rc if isinstance(x, dict)) if isinstance(rc, list) else str(rc or "")
-                    _git_write(f, cmd, bcwd, recorded, out)
+                    _git_write(f, gt.shell_code(cmd), bcwd, recorded, out)
             c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
         if isinstance(c, str):
             before = len(s.turns)

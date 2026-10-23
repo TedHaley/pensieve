@@ -71,6 +71,16 @@ def run():
     results.append(check("a commit on a default branch is no write", any(k.endswith("@main") for k, _ in e3), False))
     results.append(check("nothing else came of it", len(e3), 2))
 
+    sc = git_tools.shell_code
+    results.append(check("a git command in a quoted test input runs nowhere",
+                         sc("""jq -nc '{tool_input:{command:"git checkout -b foo"}}' | python3 hook.py"""), 'jq -nc "" | python3 hook.py'))
+    results.append(check("a git command in a heredoc body runs nowhere",
+                         "foo" in sc("git commit -F - <<'EOF'\nfeat: x\n\ngit push origin foo\nEOF\ngit push origin real"), False))
+    results.append(check("the git command after a heredoc stays",
+                         "git push origin real" in sc("git commit -F - <<'EOF'\nx\nEOF\ngit push origin real"), True))
+    results.append(check("bash -c keeps its command", sc('bash -c "git checkout -b kept"'), 'bash -c "git checkout -b kept"'))
+    results.append(check("a quoted path stays", sc('cd "/a b" && git push origin x'), 'cd "/a b" && git push origin x'))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 
