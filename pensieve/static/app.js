@@ -2346,7 +2346,7 @@ function renderSetup() {
   } else if (step === 'tickets') {
     const rows = SETUP_TRACKERS.map(id => (st.cx || []).find(c => c.id === id)).filter(Boolean);
     const on = c => c.state === 'on' || c.state === 'found';
-    body = `<h1>Connect your tickets</h1><p class="sub">Your tickets become to-dos, and close their threads when done. Read-only. Optional.</p>
+    body = `<h1>Connect your issue tracker</h1><p class="sub">Your tickets become to-dos, and close their threads when done. Read-only. Optional.</p>
       <div class="setup-trackers">${st.cx ? rows.map(c => `<div class="setup-row setup-tracker"><b>${esc(c.label)}</b>
         <span class="muted">${on(c) ? `Connected${c.items ? ` · ${srcCount(c.items, 'items')}` : ''}` : st.cxWait === c.id ? 'Waiting for the sign-in in your browser…' : c.state === 'needs-auth' ? 'Needs sign-in' : 'Not connected'}</span>
         ${on(c) ? '<span class="setup-ok">✓</span>' : st.cxWait === c.id && st.cxUrl ? `<a class="btn" href="${esc(st.cxUrl)}" target="_blank" rel="noopener">Open sign-in</a>`

@@ -254,7 +254,7 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 
 **Connections** collect data from MCP servers with read-only tools. Pensieve keeps each item over time, with a list of its changes.
 
-The setup asks you to connect your ticket tracker: Jira, Linear or Asana. You sign in with your own account in the browser, and Pensieve then collects every 6 hours. Each collection reads the tickets assigned to you, and reads again the status of each ticket on a thread that is not closed. A ticket assigned to you becomes a to-do thread. A ticket that closes closes its thread. You can also connect a tracker later in Settings → Sources → Cloud connectors.
+The setup asks you to connect your issue tracker: Jira, Linear or Asana. You sign in with your own account in the browser, and Pensieve then collects every 6 hours. Each collection reads the tickets assigned to you, and reads again the status of each ticket on a thread that is not closed. A ticket assigned to you becomes a to-do thread. A ticket that closes closes its thread. You can also connect a tracker later in Settings → Sources → Cloud connectors.
 
 Pensieve finds your MCP servers by itself. It never starts an agent of its own:
 
