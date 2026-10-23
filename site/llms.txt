@@ -1,6 +1,6 @@
 # Pensieve
 
-> Pensieve: never lose the thread. Pensieve is a local MCP server and Mac app for developers and their AI coding agents. It is free and open source. It searches your files, git repos, AI agent sessions, tickets and messages by meaning or by exact words. Coding agents (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop, VS Code) connect to it over MCP and get the most relevant files in one search instead of many grep calls. Everything runs on the Mac. MIT license.
+> Pensieve: never lose the thread. Pensieve is a local MCP server and Mac app for developers and their AI coding agents. It is free and open source. It has two modes. Threads mode (the default) reads your AI agent sessions, git, GitHub and your issue tracker (Jira, Linear or Asana), and makes one thread for each agent session that wrote something. It needs no index and no model. Developer mode also indexes the repos and files that you choose, and searches them by meaning or by exact words. Coding agents (Claude Code, Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop, VS Code) connect to it over MCP and get the most relevant files in one search instead of many grep calls. Everything runs on the Mac. MIT license.
 
 Pensieve needs an Apple Silicon Mac with macOS 14 or later. The backend and the Map also work on Linux. The search panel app is macOS only.
 
@@ -15,7 +15,7 @@ pensieve integrate recommended
 
 The first command installs the app and the `pensieve` backend. When an agent runs it, it installs only and does not open the app. The second command adds Pensieve as an MCP server to each agent on the Mac. Restart an open agent to load the server.
 
-Pensieve indexes nothing until setup is done. Until then, every MCP connection gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source` and `setup_start`. Call `setup_guide` first. It gives the questions to ask the user, in order.
+Pensieve reads and indexes nothing until setup is done. Until then, every MCP connection gets the setup tools: `setup_guide`, `setup_scan`, `setup_add_source` and `setup_start`. Call `setup_guide` first. It gives the questions to ask the user, in order.
 
 ## MCP tools
 
@@ -24,7 +24,10 @@ Pensieve indexes nothing until setup is done. Until then, every MCP connection g
 - `similar`: code that is similar to a result. Use it before you write new code.
 - `repo`: where things are in a repo, the areas whose authors left (`gaps`), and the areas the user has not worked in (`unexplored`).
 - `people`: who knows a topic, the people of a repo, or one person, from git blame.
-- `threads`, `thread`, `share_thread`: the user's threads (one per goal), the closest to done first with their steps left, one thread with its saved versions, and a thread to share as one HTML file.
+- `threads`, `thread`: the user's threads (one per agent session that wrote something) that are not done, the closest to done first with their steps left, and one thread whole. Pensieve only reads: close a thread in git, GitHub or the tracker.
+- `cluster`: the threads of one branch, each session's share of the branch's lines, and the steps to ship or discard the work.
+- `thread_page`: saves the page of one thread, or of a branch's threads, as one HTML file in `~/Downloads`, with the JSON inside.
+- `start_todo`: makes the worktree for a to-do (a ticket of the user's with no work on it yet) and returns its path and the prompt.
 - `projects`, `list_repos`, `open`, `current_scope`, `index_path`, `stale`, `report_feedback`.
 
 Each agent works in a scope. By default, the scope is the repo that the agent started in. The full list, with arguments and return values: https://pensieve.tools/docs/mcp-tools/
@@ -39,8 +42,8 @@ Claude Sonnet in Claude Code, 72 held-out tasks in four repos (504 to 34,847 fil
 - [Install](https://pensieve.tools/docs/install/): requirements (Mac and Linux), install, setup, uninstall
 - [Connect your agent](https://pensieve.tools/docs/agents/): `pensieve integrate`, scopes, add-ons, and one page for each agent: [Claude Code](https://pensieve.tools/docs/agents/claude-code/), [Codex](https://pensieve.tools/docs/agents/codex/), [Cursor](https://pensieve.tools/docs/agents/cursor/), [Gemini CLI](https://pensieve.tools/docs/agents/gemini-cli/), [Qwen Code](https://pensieve.tools/docs/agents/qwen-code/), [Windsurf](https://pensieve.tools/docs/agents/windsurf/), [Claude Desktop](https://pensieve.tools/docs/agents/claude-desktop/), [VS Code](https://pensieve.tools/docs/agents/vs-code/)
 - [MCP tools](https://pensieve.tools/docs/mcp-tools/): every tool, its arguments and what it returns
-- [Threads](https://pensieve.tools/docs/threads/): the five states, saved versions, and sharing a thread as HTML
-- [Connections](https://pensieve.tools/docs/connections/): read-only collection from MCP servers
+- [Threads](https://pensieve.tools/docs/threads/): the six states, clusters by branch, to-do threads, Ship and Discard
+- [Connections](https://pensieve.tools/docs/connections/): Jira, Linear and Asana sign-in, and read-only collection from MCP servers
 - [Benchmark](https://pensieve.tools/docs/benchmark/): method, results and limits
 - [Privacy and data](https://pensieve.tools/docs/privacy/): what stays local and what uses the network
 - [FAQ](https://pensieve.tools/docs/faq/)

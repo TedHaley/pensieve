@@ -351,14 +351,14 @@ def revive_cluster_command(cards: list[dict], branch: str, folder, agent: str = 
 
 
 RESOLVE_PROMPTS = {
-    "ship": ("Ship the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+    "ship": ("[pensieve ship] Ship the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
               "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
               "{copy}. The steps that take this work to merged and closed, in order:\n{steps}\n"
               "Do the agent's steps with your own tools, in this order, and stop before each step that is mine or "
               "the tracker's: tell me what it is and what you need from me. Before anything that leaves this Mac "
               "(a push, a pull request, a comment, a ticket change), show me what you will do and wait for my yes. "
               "When a step is done, say what you checked to know it is done."),
-    "discard": ("Discard the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+    "discard": ("[pensieve discard] Discard the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
                 "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
                 "{copy}. The steps that close this work without merging it, in order:\n{steps}\n"
                 "Nothing here is reversible: before each step, show me exactly what it deletes, closes or changes "

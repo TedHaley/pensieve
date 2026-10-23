@@ -1289,6 +1289,14 @@ async def hook_repo_check(request: Request):
     except ValueError:
         return {}
     c = await asyncio.to_thread(_repo_check, cwd)
+    if settings.get("mode") != "developer":  # Threads mode indexes no repo: nothing to ask, only the repo's threads
+        if c.get("state") == "none":
+            return {}
+        try:
+            note = integrations.threads_note(c["name"], c["root"], await asyncio.to_thread(work.tasks, store, 30))
+        except Exception:
+            note = None
+        return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": note}} if note else {}
     notes = [integrations.repo_note(c)]
     if c.get("state") == "indexed":  # a cleanup hint, from the last stale report only: the hook may wait 3 s at most
         items = stale_mod.cached(c["root"])

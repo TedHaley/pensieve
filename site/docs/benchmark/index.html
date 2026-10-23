@@ -100,14 +100,6 @@ checked each claim against the code. Only confirmed errors count.</p>
 <p>If a repo has good notes for the agent, grep needs no help. The overview tool helps most when a repo has no
 notes. The test used the <code>overview</code> tool. Today, <code>repo</code> gives the same overview.</p>
 
-<h2 id="shared-threads">Shared threads</h2>
-<p>This test asks whether a shared thread helps a teammate's agent. The agent worked in a fresh clone, with no
-access to the owner's computer. It answered questions about 4 real pieces of work, 3 times each. A judge counted
-the facts from a list that the answer got right, and the wrong claims.</p>
-<div class="tbl"><table><thead><tr><th>Setup</th><th class=n>Facts right</th><th class=n>Wrong claims</th></tr></thead><tbody><tr><td>No shared thread</td><td class=n>6 / 60 (11%)</td><td class=n>10</td></tr><tr><td>With the shared thread</td><td class=n>52 / 60 (85%)</td><td class=n>0</td></tr></tbody></table></div>
-<p>The script is <a href="https://github.com/TedHaley/pensieve/tree/main/bench/workflows.py"><code>bench/workflows.py</code></a>. This test is small: 4 pieces
-of work and 12 runs in each setup.</p>
-
 <h2 id="limits">What we did not measure</h2>
 <ul>
   <li><strong>Other models and agents.</strong> Every agent run used Claude Sonnet in Claude Code. We did not measure Codex, Cursor, Gemini CLI, Qwen Code, Windsurf, Claude Desktop or VS Code.</li>

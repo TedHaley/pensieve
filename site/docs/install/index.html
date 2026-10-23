@@ -73,17 +73,21 @@ installs only and does not open the app.</p>
 adds three hooks. <a href="/docs/agents/">Connect your agent</a> lists each change, file by file.</p>
 
 <h2 id="setup">Choose what to index</h2>
-<p>Pensieve indexes nothing until you finish setup. This is also true after a reset. When the app opens, it shows
-these steps:</p>
+<p>Pensieve reads and indexes nothing until you finish setup. This is also true after a reset. When the app opens,
+it shows these steps:</p>
 <ol>
-  <li>Read what Pensieve does.</li>
-  <li>Choose how you use your computer: software development, AI coding agents, documents and office work, or research and notes.</li>
-  <li>Let Pensieve look for sources in the folders that those choices need. macOS can ask you to allow access to some folders.</li>
-  <li>Choose what to index. Add folders or repos that Pensieve did not find.</li>
-  <li>Choose whether Pensieve reads images, video and audio by what they show or say. These are off by default.</li>
-  <li>Choose the search model.</li>
-  <li>Start indexing.</li>
+  <li><strong>Welcome:</strong> read what Pensieve does.</li>
+  <li><strong>Choose a mode:</strong> Threads mode or Developer mode (see <a href="/docs/#modes">Two modes</a>). We recommend Threads mode to start.</li>
+  <li><strong>Connect your issue tracker:</strong> click Sign in for Jira, Linear or Asana. The sign-in opens in your browser. This step is optional. You can also connect a tracker later in Settings → Sources → Cloud connectors.</li>
 </ol>
+<p>In Threads mode, click <strong>Start Threads mode</strong> after step 3. In Developer mode, these steps follow:</p>
+<ol start="4">
+  <li><strong>Allow Pensieve to look:</strong> Pensieve looks for sources in the folders that it lists. macOS can ask you to allow access to some folders.</li>
+  <li><strong>Choose what Pensieve indexes:</strong> add folders or repos that Pensieve did not find. Choose whether Pensieve reads images, video and audio by what they show or say. These are off by default.</li>
+  <li><strong>Choose your search model.</strong></li>
+  <li><strong>Start indexing.</strong></li>
+</ol>
+<p>When you switch the mode in Settings, the setup starts again at the mode step.</p>
 <p>To do setup from a terminal, use these commands:</p>
 <pre><code>pensieve setup                  <span class="c"># list the sources that Pensieve found, with their sizes</span>
 pensieve setup recommended      <span class="c"># index the sources marked [x]</span>
@@ -92,7 +96,7 @@ pensieve setup recommended images audio   <span class="c"># also read images and
 <code>setup_guide</code>, <code>setup_scan</code>, <code>setup_add_source</code> and <code>setup_start</code>.</p>
 
 <h2 id="first-index">The first index</h2>
-<p>The first index uses a lot of energy. The search model runs until it finishes, at about 500 code files a minute
+<p>This applies to Developer mode only. The first index uses a lot of energy. The search model runs until it finishes, at about 500 code files a minute
 on Apple Silicon. A repo with 35,000 files takes a little more than one hour. Search works while Pensieve indexes.
 Settings → Sources shows what is syncing now.</p>
 <div class="note"><p>If you use a laptop, connect it to power before the first index.</p></div>

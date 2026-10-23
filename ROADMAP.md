@@ -12,8 +12,8 @@ Strong focus on your context. This is how we stay focused on individuals. Contex
 - **How this differs:** "company brain" products build one shared picture of the company for everyone. Pensieve
   builds one picture for each person, from that person's point of view.
 - **Tabs, in this order:**
-  1. **Threads:** one thread for each goal of your work (D5), in the states To do, Open, Loose ends, Complete and
-     Forgotten. It is about you. Agents offer to close the thread closest to done.
+  1. **Threads:** one thread for each agent session that wrote something (D5), in the states Open, To-do, Thoughts,
+     Loose ends, Closed and Forgotten. It is about you. Agents offer to close the thread closest to done.
   2. **Projects:** clusters of content and the project that each one belongs to (D8). It is about your team.
   3. **People:** the people you work closest with, as a graph (D9, D10).
   4. **Map:** stays, with a lower priority.
@@ -63,9 +63,9 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D2 | Opt-in usage counts | Product | idea |
 | D3 | A place for user feedback | Product | testing |
 | D4 | Find people with similar or complementary work | Product | idea |
-| D5 | The Context tab: context cards across sources, in five states | Product | testing |
-| D6 | Context cards as files to share | Product | testing |
-| D7 | Threads: one goal followed over time | Product | idea |
+| D5 | The Threads tab: a thread for each session, in six states | Product | shipped |
+| D6 | Context cards as files to share | Product | dropped |
+| D7 | Threads: one goal followed over time | Product | dropped |
 | D8 | The Projects tab: content in clusters, by project | Product | idea |
 | D9 | The People tab: the people you work closest with, as a graph | Product | investigating |
 | D10 | One identity for each person across Slack and GitHub | Product | investigating |
@@ -547,7 +547,15 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - 2026-10-18, the mandate: the People tab (D9) shows the people you already work with, from your own data on
     your Mac. It needs no server. D4 finds people you do not know yet, across users, so it keeps the risks above.
 
-### D5. The Context tab: context cards across sources, in five states
+### D5. The Threads tab: a thread for each session, in six states
+
+- **Status:** shipped. The notes below, up to 2026-10-18, describe the Context tab that came before it.
+- 2026-10-23: one thread for each agent session that wrote something (edits, commits, a branch, a PR). Threads read
+  the transcripts, git, gh and the issue tracker, with no index and no model. States: Open, To-do, Thoughts, Loose
+  ends, Closed and Forgotten. The threads of one branch are a cluster: the session with the largest share of the
+  branch's surviving lines holds the branch. Ship and Discard replace Wrap up. A to-do starts a session in a worktree
+  (`start_todo`). Removed: model-written notes, done checks, goal cards, thread history, Share this thread, search
+  by meaning, related documents, and the Coworkers and related work panel. Details: [`docs/threads.md`](docs/threads.md).
 
 - **States** (`pensieve/task_states.py`): latent, conscious, subconscious, etched and forgotten. Each one has a
   meaning and an automatic rule. Forgotten: not done, quiet for 21 days (14 for latent work), no open PR and no
@@ -581,7 +589,6 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Depends on:** E4.
 - **Measure:** the share of open tickets that join to at least one branch or session, and how often the user opens
   the tab.
-- **Status:** testing
 - **Notes:**
   - 2026-10-16: on the real index (30 days): 114 tasks in 0.2 s (49 with a ticket, 10 on a feature branch, 55
     without either). Notes: 9 of 9 written once the engine flags were added, against 2 of 10 before. Coworker lookup
@@ -636,8 +643,10 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   - A static file is a snapshot. A live card (it changes when its PR merges) needs a place to sync to: D1.
   - Handoff: an agent that gets a card from a teammate resumes from it. Test with the workflow benchmark: give the
     card of another person's task and measure facts and calls.
-- **Status:** testing
+- **Status:** dropped
 - **Notes:**
+  - 2026-10-23: dropped. Share this thread and `share_thread` are removed. `thread_page` saves a thread's page in
+    `~/Downloads`, with no redaction.
   - 2026-10-17: a card has a `remote` part (git remote, branch and commit, PRs, tickets, links, artifacts) and a
     `local` part (folder paths, the resume command, session ids). `cards.share` drops `local` and every local path,
     and makes a branch card's id portable (`b:org/repo@branch`). `handoff` gives the next step, the commands that
@@ -675,8 +684,10 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   overlap and goal distance, and record start, continue, split, merge, fork, end and revive.
 - **Measure:** replay the last 30 days, as of each day. Label a sample of links as same work or different work.
   Compare members only, embeddings only and both, by wrong joins and wrong splits, and set the thresholds.
-- **Status:** testing
+- **Status:** dropped
 - **Notes:**
+  - 2026-10-23: dropped. A thread is now one session (D5), so its id does not change. The linker
+    (`pensieve/threads.py`) and the thread history (`pensieve/history.py`) are removed.
   - 2026-10-17: built `pensieve/threads.py` (the linker) and `bench/threads_replay.py`. On one Mac: 61 builds
     12 hours apart, 1,365 snapshots, 584 pairs to decide, labelled by Sonnet (551 with confidence 0.7 or more: 30
     same goal). Members only: F1 0.74 at overlap 0.4; goals only: 0.71 at similarity 0.8; both: 0.74. The full
@@ -881,7 +892,7 @@ each connection, and each hit shows its connection.
 
 - **Why:** much of your context is in cloud tools, not on your disk. E4 collects from MCP servers that an agent
   already has. Many users have no such server for each tool.
-- **Tools:** Notion, Slack, Google Drive, HubSpot, GitHub, Granola and Linear.
+- **Tools:** Notion, Slack, Google Drive, HubSpot, GitHub, Granola, Linear, Jira and Asana.
 - **Rule:** read-only, with your own access. Pensieve sees what you can see, and no more. It never writes. The rule
   of E4 applies to each tool call.
 - **Try:** for each tool, use its MCP server through E4 when it has one. Otherwise sign in with your own account
@@ -894,6 +905,9 @@ each connection, and each hit shows its connection.
   its items that you or your agent then use.
 - **Status:** investigating
 - **Notes:**
+  - 2026-10-23: Jira (Atlassian's MCP server) and Asana (Asana's MCP server) sign in with OAuth in the browser. The
+    setup has a step that connects an issue tracker: Jira, Linear or Asana. A sign-in that ends connected collects
+    at once. A ticket assigned to the user becomes a to-do thread, and a ticket that closes closes its thread.
 
 ## F. Website
 

@@ -10,7 +10,7 @@ Use the same text in each directory.
 - **Repository:** https://github.com/TedHaley/pensieve
 - **Website:** https://pensieve.tools
 - **Short description (100 characters, the registry limit is 100):** Local search over your files, git repos and agent sessions, with a thread for each goal you work on.
-- **Long description:** Pensieve is a free, local Mac app with an MCP server. It indexes your documents, git repositories and past AI agent sessions. Agents get the few most relevant files and passages, scoped to the repo that they run in. Pensieve also shows who knows an area of code, and it keeps a thread for each goal of your work. MIT license.
+- **Long description:** Pensieve is a free, local Mac app with an MCP server. It indexes your documents, git repositories and past AI agent sessions. Agents get the few most relevant files and passages, scoped to the repo that they run in. Pensieve also shows who knows an area of code, and it keeps a thread for each agent session that wrote something, with its PRs, branch and tickets. MIT license.
 - **Categories:** search, developer tools, knowledge and memory
 - **Install:** `curl -fsSL https://pensieve.tools/install.sh | sh`, then `pensieve integrate recommended`
 - **Client configuration:** the JSON block in the "MCP server" section of the README

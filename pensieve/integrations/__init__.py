@@ -39,9 +39,9 @@ SKILLS = {  # id -> (label, what it does, recommended)
     "pensieve-plan": ("Plan with prior art and experts",
                       "Plans for new code list existing code to reuse, earlier attempts, people to loop in and "
                       "knowledge risks.", False),
-    "pensieve-wrap-up": ("Wrap up threads",
-                         "Gets the threads closest to done and does the steps that close them in git, GitHub and the "
-                         "tracker; asks before a merge or a close.", False),
+    "pensieve-wrap-up": ("Ship or discard threads",
+                         "Gets the threads closest to done and does the steps that ship or discard them in git, GitHub "
+                         "and the issue tracker; asks before a push, a merge or a close.", False),
 }
 
 
@@ -243,8 +243,9 @@ def threads_note(name: str, root: str, threads: list[dict]) -> str | None:
     t = min(mine, key=lambda t: insights_stats.closest_first(len(t.get("left") or []), t["updated"]))
     title = (t.get("anchor") or {}).get("title") or t["title"]
     step = (t.get("left") or [{}])[0].get("text", "")
-    return (f"{name} has {loose} loose end{'s' if loose != 1 else ''} (threads that are not done and went quiet). The "
-            f"thread closest to done is \"{title}\" ({t['id']})" + (f"; its next step: {step}" if step else "") + ". "
+    lead = (f"{name} has {loose} loose end{'s' if loose != 1 else ''} (threads that are not done and went quiet). "
+            if loose else f"{name} has open threads. ")
+    return (lead + f"The thread closest to done is \"{title}\" ({t['id']})" + (f"; its next step: {step}" if step else "") + ". "
             "Don't interrupt the task for this. At a natural pause, offer the user to close it: call Pensieve's "
             "`threads` tool and follow the pensieve-wrap-up skill if it is installed. Pensieve only reads: a thread "
             "closes when its PR merges, its ticket closes or its branch goes.")

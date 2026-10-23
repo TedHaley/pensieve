@@ -2377,7 +2377,7 @@ function renderSetup() {
       <h3 class="setup-h">Embedding model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Embedding model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
         <div class="ai-opt-h"><b>${esc(m.label)}</b><span class="priv local">Local</span></div><p>${esc(m.about)}</p></button>`).join('')}</div>
-      <h3 class="setup-h">Notes and insights</h3><p class="sub">The agent you connect to Pensieve over MCP writes thread notes, summaries, topic names and insights. Pensieve runs no text model of its own.</p>
+      <h3 class="setup-h">Summaries and insights</h3><p class="sub">The agent you connect to Pensieve over MCP writes session summaries, topic names and insights. Pensieve runs no text model of its own.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Text engine">${(g.engines || []).map(x => `<button class="ai-opt ${st.engine === x.id ? 'on' : ''}" data-setup-engine="${esc(x.id)}" role="radio" aria-checked="${st.engine === x.id}" ${x.unavailable ? 'disabled' : ''}>
         <div class="ai-opt-h"><b>${esc(x.label)}</b>${x.id === 'builtin' ? '<span class="priv local">Local</span>' : ''}</div><p>${esc(x.unavailable || x.about)}</p></button>`).join('')}</div>
       ${btns('start', 'Next')}`;
@@ -2943,7 +2943,7 @@ async function renderSettings() {
       <p class="sc-p">The agent that "New session" on a thread starts in Terminal. "Resume session" always uses the agent that wrote the session.</p>
       <div id="agentpick"><div class="spinner" style="margin:8px 0"></div></div></div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
-  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. Your agent, a command-line agent or a model server writes the notes. MCP servers bring in tickets and messages.') + `
+  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. Your agent, a command-line agent or a model server writes the summaries. MCP servers bring in tickets and messages.') + `
     <div class="set-card mdl" id="set-Embedding-model">
       <div class="mdl-h"><span class="mdl-n">1</span><div class="mdl-t"><h3>Embedding model</h3><p>Finds your files, code and sessions by meaning. Always on.</p></div><span class="priv local">Local</span></div>
       <div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div>
@@ -3261,7 +3261,7 @@ function engineCardHtml() {
   const state = `<div class="set-row"><div><div class="k">Status</div><div class="d">${e.error ? `<span class="err">${esc(e.error)}</span>` : e.last_answer ? `Last answer ${rel(e.last_answer * 1000)} · ${plural(e.answered || 0, 'job')} since the backend started` : 'No answer yet'} · ${plural(e.waiting || 0, 'job')} waiting · at most ${D.engine_rate} a minute, one at a time</div></div>
       <div><button class="btn" data-engtest ${ENG.busy ? 'disabled' : ''}>${ENG.busy ? 'Testing…' : 'Test'}</button>${t ? `<div class="${t.ok ? 'muted' : 'err'}" style="font-size:12px;margin-top:4px">${t.ok ? `Answered “${esc(t.reply)}” in ${(t.ms / 1000).toFixed(1)} s` : esc(t.error)}</div>` : ''}</div></div>`;
   return `<div class="set-card mdl" id="set-Notes">
-      <div class="mdl-h"><span class="mdl-n">2</span><div class="mdl-t"><h3>Notes and summaries</h3><p>What writes thread notes, session summaries and insights.</p></div></div>
+      <div class="mdl-h"><span class="mdl-n">2</span><div class="mdl-t"><h3>Summaries and insights</h3><p>What writes session summaries, topic names and insights, in Developer mode.</p></div></div>
       <div class="seg" role="radiogroup" aria-label="Text engine" style="margin:4px 0 10px">${ENGINES.map(([id, label]) => `<button data-engpick="${id}" class="${eng === id ? 'on' : ''}" aria-pressed="${eng === id}">${label}</button>`).join('')}</div>
       ${how}${state}</div>`;
 }
@@ -3974,7 +3974,7 @@ async function openPeopleFor(who) {
 window.addEventListener('resize', debounce(() => { if (S.view === 'people') { ppDrawGraph(); if (ppRelOn()) ppFillRel(); } }, 200));
 
 /* ============================== threads tab ============================== */
-// Each thread: its data points from every source, newest first, and an AI note on how it stands and is moving.
+// Each thread: one agent session and its data sources (branches, PRs, tickets), the steps left, and its related sessions.
 S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), menu: false,
           states: new Set((() => { const v = store.get('threadStates3', ['open', 'todo', 'thoughts', 'loose_ends']); return Array.isArray(v) ? v : [v]; })()),
           view: store.get('workView', 'compact'), collapsed: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a thread; full: the rows opened
@@ -4079,12 +4079,12 @@ async function loadAgents() {
     S.agents = {...d, startName: by?.name};
   } catch {}
 }
-function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header wraps up: the card has no button
+function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header has Ship and Discard: the card has none
   const lead = cluster && wkHolds(t, cluster) ? ' lead' : '';  // the session to pick the branch up from
   const resume = t.resume ? `<span class="wk-split${lead}"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
-  const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
+  const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The conversation snippet, related sessions, data sources, files and activity">${open ? 'Hide details' : 'Details'}</button>`;
   const own = {key: `thread|${t.id}`, state: t.state, branch: t.branches?.[0]?.branch || t.claim?.branch || '', tasks: [t]};
   if (t.state === 'todo') {  // a ticket nothing picked up yet: it starts in a worktree, or gets cancelled
     const start = `<button class="wk-btn primary" data-wk-start-todo="${esc(t.id)}" title="Make a worktree on a branch named from the ticket, in its project's repo, and start a new ${esc(S.agents?.startName || 'agent')} session there that reads the ticket first">${WK_IC.play}Start session in worktree</button>`;
@@ -4093,8 +4093,6 @@ function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header 
   const wrap = cluster ? '' : wkResolveBtns(own);
   return `<div class="wk-bar">${resume}${fresh}${details}${wrap}<span class="wk-loc"></span>${wkCardBtns(t)}</div>`;
 }
-// A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
-// thread goes on; only a thread with no anchor title takes the note's (the same rule as cardtext.card_title)
 const wkCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 const wkTitle = t => t.title || t.anchor?.title || '';
 const WK_WHO = {agent: ['agent', 'An agent can do this in a session'], you: ['you', 'Only you can do this'],
@@ -4248,8 +4246,8 @@ function wkCard(t, d, cluster = '') {
       ${wkActions(t, d, cluster)}
     </article>`;
 }
-// What the session is about: its summary when the note writer has one, else the user's last words and the agent's
-// last reply, cut short. A card's title is a few words; this says what was asked and what came of it.
+// A summary exists only in Developer mode; in Threads mode the snippet is the last question and the last reply.
+// A card's title is a few words; this says what was asked and what came of it.
 function wkAbout(t) {
   // plain words: no markdown marks, no bullets, no code ticks, one line
   const cut = (s, n) => { s = (s || '').replace(/[*_`#>]+/g, '').replace(/^\s*[-•]\s+/gm, '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).replace(/\s\S*$/, '') + '…' : s; };
@@ -4449,7 +4447,7 @@ function renderWork() {
   const box = document.activeElement?.id === 'wksearch' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const search = `<div class="wk-search"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       <input id="wksearch" type="search" value="${esc(S.work.q)}" placeholder="Search threads" aria-label="Search threads" autocomplete="off" spellcheck="false"
-        title="Plain words search by meaning · &quot;exact words&quot; must appear · -word leaves threads out">
+        title="Finds threads by their words · &quot;exact words&quot; must appear · -word leaves threads out">
       <span class="syn">${S.work.hits ? `${S.work.hits.length} match${S.work.hits.length === 1 ? '' : 'es'}` : '"exact" · -exclude'}</span></div>`;
   el.innerHTML = `<div class="wk-head"><h2>Threads</h2>
       <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>

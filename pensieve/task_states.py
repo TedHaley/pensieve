@@ -1,9 +1,10 @@
-"""The four states of a thread on the Threads tab, how each one is set, and where changes are kept.
+"""The six states of a thread on the Threads tab, how each one is set, and where changes are kept.
 
 A thread gets its state automatically from its sinks (thread_model.thread_state, through sink_status.task_state).
-Unknown counts as closed. A task with no sink is closed too: nothing verifies it. The user can set a state by hand on
-the Threads tab, and forgotten is only set by hand. A state set by hand holds until the thread has new activity after
-it; then the automatic state applies again. Every change by hand is a row in `card_states` (in store.db)."""
+Unknown counts as closed. A thread with no sink of its own takes the state of the sinks it contributed to, else it is a
+thought (thread_model.thought_state). A ticket of the user's with no work on it is a to-do. Work with a sink is never
+forgotten automatically: the user sets it aside by hand. A state set by hand holds until the thread has new activity
+after it; then the automatic state applies again. Every change by hand is a row in `card_states` (in store.db)."""
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -38,15 +39,15 @@ MODELS = {m.state: m for m in [
                "A session with no data source, active in the last 2 days. Forgotten after 2 days quiet.", "#5ac8fa"),
     StateModel(State.LOOSE_ENDS, "Loose ends","Work that is not done and has gone quiet: close it out.",
                "Work that is not done (an open PR, a ticket that is not done, uncommitted files, or work left), with "
-               "no activity in the last 3 days. Also a ticket not started yet, or a thread with no sink to verify.",
+               "no activity in the last 3 days.",
                "#ff9f0a"),
     StateModel(State.CLOSED, "Closed", "Done. A closed thread does not reopen: new work starts a new thread.",
                "Every sink it writes to is verified done: its PR is merged or closed, its ticket is done, or its branch "
                "is merged or deleted.",
                "#8e8e93"),
     StateModel(State.FORGOTTEN, "Forgotten", "Not finished, and it will likely stay that way.",
-               "Material work that is not done and quiet for 21 days, with no open PR and no uncommitted work. Or a "
-               "conversation with no ticket and no edits, once its session has ended.",
+               "A thought quiet for 2 days, or a thread you set aside by hand. Work with a data source that is not done "
+               "stays a loose end.",
                "#ff453a"),
 ]}
 ORDER = [State.OPEN, State.TODO, State.THOUGHTS, State.LOOSE_ENDS, State.CLOSED, State.FORGOTTEN]

@@ -21,7 +21,6 @@ from enum import Enum
 import time
 
 RECENT_DAYS = 3  # an open thread had work in this many days
-FORGOTTEN_DAYS = 21  # a thread with work left, quiet this long is forgotten
 THOUGHT_DAYS = 2  # a thought quiet this long is forgotten
 
 

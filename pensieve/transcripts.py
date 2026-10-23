@@ -30,6 +30,8 @@ PR_URL = re.compile(r"https://(?:github\.com/[\w.-]+/[\w.-]+/pull/\d+|[\w.-]*git
                     r"|bitbucket\.org/[\w.-]+/[\w.-]+/pull-requests/\d+|dev\.azure\.com/[\w./%-]+?/pullrequest/\d+)")
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 OWN_MARK = "[pensieve text job]"  # the first line of every prompt Pensieve's text engine sends (engine.MARK)
+# The first words of the sessions that Pensieve starts to close work (cards.RESOLVE_PROMPTS): a close-out, not a thread
+CLOSE_MARKS = ("[pensieve ship]", "[pensieve discard]")
 VERSION = 3  # of the cache files: a new version reads every transcript again
 
 
@@ -298,8 +300,8 @@ def _read(f: Facts, path: Path):
             before = len(s.turns)
             parsers._add(s, t, c, when)
             if len(s.turns) > before:
-                if f.n_turns == 0 and t == "user" and c.lstrip().startswith(OWN_MARK):
-                    st["own"] = True  # a session Pensieve's own text engine ran: not the user's work
+                if f.n_turns == 0 and t == "user" and c.lstrip().startswith((OWN_MARK, *CLOSE_MARKS)):
+                    st["own"] = True  # a text job, or a ship or discard session: not a thread of its own
                 _text_facts(f, s.turns[-1][1])
                 f.n_turns += 1
     if len(pending) > 200:  # calls whose result never came

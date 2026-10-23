@@ -259,22 +259,22 @@ def read(id: str, max_chars: int = 12000) -> dict:
 
 
 def prompt_context(prompt: str, cwd: str, card_format: str = "text") -> str:
-    """For Claude Code's UserPromptSubmit hook, for a prompt sent in an indexed repo: the thread of the work it is
-    about, the list of threads for a standup or open loops, the past sessions for a question about a decision, or
-    else the best code matches as the search tool shows them. "" for a slash command, a few words, or a folder
-    Pensieve doesn't index."""
+    """For Claude Code's UserPromptSubmit hook: the thread of the work a prompt is about, or the list of threads for
+    a standup or open loops. In an indexed repo also the past sessions for a question about a decision, or else the
+    best code matches as the search tool shows them. "" for a slash command, a few words, or nothing found."""
     text = (prompt or "").strip()
     if not cwd or text.startswith("/") or len(text.split()) < 3:
         return ""
     sc = scopes.resolve("auto", cwd, _c()["repos"])
-    if sc is None or getattr(sc, "unindexed", False) or not sc.repos:
+    if sc is None:
         return ""
+    index = not getattr(sc, "unindexed", False) and bool(sc.repos)  # no index (Threads mode): only the threads
     q = re.sub(r"\s+", " ", text.replace('"', " "))[:400]  # a prompt's quotes aren't search syntax
     t, tokens = time.perf_counter(), (scopes.current.set(sc), agent_cwd.set(cwd))
     res = []
     try:
         kind, found = _work_for_prompt(text, card_format)  # a prompt about the user's work: a thread or the list
-        if found:
+        if found or not index:
             pass
         elif WHO_WORDS.search(text):  # who knows or should review some code: its authors
             kind, found = "people", _people(text)
@@ -295,8 +295,8 @@ def prompt_context(prompt: str, cwd: str, card_format: str = "text") -> str:
     if not found:
         return ""
     head = {
-        "thread": "Pensieve found the thread this prompt is about. Its problem, goal, state and next are as of the "
-                  "last session; the folders and PRs are live. Use it, and look up only what it doesn't answer.",
+        "thread": "Pensieve found the thread this prompt is about. Where its session stopped is as of that session; "
+                  "the state, folders, PRs and steps left are live. Use it, and look up only what it doesn't answer.",
         "threads": "Pensieve listed the user's threads for this prompt. Offer to close the one closest to done.",
         "people": "Pensieve looked up who knows the code this prompt is about.",
         "sessions": f"Pensieve searched the past agent sessions in {sc.name} for this prompt. read(id) shows one; "
@@ -736,8 +736,8 @@ def threads(state: str = "open,todo,loose_ends", query: str = "", limit: int = 1
     ("you": only the user, such as an answer, a review or a merge; "agent": you can, in a session; "tracker": a change
     in the system the item lives in, such as a ticket's status) and what it acts on. Pensieve only reads: do each
     step in git, GitHub or the tracker, and Pensieve sees the change. state: comma-separated, from open (worked on
-    now), loose_ends (not done and gone quiet: close it out), todo (a ticket with no work yet), complete, forgotten,
-    or "all". query: words, a ticket key, branch or PR number; threads that match more of them come first, and the
+    now), todo (a ticket of the user's with no work yet: start_todo starts it), thoughts (a session with no branch,
+    PR or ticket), loose_ends (not done and gone quiet: close it out), closed, forgotten, or "all". query: words, a ticket key, branch or PR number; threads that match more of them come first, and the
     others are left out. Within this connection's scope (its repo by default). Call thread(id) before you pick one
     up. At a natural pause, offer the user to close the first one."""
     from pensieve import work
@@ -786,7 +786,8 @@ def _branch_threads(branch: str) -> list[dict]:
 @tool()
 def cluster(branch: str) -> str:
     """The threads of one branch (the last 30 days, within this connection's scope), newest session first: what
-    each session did on the branch and its share of the lines, each thread's state, and the two ways to close the
+    each session did on the branch, its share of the lines (the largest share holds the branch: pick the work up
+    from that session), each thread's state, and the two ways to close the
     work, each as steps with who can do each (you, the agent; the user; or the tracker): ship it (commit, push,
     open and merge the PR, close the ticket) or discard it (drop the changes, close the PR, delete the branch,
     cancel the ticket). Pensieve only reads: do the steps in git, GitHub or the tracker, and ask the user before
@@ -803,6 +804,8 @@ def cluster(branch: str) -> str:
     for t in ts:
         me = next((k for k in t.get("kin", []) if k.get("me")), {})
         share = f", {round(me['share'] * 100)}% of the branch" if me.get("share") else ""
+        if (t.get("claims") or {}).get(branch, {}).get("lost") is False:
+            share += ", holds the branch"
         at = (t.get("sessions") or [{}])[0].get("updated") or t["updated"]
         out.append(f"- {day(at)} {t['title']} [{t['id']} {t['state']}]: {me.get('did') or 'no changes'}{share}")
     can = any(t["state"] in ("open", "loose_ends", "forgotten") for t in ts)
@@ -852,7 +855,7 @@ def start_todo(id: str, repo: str = "") -> dict:
 
 @tool()
 def set_thread_state(id: str, state: str, reason: str = "") -> dict:
-    """Set a thread's state by hand, as the user can on the Threads tab: todo, open, loose_ends, complete, forgotten,
+    """Set a thread's state by hand, as the user can on the Threads tab: open, todo, loose_ends, closed, forgotten,
     or "auto" to let Pensieve decide again. Pensieve sets each state from the evidence, so a thread closes when its PR
     merges or its ticket closes: use this only when the user asks for it."""
     from pensieve import work
@@ -1044,20 +1047,20 @@ def setup_guide() -> dict:
     categories with the folders scanning each one reads, the search models and the energy note. Reads no
     folders. Walk the user through it in order, one question at a time:
     1. Tell them what Pensieve is, from `about`.
-    2. Ask which profiles fit them (several can).
-    3. Tell them which folders the scan reads (`reads` of each profile's categories) and that macOS may ask them to
-       allow access. When they agree, call setup_scan with those profiles.
-    4. Show what the scan found, pre-checked items first, and ask what to index. Offer setup_add_source for folders
-       or repos it missed.
-    5. Ask which of images, video and audio to read by what they show or say (`content`: each entry's note says
-       what it costs). All three are off by default: then those files are found by name.
-    6. Ask what writes Pensieve's notes, summaries and insights in the background: one of `engines` (its `about`
-       says what it costs; leave out the ones with `unavailable`). `text_engine` is the default. They can change it
-       later in Settings → Models.
-    7. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start.
-    8. Ask whether they track work in Jira, Linear or Asana. The sign-in is in the browser: send them to
-       Settings → Sources → Cloud connectors in the app. Their tickets then become to-do threads, and a ticket's
-       status closes its thread."""
+    2. Ask which mode they want, from `profiles`: "session" (Threads mode: recommended to start; no index, no
+       model) or "developer" (also indexes the repos and files they choose, for search, the Map, People and Insights).
+    3. Ask whether they track work in Jira, Linear or Asana. The sign-in is in the browser: send them to
+       Settings → Sources → Cloud connectors in the app, now or later. Their tickets then become to-do threads, and
+       a ticket's status closes its thread.
+    4. Threads mode: call setup_scan with profiles=["session"], then setup_start(recommended=true, mode="session").
+       That is all.
+    5. Developer mode: tell them which folders the scan reads (`reads` of the categories) and that macOS may ask them
+       to allow access. When they agree, call setup_scan with profiles=["developer"]. Show what it found, pre-checked
+       items first, and ask what to index. Offer setup_add_source for folders or repos it missed.
+    6. Developer mode: ask which of images, video and audio to read by what they show or say (`content`: each
+       entry's note says what it costs). All three are off by default: then those files are found by name.
+    7. Developer mode: tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call
+       setup_start with mode="developer"."""
     return onboarding.guide()
 
 
