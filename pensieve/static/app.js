@@ -2898,7 +2898,7 @@ async function renderSettings() {
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
     </div>
     <div class="set-card" id="set-New-sessions"><h3>New sessions</h3>
-      <p class="sc-p">The agent that "New session" on a thread starts in Terminal. "Resume last session" always uses the agent that wrote the session.</p>
+      <p class="sc-p">The agent that "New session" on a thread starts in Terminal. "Resume session" always uses the agent that wrote the session.</p>
       <div id="agentpick"><div class="spinner" style="margin:8px 0"></div></div></div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
   else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. Your agent, a command-line agent or a model server writes the notes. MCP servers bring in tickets and messages.') + `
@@ -4019,7 +4019,7 @@ async function loadAgents() {
   } catch {}
 }
 function wkActions(t, d) {
-  const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume last session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
+  const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
