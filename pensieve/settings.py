@@ -95,7 +95,7 @@ DESCRIPTIONS = {
                    "again with the new model, in the background; search keeps working meanwhile.",
     "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
     "search_gate_holdout": "The search gate (Claude Code add-on) leaves one session in this many unblocked, so you can compare Pensieve with grep. 0 blocks every session.",
-    "text_engine": "What writes thread notes, summaries and insights in the background: builtin (Qwen 3.5 9B on this Mac, which Pensieve starts when there is work), cli (a command-line agent, once per job) or server (a model server that you run, local or hosted).",
+    "text_engine": "What writes summaries and insights in the background: builtin (Qwen 3.5 9B on this Mac, which Pensieve starts when there is work), cli (a command-line agent, once per job) or server (a model server that you run, local or hosted).",
     "cli_command": "The command-line agent that writes them when text_engine is cli. It gets the prompt on stdin, or in place of {prompt}; {out} is a file it can write its answer to.",
     "llm_url": "The OpenAI-compatible URL of a model server that you run, when text_engine is server: LM Studio (http://localhost:1234/v1), Ollama (http://localhost:11434/v1) or a hosted API.",
     "llm_model": "The model on that server.",

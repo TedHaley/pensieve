@@ -110,13 +110,10 @@ def anchor(card: dict) -> Anchor:
     return Anchor("session", _cap((s or {}).get("title", "") or card.get("title", "")), (s or {}).get("id", ""), theme=True)
 
 
-def card_title(card: dict, note: dict | None = None) -> str:
-    """The title a card shows: its anchor's title, which stays the same while the thread goes on. Only a thread with
-    no PR, ticket or branch, whose session has no title, takes the note writer's title."""
+def card_title(card: dict) -> str:
+    """The title a card shows: its anchor's title, which stays the same while the thread goes on."""
     a = card.get("anchor") or {}
-    if a.get("title"):
-        return a["title"]
-    return _cap(((note or {}).get("title") or "").strip()) or card.get("title", "")
+    return a.get("title") or card.get("title", "")
 
 
 def pick_session(card: dict) -> dict | None:
@@ -174,15 +171,13 @@ def agent_reply(turns: list) -> Reply:
 DONE_WORDS = re.compile(r"\b(done|closed|resolved|complete|completed|won'?t do|cancel+ed)\b", re.I)
 
 
-def pending(card: dict, reply: Reply | None = None, resolved: bool = False) -> list[Pending]:
+def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
     """What is left to close the thread, most urgent first, each with who can act:
     - a question the agent asked: only the user can answer it;
     - each open pull request, by where it stands (failing checks, changes requested, approved, in review, draft);
     - unpushed commits and uncommitted files on the card's own branch;
-    - a ticket that is not done although the thread's work is: close it in its tracker. The work is done when the
-      card's pull request merged, or when the note writer, which reads every source of the card, judged the thread
-      `resolved`;
-    - a ticket that is not done, with no pull request and not resolved: the work itself."""
+    - a ticket that is not done although the card's pull request merged: close it in its tracker;
+    - a ticket that is not done, with no pull request: the work itself."""
     out = []
     if reply and reply.question:
         out.append(Pending(f"Answer the agent: {reply.question}", "you"))
@@ -217,9 +212,8 @@ def pending(card: dict, reply: Reply | None = None, resolved: bool = False) -> l
         seen.add(k["key"])
         if DONE_WORDS.search(k.get("status") or ""):
             continue
-        if merged or resolved:
-            why = "its pull request merged" if merged else "the work in its sessions is done"
-            out.append(Pending(f"Close {k['key']}: {why}", "parent", k["key"]))
+        if merged:
+            out.append(Pending(f"Close {k['key']}: its pull request merged", "parent", k["key"]))
         elif not card.get("prs"):
             out.append(Pending(f"Work on {k['key']}", "agent", k["key"]))
     return out
@@ -241,12 +235,12 @@ def _stage(text: str) -> str:
     return "work"  # fix checks, address review, commit, push, work on a ticket
 
 
-def closeout(card: dict, reply: Reply | None = None, resolved: bool = False) -> list[dict]:
+def closeout(card: dict, reply: Reply | None = None) -> list[dict]:
     """The steps that take the thread to a complete state, in order: answer the agent, finish the work, get it
     reviewed, merge, delete the branch, close the ticket. Steps that are already done stay in the list, marked done.
     `pending` gives the open steps and who acts; this adds the order and the done steps."""
     steps = []
-    for x in pending(card, reply, resolved):
+    for x in pending(card, reply):
         steps.append(dict(text=x.text, who=x.how, ref=x.ref, stage=_stage(x.text), done=False))
     merged = [p for p in card.get("prs", []) if p.get("state") == "merged"]
     for p in merged:

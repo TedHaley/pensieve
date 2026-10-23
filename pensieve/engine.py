@@ -1,4 +1,4 @@
-"""The background writer of Pensieve's text jobs (agent_jobs: thread notes, summaries, topic names, insights). The
+"""The background writer of Pensieve's text jobs (agent_jobs: summaries, topic names, insights). The
 setting `text_engine` picks it:
 
     builtin  Qwen 3.5 9B on this Mac (mlx_lm server on BUILTIN_PORT): Pensieve starts it on the first job and stops it

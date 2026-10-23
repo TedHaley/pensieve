@@ -65,11 +65,6 @@ class StateChange:
     at: float
 
 
-def _nothing_left(note: dict) -> bool:
-    left = (note.get("next") or note.get("left") or "").strip().rstrip(".").lower()  # "left" in notes before version 8
-    return left in ("nothing", "none", "n/a", "nothing left")
-
-
 def latest(store=None) -> dict[str, StateChange]:
     """The last change by hand of each task (the card_states table of store.db; `store` is not used any more)."""
     from pensieve import store as v2
@@ -105,7 +100,7 @@ def set_state(store, task_id: str, state: str, by: str = "user", reason: str = "
     return ch
 
 
-def apply(task: dict, note: dict, manual: StateChange | None):
+def apply(task: dict, manual: StateChange | None):
     """Set task["state"] and why: by hand while no activity is newer than that change, else automatically."""
     from pensieve import chains, sink_status, thread_model as tm
     by_sinks, reason, status = sink_status.task_state(task)

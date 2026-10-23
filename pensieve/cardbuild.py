@@ -1,7 +1,7 @@
 """The incremental card builder (docs/design/storage.md, "Cards within 2 seconds").
 
 A write that can change a card sends an event: a session indexed, a document stored, commits loaded, a card's state
-set by hand, a note written. The builder thread takes the events of the last 200 ms together:
+set by hand. The builder thread takes the events of the last 200 ms together:
 
 1. It loads again only what the events name: those sessions (their rows, text facts and edited files), those
    documents, or the commits and worktrees.
@@ -11,7 +11,6 @@ set by hand, a note written. The builder thread takes the events of the last 200
    through `card_members_ref` (a PR or a card). The other cards keep their folders and PRs from the last build.
 4. It writes the rows of `cards` and `card_members` that changed, deletes the cards that went, and calls `listeners`
    with the ids. The server sends them to the page as a `card` event.
-5. A card whose signature changed gets a new note after NOTE_QUIET seconds without more changes (`note_fn`).
 
 A full build runs at the start and every FULL_SECONDS: it moves the window, and it asks gh for the PR states."""
 import copy
@@ -31,10 +30,8 @@ from pensieve.store import cards as store_cards
 DAYS = 30            # the window of the built cards; /api/work filters it for a shorter one
 FULL_SECONDS = 300   # a full build: the window moves, and gh gives the PR states
 COALESCE = 0.2       # events this close together make one build
-NOTE_QUIET = 20      # seconds without a change before a card gets a new note
-NOTE_STATES = ("open", "loose_ends")
 
-SESSION, DOCUMENT, COMMIT, PR, STATE, NOTE, REFRESH = "session", "document", "commit", "pr", "state", "note", "refresh"
+SESSION, DOCUMENT, COMMIT, PR, STATE, REFRESH = "session", "document", "commit", "pr", "state", "refresh"
 
 current: "Builder | None" = None
 
@@ -66,8 +63,6 @@ class Builder:
         self.sigs: dict[str, str] = store_cards.signatures(v2.store_db())
         self.tasks: dict[str, dict] = {}
         self.listeners = []                  # fn(changed ids, removed ids), on the builder thread
-        self.note_fn = None                  # fn(task) -> bool: write the card's note now
-        self.note_due: dict[str, float] = {}
         self.q: queue.Queue = queue.Queue()
         self.last_full = 0.0
         self.builds: list[dict] = []         # the last builds: {at, kind, ms, changed}
@@ -107,7 +102,6 @@ class Builder:
                     self.full(net=True)
                 elif events:
                     self.update(events)
-                self._notes()
             except Exception:
                 traceback.print_exc()
             finally:
@@ -143,9 +137,6 @@ class Builder:
             force |= store_cards.with_members(db, MemberKind.PULL_REQUEST, kinds[PR])
         net = bool(kinds.get(REFRESH) or kinds.get(PR))
         changed = self._build(force=force, net=net)
-        noted = [i for i in kinds.get(NOTE, ()) if i not in changed]  # a new note: the card's view is the same
-        if noted:
-            self._tell(noted, [])
         self._log("+".join(sorted(kinds)), t0, changed)
         # a changed card with an open PR, or a PR of unknown state: ask gh at once, in a build of its own
         ask = [i for i in changed if i in self.tasks and not net and any(
@@ -186,9 +177,6 @@ class Builder:
             rows = [(self._card(by_id[i], views[i], now), _members(by_id[i])) for i in changed]
             store_cards.save(v2.store_db(), rows, delete=removed)
             for card, _ in rows:
-                if self.sigs.get(card.id) != card.signature and by_id[card.id]["state"] in NOTE_STATES \
-                        and not by_id[card.id].get("goal_of"):
-                    self.note_due[card.id] = time.time() + NOTE_QUIET
                 self.sigs[card.id] = card.signature
         self.views, self.tasks = views, by_id
         if changed or removed:
@@ -209,25 +197,6 @@ class Builder:
         return Card(t["id"], kind, t.get("goal_of"), t["title"] or t["id"],
                     State(task_states.stored(t["state"])), int(min(times) or 0),
                     int(t["updated"] or 0), now, work._signature(t), view)
-
-    def _notes(self):
-        """Write the notes that are due: NOTE_QUIET seconds after the last change of their card."""
-        now = time.time()
-        due = [i for i, at in self.note_due.items() if at <= now]
-        if not due or self.note_fn is None:
-            return
-        for i in due:
-            self.note_due.pop(i, None)
-        todo = [t for t in work.stale_notes([self.tasks[i] for i in due if i in self.tasks], ids=set(due), min_age=0)]
-        if todo:
-            threading.Thread(target=self._write_notes, args=(todo,), daemon=True, name="card-notes").start()
-
-    def _write_notes(self, todo):
-        for t in todo:  # work.write_note sends a NOTE event for each
-            try:
-                self.note_fn(t)
-            except Exception:
-                traceback.print_exc()
 
     def _log(self, kind, t0, changed):
         self.builds = (self.builds + [dict(at=time.time(), kind=kind, ms=round((time.perf_counter() - t0) * 1000),

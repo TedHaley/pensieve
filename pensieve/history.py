@@ -7,7 +7,8 @@ when one of these is true:
   - its state changed (in progress, gone quiet, done, left);
   - a ticket, PR, branch, commit or session came or went (edited files alone don't count);
   - a push: the remote branch of one of its folders moved;
-  - the embedding of its core (problem and goal) moved DRIFT or more since the last save: the note says something new.
+  - the embedding of its goal text (its title, its tickets' titles and its sessions' titles) moved DRIFT or more
+    since the last save.
 A thread is saved at most once every GAP seconds, except for an event, a state change or a push.
 
 A 30-day replay of one Mac's work (bench/threads_replay.py backup) gave 29 saves with these rules, against 1,365 for a
@@ -80,19 +81,18 @@ class Keeper:
                 self._vecs[k] = v / (np.linalg.norm(v) + 1e-9)
         return [self._vecs[k] for k in keys]
 
-    def run_once(self, now: float | None = None, tasks: list[dict] | None = None, notes: dict | None = None) -> list[dict]:
+    def run_once(self, now: float | None = None, tasks: list[dict] | None = None) -> list[dict]:
         """Link the current cards and save the ones that changed. Returns what was saved: {thread, reasons}. A replay
-        gives the tasks and notes of a past time, and that time as `now`."""
+        gives the tasks of a past time, and that time as `now`."""
         from pensieve import cards, task_states
         now = now or time.time()
-        notes = work.notes() if notes is None else notes
         ts = [t for t in (work.tasks(self.store, 30) if tasks is None else tasks)
               if t["files"] or t["branches"] or t["prs"] or t["keys"] or t["commits"]]  # a question alone is not a thread
         if not ts:
             return []
         db = v2.store_db()
-        vecs = self._embed([threads.goal_text(t, notes.get(t["id"])) for t in ts])
-        snaps = [threads.snapshot(t, v, notes.get(t["id"])) for t, v in zip(ts, vecs)]
+        vecs = self._embed([threads.goal_text(t) for t in ts])
+        snaps = [threads.snapshot(t, v) for t, v in zip(ts, vecs)]
         before = len(self.linker.events)
         out = self.linker.step(snaps, now)
         threads.save(self.linker)  # the rows of new threads, before their first saves
@@ -124,8 +124,7 @@ class Keeper:
                 why.add("start")
             if not why or (prev and now - prev.at < GAP and not why & (EVENTS | {"state", "push"})):
                 continue
-            note = notes.get(t["id"], {})
-            card = dict(cards.build(t, note, task_states.history(self.store, t["id"])), thread_id=tid)
+            card = dict(cards.build(t, task_states.history(self.store, t["id"])), thread_id=tid)
             rows.add_save(db, ThreadSnapshot(None, tid, int(now), s["snapshot"], State(task_states.stored(t["state"])), structure, pushed,
                                              np.asarray(s["vec"], dtype=np.float32).tobytes(), json.dumps(card)), why)
             saved.append(dict(thread=tid, task=t["id"], reasons=sorted(why)))

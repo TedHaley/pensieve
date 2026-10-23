@@ -1553,9 +1553,6 @@ function openTopic(entry) {
   $('[data-asproject]', body)?.addEventListener('click', () => openTopicAsProject(entry.members));
 }
 // a card's note, in the order of the core: [field, label, what it says]
-const NOTE_ROWS = [['problem', 'Problem', 'What is wrong or missing'], ['goal', 'Goal', 'What done looks like, and why it matters'],
-  ['state', 'State', 'Where it stands, and what was decided'], ['next', 'Next', 'What needs to be done, and whether someone is still working on it'],
-  ['question', 'Waiting on you', 'The question that the last session asked you']];
 // the repo (name, folder key) that the current folder filter is in, if exactly one
 function focusedRepo() {
   const D = S.data; if (D.folders.size !== 1) return null;
@@ -3934,7 +3931,7 @@ window.addEventListener('resize', debounce(() => { if (S.view === 'people') { pp
 
 /* ============================== threads tab ============================== */
 // Each thread: its data points from every source, newest first, and an AI note on how it stands and is moving.
-S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, asked: new Set(), menu: false,
+S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set(), adj: {}, menu: false,
           states: new Set((() => { const v = store.get('threadStates2', ['open', 'thoughts', 'loose_ends']); return Array.isArray(v) ? v : [v]; })()),
           view: store.get('workView', 'compact'), collapsed: new Set(), q: '', hits: null,  // hits: the ids a search found  // compact view: one row a thread; full: the rows opened
           details: new Set()};  // the threads whose problem, goal, state and sections are open
@@ -4031,7 +4028,7 @@ function wkActions(t, d) {
 // thread goes on; only a thread with no anchor title takes the note's (the same rule as cardtext.card_title)
 const wkCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 const wkTitle = t => t.title || t.anchor?.title || '';
-const WK_WHO = {agent: ['your agent', 'Your agent can do this in a session'], you: ['you', 'Only you can do this'],
+const WK_WHO = {agent: ['agent', 'An agent can do this in a session'], you: ['you', 'Only you can do this'],
   parent: ['tracker', 'A step in the system the item lives in: Pensieve only reads']};
 const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
 async function openThread(tid, title) {
@@ -4144,7 +4141,6 @@ function wkSections(t) {
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
   try { S.work.data = await api(`/api/threads?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
-  if (first) S.work.asked.clear();
   if (S.view === 'work') renderWork();
   if (S.work.q.trim()) wkSearch();  // the threads changed: so can what matches
 }
@@ -4200,7 +4196,7 @@ function wkWorking(t) {
 }
 // `cluster`: the branch of the cluster the card sits in, whose header says where the work is
 function wkCard(t, d, cluster = '') {
-  const n = d.notes[t.id], open = S.work.view === 'expanded' ? !S.work.collapsed.has(t.id) : S.work.details.has(t.id);
+  const open = S.work.view === 'expanded' ? !S.work.collapsed.has(t.id) : S.work.details.has(t.id);
   const when = cluster ? wkOwnTime(t) : t.updated;  // in a cluster, the session's own time: the cards go by it
   const head = `<header class="wk-head">
       <div class="wk-hcol"><h4 class="wk-title" title="${esc(t.title)}">${esc(wkTitle(t))}</h4>${cluster ? wkShare(t, cluster) : wkWorking(t)}</div>
@@ -4263,13 +4259,16 @@ function wkWrapSteps(tasks) {
 }
 function wkWrapUp(c) {
   const key = `${c.state}|${c.branch}`, open = S.work.wrap === key, steps = wkWrapSteps(c.tasks), ids = c.tasks.map(t => t.id).join(',');
+  const yours = steps.filter(s => s.who === 'you').length, agents = steps.filter(s => s.who === 'agent').length, rest = steps.length - yours - agents;
+  const sub = steps.length ? [agents && `${agents} for the agent`, yours && `${yours} for you`, rest && `${rest} in the tracker`].filter(Boolean).join(' · ') : '';
   const menu = !open ? '' : `<div class="wk-menu wk-wrap-menu" role="menu">
-      <div class="wk-wrap-h">To close the work on ${WK_IC.branch}${esc(c.branch)}</div>
+      <div class="wk-wrap-h">To close the work on <span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span></div>
+      ${sub ? `<div class="wk-wrap-sub">${plural(steps.length, 'step')} left · ${esc(sub)}</div>` : ''}
       ${steps.length ? steps.map(s => `<div class="wk-step"><span class="box" aria-hidden="true"></span>
         <span class="what">${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</span>
-        ${s.who ? `<span class="who">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join('') : '<div class="wk-step muted">Nothing left: every step is done</div>'}
+        ${s.who ? `<span class="who" title="${esc(WK_WHO[s.who]?.[1] || '')}">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join('') : '<div class="wk-step muted">Nothing left: every step is done</div>'}
       <div class="wk-menu-foot">${WRAP_STATES.has(c.state)
-        ? `<button class="wk-btn primary" data-wk-wrapup-start="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does the agent's steps, asking you before each of yours">${WK_IC.spark}Start a session to wrap up</button>`
+        ? `<span class="muted">The agent does its steps and asks you before yours</span><button class="wk-btn primary" data-wk-wrapup-start="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does the agent's steps, asking you before each of yours">${WK_IC.spark}Start a session to wrap up</button>`
         : `<span class="muted">${esc(wkModel(c.state).label)}: nothing to wrap up</span>`}</div></div>`;
   return `<span class="wk-wrap"><button class="wk-btn ${open ? 'on' : ''}" data-wk-wrap="${esc(key)}" aria-haspopup="menu" aria-expanded="${open}" title="The steps left to close the work on this branch">Wrap up<span class="wk-n">${steps.length}</span></button>${menu}</span>`;
 }
@@ -4310,15 +4309,14 @@ async function patchWork(ids = [], removed = []) {
   if (!d || S.work.hits) return loadWork();
   const page = () => wkPageTasks().map(t => `${t.id}:${t.state}`).join('\n');
   const before = page();
-  let got = {threads: [], notes: {}, history: {}};
+  let got = {threads: [], history: {}};
   if (ids.length) {
     try { got = await api(`/api/threads?days=${S.work.days}&ids=${enc(ids.join(','))}`); } catch { return loadWork(); }
   }
   if (S.work.data !== d) return;  // a full load came in meanwhile
   const drop = new Set([...ids, ...removed]);
   d.threads = d.threads.filter(t => !drop.has(t.id)).concat(got.threads).sort(wkOrder(d));
-  for (const i of drop) { delete d.notes[i]; if (d.history) delete d.history[i]; }
-  Object.assign(d.notes, got.notes || {});
+  for (const i of drop) if (d.history) delete d.history[i];
   d.history = Object.assign(d.history || {}, got.history || {});
   S.work.patched = (S.work.patched || 0) + 1;
   const el = $('#work');

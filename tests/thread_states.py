@@ -22,7 +22,7 @@ def task(quiet_days=0, **extra):
 
 
 def state_of(t):
-    ts.apply(t, {}, None)
+    ts.apply(t, None)
     return t["state"]
 
 
@@ -55,18 +55,18 @@ def run():
     results.append(check("a session that contributed to a merged PR is closed",
                          state_of(task(1, contributed=done)), "closed"))
     t = task(0, contributed=gave)
-    ts.apply(t, {}, None)
+    ts.apply(t, None)
     results.append(check("the reason says it contributed", t["state_why"].startswith("contributed to"), True))
     results.append(check("no sink, quiet 5 days: forgotten", state_of(task(5)), "forgotten"))
     results.append(check("no sink, quiet 30 days: forgotten", state_of(task(30)), "forgotten"))
 
     manual = ts.StateChange("t1", "forgotten", "user", "parked", NOW - 1)
     held = task(0, prs=open_pr, updated=NOW - 5)
-    ts.apply(held, {}, manual)
+    ts.apply(held, manual)
     results.append(check("a state set by hand holds while nothing newer happens",
                          held["state"], "forgotten"))
     newer = task(0, prs=open_pr, updated=NOW + 60)
-    ts.apply(newer, {}, manual)
+    ts.apply(newer, manual)
     results.append(check("new activity after a state set by hand: automatic again",
                          newer["state"], "open"))
 

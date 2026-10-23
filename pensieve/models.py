@@ -427,8 +427,8 @@ class CardDone:
 
 @dataclass(frozen=True)
 class CardDoneCheck:
-    """The last done check of a card (work.check_done): the note's time, its items and the commits it saw. The same
-    key asks the model nothing again."""
+    """The last done check of a card, from the versions that had model-written notes: its key held the note's time,
+    its items and the commits it saw. Kept for the table; nothing writes it now."""
     __table__ = "card_done_checks"
     card_id: str
     key: str

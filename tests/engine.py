@@ -89,23 +89,22 @@ def test_default_engine():
 FAKE_AGENT = """import json, sys
 text = sys.stdin.read()
 assert text.startswith("[pensieve text job]"), "no mark"
-print(json.dumps(dict(title="Retry payments", problem="p", goal="g", state="s", next="n", question="",
-                      resolved=False, evidence=[], goals=[])))
+print(json.dumps(dict(summary="A session that retried payments.", tags=["payments", "retries"])))
 """
 
 
-def test_the_worker_drains_the_note_queue():
-    """The essential path: thread notes and summaries that wait in the queue are answered in the background by the
-    worker that the app starts, with no agent session, and the next ask gets the answer."""
+def test_the_worker_drains_the_job_queue():
+    """The essential path: summaries that wait in the queue are answered in the background by the worker that the
+    app starts, with no agent session, and the next ask gets the answer."""
     import asyncio
     import inspect
-    from pensieve import agent_jobs, llm, server, work
+    from pensieve import agent_jobs, llm, server, summarize
     assert "engine_worker()" in inspect.getsource(server.lifespan), "the app no longer starts the text engine"
     agent = Path(os.environ["PENSIEVE_DATA"]) / "fake_agent.py"
     agent.write_text(FAKE_AGENT)
     settings.update({"setup_done": True, "text_engine": "cli", "cli_command": f"{sys.executable} {agent}",
                      "engine_rate": 600})
-    asks = [dict(prompt=f"Write the note of thread {i}", schema=work.NOTE_SCHEMA, kind="thread note") for i in range(4)]
+    asks = [dict(prompt=f"Summarize session {i}", schema=summarize.SESSION_SCHEMA, kind="session summary") for i in range(4)]
     asks.append(dict(prompt="Summarize this session", schema=None, kind="session summary"))
     for a in asks:
         try:
@@ -128,7 +127,7 @@ def test_the_worker_drains_the_note_queue():
     assert not agent_jobs.counts(), f"jobs left: {agent_jobs.counts()}"
     for a in asks:
         got = llm.complete(a["prompt"], max_tokens=700, schema=a["schema"], kind=a["kind"])
-        assert (got["title"] if a["schema"] else json.loads(got)["title"]) == "Retry payments"
+        assert (got["summary"] if a["schema"] else json.loads(got)["summary"]) == "A session that retried payments."
 
 
 def test_one_builtin_server():

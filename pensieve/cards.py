@@ -42,27 +42,22 @@ def _num(url: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def build(t: dict, note: dict, hist: list[dict]) -> dict:
-    """The local context-card/1 object of a task. Its core has the same validation as the text card: sentences
-    that git or GitHub contradict are marked, and the last session's own question wins over the model's."""
-    core, changed = work.reconcile(note, t) if note else ({}, [])
+def build(t: dict, hist: list[dict]) -> dict:
+    """The local pensieve-thread/2 object of a task: its state, the last session's open question, what changed
+    since that session, what is left, its resources, last words, timeline and state history."""
     last = max((s["updated"] for s in t.get("sessions", [])), default=0)
     since = [f"PR #{_num(p['url'])} merged {_iso(p['merged_at'])[:10]}" for p in t["prs"] + t.get("branch_prs", [])
              if last and (p.get("merged_at") or 0) > last]
-    since += [c for c in changed if not c.startswith("PR #")]
     asked = work.asked_question(t)
-    if asked:
-        core["question"] = asked
-    if core:
-        core["as_of"] = _iso(last)
+    core = dict(question=asked, as_of=_iso(last)) if asked else {}
     root = next((p["path"] for p in t.get("places", []) if p.get("git")), "")
     card = dict(
-        schema=SCHEMA, id=t["id"], title=cardtext.card_title(t, note), label=t["title"],
+        schema=SCHEMA, id=t["id"], title=cardtext.card_title(t), label=t["title"],
         kind=t.get("kind", "work"), locality="local",
         state=dict(value=t["state"], why=t.get("state_why", ""), set_by=t.get("state_by") or "auto"),
         made_at=_iso(datetime.now().timestamp()), last_activity=_iso(t["updated"]), last_session=_iso(last),
         origin=_clean(dict(by=work._git(root, "config", "user.name", ttl=3600) if root else "", generator=_version())),
-        core=core, since_last_session=since, outdated=changed,
+        core=core, since_last_session=since,
         left=[dict(step=x["text"], who=x["how"], ref=x.get("ref") or None) for x in t.get("left") or []],
         resources=[r.to_dict() for r in res.collect(t)],
         last_words=work._clean_words(t.get("last_words") or ""),
@@ -109,10 +104,9 @@ def render_agent(card: dict) -> str:
     read it. Agents follow ids, URLs and commands; they don't need layout."""
     c = dict(card, timeline=card.get("timeline", [])[:5], history=card.get("history", [])[-3:])
     c["resources"] = [{k: v for k, v in r.items() if k != "relevance"} for r in card.get("resources", [])]
-    head = ("Pensieve thread (pensieve-thread/2). 'core' (problem, goal, state, next, question) is a model's note as of "
-            "core.as_of; a sentence marked [outdated: …] is wrong now. Each resource has a reach: git, mcp and public "
-            "ones can be opened with their ref; local and restricted ones are summarized. 'handoff' says how to start "
-            "and how to get the live state. "
+    head = ("Pensieve thread (pensieve-thread/2). 'core.question' is what the last session asked and nobody answered. "
+            "'left' is what closes the thread, with who acts. Each resource has a reach: git, mcp and public ones can "
+            "be opened with their ref. 'handoff' says how to start and how to get the live state. "
             + ("'local' works only on this machine." if card.get("locality") == "local" else "Shared: start with 'ask' and handoff.start."))
     return head + "\n" + json.dumps(_clean(c), ensure_ascii=False, separators=(",", ":"))
 
@@ -245,9 +239,11 @@ def _card_html(card: dict) -> str:
         out.append(f'<div class="box req"><b>{e(by or "The sender")} asks you</b>{e(card["ask"])}</div>')
     if core.get("question"):
         out.append(f'<div class="box ask"><b>Waiting on {e(by) if shared and by else "you"}</b>{e(core["question"])}</div>')
-    rows = [f"<dt>{label}</dt><dd>{_marked(core[k])}</dd>" for k, label in work.CORE_LABELS[:4] if core.get(k)]
-    if rows:
-        out += [f"<h2>The work · as of {e(day(core.get('as_of')))}</h2>", f"<dl>{''.join(rows)}</dl>"]
+    left = card.get("left") or []
+    if left:
+        who = {"agent": "your agent", "you": "you", "parent": "the tracker"}
+        out += ["<h2>Left to close it</h2>", "<ul>" + "".join(
+            f"<li>{e(x['step'])} <span class=\"note\">{e(who.get(x.get('who'), x.get('who') or ''))}</span></li>" for x in left) + "</ul>"]
     if card.get("since_last_session"):
         out += ["<h2>Since then</h2>", "<ul>" + "".join(f"<li>{e(x)}</li>" for x in card["since_last_session"]) + "</ul>"]
     h, loc = card.get("handoff", {}), card.get("local", {})

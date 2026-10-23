@@ -40,15 +40,10 @@ def snapshot_id(m: dict) -> str:
     return hashlib.sha1("\n".join(sorted(m)).encode()).hexdigest()[:12]
 
 
-def goal_text(t: dict, note: dict | None = None) -> str:
-    """The text that stands for a snapshot's goal: the note's problem and goal when there is a note, or else the
-    title, the ticket titles and what its sessions were about."""
-    from pensieve import work
-    core = work.core(note or {})
-    if core.get("problem") or core.get("goal"):
-        return f"{t['title']}. {core.get('problem', '')} {core.get('goal', '')}".strip()
+def goal_text(t: dict) -> str:
+    """The text that stands for a snapshot's goal: the title, the ticket titles and what its sessions were about."""
     parts = [t["title"]] + [k["title"] for k in t["tickets"] if k.get("title")]
-    parts += [s["title"] for s in t["sessions"][:4]] + [re.sub(r"\s+", " ", t.get("last_summary") or "")[:400]]
+    parts += [s["title"] for s in t["sessions"][:4]]
     return ". ".join(p for p in parts if p)[:1200]
 
 
@@ -185,7 +180,7 @@ def load(rules: Rules | None = None) -> Linker:
     return linker
 
 
-def snapshot(t: dict, vec: np.ndarray, note: dict | None = None) -> dict:
+def snapshot(t: dict, vec: np.ndarray) -> dict:
     m = members(t)
-    return dict(snapshot=snapshot_id(m), members=m, vec=vec, goal=goal_text(t, note), task=t["id"],
+    return dict(snapshot=snapshot_id(m), members=m, vec=vec, goal=goal_text(t), task=t["id"],
                 title=t["title"], repos=t["repos"])

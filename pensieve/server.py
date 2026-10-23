@@ -475,8 +475,8 @@ async def enricher():
 
 
 async def card_keeper():
-    """Every history.CHECK seconds: mark what later commits did (work.check_done), link the cards to threads
-    (history.current) and save the ones that changed; once a day, prune the history."""
+    """Every history.CHECK seconds: link the cards to threads (history.current) and save the ones that changed;
+    once a day, prune the history."""
     from pensieve import history, work
     await asyncio.sleep(60)  # after the first index pass has settled
     history.current, pruned = history.Keeper(store), 0.0
@@ -1638,23 +1638,17 @@ def remove_mcp_server(path: str):
 
 @app.get("/api/threads")
 def get_threads(days: int = 30, ids: str = ""):
-    """The Threads tab: the threads with their state, their data points from every source, each one's note, and its
-    saved history (id and number of saved versions) once the keeper has linked it. With `ids` (comma-separated),
-    only those threads: the page asks for them after a `thread` event."""
+    """The Threads tab: the threads with their state, their data points from every source, and each one's saved
+    history (id and number of saved versions) once the keeper has linked it. With `ids` (comma-separated), only
+    those threads: the page asks for them after a `thread` event."""
     from pensieve import history
     only = set(_csv(ids)) if ids else None
     ts = work.tasks(store, days, ids=only)
-    have = work.notes()
-    stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
     of = {t["id"]: history.thread_of(t["id"]) for t in ts}
     if only is None:
-        work.warm_card_search(ts, have)
-    # each note's core (problem, goal, state, next, question); notes in an older format show until written again
-    return dict(threads=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
-                                             "stale": t["id"] in stale}
-                                   for t in ts if work.core(have.get(t["id"], {}))},
-                history={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
-                states=task_states.models(), writing=status.get("work_notes") or [])
+        work.warm_card_search(ts)
+    return dict(threads=ts, history={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
+                states=task_states.models())
 
 
 @app.get("/api/threads/search")
@@ -1662,7 +1656,7 @@ def search_threads(q: str, days: int = 30):
     """The threads of the last `days` days that match `q`, best first: {results: [{id, score}]}. Meaning words rank
     the threads, "exact phrases" and -words filter them."""
     ts = work.tasks(store, days)
-    return dict(results=work.search_cards(ts, work.notes(), q))
+    return dict(results=work.search_cards(ts, q))
 
 
 @app.get("/api/thread")
@@ -1695,7 +1689,7 @@ def _local_card(task_id: str, days: int) -> dict:
     t = next((x for x in work.tasks(store, days) if x["id"] == task_id), None)
     if not t:
         raise HTTPException(404, f"no thread {task_id}")
-    return cards.build(t, work.notes().get(task_id, {}), task_states.history(store, task_id))
+    return cards.build(t, task_states.history(store, task_id))
 
 
 def _repo_rows():

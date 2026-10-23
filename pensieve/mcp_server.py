@@ -347,7 +347,6 @@ def _work_for_prompt(text: str, card_format: str = "text") -> tuple[str, str]:
     ("threads", the thread lines for a prompt about all of the user's work: a standup, what is still open), or
     ("", ""); within the current scope."""
     from pensieve import task_states, work
-    have = work.notes()
     if work.LIST_WORDS.search(text):
         standup = work.STANDUP_WORDS.search(text)
         ts = [t for t in _tasks_in_scope() if _material(t) and (standup or t["state"] in ("open", "loose_ends", "todo"))]
@@ -361,15 +360,15 @@ def _work_for_prompt(text: str, card_format: str = "text") -> tuple[str, str]:
                    "\"updated:>=<start date>\"` (a PR opened before the period can merge in it). Threads without a PR "
                    "(a repair, an investigation) are work done too."
                    if standup else "for every open PR, also run `gh pr list --author @me --state open`."))
-        return ("threads", head + "\n" + "\n".join(work.brief(t, have.get(t["id"], {})) for t in ts)) if ts else ("", "")
-    t = work.card_for_prompt(_tasks_in_scope(), text, have)
+        return ("threads", head + "\n" + "\n".join(work.brief(t) for t in ts)) if ts else ("", "")
+    t = work.card_for_prompt(_tasks_in_scope(), text)
     if not t:
         return "", ""
     hist = task_states.history(_c()["store"], t["id"])
     if card_format == "json":
         from pensieve import cards
-        return "thread", cards.render_agent(cards.build(t, have.get(t["id"], {}), hist))
-    return "thread", work.compact(t, have.get(t["id"], {}), hist)
+        return "thread", cards.render_agent(cards.build(t, hist))
+    return "thread", work.compact(t, hist)
 
 
 def _material(t: dict) -> bool:
@@ -743,13 +742,12 @@ def threads(state: str = "open,loose_ends", query: str = "", limit: int = 10) ->
     up. At a natural pause, offer the user to close the first one."""
     from pensieve import history, work
     want = None if state.strip() == "all" else {task_states_name(s) for s in state.split(",") if s.strip()}
-    have = work.notes()
     ts = [t for t in _tasks_in_scope() if not want or t["state"] in want]
-    ts = work.matching(ts, query, have) if query.strip() else sorted((t for t in ts if _material(t)), key=_closest)
+    ts = work.matching(ts, query) if query.strip() else sorted((t for t in ts if _material(t)), key=_closest)
     out = []
     for t in ts[:max(1, min(limit, 50))]:
         th = history.thread_of(t["id"])
-        out.append(work.brief(t, have.get(t["id"], {})) + (f" · {th}" if th else ""))
+        out.append(work.brief(t) + (f" · {th}" if th else ""))
         out += [f"  - {x['text']} ({WHO.get(x['how'], x['how'])}{', ' + x['ref'] if x.get('ref') else ''})"
                 for x in t.get("left") or []]
     return "\n".join(out) or f"No threads in state {state}."
@@ -786,7 +784,7 @@ def thread(id: str, full: bool = False, version: str = "") -> str:
     t = next((x for x in _tasks_in_scope() if x["id"] == tid), None)
     if not t:
         raise KeyError(f"{id}: not a current thread; thread(id, version=\"list\") lists its saved versions")
-    text = (work.detail if full else work.compact)(t, work.notes().get(tid, {}), task_states.history(_c()["store"], tid))
+    text = (work.detail if full else work.compact)(t, task_states.history(_c()["store"], tid))
     th = history.thread_of(tid)
     return text + (f"\nThread: {th} · {history.saves(th)} saved versions (thread(id, version=\"list\"))" if th else "")
 
@@ -837,9 +835,9 @@ def thread_page(id: str = "", branch: str = "") -> dict:
     in ~/Downloads. The page holds the threads' JSON too, so agents read it as data. Give `id` (a thread) or `branch`
     (its name). Returns the file's path and the thread ids on it. To send it, attach the file with your own tool and
     write your own message: the user approves what you send."""
-    from pensieve import cards, history, task_states, work
+    from pensieve import cards, history, task_states
     store = _c()["store"]
-    build = lambda t: cards.build(t, work.notes().get(t["id"], {}), task_states.history(store, t["id"]))
+    build = lambda t: cards.build(t, task_states.history(store, t["id"]))
     if branch:
         ts = _branch_threads(branch)
         if not ts:
@@ -868,11 +866,11 @@ def set_thread_state(id: str, state: str, reason: str = "") -> dict:
 
 @tool()
 def pending_work(limit: int = 5, kind: str = "") -> str:
-    """Pensieve's text jobs that wait for an answer (Pensieve runs no text model of its own): thread notes, session summaries, topic names, insights, team
-    summaries and collection plans. Call it when the user asks you to do Pensieve's pending work. For each job, follow
-    its instructions, answer from its data only, and send the answer with submit_work. kind: one kind only, e.g.
-    "thread note". The jobs are yours for 10 minutes: other sessions get different ones. The list is empty when nothing
-    waits."""
+    """Pensieve's text jobs that wait for an answer (Pensieve runs no text model of its own): session summaries, topic
+    names, insights, team summaries and collection plans. Call it when the user asks you to do Pensieve's pending
+    work. For each job, follow its instructions, answer from its data only, and send the answer with submit_work.
+    kind: one kind only, e.g. "session summary". The jobs are yours for 10 minutes: other sessions get different
+    ones. The list is empty when nothing waits."""
     from pensieve import agent_jobs
     jobs = agent_jobs.pending(max(1, min(limit, 20)), kind, agent_conn.get() or agent_client.get() or "")
     left = sum(agent_jobs.counts().values())
