@@ -148,6 +148,10 @@ async def watcher():
             status.update(indexing=False, message="waiting for setup")
             await _wait(wake_files, config.POLL_SECONDS)
             continue
+        if settings.get("mode") != "developer":  # threads mode indexes no files: the threads read the transcripts
+            status.update(indexing=False, message="idle")
+            await _wait(wake_files, config.POLL_SECONDS)
+            continue
         try:
             d = watch.take()
             if sorted(str(p) for p in files.roots()) != sorted(watch.folders):  # a folder appeared or went away
@@ -294,7 +298,7 @@ async def upstream_watcher():
 async def repo_watcher():
     last_full = 0
     while True:
-        if not settings.get("setup_done"):
+        if not settings.get("setup_done") or settings.get("mode") != "developer":
             await _wait(wake_repos, 30)
             continue
         try:
@@ -639,7 +643,8 @@ async def model_switcher():
     """Embeds the index with the model chosen in Settings, in the background (see reembed). Ends in a restart."""
     loop = asyncio.get_running_loop()
     while True:
-        if settings.get("setup_done") and reembed.wanted() != config.EMBED_MODEL or store.meta("next_model"):
+        if settings.get("setup_done") and settings.get("mode") == "developer" and reembed.wanted() != config.EMBED_MODEL \
+                or store.meta("next_model"):
             try:
                 if reembed.switch_empty(store, [store, repos, files]):
                     broadcast({"type": "status", **status})
@@ -1420,19 +1425,23 @@ class SetupReq(BaseModel):
     embed_model: str | None = None  # the search model (config.EMBED_MODELS)
     content: list[str] | None = None  # images, video, audio: read by content (needs EmbeddingGemma 2)
     text_engine: str | None = None  # what writes notes and summaries (onboarding.engines)
+    mode: str | None = None  # session (threads only, no index) or developer; default: developer when a repo is chosen
 
 
 @app.post("/api/setup")
 async def post_setup(req: SetupReq):
-    """Index exactly the chosen sources: every other candidate is switched off, then indexing starts."""
+    """Choose the sources and the mode: every other candidate is switched off. In developer mode indexing starts; in
+    session mode the threads read the transcripts themselves and nothing is indexed."""
     try:
         res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.embed_model, req.content,
-                                                  req.text_engine))
+                                                  req.text_engine, req.mode))
     except ValueError as e:
         raise HTTPException(400, str(e))
     wake_files.set()
-    wake_repos.set()
-    wake_model.set()
+    wake_sessions.set()
+    if settings.get("mode") == "developer":
+        wake_repos.set()
+        wake_model.set()
     return res
 
 

@@ -2299,10 +2299,10 @@ const ENERGY_IC = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M13 
 const SETUP_STEPS = ['about', 'profile', 'look', 'choose', 'ai', 'start'];
 const SETUP_ADD = {files: 'Add folder…', repos: 'Add repo…', agents: 'Add session folder…'};
 const setupState = {step: 'about', guide: null, profiles: new Set(['session']), cands: null, chosen: new Set(), busy: false, err: null, adding: null};
-async function openSetup() {
+async function openSetup(mode = '') {  // with a mode: start at the mode step with it picked
   let el = $('#setupsheet');
   if (!el) { el = document.createElement('div'); el.id = 'setupsheet'; el.className = 'setup-sheet'; document.body.appendChild(el); }
-  Object.assign(setupState, {step: 'about', profiles: new Set(['session']), cands: null, chosen: new Set(), busy: false, err: null, adding: null});
+  Object.assign(setupState, {step: mode ? 'profile' : 'about', profiles: new Set([mode || 'session']), cands: null, chosen: new Set(), busy: false, err: null, adding: null});
   el.innerHTML = '<div class="setup-card"><div class="spinner" style="margin:24px auto"></div></div>';
   try { setupState.guide = await api('/api/setup?scan=0'); }
   catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
@@ -2323,8 +2323,9 @@ async function setupScan(extra) {
 function setupGo(step) { setupState.step = step; setupState.err = null; renderSetup(); $('#setupsheet')?.scrollTo(0, 0); }
 function renderSetup() {
   const el = $('#setupsheet'), g = setupState.guide; if (!el || !g) return;
-  const st = setupState, step = st.step, n = SETUP_STEPS.indexOf(step);
-  const dots = `<div class="setup-dots">${SETUP_STEPS.map((s, i) => `<i class="${i < n ? 'done' : i === n ? 'on' : ''}"></i>`).join('')}</div>`;
+  const st = setupState, step = st.step, quick = !st.profiles.has('developer');  // threads mode: two steps, no index
+  const steps = quick ? SETUP_STEPS.slice(0, 2) : SETUP_STEPS, n = steps.indexOf(step);
+  const dots = `<div class="setup-dots">${steps.map((s, i) => `<i class="${i < n ? 'done' : i === n ? 'on' : ''}"></i>`).join('')}</div>`;
   const cancel = g.done ? '<button class="btn" data-setup-cancel>Cancel</button>' : '';
   const btns = (next, label, ok = true) => `${st.err ? `<p class="err">${esc(st.err)}</p>` : ''}<div class="setup-btns">${cancel}<span style="flex:1"></span>${n > 0 ? '<button class="btn" data-setup-back>Back</button>' : ''}
     <button class="btn primary" data-setup-next="${next}" ${ok && !st.busy ? '' : 'disabled'}>${esc(label)}</button></div>`;
@@ -2335,11 +2336,11 @@ function renderSetup() {
   if (step === 'about') {
     body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg>
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-      <p class="sub">Setup takes a minute. Pick a mode. Developer mode also asks what to index and which search model to use.</p>${btns('profile', 'Get started')}`;
+      <p class="sub">Threads mode is ready in two clicks and indexes nothing. Developer mode also asks what to index and which search model to use.</p>${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
-    body = `<h1>Choose a mode</h1><p class="sub">Threads mode reads only your agent sessions. Developer mode also indexes your repos and files, so sessions get richer context.</p>
+    body = `<h1>Choose a mode</h1><p class="sub">Threads mode reads your agent sessions as they are, with git and gh: no index, no model. Developer mode also indexes your repos and files for search and the Map.</p>
       <div class="setup-profiles" role="radiogroup">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="radio" aria-checked="${st.profiles.has(p.id)}">
-        <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${btns('look', 'Next', st.profiles.size > 0)}`;
+        <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${quick ? btns('quick', st.busy ? 'Starting…' : 'Start Threads mode') : btns('look', 'Next', st.profiles.size > 0)}`;
   } else if (step === 'look') {
     body = `<h1>Allow Pensieve to look</h1><p class="sub">To suggest sources, Pensieve looks in these places. macOS may ask you to allow access to some folders. Pensieve reads them only on this Mac, and nothing is indexed until you choose.</p>
       ${setupCats().map(c => `<div class="setup-cat"><h3>${esc(c.label)}</h3><p>${esc(c.reads)}</p></div>`).join('')}
@@ -2375,7 +2376,7 @@ function renderSetup() {
   }
   el.innerHTML = `<div class="setup-card">${dots}${body}</div>`;
   $('[data-setup-cancel]', el)?.addEventListener('click', () => el.remove());
-  $('[data-setup-back]', el)?.addEventListener('click', () => setupGo(SETUP_STEPS[n - 1]));
+  $('[data-setup-back]', el)?.addEventListener('click', () => setupGo(steps[n - 1]));
   $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { st.profiles = new Set([b.dataset.setupProf]); st.cands = null; st.chosen.clear(); renderSetup(); });
   $$('[data-setup-id]', el).forEach(c => c.onchange = () => { st.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
   $$('[data-setup-embed]', el).forEach(b => b.onclick = () => {
@@ -2399,20 +2400,27 @@ function renderSetup() {
   $$('[data-setup-addgo]', el).forEach(b => b.onclick = () => setupAdd(b.dataset.setupAddgo, $(`[data-setup-addin]`, el).value.trim()));
   $('[data-setup-next]', el)?.addEventListener('click', async e => {
     const next = e.currentTarget.dataset.setupNext;
-    if (next === 'choose' && !st.cands) {
+    if ((next === 'choose' || next === 'quick') && !st.cands) {
       st.busy = true; renderSetup();
       try { await setupScan(); } catch (err) { st.busy = false; st.err = 'Could not look for sources: ' + err.message; return renderSetup(); }
       st.busy = false;
     }
-    if (next !== 'go') return setupGo(next);
+    if (next === 'quick') {  // threads mode: every agent folder found, no index, done
+      st.cands.flatMap(c => c.items).forEach(i => { if (i.available && i.id.startsWith('agents/')) st.chosen.add(i.id); });
+      if (!st.chosen.size) { st.err = 'No agent sessions found on this Mac. Run an agent once, or add its folder in Settings → Sources.'; return renderSetup(); }
+    } else if (next !== 'go') return setupGo(next);
+    const mode = quick ? 'session' : 'developer';
     st.busy = true; renderSetup();
-    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({sources: [...st.chosen], embed_model: st.embed, content: [...st.kinds], text_engine: st.engine})});
+    const body = quick ? {sources: [...st.chosen], mode} : {sources: [...st.chosen], embed_model: st.embed, content: [...st.kinds], text_engine: st.engine, mode};
+    const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     st.busy = false;
-    if (!r.ok) { st.err = typeof j.detail === 'string' ? j.detail : 'Could not start indexing'; return renderSetup(); }
+    if (!r.ok) { st.err = typeof j.detail === 'string' ? j.detail : 'Could not finish the setup'; return renderSetup(); }
     el.remove(); S.status.setup_done = true;
+    await loadSettings(true); applyMode(mode);
+    if (quick) { await setView('work'); loadWork(true); toast('Threads mode is on: your sessions are read now'); return; }
     S.setTab = 'sources'; store.set('setTab', 'sources');
-    await loadSettings(true); await setView('settings'); renderSettings(); pollStatus();
+    await setView('settings'); renderSettings(); pollStatus();
     toast('Indexing started');
   });
 }
@@ -2943,9 +2951,8 @@ async function renderSettings() {
   if (tab === 'general') { bindGeneral(); $('#set-Setup [data-open-setup]')?.addEventListener('click', openSetup); $('#set-Setup [data-restart]')?.addEventListener('click', restartServer); }
   if (tab === 'usage') bindUsage();
   if (tab === 'mode') $$('[data-mode-pick]', el).forEach(b => b.onclick = () => {
-    if (!S.set) return;
-    S.set.draft.mode = b.dataset.modePick;
-    saveSettings().then(() => applyMode(S.set.draft.mode));
+    if (!S.set || b.dataset.modePick === (S.set.draft.mode || 'session')) return;
+    openSetup(b.dataset.modePick);  // a new mode chooses its sources again: the setup runs from the mode step
   });
   if (tab === 'feedback') renderFeedback();
   const upd = $('[data-upd]', el);

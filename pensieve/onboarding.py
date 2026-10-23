@@ -11,8 +11,9 @@ from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
     "Pensieve follows your work across AI agent sessions, and helps you organize and track all of your ideas.",
-    "Threads mode, the default, reads your agent sessions and builds threads from them. Nothing else is indexed.",
-    "Developer mode also indexes your git repos and files, and unlocks the Map, People and Insights.",
+    "Threads mode, the default, reads your agent sessions as they are, with git and gh. No index, no model, "
+    "ready in two clicks.",
+    "Developer mode also indexes your git repos and files, and unlocks search, the Map, People and Insights.",
     "Everything runs on this Mac. Nothing is uploaded.",
 ]
 
@@ -20,12 +21,11 @@ ABOUT = [
 # git repos and files into an index, so that sessions get richer context.
 PROFILES = [
     dict(id="session", label="Threads mode", categories=["agents"],
-         description="Reads only your historic agent sessions (Claude Code, Codex, Qwen Code) and builds threads from "
-                     "them. Nothing else is read or indexed."),
+         description="Reads your agent sessions (Claude Code, Codex, Qwen Code) as they are, with git and gh, and "
+                     "builds threads from them. No index, no model: ready in two clicks."),
     dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
-         description="Also reads your git repos and your files into an index, so sessions get richer context. Unlocks "
-                     "the Map, People and Insights. It is more compute intensive: indexing uses the Mac's GPU and "
-                     "takes a while."),
+         description="Also reads your git repos and your files into an index, for search, the Map, People and "
+                     "Insights. It is more compute intensive: indexing uses the Mac's GPU and takes a while."),
 ]
 
 ENERGY_NOTE = ("Indexing uses a lot of power: it runs the embedding model on your Mac's GPU until it finishes, so the Mac "
@@ -248,16 +248,20 @@ def index(path: str, cwd=None) -> dict:
             else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
 
 
-def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_engine=None) -> dict:
+def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_engine=None, mode=None) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
     switched off, then indexing starts. Categories that were never scanned are switched off whole. `embed_model` picks
     the search model (guide()["embed_models"]).
     On an empty index the search model changes at once; otherwise the switch runs in the background (reembed).
     `kinds`: which of images, video and audio to read by content (content.KINDS); the others are found by name. None
     leaves them as they are. They need the EmbeddingGemma 2 search model: with kinds and no `embed_model`, that
-    model is chosen. Their model parts download in the background. `text_engine`: what writes notes (engines())."""
+    model is chosen. Their model parts download in the background. `text_engine`: what writes notes (engines()).
+    `mode`: session (threads only: the agent sources, no index) or developer; by default developer when a repo is
+    chosen."""
     if chosen is None and not recommended:
         raise ValueError("Send the source ids to index, or recommended: true")
+    if mode not in (None, "session", "developer"):
+        raise ValueError("mode must be session or developer")
     if text_engine:
         from pensieve import engine
         settings.update({"text_engine": text_engine, **({"cli_command": settings.get("cli_command") or
@@ -300,7 +304,7 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     # added to the repos setting: big repos, which discovery skips, and repos found only in agent transcripts
     big = [i["id"][6:] for i in items if (i.get("big") or i.get("agents")) and i["id"] in chosen]
     changes = {"disabled": off, "repos": list(dict.fromkeys(settings.get("repos") + big)), "setup_done": True,
-               "mode": "developer" if any(c.startswith("repos/") for c in chosen) else "session"}
+               "mode": mode or ("developer" if any(c.startswith("repos/") for c in chosen) else "session")}
     settings.update(changes)
     _cache.clear()
     _scanned.clear()

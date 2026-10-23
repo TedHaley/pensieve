@@ -1059,14 +1059,16 @@ def setup_add_source(kind: str, path: str) -> dict:
 
 @tool()
 def setup_start(sources: list[str] | None = None, recommended: bool = False, content: list[str] | None = None,
-                text_engine: str | None = None) -> dict:
+                text_engine: str | None = None, mode: str | None = None) -> dict:
     """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
-    ones); everything else is switched off. `content`: which of "images", "video" and "audio" to read by what they show or say (this selects the
-    EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by name.
-    `text_engine`: the id of the engine from setup_guide's `engines` that the user chose.
-    Indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left, counting only what isn't
-    indexed yet), the `energy` note when minutes > 1, and `next` (how to search and see the map)."""
-    res = onboarding.start(sources, recommended, kinds=content, text_engine=text_engine)
+    ones); everything else is switched off. `mode`: "session" (threads mode: the agent sources only, read as they
+    are, no index and no model) or "developer" (the repos and files are indexed too); by default developer when a
+    repo is chosen. `content`: which of "images", "video" and "audio" to read by what they show or say (this selects
+    the EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by
+    name. `text_engine`: the id of the engine from setup_guide's `engines` that the user chose.
+    In developer mode indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left,
+    counting only what isn't indexed yet), the `energy` note when minutes > 1, and `next`."""
+    res = onboarding.start(sources, recommended, kinds=content, text_engine=text_engine, mode=mode)
     from pensieve import server
     server.watch.force_full()
     return res
