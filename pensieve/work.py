@@ -992,14 +992,14 @@ def _artifacts(s: dict, links: list[str], docs=(), read_docs=(), limit: int = 20
     return out[:limit]
 
 
-AGENT_DIRS = [str(Path.home() / d) for d in (".claude", ".codex", ".gemini", ".qwen", ".agents", ".cursor", ".pensieve")]
+AGENT_DIRS = {".claude", ".codex", ".gemini", ".qwen", ".agents", ".cursor", ".pensieve"}
 
 
 def _agent_own(path: str) -> bool:
-    """An agent's own file, not context about the work: its memory, skills, plugins and tool output (under the
-    agent's folder or a temp folder)."""
-    return path.startswith(tuple(AGENT_DIRS)) or path.startswith(("/tmp/", "/private/tmp/", "/var/folders/",
-                                                                   "/private/var/folders/"))
+    """An agent's own file, not context about the work: its memory, skills, plugins and tool output (in an agent's
+    folder, the user's or a repo's, or in a temp folder)."""
+    return bool(AGENT_DIRS & set(Path(path).parts)) or path.startswith(("/tmp/", "/private/tmp/", "/var/folders/",
+                                                                         "/private/var/folders/"))
 
 
 _slack = []
