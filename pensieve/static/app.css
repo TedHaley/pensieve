@@ -765,7 +765,7 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:6px}
 .wk-head h2{margin:0;font-size:24px;letter-spacing:-.01em}.wk-head p{margin:6px 0 0;color:var(--text-3);font-size:13.5px;max-width:620px}
 .wk-ctl{margin-left:auto;display:flex;gap:8px;align-items:center}
-.wk-cluster{position:relative;margin:0 0 14px;padding:8px 8px 0 32px;border-radius:22px;background:var(--card-2);box-shadow:inset 0 0 0 .5px var(--line-2),inset 4px 0 0 var(--acc)}
+.wk-cluster{position:relative;margin:0 0 14px;padding:8px 8px 0 32px;border-radius:22px;background:var(--card-2);box-shadow:inset 0 0 0 .5px var(--line-2)}
 .wk-cluster::before{content:"";position:absolute;left:17px;top:46px;bottom:16px;width:2px;border-radius:2px;background:var(--acc);opacity:.7}
 .wk-cluster .wk-cluster-h{margin-left:-20px}
 .wk-twig{position:relative}
