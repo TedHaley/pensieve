@@ -51,6 +51,46 @@ def apply_pending() -> str | None:
     return what
 
 
+VERSION = config.DATA_DIR / "data-version"  # the version whose index and threads these are
+THREAD_TABLES = ["thread_snapshot_reasons", "thread_snapshots", "thread_events", "thread_cards", "thread_members",
+                 "thread_repos", "threads"]  # children first: the saved versions of threads are not kept
+
+
+def current_version() -> str:
+    """The version of this build: the source tree's pyproject.toml when run from the repo, else the installed one."""
+    import re
+    from pathlib import Path
+    project = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    if project.exists():
+        m = re.search(r'^version\s*=\s*"([^"]+)"', project.read_text(), re.M)
+        if m:
+            return m.group(1)
+    from importlib.metadata import version
+    return version("pensieve")
+
+
+def settle_version() -> str | None:
+    """Before anything opens the database: when this build's version is not the data's, delete the index and the
+    thread history, keep the settings, and stamp the new version. Returns the old version ('new' for none) or None."""
+    now = current_version()
+    had = VERSION.read_text().strip() if VERSION.exists() else None
+    if had == now:
+        return None
+    store = config.DATA_DIR / "v2" / "store.db"
+    if store.exists():
+        for f in INDEX:
+            (config.DATA_DIR / f).unlink(missing_ok=True)
+        shutil.rmtree(config.DATA_DIR / EXPORTS, ignore_errors=True)
+        import sqlite3
+        con = sqlite3.connect(store)
+        for t in THREAD_TABLES:
+            con.execute(f"DROP TABLE IF EXISTS {t}")
+        con.commit()
+        con.close()
+    VERSION.write_text(now)
+    return had or "new"
+
+
 def restart():
     """Replace this process with a fresh `pensieve` run (same arguments, same pid). Open sockets close on exec."""
     sys.stdout.flush()

@@ -72,6 +72,7 @@ def main():
         return webbrowser.open(url) and None
 
     from pensieve import reset
+    reset.settle_version()  # a new version resets the index and drops the thread history, keeping the settings
     done = reset.apply_pending()  # before anything opens the database
     from pensieve import reembed
     reembed.finish()  # a switch to another embedding model whose vectors are ready

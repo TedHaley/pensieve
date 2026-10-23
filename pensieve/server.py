@@ -2149,6 +2149,14 @@ async def factory_reset(req: ResetReq):
     return {"ok": True}
 
 
+@app.post("/api/restart")
+async def restart_server():
+    """Start this server again in place. The index and the settings stay."""
+    from pensieve import reset
+    asyncio.get_running_loop().call_later(0.6, reset.restart)  # after this response is sent
+    return {"ok": True}
+
+
 @app.get("/api/integrations")
 def get_integrations():
     from pensieve import integrations

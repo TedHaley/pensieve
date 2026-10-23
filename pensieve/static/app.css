@@ -789,8 +789,24 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-menu input{margin:0;accent-color:var(--accent)}
 .wk-menu i{width:8px;height:8px;border-radius:50%}
 .wk-menu span{margin-left:auto;color:var(--text-3);font-variant-numeric:tabular-nums;font-size:12px}
+.wk-menu label.wk-drag{position:relative}
+.wk-menu .wk-grip{margin:0;color:var(--text-3);cursor:grab;letter-spacing:-2px;font-size:12px;user-select:none}
+.wk-menu label.dragging{opacity:.45}
+.wk-menu label.drop-before{box-shadow:inset 0 2px 0 var(--accent)}
+.wk-menu label.drop-after{box-shadow:inset 0 -2px 0 var(--accent)}
 .wk-menu-foot{display:flex;justify-content:space-between;padding:6px 9px 2px;border-top:1px solid var(--line);margin-top:4px}
 .wk-menu-foot .linkbtn{font-size:12px}
+.wk-step{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px}
+.wk-step .box{flex:none;width:14px;height:14px;border:1px solid var(--line);border-radius:4px;display:grid;place-items:center;font-size:10px;color:var(--ok, var(--accent))}
+.wk-step .what{flex:1;min-width:0}
+.wk-step.done .what{color:var(--text-3);text-decoration:line-through}
+.wk-step .who{margin-left:auto;color:var(--text-3);font-size:12px;white-space:nowrap}
+.wk-rel{padding:5px 0;border-top:1px solid var(--line)}
+.wk-rel:first-child{border-top:0}
+.wk-rel-t{display:block;max-width:100%;text-align:left;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wk-rel-m{display:flex;align-items:center;gap:8px;margin-top:2px;font-size:12px;color:var(--text-3);flex-wrap:wrap}
+.wk-refresh{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px}
+.wk-refresh svg{flex:none}
 .wk-state{appearance:none;-webkit-appearance:none;border:0;border-radius:999px;padding:3px 10px;font:600 11px var(--sans);cursor:pointer;field-sizing:content;
   color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);flex:none}
 .wk-state:hover{background:color-mix(in srgb,var(--c) 25%,transparent)}

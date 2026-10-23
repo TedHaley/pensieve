@@ -109,7 +109,10 @@ def apply(threads: list[dict]) -> None:
             continue
         won = {t["_sessions"][0]["id"] for t in ts if res[t["_sessions"][0]["id"]]["majority"]}
         won_tickets = {k["key"] for t in ts if t["_sessions"][0]["id"] in won for k in t.get("tickets", [])}
+        # the session with the largest share of the branch's lines names the threads that share it
+        lead = max(ts, key=lambda t: res[t["_sessions"][0]["id"]]["share"])["_sessions"][0]
         for t in ts:
+            t["_lead_title"] = lead.get("title", "")
             r = res[t["_sessions"][0]["id"]]
             t["claim"] = dict(branch=branch, lost=not r["majority"], **r)
             if not r["majority"]:  # the loser keeps only what it holds on its own: its other sinks decide its state

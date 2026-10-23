@@ -31,8 +31,7 @@ MODELS = {m.state: m for m in [
                "A session is running, or the thread has material work (edits, commits, a branch or a PR) and activity "
                "in the last 3 days, and it is not done.", "#34c759"),
     StateModel(State.THOUGHTS, "Thoughts", "A session with no data source: no PR, branch or ticket it wrote to.",
-               "A session with no data source, written in the last 3 days. Loose ends after 3 days quiet, forgotten "
-               "after 21 days quiet.", "#5ac8fa"),
+               "A session with no data source, active in the last 2 days. Forgotten after 2 days quiet.", "#5ac8fa"),
     StateModel(State.LOOSE_ENDS, "Loose ends","Work that is not done and has gone quiet: close it out.",
                "Work that is not done (an open PR, a ticket that is not done, uncommitted files, or work left), with "
                "no activity in the last 3 days. Also a ticket not started yet, or a thread with no sink to verify.",

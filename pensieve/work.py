@@ -9,6 +9,7 @@ A task joins agent sessions, git branches, commits and connection items (tickets
 tickets and threads about the same subject."""
 import hashlib
 from dataclasses import asdict
+from functools import lru_cache
 import json
 import re
 import subprocess
@@ -615,7 +616,8 @@ def group(inp: Inputs) -> list[dict]:
             items=[{k: i[k] for k in ("title", "url", "server", "path", "updated", "private")}
                    for i in sorted(its, key=lambda i: -i["updated"]) if not i["key"]][:30],
             sessions=[dict(id=s["id"], title=s["title"], updated=s["updated"], branch=s["branch"], repo=s["repo"],
-                           project=s["project"], artifacts=_artifacts(s, facts[s["id"]]["links"])) for s in ss],
+                           project=s["project"], summary=(s["summary"] or "")[:600],
+                           artifacts=_artifacts(s, facts[s["id"]]["links"])) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
     # A ticket that a thread in another repo works on belongs there: sessions here that only name it (a pasted log,
@@ -673,13 +675,65 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
     for t in out:
         _attention(t)
         _thread(t, inp, have.get(t["id"], {}))
+        t["events"] = sorted(t["events"] + _branch_events(t), key=lambda e: -e["ts"])[:80]
         task_states.apply(t, have.get(t["id"], {}), manual.get(t["id"]))
         _title(t)
         t.pop("_sessions")
         t.pop("_shared", None)
         t.pop("_named", None)
+    _related_cards(out, have)
     out.sort(key=_order)
     return out
+
+
+RELATED_MAX = 5        # the related threads a card lists
+RELATED_SIMILAR = 0.8  # card text similarity (cosine of the card vectors) that makes two threads related by context
+
+
+def _sinks(t: dict) -> dict[str, str]:
+    """The sinks a card writes to, each with the reason a shared sink makes two cards related: its branches, its
+    pull requests and its tickets."""
+    out = {}
+    for b in t.get("branches", []):
+        out[f"branch:{b['branch']}"] = f"same branch {b['branch']}"
+    for p in t.get("prs", []):
+        out[f"pr:{p['url']}"] = f"same pull request #{p['url'].rstrip('/').rsplit('/', 1)[-1]}"
+    for k in t.get("tickets", []):
+        if not k.get("ref"):
+            out[f"ticket:{k['key']}"] = f"same ticket {k['key']}"
+    return out
+
+
+def _related_cards(tasks_: list[dict], have: dict) -> None:
+    """Each card's `related`: the other cards that share a sink (the reason names it), then the cards whose text is
+    close in meaning (the reason gives the similarity). At most RELATED_MAX, sinks first."""
+    if len(tasks_) < 2:
+        for t in tasks_:
+            t["related"] = []
+        return
+    by_id = {t["id"]: t for t in tasks_}
+    sinks = {t["id"]: _sinks(t) for t in tasks_}
+    holders = defaultdict(list)
+    for tid, ss in sinks.items():
+        for key in ss:
+            holders[key].append(tid)
+    vecs = _card_vectors(tasks_, have)
+    ids = [t["id"] for t in tasks_]
+    mat = np.stack([vecs[i] for i in ids])
+    sims = mat @ mat.T
+    for n, tid in enumerate(ids):
+        rel, seen = [], {tid}
+        for key, why in sinks[tid].items():
+            for other in holders[key]:
+                if other not in seen:
+                    seen.add(other)
+                    rel.append(dict(id=other, reason=why))
+        similar = sorted(((float(sims[n, m]), other) for m, other in enumerate(ids) if other not in seen
+                          and float(sims[n, m]) >= RELATED_SIMILAR), reverse=True)
+        rel += [dict(id=other, reason=f"similar context ({score:.2f})") for score, other in similar]
+        t = by_id[tid]
+        t["related"] = [dict(id=r["id"], title=by_id[r["id"]]["title"], state=by_id[r["id"]]["state"], reason=r["reason"])
+                        for r in rel[:RELATED_MAX]]
 
 
 def _thread(t: dict, inp: "Inputs", note: dict):
@@ -693,35 +747,49 @@ def _thread(t: dict, inp: "Inputs", note: dict):
     t["mine"] = cardtext.my_messages(turns)
     t["reply"] = asdict(reply) if reply and (reply.text or reply.waiting) else None
     t["left"] = [asdict(x) for x in cardtext.pending(t, reply, resolved=bool(note.get("resolved")))]
+    t["closeout"] = cardtext.closeout(t, reply, resolved=bool(note.get("resolved")))
 
 
-TITLE_FILLER = re.compile(r"^(i'?ll|i'?m|i\s|i've|let'?s|let me|sure|okay|ok|done|got it|yes|no|now|next|great|thanks|here)\b", re.I)
+_REFLOG_CREATED = re.compile(r"^(\S+)@\{(\d+)\}\|branch: Created")
 
 
-def _headline(text: str) -> str:
-    """The first sentence of a text when it reads as a title: 15 to 90 characters, plain, a statement. Else ''."""
-    line = next((x.strip() for x in (text or "").splitlines() if x.strip()), "")
-    line = re.sub(r"[*_`#>|]+", "", line).strip()
-    line = re.split(r"(?<=[.!?])\s", line)[0].rstrip(".")
-    ok = 15 <= len(line) <= 90 and not line.endswith((":", "?")) and not TITLE_FILLER.match(line)
-    return line if ok else ""
+@lru_cache(maxsize=512)
+def _branch_created(path: str, branch: str) -> float:
+    """When a branch was made in its checkout: the time of its reflog's "branch: Created" entry, or 0 when the reflog
+    does not say (git keeps a branch's reflog for 90 days by default, and a clone has none)."""
+    r = subprocess.run(["git", "-C", path, "reflog", "show", "--date=unix", "--format=%gd|%gs", f"refs/heads/{branch}"],
+                       capture_output=True, text=True, timeout=10)
+    for line in r.stdout.splitlines():
+        m = _REFLOG_CREATED.match(line)
+        if m:
+            return float(m.group(2))
+    return 0.0
+
+
+def _branch_events(t: dict) -> list[dict]:
+    """A "Branch created" event for each of the card's branches whose checkout still has its reflog."""
+    out = []
+    for b in t.get("branches", []):
+        pl = next((p for p in t.get("places", []) if p.get("branch") == b["branch"] and p.get("path")), None)
+        if not pl:
+            continue
+        at = _branch_created(pl["path"], b["branch"])
+        if at:
+            out.append(dict(ts=at, source="branch", title=f"Branch {b['branch']} created",
+                            detail=b.get("repo", ""), ref=""))
+    return out
 
 
 def _title(t: dict):
-    """The card's title: the open PR or ticket it works on. Once its sinks are all closed, the session's own title.
-    Otherwise the agent's last reply, then the user's latest words, when either reads as a title."""
-    own = t["sessions"][0]["title"] if t.get("sessions") else t.get("title", "")
-    pr = next((p for p in t["prs"] if (p.get("state") or "").lower() in ("open", "draft")), None)
-    tk = next((k for k in t["tickets"] if k.get("status") and k["status"].lower() not in DONE), None)
-    if tk:
-        found = tk.get("title", "")
-    elif pr:
-        found = pr.get("title", "")
-    elif (t["prs"] or t["branches"] or t["tickets"]) and t.get("state") == "closed":
-        found = own
-    else:
-        found = _headline((t.get("reply") or {}).get("text", "")) or _headline((t.get("mine") or [""])[-1])
-    t["title"] = found or own
+    """The card's title: its ticket's title, then its pull request's, then its session's. An open ticket or PR comes
+    first. Sessions that write to the same branch name the card by the one with the largest share of its lines
+    (claims.apply sets `_lead_title`)."""
+    own = t.pop("_lead_title", None) or (t["sessions"][0]["title"] if t.get("sessions") else t.get("title", ""))
+    tickets = sorted(t.get("tickets", []), key=lambda k: k.get("status", "").lower() in DONE)
+    prs = sorted(t.get("prs", []), key=lambda p: (p.get("state") or "").lower() not in ("open", "draft"))
+    tk = next((k["title"] for k in tickets if k.get("title")), "")
+    pr = next((p["title"] for p in prs if p.get("title")), "")
+    t["title"] = tk or pr or own
 
 
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
@@ -1630,10 +1698,13 @@ def card_text(t: dict, note: dict | None) -> str:
     sessions."""
     note = note or {}
     places = [" ".join(x for x in (p.get("repo"), p.get("branch")) if x) for p in t.get("places", [])]
-    return "\n".join(x for x in [t["title"], note.get("title", ""), *core(note).values(), *places,
-                                 *(f"#{p['url'].rstrip('/').rsplit('/', 1)[-1]} {p.get('title') or ''}" for p in t["prs"]),
+    branches = [" ".join(x for x in (b.get("repo"), b.get("branch")) if x) for b in t.get("branches", [])]
+    return "\n".join(x for x in [t["title"], note.get("title", ""), *core(note).values(), *places, *branches,
+                                 *(f"#{p['url'].rstrip('/').rsplit('/', 1)[-1]} {p.get('title') or ''} {p.get('head') or ''}"
+                                   for p in t["prs"]),
                                  *(f"{k['key']} {k.get('title') or ''}" for k in t.get("tickets", [])),
-                                 *(s.get("title") or "" for s in t["sessions"][:8])] if x.strip())
+                                 *(f"{s.get('title') or ''} {s.get('branch') or ''} {s.get('summary') or ''}"
+                                   for s in t["sessions"][:8])] if x.strip())
 
 
 _card_vecs: dict[str, np.ndarray] = {}  # card text hash -> embedding

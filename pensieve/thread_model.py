@@ -21,7 +21,8 @@ from enum import Enum
 import time
 
 RECENT_DAYS = 3  # an open thread had work in this many days
-FORGOTTEN_DAYS = 21  # a thought, or a thread with work left, quiet this long is forgotten
+FORGOTTEN_DAYS = 21  # a thread with work left, quiet this long is forgotten
+THOUGHT_DAYS = 2  # a thought quiet this long is forgotten
 
 
 class SinkKind(str, Enum):
@@ -146,11 +147,9 @@ def thread_state(sinks: list[Sink], status: dict, last_active: float, now: float
 
 def thought_state(last_active: float, now: float | None = None) -> tuple[ThreadState, str]:
     """The state of a session with no data source (no PR, branch or ticket it wrote to), from its last activity.
-    thoughts: written in the last RECENT_DAYS. loose ends: quiet for RECENT_DAYS, then forgotten after FORGOTTEN_DAYS."""
+    thoughts: active in the last THOUGHT_DAYS. forgotten: quiet for THOUGHT_DAYS or longer."""
     now = now or time.time()
     quiet = (now - last_active) / 86400
-    if quiet < RECENT_DAYS:
-        return ThreadState.THOUGHTS, f"a thought: no data source, written in the last {RECENT_DAYS} days"
-    if quiet < FORGOTTEN_DAYS:
-        return ThreadState.LOOSE_ENDS, f"a thought with no data source, quiet for {int(quiet)} days"
+    if quiet < THOUGHT_DAYS:
+        return ThreadState.THOUGHTS, f"a thought: no data source, active in the last {THOUGHT_DAYS} days"
     return ThreadState.FORGOTTEN, f"a thought with no data source, quiet for {int(quiet)} days"

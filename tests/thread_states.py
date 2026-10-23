@@ -48,7 +48,7 @@ def run():
     results.append(check("ticket done: closed",
                          state_of(task(0, tickets=[dict(key="ABC-3", status="Done")])), "closed"))
     results.append(check("no sink, written now: thoughts", state_of(task(0)), "thoughts"))
-    results.append(check("no sink, quiet 5 days: loose ends", state_of(task(5)), "loose_ends"))
+    results.append(check("no sink, quiet 5 days: forgotten", state_of(task(5)), "forgotten"))
     results.append(check("no sink, quiet 30 days: forgotten", state_of(task(30)), "forgotten"))
 
     manual = ts.StateChange("t1", "forgotten", "user", "parked", NOW - 1)

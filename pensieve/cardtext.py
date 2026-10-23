@@ -225,6 +225,53 @@ def pending(card: dict, reply: Reply | None = None, resolved: bool = False) -> l
     return out
 
 
+CLOSE_ORDER = ("answer", "work", "review", "merge", "branch", "ticket")  # the stages of closing a thread, in order
+
+
+def _stage(text: str) -> str:
+    """The stage of a close-out step, from the text that `pending` wrote."""
+    if text.startswith("Answer"):
+        return "answer"
+    if text.startswith(("Get ", "Mark ")):
+        return "review"
+    if text.startswith("Merge "):
+        return "merge"
+    if text.startswith("Close "):
+        return "ticket"
+    return "work"  # fix checks, address review, commit, push, work on a ticket
+
+
+def closeout(card: dict, reply: Reply | None = None, resolved: bool = False) -> list[dict]:
+    """The steps that take the thread to a complete state, in order: answer the agent, finish the work, get it
+    reviewed, merge, delete the branch, close the ticket. Steps that are already done stay in the list, marked done.
+    `pending` gives the open steps and who acts; this adds the order and the done steps."""
+    steps = []
+    for x in pending(card, reply, resolved):
+        steps.append(dict(text=x.text, who=x.how, ref=x.ref, stage=_stage(x.text), done=False))
+    merged = [p for p in card.get("prs", []) if p.get("state") == "merged"]
+    for p in merged:
+        steps.append(dict(text=f"Merged #{p['url'].rstrip('/').rsplit('/', 1)[-1]}", who="", ref=p["url"],
+                          stage="merge", done=True))
+    if merged:
+        own = {b.get("branch") for b in card.get("branches", []) if b.get("branch")}
+        for b in sorted(own):
+            steps.append(dict(text=f"Delete branch {b} after the merge", who="you", ref=b, stage="branch", done=False))
+    for k in card.get("tickets", []):
+        if k.get("ref"):
+            continue
+        if DONE_WORDS.search(k.get("status") or ""):
+            steps.append(dict(text=f"{k['key']} is done", who="", ref=k["key"], stage="ticket", done=True))
+    order = {s: i for i, s in enumerate(CLOSE_ORDER)}
+    seen = set()
+    out = []
+    for s in sorted(steps, key=lambda s: (order[s["stage"]], s["done"])):
+        if s["text"] in seen:
+            continue
+        seen.add(s["text"])
+        out.append(s)
+    return out
+
+
 _ROLE = re.compile(r"^(User|Assistant|Memory): ", re.M)
 
 

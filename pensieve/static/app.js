@@ -2340,7 +2340,7 @@ function renderSetup() {
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
       <p class="sub">Setup takes a minute. Pick a mode. Developer mode also asks what to index and which search model to use.</p>${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
-    body = `<h1>Choose a mode</h1><p class="sub">Session mode reads only your agent sessions. Developer mode also indexes your repos and files, so sessions get richer context.</p>
+    body = `<h1>Choose a mode</h1><p class="sub">Threads mode reads only your agent sessions. Developer mode also indexes your repos and files, so sessions get richer context.</p>
       <div class="setup-profiles" role="radiogroup">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="radio" aria-checked="${st.profiles.has(p.id)}">
         <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${btns('look', 'Next', st.profiles.size > 0)}`;
   } else if (step === 'look') {
@@ -2804,6 +2804,18 @@ async function renderFeedback() {
   $$('[data-fb-send]', box).forEach(a => a.addEventListener('click', () => setTimeout(() => set(a.dataset.fbSend, 'sent'), 300)));
   $$('[data-fb-set]', box).forEach(b => b.onclick = () => set(b.dataset.fbSet, b.dataset.st));
 }
+async function restartServer(e) {
+  const btn = e?.currentTarget || $('#set-Setup [data-restart]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Restarting…'; }
+  try { await api('/api/restart', {method: 'POST', headers: {'content-type': 'application/json'}, body: '{}'}); }
+  catch (err) { toast('Could not restart: ' + err.message); if (btn) { btn.disabled = false; btn.textContent = 'Restart server'; } return; }
+  await new Promise(r => setTimeout(r, 2500));
+  for (let i = 0; i < 120; i++) {
+    try { if ((await fetch('/api/status', {cache: 'no-store'})).ok) { location.reload(); return; } } catch {}
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  toast('Pensieve hasn’t come back yet. Quit and reopen the app if this page stays empty.');
+}
 function renderReset(step) {
   const box = $('#resetbox');
   if (!box) return;
@@ -2899,8 +2911,8 @@ async function renderSettings() {
     const cur = S.set?.draft?.mode || 'session';
     const opt = (id, label, text) => `<button class="ai-opt ${cur === id ? 'on' : ''}" data-mode-pick="${id}" role="radio" aria-checked="${cur === id}">
       <div class="ai-opt-h"><b>${label}</b></div><p>${text}</p></button>`;
-    body = bar('Mode', 'Session mode reads only your agent sessions. Developer mode also indexes your repos and files, so sessions get richer context.') +
-      `<div class="ai-opts" role="radiogroup" aria-label="Mode">${opt('session', 'Session mode', 'Reads only your historic agent sessions and builds threads from them. Nothing else is indexed. Map, People and Insights are hidden.')}${opt('developer', 'Developer mode', 'Also reads your git repos and files into an index, so sessions get richer context. Unlocks the Map, People and Insights. It is more compute intensive: indexing uses the Mac\'s GPU and takes a while.')}</div>`;
+    body = bar('Mode', 'Threads mode reads only your agent sessions. Developer mode also indexes your repos and files, so sessions get richer context.') +
+      `<div class="ai-opts" role="radiogroup" aria-label="Mode">${opt('session', 'Threads mode', 'Reads only your historic agent sessions and builds threads from them. Nothing else is indexed. Map, People and Insights are hidden.')}${opt('developer', 'Developer mode', 'Also reads your git repos and files into an index, so sessions get richer context. Unlocks the Map, People and Insights. It is more compute intensive: indexing uses the Mac\'s GPU and takes a while.')}</div>`;
   }
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/v2/store.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
@@ -2918,7 +2930,9 @@ async function renderSettings() {
         <div><label class="tog"><input type="checkbox" data-upd ${S.set.orig.auto_update_check !== false ? 'checked' : ''}></label></div></div></div>
     <div class="set-card" id="set-Setup"><h3>Setup</h3>
       <div class="set-row" style="border-top:0"><div><div class="k">Run setup again</div><div class="d">Choose sources, what Pensieve reads and the models again. Your index stays: what you choose again is not indexed again, and what you leave out is removed.</div></div>
-        <div><button class="btn" data-open-setup>Run setup</button></div></div></div>
+        <div><button class="btn" data-open-setup>Run setup</button></div></div>
+      <div class="set-row"><div><div class="k">Restart the server</div><div class="d">Starts Pensieve's server again and reloads this page. Your index and settings stay.</div></div>
+        <div><button class="btn" data-restart>Restart server</button></div></div></div>
     <div class="set-card danger" id="set-Reset"><h3>Reset Pensieve</h3><div id="resetbox"></div></div>`;
   const prevMain = $('#setmain'), y = prevMain && prevMain.dataset.tab === tab ? prevMain.scrollTop : keep?.tab === tab ? keep.y : 0;
   el.innerHTML = `<div class="set-sheet"><nav class="set-nav">${SET_TABS.map(([id, l, c, ic]) => `<button class="${id === tab ? 'on' : ''}" data-settab="${id}"><span class="set-ic" style="background:${c}"><svg viewBox="0 0 24 24" width="14" height="14">${ic}</svg></span>${esc(l)}</button>`).join('')}<span class="grow"></span><button class="btn set-done" data-setdone title="Close (Esc)">Done</button></nav>
@@ -2929,7 +2943,7 @@ async function renderSettings() {
   if (tab === 'ai') { bindAISettings($('#setmain')); bindEngine($('#setmain')); renderModels(); renderContent(); }
   if (tab === 'agents') { loadIntegrations(); renderAgentPick(); }
   if (tab === 'sources') renderPlaces();
-  if (tab === 'general') { bindGeneral(); $('#set-Setup [data-open-setup]')?.addEventListener('click', openSetup); }
+  if (tab === 'general') { bindGeneral(); $('#set-Setup [data-open-setup]')?.addEventListener('click', openSetup); $('#set-Setup [data-restart]')?.addEventListener('click', restartServer); }
   if (tab === 'usage') bindUsage();
   if (tab === 'mode') $$('[data-mode-pick]', el).forEach(b => b.onclick = () => {
     if (!S.set) return;
@@ -3927,10 +3941,20 @@ S.work = {data: null, days: +store.get('workDays', 30), page: 0, open: new Set()
 const wkPageSize = () => S.work.view === 'compact' ? 40 : 10;
 const wkModel = s => (S.work.data?.states || []).find(m => m.state === s) || {label: s, color: '#8e8e93', meaning: ''};
 // A search shows its matches best first, in every state; otherwise the threads of the states picked
+// The state being dragged in the filter menu (kept across redraws of the menu)
+let wkDragging = null;
+// The states in the viewer's order (dragged in the filter menu), then the model's order for any state not yet dragged
+const wkStateList = () => {
+  const models = S.work.data?.states || [];
+  const saved = store.get('threadStateOrder', []);
+  const rank = s => saved.includes(s) ? saved.indexOf(s) : saved.length + models.findIndex(m => m.state === s);
+  return [...models].sort((a, b) => rank(a.state) - rank(b.state));
+};
 const wkShown = () => {
   const ts = S.work.data?.threads || [];
   if (S.work.hits) { const by = new Map(ts.map(t => [t.id, t])); return S.work.hits.map(id => by.get(id)).filter(Boolean); }
-  return ts.filter(t => !S.work.states.size || S.work.states.has(t.state));
+  const rank = new Map(wkStateList().map((m, i) => [m.state, i]));  // the list's groups follow the filter's order
+  return ts.filter(t => !S.work.states.size || S.work.states.has(t.state)).sort((a, b) => (rank.get(a.state) ?? 0) - (rank.get(b.state) ?? 0));
 };
 let wkSeq = 0;
 const wkSearch = debounce(async () => {
@@ -3947,10 +3971,12 @@ const wkSearch = debounce(async () => {
 const closeWkMenu = () => { if (S.work.menu) { S.work.menu = false; renderWork(); } };
 document.addEventListener('click', closeWkMenu);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeWkMenu(); });
-const WK_SRC = {session: 'Session', commit: 'Commit', ticket: 'Ticket', pr: 'PR', message: 'Message', change: 'Change'};
+const WK_SRC = {session: 'Session', commit: 'Commit', ticket: 'Ticket', pr: 'PR', message: 'Message', change: 'Change', branch: 'Branch'};
+const WK_RECENT = 10;  // the newest activity events a card shows
 const homeTilde = p => p.replace(/^\/Users\/[^/]+/, '~');
 const WK_IC = {
-  play: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  play:'<svg viewBox="0 0 24 24" width="12" height="12"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/></svg>',
   share: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 14.5V3.5M8 7.5l4-4 4 4M7.5 10.5H6.5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   spark: '<svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9ZM18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8Z" fill="currentColor"/></svg>',
   eye: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
@@ -3995,7 +4021,7 @@ async function loadAgents() {
 function wkActions(t, d) {
   const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume last session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
-  const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}New session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
+  const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}New session from context</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
   const id = `<button class="wk-btn icon" data-wk-thread="${esc(d.history?.[t.id]?.id || t.id)}" data-wk-title="${esc(t.title)}" title="Thread ${esc(t.id)}: its saved versions">${WK_IC.thread}</button>`;
@@ -4153,8 +4179,16 @@ function wkSections(t) {
   const hideA = S.work.open.has(t.id + ':ah');
   const artifacts = t.sessions.flatMap(s => (s.artifacts || []).filter(a => a.kind === 'link').map(a => `<div class="wk-row">
       <a class="nm" href="${esc(a.url)}" target="_blank" rel="noopener">${WK_IC.share}${esc(a.url.replace(/^https:\/\//, ''))}</a></div>`)).join('');
-  const activity = t.events.length ? `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:ah" aria-expanded="${!hideA}">${hideA ? '▸' : '▾'} Activity <span class="muted">${t.events.length}</span></button></h5>${hideA ? '' : `<ol class="wk-tl">${t.events.map(wkEvent).join('')}</ol>`}</section>` : '';
-  return sec('Data Sources', folders + prs + tickets + seen + artifacts) + activity;
+  const recent = t.events.slice(0, WK_RECENT);  // the events are newest first
+  const activity = recent.length ? `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:ah" aria-expanded="${!hideA}">${hideA ? '▸' : '▾'} Activity <span class="muted">${recent.length}</span></button></h5>${hideA ? '' : `<ol class="wk-tl">${recent.map(wkEvent).join('')}</ol>`}</section>` : '';
+  // the steps that take the thread to a complete state, in order; a step already done stays in the list, struck through
+  const wrapUp = sec('Wrap-up',(t.closeout || []).map(s => `<div class="wk-step${s.done ? ' done' : ''}"><span class="box" aria-hidden="true">${s.done ? '✓' : ''}</span>
+      <span class="what">${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</span>
+      ${s.who ? `<span class="who">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join(''));
+  const related = sec('Related sessions', (t.related || []).map(r => `<div class="wk-rel">
+      <button class="wk-rel-t linkbtn subtle" data-wk-preview="${esc(r.id)}">${esc(r.title)}</button>
+      <div class="wk-rel-m">${wkSt(wkModel(r.state).label)}<span>${esc(r.reason)}</span></div></div>`).join(''));
+  return sec('Data Sources', folders + prs + tickets + seen + artifacts) + activity + wrapUp + related;
 }
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
@@ -4275,9 +4309,9 @@ function renderWork() {
   const label = !picked.length || picked.length === d.states.length ? 'All states' : picked.length <= 2 ? picked.map(m => m.label).join(', ') : `${picked.length} states`;
   const filter = `<div class="wk-filter">
       <button class="wk-drop" data-wk-menu aria-haspopup="listbox" aria-expanded="${S.work.menu}">${picked.length && picked.length < d.states.length ? picked.map(m => `<i style="background:${m.color}"></i>`).join('') : ''}${esc(label)}<span>${shown.length}</span></button>
-      ${S.work.menu ? `<div class="wk-menu" role="listbox" aria-multiselectable="true">${d.states.map(m => `<label title="${esc(def(m))}">
-          <input type="checkbox" data-wk-st="${m.state}" ${S.work.states.has(m.state) ? 'checked' : ''}><i style="background:${m.color}"></i>${esc(m.label)}<span>${count(m.state)}</span></label>`).join('')}
-        <div class="wk-menu-foot"><button class="linkbtn" data-wk-st-all>All</button><button class="linkbtn" data-wk-st-none>Clear</button></div></div>` : ''}
+      ${S.work.menu ? `<div class="wk-menu" role="listbox" aria-multiselectable="true">${wkStateList().map(m => `<label class="wk-drag" draggable="true" data-wk-drag="${m.state}" title="${esc(def(m))} · drag to reorder">
+          <span class="wk-grip" aria-hidden="true">⋮⋮</span><input type="checkbox" data-wk-st="${m.state}" ${S.work.states.has(m.state) ? 'checked' : ''}><i style="background:${m.color}"></i>${esc(m.label)}<span>${count(m.state)}</span></label>`).join('')}
+        <div class="wk-menu-foot"><button class="linkbtn" data-wk-st-all>All</button><button class="linkbtn" data-wk-st-order>Default order</button><button class="linkbtn" data-wk-st-none>Clear</button></div></div>` : ''}
     </div>`;
   const pager = pages > 1 ? `<div class="wk-pager"><button class="btn" data-wk-page="-1" ${S.work.page ? '' : 'disabled'}>‹ Newer</button>
       <span class="muted">Page ${S.work.page + 1} of ${pages}</span><button class="btn" data-wk-page="1" ${S.work.page < pages - 1 ? '' : 'disabled'}>Older ›</button></div>` : '';
@@ -4290,7 +4324,7 @@ function renderWork() {
       <span class="syn">${S.work.hits ? `${S.work.hits.length} match${S.work.hits.length === 1 ? '' : 'es'}` : '"exact" · -exclude'}</span></div>`;
   el.innerHTML = `<div class="wk-head"><h2>Threads</h2>
       <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>
-        `<button data-wk-view="${v}" class="${S.work.view === v ? 'on' : ''}" role="radio" aria-checked="${S.work.view === v}" title="${l} view">${ic}${l}</button>`).join('')}</div>${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
+        `<button data-wk-view="${v}" class="${S.work.view === v ? 'on' : ''}" role="radio" aria-checked="${S.work.view === v}" title="${l} view">${ic}${l}</button>`).join('')}</div>${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select><button class="btn wk-refresh" data-wk-refresh title="Load the threads again">${WK_IC.refresh}Refresh</button></div></div>
     ${search}
     ${tasks.length ? tasks.map((t, i) => {
       const prev = i ? tasks[i - 1] : shown[first - 1];
@@ -4319,10 +4353,33 @@ function renderWork() {
   const pick = states => { S.work.states = new Set(states); S.work.page = 0; store.set('threadStates2', [...S.work.states]); renderWork(); };
   $$('[data-wk-menu]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.menu = !S.work.menu; renderWork(); });
   $$('[data-wk-st]', el).forEach(c => c.onchange = () => pick(d.states.map(m => m.state).filter(s => s === c.dataset.wkSt ? c.checked : S.work.states.has(s))));
-  $$('[data-wk-st-all]', el).forEach(b => b.onclick = () => pick(d.states.map(m => m.state)));
+  $$('[data-wk-st-all]', el).forEach(b => b.onclick = () => pick(wkStateList().map(m => m.state)));
   $$('[data-wk-st-none]', el).forEach(b => b.onclick = () => pick([]));
+  $$('[data-wk-st-order]', el).forEach(b => b.onclick = () => { store.set('threadStateOrder', []); renderWork(); });
+  // drag a state in the menu to where it should sit; the list's groups follow that order
+  $$('[data-wk-drag]', el).forEach(l => {
+    const mark = (cls) => { $$('.drop-before, .drop-after', el).forEach(x => x.classList.remove('drop-before', 'drop-after')); if (cls) l.classList.add(cls); };
+    l.ondragstart = e => { wkDragging = l.dataset.wkDrag; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', wkDragging); l.classList.add('dragging'); };
+    l.ondragend = () => { wkDragging = null; l.classList.remove('dragging'); mark(null); };
+    l.ondragover = e => {
+      if (!wkDragging || wkDragging === l.dataset.wkDrag) return;
+      e.preventDefault();
+      const order = wkStateList().map(m => m.state);
+      mark(order.indexOf(wkDragging) < order.indexOf(l.dataset.wkDrag) ? 'drop-after' : 'drop-before');
+    };
+    l.ondrop = e => {
+      if (!wkDragging || wkDragging === l.dataset.wkDrag) return;
+      e.preventDefault();
+      const order = wkStateList().map(m => m.state), from = order.indexOf(wkDragging), to = order.indexOf(l.dataset.wkDrag);
+      const rest = order.filter(s => s !== wkDragging);
+      rest.splice(from < to ? rest.indexOf(l.dataset.wkDrag) + 1 : rest.indexOf(l.dataset.wkDrag), 0, wkDragging);
+      wkDragging = null;
+      store.set('threadStateOrder', rest); renderWork();
+    };
+  });
   $$('.wk-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
   $$('[data-wk-days]', el).forEach(s => s.onchange = () => { S.work.days = +s.value; S.work.page = 0; store.set('workDays', S.work.days); loadWork(true); });
+  $$('[data-wk-refresh]', el).forEach(b => b.onclick = () => loadWork(true));
   $$('[data-wk-view]', el).forEach(b => b.onclick = () => {
     S.work.view = b.dataset.wkView; S.work.page = 0; store.set('workView', S.work.view); renderWork();
   });

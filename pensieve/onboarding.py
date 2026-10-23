@@ -11,15 +11,15 @@ from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
     "Pensieve follows your work across AI agent sessions, and helps you organize and track all of your ideas.",
-    "Session mode, the default, reads your agent sessions and builds threads from them. Nothing else is indexed.",
+    "Threads mode, the default, reads your agent sessions and builds threads from them. Nothing else is indexed.",
     "Developer mode also indexes your git repos and files, and unlocks the Map, People and Insights.",
     "Everything runs on this Mac. Nothing is uploaded.",
 ]
 
-# The mode decides which categories are scanned. Session mode reads only agent sessions. Developer mode also reads
+# The mode decides which categories are scanned. Threads mode reads only agent sessions. Developer mode also reads
 # git repos and files into an index, so that sessions get richer context.
 PROFILES = [
-    dict(id="session", label="Session mode", categories=["agents"],
+    dict(id="session", label="Threads mode", categories=["agents"],
          description="Reads only your historic agent sessions (Claude Code, Codex, Qwen Code) and builds threads from "
                      "them. Nothing else is read or indexed."),
     dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
@@ -299,7 +299,8 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     off += [c for c in all_cats if not any(i in chosen and i.startswith(c + "/") for i in known)]  # incl. never scanned
     # added to the repos setting: big repos, which discovery skips, and repos found only in agent transcripts
     big = [i["id"][6:] for i in items if (i.get("big") or i.get("agents")) and i["id"] in chosen]
-    changes = {"disabled": off, "repos": list(dict.fromkeys(settings.get("repos") + big)), "setup_done": True}
+    changes = {"disabled": off, "repos": list(dict.fromkeys(settings.get("repos") + big)), "setup_done": True,
+               "mode": "developer" if any(c.startswith("repos/") for c in chosen) else "session"}
     settings.update(changes)
     _cache.clear()
     _scanned.clear()
