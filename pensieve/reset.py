@@ -69,9 +69,19 @@ def current_version() -> str:
     return version("pensieve")
 
 
+SETUP_SINCE = "0.16.0"  # data from before it runs the setup again: modes and the issue tracker step came in it
+DERIVED = ["threads/facts", "sink_status.json"]  # what the threads read from transcripts and gh, made again on start
+
+
+def _older(a: str, b: str) -> bool:
+    num = lambda v: tuple(int(x) if x.isdigit() else 0 for x in v.split("-")[0].split("."))
+    return num(a) < num(b)
+
+
 def settle_version() -> str | None:
-    """Before anything opens the database: when this build's version is not the data's, delete the index and the
-    thread history, keep the settings, and stamp the new version. Returns the old version ('new' for none) or None."""
+    """Before anything opens the database: when this build's version is not the data's, delete the index, the
+    thread history and what the threads derived from transcripts, keep the settings, and stamp the new version. Data
+    from before SETUP_SINCE also runs the setup again. Returns the old version ('new' for none) or None."""
     now = current_version()
     had = VERSION.read_text().strip() if VERSION.exists() else None
     if had == now:
@@ -81,12 +91,22 @@ def settle_version() -> str | None:
         for f in INDEX:
             (config.DATA_DIR / f).unlink(missing_ok=True)
         shutil.rmtree(config.DATA_DIR / EXPORTS, ignore_errors=True)
+        for d in DERIVED:
+            p = config.DATA_DIR / d
+            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
         import sqlite3
         con = sqlite3.connect(store)
         for t in THREAD_TABLES:
             con.execute(f"DROP TABLE IF EXISTS {t}")
         con.commit()
         con.close()
+        if had and _older(had, SETUP_SINCE) and not _older(now, SETUP_SINCE):
+            f = config.DATA_DIR / "settings.json"
+            try:
+                s = json.loads(f.read_text())
+                f.write_text(json.dumps({**s, "setup_done": False}, indent=2))
+            except (OSError, ValueError):
+                pass
     VERSION.write_text(now)
     return had or "new"
 
