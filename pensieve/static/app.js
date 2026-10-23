@@ -4285,6 +4285,21 @@ function wkKin(t) {
   const n = rows.filter(k => !k.me).length;
   return `<section class="wk-sec wk-kin"><h5>Related sessions${branch && kin.length ? ` · <span class="wk-kin-b">${WK_IC.branch}${esc(branch)}</span>` : ''} <span class="muted">${n}</span></h5><ol class="wk-kin-list">${html}</ol></section>`;
 }
+// The threads of a page as clusters: the threads of one state that wrote to the same branch sit together, the
+// newest session first, where the newest of them sits in the list. Every other thread is a cluster of one.
+function wkClusters(tasks) {
+  const branch = t => t.branches?.[0]?.branch || t.claim?.branch || '';  // the branch it holds, else the one it contributed to
+  const key = t => branch(t) && (t.kin || []).length ? `${t.state}|${branch(t)}` : '';
+  const own = t => t.sessions?.[0]?.updated || t.updated;  // the session's own time, not what the branch holder adopted
+  const items = [], at = new Map();
+  for (const t of tasks) {
+    const k = key(t);
+    if (k && at.has(k)) at.get(k).tasks.push(t);
+    else { const c = {state: t.state, branch: k ? branch(t) : '', tasks: [t]}; items.push(c); if (k) at.set(k, c); }
+  }
+  for (const c of items) if (c.tasks.length > 1) c.tasks.sort((a, b) => own(b) - own(a)); else c.branch = '';
+  return items;
+}
 // The order of the server (work._order): by state, a running session first, then the newest
 function wkOrder(d) {
   const at = new Map(d.states.map((m, i) => [m.state, i]));
@@ -4364,10 +4379,11 @@ function renderWork() {
       <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>
         `<button data-wk-view="${v}" class="${S.work.view === v ? 'on' : ''}" role="radio" aria-checked="${S.work.view === v}" title="${l} view">${ic}${l}</button>`).join('')}</div>${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select><button class="btn wk-refresh" data-wk-refresh title="Load the threads again">${WK_IC.refresh}Refresh</button></div></div>
     ${search}
-    ${tasks.length ? tasks.map((t, i) => {
-      const prev = i ? tasks[i - 1] : shown[first - 1];
-      const head = many && (!prev || prev.state !== t.state) ? `<h3 class="wk-group" style="--acc:${wkModel(t.state).color}" title="${esc(def(wkModel(t.state)))}">${esc(wkModel(t.state).label)}<span>${count(t.state)}</span></h3>` : '';
-      return head + wkCard(t, d);
+    ${tasks.length ? wkClusters(tasks).map((c, i, items) => {
+      const prev = i ? items[i - 1] : shown[first - 1];
+      const head = many && (!prev || prev.state !== c.state) ? `<h3 class="wk-group" style="--acc:${wkModel(c.state).color}" title="${esc(def(wkModel(c.state)))}">${esc(wkModel(c.state).label)}<span>${count(c.state)}</span></h3>` : '';
+      const cards = c.tasks.map(t => wkCard(t, d)).join('');
+      return head + (c.branch ? `<section class="wk-cluster" style="--acc:${wkModel(c.state).color}"><header class="wk-cluster-h">${WK_IC.branch}${esc(c.branch)}<span>${plural(c.tasks.length, 'session')} on this branch</span></header>${cards}</section>` : cards);
     }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.threads.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
