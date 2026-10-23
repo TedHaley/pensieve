@@ -2338,15 +2338,15 @@ function renderSetup() {
   if (step === 'about') {
     body = `<div class="setup-hero"><svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4.91 5.06a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM4.91 18.94a3.06 3.06 0 1 0 6.12 0a3.06 3.06 0 1 0-6.12 0ZM6.86 8.11a6.11 6.11 0 1 0 12.22 0a6.11 6.11 0 1 0-12.22 0Z"/></svg>
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-      <p class="sub">Threads mode is ready in a minute and indexes nothing. Developer mode also asks what to index and which search model to use.</p>${btns('profile', 'Get started')}`;
+      ${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
-    body = `<h1>Choose a mode</h1><p class="sub">Threads mode reads your agent sessions as they are, with git and gh: no index, no model. Developer mode also indexes your repos and files for search and the Map.</p>
+    body = `<h1>Choose a mode</h1><p class="sub">You can switch later in Settings.</p>
       <div class="setup-profiles" role="radiogroup">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="radio" aria-checked="${st.profiles.has(p.id)}">
         <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${btns('tickets', 'Next', st.profiles.size > 0)}`;
   } else if (step === 'tickets') {
     const rows = SETUP_TRACKERS.map(id => (st.cx || []).find(c => c.id === id)).filter(Boolean);
     const on = c => c.state === 'on' || c.state === 'found';
-    body = `<h1>Connect your tickets</h1><p class="sub">A ticket assigned to you becomes a to-do thread, and its status closes the thread when the ticket closes. Pensieve signs in with your account and only reads. You can skip this and connect later in Settings → Sources.</p>
+    body = `<h1>Connect your tickets</h1><p class="sub">Your tickets become to-dos, and close their threads when done. Read-only. Optional.</p>
       <div class="setup-trackers">${st.cx ? rows.map(c => `<div class="setup-row setup-tracker"><b>${esc(c.label)}</b>
         <span class="muted">${on(c) ? `Connected${c.items ? ` · ${srcCount(c.items, 'items')}` : ''}` : st.cxWait === c.id ? 'Waiting for the sign-in in your browser…' : c.state === 'needs-auth' ? 'Needs sign-in' : 'Not connected'}</span>
         ${on(c) ? '<span class="setup-ok">✓</span>' : st.cxWait === c.id && st.cxUrl ? `<a class="btn" href="${esc(st.cxUrl)}" target="_blank" rel="noopener">Open sign-in</a>`

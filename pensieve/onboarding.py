@@ -10,22 +10,19 @@ from pathlib import Path
 from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
-    "Pensieve follows your work across AI agent sessions, and helps you organize and track all of your ideas.",
-    "Threads mode, the default, reads your agent sessions as they are, with git and gh, and your tickets from Jira, "
-    "Linear or Asana. No index, no model, ready in a minute.",
-    "Developer mode also indexes your git repos and files, and unlocks search, the Map, People and Insights.",
-    "Everything runs on this Mac. Nothing is uploaded.",
+    "Pensieve tracks your work across agent sessions, branches, PRs and tickets.",
+    "Threads mode: light and quick to set up.",
+    "Developer mode: adds search, the Map, People and Insights.",
+    "Everything stays on this Mac.",
 ]
 
 # The mode decides which categories are scanned. Threads mode reads only agent sessions. Developer mode also reads
 # git repos and files into an index, so that sessions get richer context.
 PROFILES = [
     dict(id="session", label="Threads mode", categories=["agents"],
-         description="Reads your agent sessions (Claude Code, Codex, Qwen Code) as they are, with git and gh, and "
-                     "builds threads from them. No index, no model: ready in a minute."),
+         description="Threads from your agent sessions, git and tickets. No index."),
     dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
-         description="Also reads your git repos and your files into an index, for search, the Map, People and "
-                     "Insights. It is more compute intensive: indexing uses the Mac's GPU and takes a while."),
+         description="Also indexes your repos and files for search, the Map, People and Insights. Uses the GPU."),
 ]
 
 ENERGY_NOTE = ("Indexing uses a lot of power: it runs the embedding model on your Mac's GPU until it finishes, so the Mac "
