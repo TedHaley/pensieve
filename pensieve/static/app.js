@@ -2340,7 +2340,7 @@ function renderSetup() {
       <h1>Welcome to Pensieve</h1></div><ul class="setup-about">${g.about.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
       ${btns('profile', 'Get started')}`;
   } else if (step === 'profile') {
-    body = `<h1>Choose a mode</h1><p class="sub">You can switch later in Settings.</p>
+    body = `<h1>Choose a mode</h1><p class="sub">We recommend starting with Threads mode to see if Pensieve is right for you. You can switch later in Settings.</p>
       <div class="setup-profiles" role="radiogroup">${g.profiles.map(p => `<button class="ai-opt ${st.profiles.has(p.id) ? 'on' : ''}" data-setup-prof="${esc(p.id)}" role="radio" aria-checked="${st.profiles.has(p.id)}">
         <div class="ai-opt-h"><b>${esc(p.label)}</b></div><p>${esc(p.description)}</p></button>`).join('')}</div>${btns('tickets', 'Next', st.profiles.size > 0)}`;
   } else if (step === 'tickets') {
