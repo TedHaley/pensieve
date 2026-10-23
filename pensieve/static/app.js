@@ -4043,7 +4043,8 @@ async function loadAgents() {
   } catch {}
 }
 function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header wraps up: the card has no button
-  const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
+  const lead = cluster && wkHolds(t, cluster) ? ' lead' : '';  // the session to pick the branch up from
+  const resume = t.resume ? `<span class="wk-split${lead}"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
@@ -4178,9 +4179,14 @@ function wkStateSel(t, d) {
 // The line under a card's title: the folder where the work is, its branch (linked when pushed), uncommitted files.
 // The line under a clustered card's title: this session's share of the branch's lines, and whether it holds the branch
 // (the most of its lines; the cluster's header says where the work is)
+const wkClaimOf = (t, branch) => t.claims?.[branch] || (t.claim?.branch === branch ? t.claim : null);
+function wkHolds(t, branch) {
+  const c = wkClaimOf(t, branch);
+  return c ? !c.lost : (t.branches || []).some(b => b.branch === branch);
+}
 function wkShare(t, branch) {
-  const c = t.claims?.[branch] || (t.claim?.branch === branch ? t.claim : null);
-  if (!c) return (t.branches || []).some(b => b.branch === branch) ? `<div class="wk-working">${wkSt('holds the branch', 'ok')}</div>` : '';
+  const c = wkClaimOf(t, branch);
+  if (!c) return wkHolds(t, branch) ? `<div class="wk-working">${wkSt('holds the branch', 'ok')}</div>` : '';
   const pct = `${Math.round((c.share || 0) * 100)}% of the branch’s lines`;
   return `<div class="wk-working">${c.lost ? wkSt(pct) : wkSt(`holds the branch · ${pct}`, 'ok')}</div>`;
 }
