@@ -4170,11 +4170,11 @@ function wkSections(t) {
       <span class="when">${i.updated ? wkDate(i.updated) : ''}</span></div>`).join('')
     + (t.seen_more ? `<div class="wk-row muted">and ${plural(t.seen_more, 'more item')} that its sessions read</div>` : '');
   const hideA = S.work.open.has(t.id + ':ah');
-  const made = t.sessions.flatMap(s => s.artifacts || []);  // the published pages first, then the files it edited
+  const made = t.sessions.flatMap(s => s.artifacts || []);  // what it made for people first, then what it used as context
   const showF = S.work.open.has(t.id + ':fl');
   const files = !made.length ? '' : `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:fl" aria-expanded="${showF}">${showF ? '▾' : '▸'} Files <span class="muted">${made.length}</span></button></h5>${!showF ? '' :
     made.slice(0, 20).map(a => a.kind === 'link'
-      ? `<div class="wk-row">${wkSt(a.service || 'page')}<a class="ttl" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.url)}">${esc(a.service ? a.name : a.url.replace(/^https:\/\//, ''))}</a>${a.how === 'made' && a.service !== 'Claude' ? `<span class="wk-path">made in this session</span>` : ''}</div>`
+      ? `<div class="wk-row">${wkSt(a.service || 'page')}<a class="ttl" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.url)}">${esc(a.service ? a.name : a.url.replace(/^https:\/\//, ''))}</a><span class="wk-path">${{made: a.service === 'Claude' ? 'published' : 'made in this session', read: 'read by the agent', named: 'named in the conversation'}[a.how] || ''}</span></div>`
       : `<div class="wk-row">${wkSt('file')}<button class="ttl linkbtn subtle" data-wk-openfile="${esc(a.path)}" title="${esc(a.path)}">${esc(a.name)}</button><span class="wk-path" title="${esc(a.path)}">${esc(homeTilde(a.path.slice(0, -a.name.length - 1)))}</span></div>`).join('')}</section>`;
   const recent = t.events.slice(0, WK_RECENT);  // the events are newest first
   const activity = recent.length ? `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:ah" aria-expanded="${!hideA}">${hideA ? '▸' : '▾'} Activity <span class="muted">${recent.length}</span></button></h5>${hideA ? '' : `<ol class="wk-tl">${recent.map(wkEvent).join('')}</ol>`}</section>` : '';

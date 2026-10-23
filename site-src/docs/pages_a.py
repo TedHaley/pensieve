@@ -193,7 +193,8 @@ it shows these steps:</p>
 </ol>
 <p>When you switch the mode in Settings, the setup starts again at the mode step.</p>
 <p>To do setup from a terminal, use these commands:</p>
-{pre('''pensieve setup                  # list the sources that Pensieve found, with their sizes
+{pre('''pensieve setup threads          # Threads mode: read every agent session folder, index nothing
+pensieve setup                  # Developer mode: list the sources that Pensieve found, with their sizes
 pensieve setup recommended      # index the sources marked [x]
 pensieve setup recommended images audio   # also read images and sound by content''')}
 <p>An agent can also do setup in its chat. Until setup is done, every MCP connection gets the tools

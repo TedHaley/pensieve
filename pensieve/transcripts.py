@@ -38,13 +38,17 @@ WEB_DOCS = [
     ("Confluence", re.compile(r"https://[\w-]+\.atlassian\.net/wiki/[\w./%+-]+")),
     ("Figma", re.compile(r"https://(?:www\.)?figma\.com/(?:file|design|board|proto)/[\w-]+(?:/[\w%-]+)?")),
 ]
+READ_ONE = re.compile(r"get|fetch|read|view|open|download", re.I)  # a tool that reads one item, not a search or a list
+SKIP_TOOL = re.compile(r"search|list|query|find|users?_?profile|reactions|emojis|members|authenticate", re.I)
+DOC_EXT = {".md", ".txt", ".pdf", ".docx", ".doc", ".pptx", ".xlsx", ".csv", ".rtf", ".pages", ".key", ".numbers",
+           ".html", ".eml"}  # a local file read as context, not code
 WRITE_TOOL = re.compile(r"create|send|post|update|append|add|duplicate|reply|schedule|edit|move|draft|publish|write",
                         re.I)
 DOC_RANK = {"made": 0, "read": 1, "named": 2}  # a document the session made comes first
 OWN_MARK = "[pensieve text job]"  # the first line of every prompt Pensieve's text engine sends (engine.MARK)
 # The first words of the sessions that Pensieve starts to close work (cards.RESOLVE_PROMPTS): a close-out, not a thread
 CLOSE_MARKS = ("[pensieve ship]", "[pensieve discard]")
-VERSION = 4  # of the cache files: a new version reads every transcript again
+VERSION = 5  # of the cache files: a new version reads every transcript again
 
 
 @dataclass
@@ -68,7 +72,7 @@ class Facts:
     ticket_urls: list = field(default_factory=list)
     prs: dict = field(default_factory=dict)        # PR url -> times named
     links: list = field(default_factory=list)      # published Artifact links
-    docs: list = field(default_factory=list)       # [url, service, made | read | named] web documents, in order
+    docs: list = field(default_factory=list)       # [url, service, made | read | named, title] web documents
     tail: list = field(default_factory=list)       # the last TAIL_TURNS turns, [role, text]
     n_turns: int = 0
     state: dict = field(default_factory=dict)      # the reader's own state between two reads
@@ -303,16 +307,20 @@ def _read(f: Facts, path: Path):
                         pending[blk.get("id", "")] = [args.get("command", ""), cwd, b]
                     elif name in EDIT_TOOLS:
                         _written(f, args)
-                    elif name.startswith("mcp__"):  # a page or message tool: the documents it opens or makes
-                        made = bool(WRITE_TOOL.search(name.rsplit("__", 1)[-1]))
-                        _web_docs(f, json.dumps(args), "made" if made else "read")
-                        if made:
+                    elif name.startswith("mcp__"):  # a page or message tool: the documents it makes or reads
+                        short = name.rsplit("__", 1)[-1]
+                        if WRITE_TOOL.search(short):
+                            _web_docs(f, json.dumps(args), "made")
                             st.setdefault("mcp_made", {})[blk.get("id", "")] = name
+                        elif READ_ONE.search(short) and not SKIP_TOOL.search(short):
+                            st.setdefault("mcp_read", {})[blk.get("id", "")] = [name, args]
                 elif blk.get("type") == "tool_result" and blk.get("tool_use_id") in st.get("mcp_made", {}):
                     st["mcp_made"].pop(blk["tool_use_id"])
-                    rc = blk.get("content")
-                    _web_docs(f, " ".join(x.get("text", "") for x in rc if isinstance(x, dict))
-                              if isinstance(rc, list) else str(rc or ""), "made")
+                    _web_docs(f, _result_text(blk), "made")
+                elif blk.get("type") == "tool_result" and blk.get("tool_use_id") in st.get("mcp_read", {}):
+                    name, args = st["mcp_read"].pop(blk["tool_use_id"])
+                    if not blk.get("is_error"):
+                        _context_doc(f, name, args, _result_text(blk))
                 elif blk.get("type") == "tool_result" and blk.get("tool_use_id") in pending:
                     cmd, bcwd, recorded = pending.pop(blk["tool_use_id"])
                     rc = blk.get("content")
@@ -374,20 +382,65 @@ def _text_facts(f: Facts, text: str):
     _web_docs(f, text, "named")
 
 
-def _web_docs(f: Facts, text: str, how: str):
-    """Keep the web documents in `text`, each once, with the strongest way the session met it."""
+def _web_docs(f: Facts, text: str, how: str, first: bool = False):
+    """Keep the web documents in `text`, each once, with the strongest way the session met it. `first`: only the
+    first one (the item a read tool returned, not the links inside it)."""
     if "https://" not in text:
         return
-    have = {d[0]: d for d in f.docs}
-    for service, rx in WEB_DOCS:
-        for u in rx.findall(text):
-            u = u.rstrip(".,);]'\"")
-            d = have.get(u)
-            if d is None:
-                have[u] = d = [u, service, how]
-                f.docs.append(d)
-            elif DOC_RANK[how] < DOC_RANK[d[2]]:
-                d[2] = how
+    found = sorted(((m.start(), service, m.group(0)) for service, rx in WEB_DOCS for m in rx.finditer(text)))
+    for _, service, u in found[:1] if first else found:
+        _keep_doc(f, u.rstrip(".,);]'\""), service, how)
+
+
+def _result_text(blk: dict) -> str:
+    rc = blk.get("content")
+    return " ".join(x.get("text", "") for x in rc if isinstance(x, dict)) if isinstance(rc, list) else str(rc or "")
+
+
+def _keep_doc(f: Facts, url: str, service: str, how: str, title: str = ""):
+    d = next((d for d in f.docs if d[0] == url), None)
+    if d is None:
+        f.docs.append([url, service, how, title])
+        return
+    if len(d) < 4:
+        d.append("")
+    if DOC_RANK[how] < DOC_RANK[d[2]]:
+        d[2] = how
+    d[3] = d[3] or title
+
+
+SLACK_HOST = "https://slack.com"  # the workspace's own host takes its place where Pensieve knows it (work._artifacts)
+
+
+def _context_doc(f: Facts, tool: str, args: dict, text: str):
+    """The item a read tool returned, as a document the session used as context: a Slack thread or channel, a Gmail
+    message or thread, else the first web document in the call or its result, with a title when the result has one."""
+    short = tool.rsplit("__", 1)[-1].lower()
+    try:  # a JSON result: its text values, with their line breaks
+        d = json.loads(text)
+        text = "\n".join(str(v) for v in d.values()) if isinstance(d, dict) else text
+    except ValueError:
+        pass
+    if "slack" in tool.lower() and args.get("channel_id"):
+        ch, ts = str(args["channel_id"]), str(args.get("message_ts") or args.get("thread_ts") or "")
+        url = f"{SLACK_HOST}/archives/{ch}" + (f"/p{ts.replace('.', '')}" if ts else "")
+        m = re.search(r"Message TS: [\d.]+\n(?:\s*\n)?(.{3,})", text)
+        _keep_doc(f, url, "Slack", "read", m.group(1).strip()[:90] if m else "")
+        return
+    if "gmail" in tool.lower() and ("thread" in short or "message" in short):
+        mid = next((str(args[k]) for k in ("thread_id", "threadId", "message_id", "messageId", "id") if args.get(k)), "")
+        if mid:
+            m = re.search(r"(?i)\"?subject\"?\s*[:=]\s*\"?([^\"\n\\]{3,120})", text)
+            _keep_doc(f, f"https://mail.google.com/mail/u/0/#all/{mid}", "Gmail", "read", m.group(1).strip() if m else "")
+        return
+    before = len(f.docs)
+    _web_docs(f, json.dumps(args), "read", first=True)
+    if len(f.docs) == before:
+        _web_docs(f, text, "read", first=True)
+    if len(f.docs) > before:
+        m = re.search(r"\"title\"\s*:\s*\"([^\"]{3,120})\"|^#\s+(.{3,120})$", text, re.M)
+        if m and not f.docs[-1][3]:
+            f.docs[-1][3] = (m.group(1) or m.group(2)).strip()
 
 
 def _written(f: Facts, args: dict):
@@ -483,7 +536,8 @@ def text_facts(f: Facts) -> dict:
     texts = [f"{'User' if r == 'user' else 'Assistant'}: {t}" for r, t in turns]
     return dict(keys=Counter({tuple(k.split("-", 1)): n for k, n in f.keys.items()}),
                 ticket_urls=[tuple(x) for x in f.ticket_urls], prs=Counter(f.prs), links=list(f.links),
-                docs=sorted((tuple(d) for d in f.docs), key=lambda d: DOC_RANK[d[2]]),
+                docs=sorted(((*d[:3], d[3] if len(d) > 3 else "") for d in f.docs), key=lambda d: DOC_RANK[d[2]]),
+                read_docs=[p for p in f.read if Path(p).suffix.lower() in DOC_EXT],
                 last=_tail(texts[-1]) if texts else "", ending=_tail("\n".join(texts[-2:]), 2400) if texts else "",
                 turns=turns)
 

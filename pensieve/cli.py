@@ -207,7 +207,20 @@ def setup(port, items):
             for c in d["content"]:
                 if c["id"] != "text":
                     print(f"  {c['id']:<8} {'on ' if c['on'] else 'off'}  {c['description']} {c.get('note', '')}")
-            print("\nNext: `pensieve setup recommended`, or `pensieve setup <id> <id> ...` with exactly the ids to index.")
+            print("\nNext: `pensieve setup threads` for Threads mode (no index; recommended to start), or for Developer "
+                  "mode `pensieve setup recommended`, or `pensieve setup <id> <id> ...` with exactly the ids to index.")
+            return
+        if items == ["threads"]:  # Threads mode: every agent session folder found, no index
+            d = httpx.get(f"{base}/api/setup", timeout=300).json()
+            agents = [i["id"] for c in d["candidates"] for i in c["items"] if i["id"].startswith("agents/") and i["available"]]
+            if not agents:
+                sys.exit("No agent sessions found on this Mac. Run a coding agent once, then try again.")
+            r = httpx.post(f"{base}/api/setup", json={"sources": agents, "mode": "session"}, timeout=300)
+            if r.status_code >= 400:
+                sys.exit(r.json().get("detail", r.text))
+            print(f"Threads mode is on: Pensieve reads {len(agents)} agent session folder{'s' if len(agents) != 1 else ''}, "
+                  f"with git and gh. Nothing is indexed.\nTo turn your tickets into to-dos, connect Jira, Linear or Asana "
+                  f"in the app: Settings → Sources → Cloud connectors.")
             return
         kinds = [i for i in items if i in ("images", "video", "audio")]  # content.KINDS
         items = [i for i in items if i not in kinds]

@@ -17,7 +17,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from pensieve import cardtext, connections, repos as repos_mod, task_states
+from pensieve import cardtext, connections, repos as repos_mod, task_states, transcripts
 
 KEY = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
 BRANCH_KEY = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,9})[-_](\d{1,6})(?![0-9])")  # abc-123-x, feat/ABC_12
@@ -657,7 +657,8 @@ def group(inp: Inputs) -> list[dict]:
                    for i in sorted(its, key=lambda i: -i["updated"]) if not i["key"]][:30],
             sessions=[dict(id=s["id"], title=s["title"], updated=s["updated"], branch=s["branch"], repo=s["repo"],
                            project=s["project"], summary=(s["summary"] or "")[:600],
-                           artifacts=_artifacts(s, facts[s["id"]]["links"], facts[s["id"]].get("docs", ()))) for s in ss],
+                           artifacts=_artifacts(s, facts[s["id"]]["links"], facts[s["id"]].get("docs", ()),
+                                                facts[s["id"]].get("read_docs", ()))) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
     # A ticket that a thread in another repo works on belongs there: sessions here that only name it (a pasted log,
@@ -974,19 +975,40 @@ def _title(t: dict):
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 
 
-def _artifacts(s: dict, links: list[str], docs=(), limit: int = 20) -> list[dict]:
-    """What a session made or used, links first: the web documents it made (a Notion page it wrote, a Slack
-    message it sent), its published Artifacts, the web documents it opened or named, then the files it created or
-    edited that still exist (not scratch files), newest file first, `limit` in all. `docs`: (url, service, how)."""
-    made = [d for d in docs if d[2] == "made"]
-    out = [dict(kind="link", url=u, name=_doc_name(u, svc), service=svc, how=how) for u, svc, how in made]
+def _artifacts(s: dict, links: list[str], docs=(), read_docs=(), limit: int = 20) -> list[dict]:
+    """The documents of a session's Files list: what it made for people (a Notion page it wrote, a Slack message it
+    sent, a published Artifact), then what it used as context (a Slack thread, an email or a page it read, a link
+    in the conversation, a local document it read), `limit` in all. The code files it edited are not on it: the
+    branch and its PRs hold them. `docs`: (url, service, how, title)."""
+    def link(u, svc, how, title):
+        if svc == "Slack" and u.startswith(transcripts.SLACK_HOST + "/"):
+            u = _slack_host() + u[len(transcripts.SLACK_HOST):]
+        return dict(kind="link", url=u, name=title or _doc_name(u, svc), service=svc, how=how)
+    out = [link(*d) for d in docs if d[2] == "made"]
     out += [dict(kind="link", url=u, name="Artifact", service="Claude", how="made") for u in links]
-    out += [dict(kind="link", url=u, name=_doc_name(u, svc), service=svc, how=how) for u, svc, how in docs
-            if how != "made"]
-    out = out[:limit]
-    files = sorted((p for p in s["edited"] if Path(p).is_file()), key=_mtime, reverse=True)
-    out += [dict(kind="file", path=p, name=Path(p).name) for p in files[:max(0, limit - len(out))]]
-    return out
+    out += [link(*d) for d in docs if d[2] != "made"]
+    files = [p for p in read_docs if Path(p).is_file() and "/scratchpad/" not in p]
+    out += [dict(kind="file", path=p, name=Path(p).name, how="read") for p in files]
+    return out[:limit]
+
+
+_slack = []
+
+
+def _slack_host() -> str:
+    """The Slack workspace's own address, from a Slack link that Pensieve holds, else slack.com (which opens the
+    workspace you are signed in to)."""
+    if not _slack:
+        host = transcripts.SLACK_HOST
+        try:
+            from pensieve import store as v2
+            row = v2.store_db().execute("SELECT url FROM documents WHERE url LIKE 'https://%.slack.com/%' LIMIT 1").fetchone()
+            if row:
+                host = "https://" + row[0].split("/")[2]
+        except Exception:
+            pass
+        _slack.append(host)
+    return _slack[0]
 
 
 GOOGLE_KIND = {"document": "Google Doc", "spreadsheets": "Google Sheet", "presentation": "Google Slides",
@@ -1003,6 +1025,8 @@ def _doc_name(url: str, service: str) -> str:
         return words or "Notion page"
     if service == "Confluence":
         return last.replace("+", " ") if not last.isdigit() else "Confluence page"
+    if service == "Gmail":
+        return "Email"
     if service == "Slack":
         return "Slack message" if "thread_ts" in url or (last[:1] == "p" and last[1:].isdigit()) else "Slack channel"
     if service == "Google Docs":
