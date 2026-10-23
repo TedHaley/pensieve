@@ -4261,7 +4261,7 @@ function wkAbout(t) {
   const body = t.summary ? `<p class="wk-summary">${esc(t.summary)}</p>${rows}` : rows || '<p class="wk-summary muted">No words from this session yet</p>';
   return `<section class="wk-sec wk-about"><h5>About</h5>${body}</section>`;
 }
-// The sessions related to this one, oldest first, each with how it relates: the kin (the sessions of the same work:
+// The sessions related to this one, newest first, each with how it relates: the kin (the sessions of the same work:
 // what each did on the shared branch, PR or ticket, and its share of the branch) and the threads whose context is
 // close in meaning. This session is marked. A click goes to that session's card.
 function wkKin(t) {
@@ -4271,7 +4271,7 @@ function wkKin(t) {
     return {id: r.id, title: r.title, state: r.state, updated: r.updated || 0, context: true,
             did: m ? `similar context, ${Math.round(+m[1] * 100)}%` : r.reason};
   });
-  const rows = [...kin, ...ctx].sort((a, b) => a.updated - b.updated);
+  const rows = [...kin, ...ctx].sort((a, b) => b.updated - a.updated);  // newest first
   if (!rows.length) return '';
   const branch = t.claim?.branch || t.branches?.[0]?.branch || '';
   const html = rows.map(k => {
