@@ -10,6 +10,7 @@ from functools import lru_cache
 from pensieve.extract import WRITE, Edge, Session, extractor
 
 PUSH = re.compile(r"\bgit (?:-C \S+ )?push\b[^\n;&|]*?\borigin\s+(?:HEAD:)?([\w][\w./-]*)")
+PUSH_BARE = re.compile(r"\bgit (?:-C \S+ )?push\b(?![^\n;&|]*\borigin\s+[\w][\w./-]*)")  # git push, git push -u origin HEAD
 CHECKOUT_B = re.compile(r"\bgit (?:-C \S+ )?(?:checkout -[bB]|switch -[cC])\s+([\w][\w./-]*)")
 CHECKOUT = re.compile(r"\bgit (?:-C \S+ )?(?:checkout|switch)\s+([\w][\w./-]*)\s*(?:$|[;&|])")
 COMMIT = re.compile(r"\bgit (?:-C \S+ )?commit\b")
@@ -48,14 +49,16 @@ def _results(records: list) -> dict[str, str]:
 
 
 def _bash_calls(records: list):
-    """(tool_use id, command, cwd) for each Bash call, in order."""
+    """(tool_use id, command, cwd, branch) for each Bash call, in order. The branch is the one Claude Code recorded
+    with the call (`gitBranch`), or empty."""
     for rec in records:
         content = (rec.get("message") or {}).get("content")
         if not isinstance(content, list):
             continue
         for b in content:
             if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Bash":
-                yield b.get("id", ""), (b.get("input") or {}).get("command", ""), rec.get("cwd", "")
+                yield (b.get("id", ""), (b.get("input") or {}).get("command", ""), rec.get("cwd", ""),
+                       rec.get("gitBranch") or "")
 
 
 @extractor("git_tools")
@@ -63,7 +66,7 @@ def git_tools(session: Session):
     results = _results(session.records)
     branch = ""  # the branch the session is on, as far as its checkouts show
     folder = ""
-    for tool_id, cmd, cwd in _bash_calls(session.records):
+    for tool_id, cmd, cwd, recorded in _bash_calls(session.records):
         folder = cwd or folder
         repo = origin_repo(folder) if folder else ""
         cd = CD.search(cmd)
@@ -77,12 +80,17 @@ def git_tools(session: Session):
         for m in CHECKOUT.finditer(cmd):
             if not CHECKOUT_B.search(cmd):
                 branch = m.group(1)
+        # a commit or a bare push goes to the branch that is checked out: the last checkout in this session, else the
+        # branch the agent recorded with the call (a session that starts on a branch never checks it out)
+        on = branch or recorded
         for m in PUSH.finditer(cmd):
             name = m.group(1)
             if name not in GENERIC:
                 yield Edge(session.id, "branch", _branch_key(repo, name), WRITE, f"git push {name}", "git_tools")
-        if COMMIT.search(cmd) and branch and branch not in GENERIC and "error" not in out.lower()[:200]:
-            yield Edge(session.id, "branch", _branch_key(repo, branch), WRITE, "git commit", "git_tools")
+        if PUSH_BARE.search(cmd) and on and on not in GENERIC and not PUSH.search(cmd) and "error" not in out.lower()[:200]:
+            yield Edge(session.id, "branch", _branch_key(repo, on), WRITE, f"git push {on}", "git_tools")
+        if COMMIT.search(cmd) and on and on not in GENERIC and "error" not in out.lower()[:200]:
+            yield Edge(session.id, "branch", _branch_key(repo, on), WRITE, "git commit", "git_tools")
         if PR_CREATE.search(cmd):
             for org_repo, n in PR_URL.findall(out)[:1]:
                 yield Edge(session.id, "pr", f"{org_repo}#{n}", WRITE, "gh pr create", "git_tools")

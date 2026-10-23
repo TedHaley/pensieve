@@ -58,6 +58,19 @@ def run():
     empty = extract.Session("claude:t2", [("user", "hello")], [])
     results.append(check("a session with no tool calls has no writes", list(git_tools.git_tools(empty)), []))
 
+    # a session that starts on a branch never checks it out: the commit goes to the branch the agent recorded
+    on_branch = [dict(bash("1", "git add -A && git commit -m 'cards'"), gitBranch="feature/cards"),
+                 result("1", "[feature/cards abc123] cards"),
+                 dict(bash("2", "git push"), gitBranch="feature/cards"), result("2", "To github.com:acme/widget.git"),
+                 dict(bash("3", "git commit -m 'on main'"), gitBranch="main"), result("3", "[main def456] on main")]
+    s3 = extract.Session("claude:t3", [("user", "commit")], on_branch)
+    e3 = [(e.key, e.evidence) for e in git_tools.git_tools(s3)]
+    results.append(check("a commit with no checkout writes the recorded branch",
+                         ("acme/widget@feature/cards", "git commit") in e3, True))
+    results.append(check("a bare push writes the recorded branch", ("acme/widget@feature/cards", "git push feature/cards") in e3, True))
+    results.append(check("a commit on a default branch is no write", any(k.endswith("@main") for k, _ in e3), False))
+    results.append(check("nothing else came of it", len(e3), 2))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 

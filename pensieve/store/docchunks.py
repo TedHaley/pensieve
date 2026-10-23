@@ -56,8 +56,8 @@ def forget(db: Db, doc_ids) -> list[int]:
 
 
 def vectors(db: Db):
-    """(chunk id, vec) of every chunk, to fill the vector index again."""
-    return db.conn.execute("SELECT id, vec FROM doc_chunks")
+    """(chunk id, doc id, vec) of every chunk, to fill the vector index again."""
+    return db.conn.execute("SELECT id, doc_id, vec FROM doc_chunks")
 
 
 def ids_of_docs(db: Db, doc_ids) -> list[int]:

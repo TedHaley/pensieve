@@ -48,6 +48,38 @@ def run():
     results.append(check("threads have distinct ids", len({t["id"] for t in out}), 3))
     results.append(check("each thread's updated time is its session's", (one["updated"], two["updated"]), (50, 90)))
 
+    # each thread's text and files are its own session's, not the task's; a thought holds no commits
+    task["commits"] = [dict(sha="abc", subject="x")]
+    task["files"] = ["/code/app/task.py"]
+    task["_sessions"][0]["edited"] = {"/code/app/one.py"}
+    out = st.split([task], facts={"s1": dict(last="one stopped here", ending="one's ending")})
+    one = next(t for t in out if t["sessions"][0]["id"] == "s1")
+    thought = next(t for t in out if t["sessions"][0]["id"] == "s3")
+    results.append(check("a thread's last words and ending are its session's", (one["last_words"], one["ending"]),
+                         ("one stopped here", "one's ending")))
+    results.append(check("a session with no facts has no last words", thought["last_words"], ""))
+    results.append(check("a thread's files are what its session edited", one["files"], ["/code/app/one.py"]))
+    results.append(check("a thread with a branch keeps the commits; a thought has none",
+                         (len(one["commits"]), thought["commits"]), (1, [])))
+    results.append(check("a thread knows the task's other sessions", sorted(s["id"] for s in one["_siblings"]), ["s2", "s3"]))
+    results.append(check("a thread keeps what its session wrote", one["_writes"], writes["/x/s1.jsonl"]))
+
+    # a session's edits still in the uncommitted diff of the task's checkout: a write to that branch
+    from pensieve import claims, work
+    ROOT = "/code/app"
+    claims.written = lambda path: ((f"{ROOT}/x.py", "a line the session wrote"),) if path == "/x/s4.jsonl" else ()
+    gits = {("log", "-1", "--format=%ct"): "100", ("diff", "HEAD", "--", "x.py"): "+++ b/x.py\n+a line the session wrote\n-old"}
+    work._git = lambda root, *args, ttl=60: gits.get(args, "")
+    place = dict(path=ROOT, branch="feat", git=True, changed=1)
+    results.append(check("edits in the uncommitted diff write the branch",
+                         st.uncommitted(dict(places=[place]), dict(path="/x/s4.jsonl", updated=200)), [("branch", "feat")]))
+    results.append(check("a session that ended before the last commit wrote nothing uncommitted",
+                         st.uncommitted(dict(places=[place]), dict(path="/x/s4.jsonl", updated=50)), []))
+    results.append(check("no write when another branch is open in the checkout",
+                         st.uncommitted(dict(places=[dict(place, head="main")]), dict(path="/x/s4.jsonl", updated=200)), []))
+    results.append(check("no write when the session's lines are not in the diff",
+                         st.uncommitted(dict(places=[place]), dict(path="/x/s5.jsonl", updated=200)), []))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 

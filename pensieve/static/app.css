@@ -801,6 +801,24 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-step .what{flex:1;min-width:0}
 .wk-step.done .what{color:var(--text-3);text-decoration:line-through}
 .wk-step .who{margin-left:auto;color:var(--text-3);font-size:12px;white-space:nowrap}
+.wk-about .wk-said{display:grid;grid-template-columns:44px minmax(0,1fr);gap:8px;padding:4px 0;font-size:12.5px;line-height:1.45;color:var(--text-2)}
+.wk-about .wk-said+.wk-said{border-top:1px solid var(--line)}
+.wk-about .wk-said .who{font:600 10.5px var(--sans);text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);padding-top:2px}
+.wk-about .wk-said.you .who{color:var(--accent)}.wk-about .wk-said.ask .who{color:#ff9f0a}
+.wk-about .wk-said .txt{overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+.wk-kin h5 .wk-kin-b{display:inline-flex;align-items:center;gap:3px;text-transform:none;letter-spacing:0;font:600 11.5px var(--mono);color:var(--text-2)}
+.wk-kin-list{list-style:none;margin:6px 0 0;padding:0 0 0 16px;position:relative}
+.wk-kin-list::before{content:"";position:absolute;left:3px;top:10px;bottom:10px;width:1px;background:var(--line-2)}
+.wk-kin-list li{position:relative;display:flex;align-items:center;gap:8px;min-height:28px;font-size:12.5px;padding:2px 6px 2px 4px;border-radius:8px;min-width:0}
+.wk-kin-list li::before{content:"";position:absolute;left:-16px;top:50%;margin-top:-4px;width:7px;height:7px;border-radius:50%;background:var(--c);box-shadow:0 0 0 3px var(--card)}
+.wk-kin-list li.me{background:var(--card-2)}
+.wk-kin-list li.me::before{width:9px;height:9px;margin-top:-5px;left:-17px;box-shadow:0 0 0 3px var(--card),0 0 0 4px var(--c)}
+.wk-kin-list time{flex:none;min-width:44px;font-size:11.5px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.wk-kin-list .nm{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--text);text-align:left}
+.wk-kin-list .nm.me{color:var(--text-2)}
+.wk-kin-list .did{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)}
+.wk-kin-list .share{flex:none;font:600 11.5px var(--mono);color:var(--text-3)}
+.wk-kin-list .wk-st{flex:none}
 .wk-rel{padding:5px 0;border-top:1px solid var(--line)}
 .wk-rel:first-child{border-top:0}
 .wk-rel-t{display:block;max-width:100%;text-align:left;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

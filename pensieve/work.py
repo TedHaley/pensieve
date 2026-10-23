@@ -665,9 +665,10 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
             t["places"] = []
     _own_prs(out)
     from pensieve import session_threads
-    out = session_threads.split(out)  # one thread per writing session, each with only its own sinks
+    out = session_threads.split(out, inp.facts)  # one thread per writing session, each with only its own sinks
     from pensieve import claims
     claims.apply(out)  # a branch shared by several threads goes to the session with the majority claim
+    _adopt(out)  # the holder of a branch takes the activity of the other sessions that wrote to it
     have, manual = notes(), task_states.latest(store)
     if inp.until is None:
         _integrated(out, have)
@@ -678,12 +679,118 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
         t["events"] = sorted(t["events"] + _branch_events(t), key=lambda e: -e["ts"])[:80]
         task_states.apply(t, have.get(t["id"], {}), manual.get(t["id"]))
         _title(t)
+    _kin(out)
+    for t in out:
         t.pop("_sessions")
         t.pop("_shared", None)
         t.pop("_named", None)
+        t.pop("_siblings", None)
+        t.pop("_writes", None)
     _related_cards(out, have)
     out.sort(key=_order)
     return out
+
+
+def _sink_names(t: dict) -> set[str]:
+    """The branches (by name), PRs and tickets a thread's session touched: what it wrote to, the branches it holds,
+    and the branch its session ran on."""
+    names = {key.split("@", 1)[-1] if kind == "branch" else key for kind, key in t.get("_writes", [])}
+    names |= {b["branch"] for b in t.get("branches", [])}
+    s = t["_sessions"][0] if t.get("_sessions") else {}
+    if s.get("branch") and s["branch"] not in DEFAULT_BRANCHES:
+        names.add(s["branch"])
+    return names
+
+
+def _adopt(threads: list[dict]) -> None:
+    """A thread that holds a branch takes the other sessions that wrote to the branch as shared sessions: their
+    activity keeps it fresh, a running one marks it active, and the card lists them. (claims.apply gave the branch
+    to one thread; the others keep their own cards.)"""
+    from pensieve import session_threads
+    by_id = {t["id"]: t for t in threads}
+    for t in threads:
+        held = {b["branch"] for b in t.get("branches", [])}
+        if not held or not t.get("_siblings"):
+            continue
+        for s in t["_siblings"]:
+            o = by_id.get(session_threads.thread_id(s["id"]))
+            if not o or not o.get("_sessions"):
+                continue
+            wrote = {key.split("@", 1)[-1] for kind, key in o.get("_writes", []) if kind == "branch"}
+            if not wrote & held:
+                continue
+            os_ = o["_sessions"][0]
+            t["_shared"].append((dict(id=os_["id"], title=os_.get("title", ""), path=os_.get("path", "")), os_.get("updated") or 0))
+            t["events"].append(dict(ts=os_.get("updated") or 0, source="session", title=os_.get("title") or "Agent session",
+                                    detail=os_.get("branch", ""), ref=os_["id"]))
+            t["updated"] = max(t["updated"], os_.get("updated") or 0)
+        t["shared_sessions"] = [dict(id=s["id"], title=s["title"], at=at)
+                                for s, at in sorted(t["_shared"], key=lambda x: -x[1])[:5]]
+
+
+def _did(evs: list[str]) -> str:
+    """What a session did to a branch, from the evidence of its write edges: created, committed, pushed, or
+    uncommitted edits."""
+    done = []
+    if any(e.startswith("created") for e in evs):
+        done.append("created")
+    if any(e == "git commit" for e in evs):
+        done.append("committed")
+    if any(e.startswith("git push") for e in evs):
+        done.append("pushed")
+    if not done:
+        return "uncommitted edits on"
+    return ", ".join(done[:-1]) + " and " + done[-1] if len(done) > 1 else done[0]
+
+
+def _kin(threads: list[dict]) -> None:
+    """Each thread's `kin`: the sessions of the same work, oldest first: those that touched a branch, PR or ticket
+    this thread's session touched. Each row says what that session did there, its thread's state and its claim on the
+    branch. The thread itself is in the list, marked `me`, so the card can draw one piece of work in time order."""
+    from pensieve import session_threads
+    by_id = {t["id"]: t for t in threads}
+    for t in threads:
+        sibs = t.get("_siblings")
+        if sibs is None:
+            continue
+        mine = _sink_names(t)
+        me = t["_sessions"][0]
+        rows = [dict(id=t["id"], session=me["id"], title=t["title"], updated=me.get("updated") or t["updated"],
+                     state=t["state"], me=True, did=_what(t, mine), share=_share(t), active=bool(t.get("active")))]
+        for s in sibs:
+            o = by_id.get(session_threads.thread_id(s["id"]))
+            if not o or not mine & _sink_names(o):
+                continue
+            os_ = o["_sessions"][0]
+            rows.append(dict(id=o["id"], session=s["id"], title=o["title"], updated=os_.get("updated") or o["updated"],
+                             state=o["state"], me=False, did=_what(o, mine), share=_share(o), active=bool(o.get("active"))))
+        t["kin"] = sorted(rows, key=lambda r: r["updated"]) if len(rows) > 1 else []
+
+
+def _what(o: dict, names: set[str]) -> str:
+    """What thread `o`'s session did on the sinks in `names`: "committed and pushed session-summaries", "opened #12",
+    "uncommitted edits on x", or "worked on x, no changes" when it only ran there."""
+    from pensieve import session_threads
+    ev = session_threads.evidence(o["_sessions"][0].get("path", ""))
+    parts = []
+    for kind, key in dict.fromkeys(o.get("_writes", [])):
+        name = key.split("@", 1)[-1] if kind == "branch" else key
+        if name not in names:
+            continue
+        if kind == "branch":
+            parts.append(f"{_did(ev.get((kind, key), []))} {name}")
+        elif kind == "pr":
+            merged = any(e == "gh pr merge" for e in ev.get((kind, key), []))
+            parts.append(f"{'merged' if merged else 'opened'} #{key.rsplit('#', 1)[-1]}")
+    if parts:
+        return ", ".join(parts)
+    ran = o["_sessions"][0].get("branch", "")
+    return f"worked on {ran}, no changes" if ran in names else "no changes"
+
+
+def _share(o: dict) -> float | None:
+    c = o.get("claim")
+    return round(c["share"], 2) if c and c.get("share") is not None else None
 
 
 RELATED_MAX = 5        # the related threads a card lists
@@ -782,9 +889,12 @@ def _branch_events(t: dict) -> list[dict]:
 
 def _title(t: dict):
     """The card's title: its ticket's title, then its pull request's, then its session's. An open ticket or PR comes
-    first. Sessions that write to the same branch name the card by the one with the largest share of its lines
-    (claims.apply sets `_lead_title`)."""
-    own = t.pop("_lead_title", None) or (t["sessions"][0]["title"] if t.get("sessions") else t.get("title", ""))
+    first. The thread that holds a branch several sessions wrote to is named by the session with the largest share of
+    its lines (claims.apply sets `_lead_title`); a thread that lost the branch keeps its own session's title, so the
+    card says what that session was about."""
+    lead = t.pop("_lead_title", None)
+    lost = bool((t.get("claim") or {}).get("lost"))
+    own = (lead if not lost else "") or (t["sessions"][0]["title"] if t.get("sessions") else t.get("title", ""))
     tickets = sorted(t.get("tickets", []), key=lambda k: k.get("status", "").lower() in DONE)
     prs = sorted(t.get("prs", []), key=lambda p: (p.get("state") or "").lower() not in ("open", "draft"))
     tk = next((k["title"] for k in tickets if k.get("title")), "")
@@ -1286,6 +1396,11 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
     if t["tickets"]:
         out.append("Tickets: " + "; ".join(f"{k['key']} {k['status']}".strip() + (f": {k['title'][:60]}" if k["title"] else "")
                                            for k in t["tickets"][:3]))
+    if t.get("kin"):
+        out.append("Sessions of this work, oldest first: " + "; ".join(
+            f"{day(k['updated'])} {'this session' if k['me'] else k['title'][:50]} ({k['did']}" +
+            (f", {round(k['share'] * 100)}% of the branch" if k.get("share") else "") + (", running" if k.get("active") else "") +
+            f") [{k['id']} {k['state']}]" for k in t["kin"][:8]))
     note, changed = reconcile(note, t) if note else ({}, [])
     since = [f"{_pr_short(p).split(' ')[0]} merged {day(p['merged_at'])}" for p in prs if last and (p.get("merged_at") or 0) > last]
     since += [c for c in changed if not c.startswith("PR #")]  # a PR's state is on the PRs line already

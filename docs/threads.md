@@ -44,6 +44,10 @@ A member is work done for the goal. A reference only mentions the thread. The th
 
 When two threads claim one ticket, PR or branch, the claim becomes a split or a merge (rule 7). Two threads never share it silently.
 
+A branch that several sessions wrote to goes to the session with the majority of its surviving lines. The other sessions keep their own threads. Each of these threads lists its kin: the sessions of the same work, oldest first, with what each did on the shared branch, PR or ticket (created, committed, pushed, uncommitted edits, or nothing). The holder of the branch takes the activity of its kin, so a new session on the branch keeps the branch's thread fresh.
+
+A session writes to a branch when it commits or pushes on it, and also when lines it wrote are still in the uncommitted diff of a checkout of that branch.
+
 ### 4. The order of evidence
 
 | Rank | Evidence | Can join | Can split |
