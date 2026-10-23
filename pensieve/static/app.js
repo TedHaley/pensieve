@@ -4222,6 +4222,14 @@ function wkStateSel(t, d) {
 // A thread as a card, as on the cards page: its title, state, open and closed chains, when it was last active, and its
 // thread id. Compact shows the head only, and a click opens it in full. Expanded adds the chains, the actions, and details.
 // The line under a card's title: the folder where the work is, its branch (linked when pushed), uncommitted files.
+// The line under a clustered card's title: this session's share of the branch's lines, and whether it holds the branch
+// (the most of its lines; the cluster's header says where the work is)
+function wkShare(t, branch) {
+  const c = t.claims?.[branch] || (t.claim?.branch === branch ? t.claim : null);
+  if (!c) return (t.branches || []).some(b => b.branch === branch) ? `<div class="wk-working">${wkSt('holds the branch', 'ok')}</div>` : '';
+  const pct = `${Math.round((c.share || 0) * 100)}% of the branch’s lines`;
+  return `<div class="wk-working">${c.lost ? wkSt(pct) : wkSt(`holds the branch · ${pct}`, 'ok')}</div>`;
+}
 function wkWorking(t) {
   const p = (t.places || [])[0];
   if (!p && t.claim?.lost) {  // its session wrote to a branch that another session's thread holds
@@ -4236,11 +4244,13 @@ function wkWorking(t) {
   const changed = p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : '';
   return `<div class="wk-working"><span class="muted">Working in</span><span class="wk-where-repo" title="${esc(p.path)}">${esc(repo)}</span>${branch}${changed}</div>`;
 }
-function wkCard(t, d) {
+// `cluster`: the branch of the cluster the card sits in, whose header says where the work is
+function wkCard(t, d, cluster = '') {
   const n = d.notes[t.id], open = S.work.view === 'expanded' ? !S.work.collapsed.has(t.id) : S.work.details.has(t.id);
+  const when = cluster ? wkOwnTime(t) : t.updated;  // in a cluster, the session's own time: the cards go by it
   const head = `<header class="wk-head">
-      <div class="wk-hcol"><h4 class="wk-title" title="${esc(t.title)}">${esc(wkTitle(t))}</h4>${wkWorking(t)}</div>
-      <time title="${esc(new Date(t.updated * 1000).toLocaleString())}">${fmtWhen(t.updated)}</time>${wkStateSel(t, d)}</header>`;
+      <div class="wk-hcol"><h4 class="wk-title" title="${esc(t.title)}">${esc(wkTitle(t))}</h4>${cluster ? wkShare(t, cluster) : wkWorking(t)}</div>
+      <time title="${esc(new Date(when * 1000).toLocaleString())}">${fmtWhen(when)}</time>${wkStateSel(t, d)}</header>`;
   return `<article class="wk-task${open ? '' : ' wk-compact'}" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
       <div class="wk-main">${head}
         ${open ? `<div class="wk-detail">${wkAbout(t)}${wkKin(t)}${wkSections(t)}${wkAdjacent(t)}</div>` : ''}
@@ -4285,12 +4295,14 @@ function wkKin(t) {
   const n = rows.filter(k => !k.me).length;
   return `<section class="wk-sec wk-kin"><h5>Related sessions${branch && kin.length ? ` · <span class="wk-kin-b">${WK_IC.branch}${esc(branch)}</span>` : ''} <span class="muted">${n}</span></h5><ol class="wk-kin-list">${html}</ol></section>`;
 }
+// A thread's session's own time: the holder of a branch adopts the time of the newest session on it (t.updated)
+const wkOwnTime = t => t.sessions?.[0]?.updated || t.updated;
 // The threads of a page as clusters: the threads of one state that wrote to the same branch sit together, the
 // newest session first, where the newest of them sits in the list. Every other thread is a cluster of one.
 function wkClusters(tasks) {
   const branch = t => t.branches?.[0]?.branch || t.claim?.branch || '';  // the branch it holds, else the one it contributed to
   const key = t => branch(t) && (t.kin || []).length ? `${t.state}|${branch(t)}` : '';
-  const own = t => t.sessions?.[0]?.updated || t.updated;  // the session's own time, not what the branch holder adopted
+  const own = wkOwnTime;
   const items = [], at = new Map();
   for (const t of tasks) {
     const k = key(t);
@@ -4338,7 +4350,7 @@ async function patchWork(ids = [], removed = []) {
     const old = $(`.wk-task[data-id="${CSS.escape(t.id)}"]`, el);
     if (!old) continue;
     const box = document.createElement('div');
-    box.innerHTML = wkCard(t, d);
+    box.innerHTML = wkCard(t, d, old.closest('.wk-cluster')?.dataset.branch || '');
     wkBind(box, d);
     old.replaceWith(...box.childNodes);
   }
@@ -4382,8 +4394,14 @@ function renderWork() {
     ${tasks.length ? wkClusters(tasks).map((c, i, items) => {
       const prev = i ? items[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== c.state) ? `<h3 class="wk-group" style="--acc:${wkModel(c.state).color}" title="${esc(def(wkModel(c.state)))}">${esc(wkModel(c.state).label)}<span>${count(c.state)}</span></h3>` : '';
-      const cards = c.tasks.map(t => wkCard(t, d)).join('');
-      return head + (c.branch ? `<section class="wk-cluster" style="--acc:${wkModel(c.state).color}"><header class="wk-cluster-h">${WK_IC.branch}${esc(c.branch)}<span>${plural(c.tasks.length, 'session')} on this branch</span></header>${cards}</section>` : cards);
+      if (!c.branch) return head + wkCard(c.tasks[0], d);
+      // the cluster's header says where the work is, so its cards do not: the checkout, its branch (linked when
+      // pushed) and its uncommitted files, from the place of the thread that holds the branch
+      const p = c.tasks.map(t => (t.places || []).find(x => x.branch === c.branch)).find(Boolean) || {};
+      const repo = p.repo || (p.path || '').split('/').pop();
+      const link = p.remote_url ? `<a class="wk-branch" href="${esc(p.remote_url)}" target="_blank" rel="noopener">${WK_IC.branch}${esc(c.branch)}</a>` : `<span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span>`;
+      return head + `<section class="wk-cluster" data-branch="${esc(c.branch)}" style="--acc:${wkModel(c.state).color}"><header class="wk-cluster-h">${repo ? `<span class="wk-where-repo" title="${esc(p.path || '')}">${esc(repo)}</span>` : ''}${link}${p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : ''}<span class="n">${plural(c.tasks.length, 'session')} on this branch</span>
+        <span class="wk-split"><button class="wk-btn" data-wk-revive-cluster="${esc(c.tasks.map(t => t.id).join(','))}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads all ${c.tasks.length} threads of this branch first">${WK_IC.spark}Fork from all ${c.tasks.length}</button><button class="wk-btn copy" data-wk-revive-cluster-copy="${esc(c.tasks.map(t => t.id).join(','))}" data-branch="${esc(c.branch)}" aria-label="Copy a prompt with every thread of this branch in it" title="Copy a prompt with every thread of this branch in it, to start the work in any agent">${WK_IC.copy}</button></span></header>${c.tasks.map(t => wkCard(t, d, c.branch)).join('')}</section>`;
     }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.threads.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
@@ -4468,6 +4486,19 @@ function wkBind(el, d) {
   });
   $$('[data-wk-resume-copy]', el).forEach(b => b.onclick = e => {
     e.stopPropagation(); navigator.clipboard?.writeText(b.dataset.wkResumeCopy); toast('Resume command copied');
+  });
+  const cluster = b => ({ids: b.dataset.wkReviveCluster?.split(',') || b.dataset.wkReviveClusterCopy.split(','), branch: b.dataset.branch, days: S.work.days});
+  $$('[data-wk-revive-cluster]', el).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(cluster(b))}); toast(`Starting a new session from the ${cluster(b).ids.length} threads of ${b.dataset.branch} in Terminal`); }
+    catch (err) { toast('Could not start it: ' + err.message); }
+  });
+  $$('[data-wk-revive-cluster-copy]', el).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try {
+      const r = await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({...cluster(b), run: false})});
+      await navigator.clipboard.writeText(r.prompt); toast('Prompt with every thread of the branch copied: paste it into any agent');
+    } catch (err) { toast('Could not copy it: ' + err.message); }
   });
   $$('[data-wk-revive-copy]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();

@@ -114,7 +114,10 @@ def apply(threads: list[dict]) -> None:
         for t in ts:
             t["_lead_title"] = lead.get("title", "")
             r = res[t["_sessions"][0]["id"]]
-            t["claim"] = dict(branch=branch, lost=not r["majority"], **r)
+            claim = dict(branch=branch, lost=not r["majority"], **r)
+            t.setdefault("claims", {})[branch] = claim  # one per branch the thread shares
+            if not t.get("claim") or t["claim"]["lost"]:  # `claim`: the branch it holds, else the first it lost
+                t["claim"] = claim
             if not r["majority"]:  # the loser keeps only what it holds on its own: its other sinks decide its state,
                 # and what it contributed to decides when it has none (task_states.apply): a session that wrote to
                 # the branch is open while the branch is, not a thought

@@ -358,13 +358,18 @@ def _link_row(r: dict, e) -> str:
             + (f"<p>{e(r['summary'])}</p>" if r.get("summary") else "") + f'</span><span class="reach">{e(REACH_LABEL[r["reach"]])}</span></li>')
 
 
+REVIVE_TAIL = ("Then check the live state of its branch, pull requests and tickets, "
+               "and review what has been done. What is left says who can do each step: the agent's steps are yours, "
+               "the user's steps are mine, and the rest happen in the system the item lives in (close a ticket in "
+               "its tracker, for example). Tell me where the work stands and how you will close the remaining "
+               "items with your own tools, and ask me before you change anything, here or in another system.")
 REVIVE_PROMPT = ("Pick up this thread: \"{title}\" (Pensieve thread {id}). Read it first with Pensieve's `thread` tool "
                  "(id {id}): it gives the thread as it is now, with what is left to close it. If you do not have "
-                 "Pensieve's tools, read {copy}. Then check the live state of its branch, pull requests and tickets, "
-                 "and review what has been done. What is left says who can do each step: the agent's steps are yours, "
-                 "the user's steps are mine, and the rest happen in the system the item lives in (close a ticket in "
-                 "its tracker, for example). Tell me where the work stands and how you will close the remaining "
-                 "items with your own tools, and ask me before you change anything, here or in another system.")
+                 "Pensieve's tools, read {copy}. " + REVIVE_TAIL)
+CLUSTER_PROMPT = ("Pick up the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+                  "first). Read each one first with Pensieve's `thread` tool: together they give the work as it is now, "
+                  "what each session did on the branch, and what is left to close it. If you do not have Pensieve's "
+                  "tools, read {copy}. " + REVIVE_TAIL)
 REVIVE_KEEP_DAYS = 7  # copies for agents without Pensieve's tools are deleted after this
 
 
@@ -373,12 +378,21 @@ def revive_prompt(card: dict) -> str:
     return REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy="its copy below") + "\n\n" + render_agent(card)
 
 
-def revive_command(card: dict, folder, agent: str = "") -> str:
-    """The shell command that starts a new agent session on a thread: the agent reads the live thread with Pensieve's
-    `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder. `agent`: the
-    agent to start (agents.AGENTS); by default the user's default agent, else one that worked on the thread (this Mac's checkout, or the home folder when it is
-    gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
-    import shlex
+def _cluster_text(cards: list[dict]) -> str:
+    return "\n\n".join(f"# Thread {i + 1} of {len(cards)}: {c['title']}\n\n{render_agent(c)}" for i, c in enumerate(cards))
+
+
+def _cluster_head(cards: list[dict], branch: str, copy: str) -> str:
+    return CLUSTER_PROMPT.format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards), copy=copy)
+
+
+def revive_cluster_prompt(cards: list[dict], branch: str) -> str:
+    """CLUSTER_PROMPT with every card of the cluster in it, for any agent."""
+    return _cluster_head(cards, branch, "their copies below") + "\n\n" + _cluster_text(cards)
+
+
+def _revive_copy(folder, slug: str, text: str):
+    """Write `text` as a dated copy in `folder` for an agent without Pensieve's tools, and drop old copies."""
     from pathlib import Path
     import time
     folder = Path(folder).expanduser()
@@ -386,16 +400,39 @@ def revive_command(card: dict, folder, agent: str = "") -> str:
     for old in folder.glob("*.md"):  # the copies are for one start each: old ones only fill the folder
         if time.time() - old.stat().st_mtime > REVIVE_KEEP_DAYS * 86400:
             old.unlink(missing_ok=True)
-    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:50] or "thread"
+    slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")[:50] or "thread"
     path = folder / f"{slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
-    path.write_text(render_agent(card))
-    where = next((r["ref"]["path"] for r in card.get("resources", []) if r["kind"] == "folder"
-                  and Path(r.get("ref", {}).get("path", "")).is_dir()), str(Path.home()))
+    path.write_text(text)
+    return path
+
+
+def _revive_start(cards: list[dict], agent: str, prompt: str) -> str:
+    """The shell command: cd to the work's folder (the first card's checkout on this Mac, else the home folder) and
+    start the agent (`agent` from agents.AGENTS, else the user's default, else one that worked on the threads)."""
+    import shlex
+    from pathlib import Path
     from pensieve import agents, settings
-    worked = [r.get("ref", {}).get("session", "").split(":", 1)[0] for r in card.get("resources", []) if r["kind"] == "session"]
+    where = next((r["ref"]["path"] for c in cards for r in c.get("resources", []) if r["kind"] == "folder"
+                  and Path(r.get("ref", {}).get("path", "")).is_dir()), str(Path.home()))
+    worked = [r.get("ref", {}).get("session", "").split(":", 1)[0] for c in cards for r in c.get("resources", [])
+              if r["kind"] == "session"]
     agent = agent if agent in agents.AGENTS else agents.choose(settings.get("default_agent"), worked)
-    prompt = REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=f"its copy in {path}")
     return f"cd {shlex.quote(where)} && {agents.start(agent, prompt)}"
+
+
+def revive_cluster_command(cards: list[dict], branch: str, folder, agent: str = "") -> str:
+    """The shell command that starts a new agent session on a cluster: the threads of one branch, newest first."""
+    path = _revive_copy(folder, branch or "branch", _cluster_text(cards))
+    return _revive_start(cards, agent, _cluster_head(cards, branch, f"their copies in {path}"))
+
+
+def revive_command(card: dict, folder, agent: str = "") -> str:
+    """The shell command that starts a new agent session on a thread: the agent reads the live thread with Pensieve's
+    `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder. `agent`: the
+    agent to start (agents.AGENTS); by default the user's default agent, else one that worked on the thread (this Mac's checkout, or the home folder when it is
+    gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
+    path = _revive_copy(folder, card["title"], render_agent(card))
+    return _revive_start([card], agent, REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=f"its copy in {path}"))
 
 
 def save(card: dict, folder) -> str:

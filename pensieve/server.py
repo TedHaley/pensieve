@@ -2001,6 +2001,8 @@ def _terminal(cmd: str):
 
 class ReviveReq(BaseModel):
     id: str = ""  # a thread on the Threads tab, as it is now
+    ids: list[str] = []  # or a cluster: the threads of one branch, newest first
+    branch: str = ""  # the cluster's branch
     days: int = 30
     thread: str = ""  # or a saved version of a thread (th_ id), number `version` (default the last)
     version: int = -1
@@ -2020,6 +2022,13 @@ def revive_thread(req: ReviveReq):
     """Start a new agent session in Terminal with a thread as its first context: the thread now, or a version that
     the history saved, such as one from work that ended. With run=false, the prompt with the thread in it."""
     from pensieve import cards, history
+    if req.ids:
+        got = [_local_card(i, req.days) for i in req.ids]
+        if not req.run:
+            return {"ok": True, "prompt": cards.revive_cluster_prompt(got, req.branch)}
+        cmd = cards.revive_cluster_command(got, req.branch, config.V2_DIR / "revive", req.agent)
+        _terminal(cmd)
+        return {"ok": True, "command": cmd}
     if req.thread:
         saves = history.history(req.thread)
         if not saves:
