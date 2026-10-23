@@ -4174,7 +4174,7 @@ function wkSections(t) {
   const showF = S.work.open.has(t.id + ':fl');
   const files = !made.length ? '' : `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:fl" aria-expanded="${showF}">${showF ? '▾' : '▸'} Files <span class="muted">${made.length}</span></button></h5>${!showF ? '' :
     made.slice(0, 20).map(a => a.kind === 'link'
-      ? `<div class="wk-row">${wkSt('page')}<a class="ttl" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.url)}">${esc(a.url.replace(/^https:\/\//, ''))}</a></div>`
+      ? `<div class="wk-row">${wkSt(a.service || 'page')}<a class="ttl" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.url)}">${esc(a.service ? a.name : a.url.replace(/^https:\/\//, ''))}</a>${a.how === 'made' && a.service !== 'Claude' ? `<span class="wk-path">made in this session</span>` : ''}</div>`
       : `<div class="wk-row">${wkSt('file')}<button class="ttl linkbtn subtle" data-wk-openfile="${esc(a.path)}" title="${esc(a.path)}">${esc(a.name)}</button><span class="wk-path" title="${esc(a.path)}">${esc(homeTilde(a.path.slice(0, -a.name.length - 1)))}</span></div>`).join('')}</section>`;
   const recent = t.events.slice(0, WK_RECENT);  // the events are newest first
   const activity = recent.length ? `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:ah" aria-expanded="${!hideA}">${hideA ? '▸' : '▾'} Activity <span class="muted">${recent.length}</span></button></h5>${hideA ? '' : `<ol class="wk-tl">${recent.map(wkEvent).join('')}</ol>`}</section>` : '';

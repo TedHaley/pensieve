@@ -657,7 +657,7 @@ def group(inp: Inputs) -> list[dict]:
                    for i in sorted(its, key=lambda i: -i["updated"]) if not i["key"]][:30],
             sessions=[dict(id=s["id"], title=s["title"], updated=s["updated"], branch=s["branch"], repo=s["repo"],
                            project=s["project"], summary=(s["summary"] or "")[:600],
-                           artifacts=_artifacts(s, facts[s["id"]]["links"])) for s in ss],
+                           artifacts=_artifacts(s, facts[s["id"]]["links"], facts[s["id"]].get("docs", ()))) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
     # A ticket that a thread in another repo works on belongs there: sessions here that only name it (a pasted log,
@@ -974,13 +974,43 @@ def _title(t: dict):
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 
 
-def _artifacts(s: dict, links: list[str], limit: int = 20) -> list[dict]:
-    """What a session made: the published Artifact links in its text (`links`) first, then the files it created or
-    edited that still exist (not scratch files), newest file first, `limit` in all."""
-    out = [dict(kind="link", url=u, name=u.rsplit("/", 1)[-1]) for u in links[:limit]]
+def _artifacts(s: dict, links: list[str], docs=(), limit: int = 20) -> list[dict]:
+    """What a session made or used, links first: the web documents it made (a Notion page it wrote, a Slack
+    message it sent), its published Artifacts, the web documents it opened or named, then the files it created or
+    edited that still exist (not scratch files), newest file first, `limit` in all. `docs`: (url, service, how)."""
+    made = [d for d in docs if d[2] == "made"]
+    out = [dict(kind="link", url=u, name=_doc_name(u, svc), service=svc, how=how) for u, svc, how in made]
+    out += [dict(kind="link", url=u, name="Artifact", service="Claude", how="made") for u in links]
+    out += [dict(kind="link", url=u, name=_doc_name(u, svc), service=svc, how=how) for u, svc, how in docs
+            if how != "made"]
+    out = out[:limit]
     files = sorted((p for p in s["edited"] if Path(p).is_file()), key=_mtime, reverse=True)
     out += [dict(kind="file", path=p, name=Path(p).name) for p in files[:max(0, limit - len(out))]]
     return out
+
+
+GOOGLE_KIND = {"document": "Google Doc", "spreadsheets": "Google Sheet", "presentation": "Google Slides",
+               "forms": "Google Form"}
+
+
+def _doc_name(url: str, service: str) -> str:
+    """A web document's name from its URL: a Notion or Confluence page's title words, else what it is."""
+    from urllib.parse import unquote
+    path = unquote(url.split("://", 1)[-1].split("?", 1)[0].split("#", 1)[0]).rstrip("/")
+    last = path.rsplit("/", 1)[-1]
+    if service == "Notion":
+        words = re.sub(r"-?[0-9a-f]{32}$", "", last).replace("-", " ").strip()
+        return words or "Notion page"
+    if service == "Confluence":
+        return last.replace("+", " ") if not last.isdigit() else "Confluence page"
+    if service == "Slack":
+        return "Slack message" if "thread_ts" in url or (last[:1] == "p" and last[1:].isdigit()) else "Slack channel"
+    if service == "Google Docs":
+        return next((v for k, v in GOOGLE_KIND.items() if f"/{k}/" in url), "Google Doc")
+    if service == "Figma":
+        parts = path.split("/")
+        return parts[3].replace("-", " ") if len(parts) > 3 else "Figma file"
+    return service
 
 
 def _own_prs(ts: list[dict]):

@@ -29,10 +29,22 @@ TICKET_URL = re.compile(r"(https://[\w-]+\.atlassian\.net/browse|https://linear\
 PR_URL = re.compile(r"https://(?:github\.com/[\w.-]+/[\w.-]+/pull/\d+|[\w.-]*gitlab[\w.-]*/[\w./-]+?/-/merge_requests/\d+"
                     r"|bitbucket\.org/[\w.-]+/[\w.-]+/pull-requests/\d+|dev\.azure\.com/[\w./%-]+?/pullrequest/\d+)")
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
+# Web documents a session made, opened or named: (service, the document's URL)
+WEB_DOCS = [
+    ("Notion", re.compile(r"https://(?:www\.)?notion\.so/[\w./%?=&#-]+|https://[\w-]+\.notion\.site/[\w./%?=&#-]+")),
+    ("Slack", re.compile(r"https://[\w-]+\.slack\.com/archives/[A-Z0-9]+(?:/p\d+)?(?:\?thread_ts=[\d.]+)?")),
+    ("Google Docs", re.compile(r"https://docs\.google\.com/(?:document|spreadsheets|presentation|forms)/d/[\w-]+")),
+    ("Google Drive", re.compile(r"https://drive\.google\.com/(?:file/d|drive/folders)/[\w-]+")),
+    ("Confluence", re.compile(r"https://[\w-]+\.atlassian\.net/wiki/[\w./%+-]+")),
+    ("Figma", re.compile(r"https://(?:www\.)?figma\.com/(?:file|design|board|proto)/[\w-]+(?:/[\w%-]+)?")),
+]
+WRITE_TOOL = re.compile(r"create|send|post|update|append|add|duplicate|reply|schedule|edit|move|draft|publish|write",
+                        re.I)
+DOC_RANK = {"made": 0, "read": 1, "named": 2}  # a document the session made comes first
 OWN_MARK = "[pensieve text job]"  # the first line of every prompt Pensieve's text engine sends (engine.MARK)
 # The first words of the sessions that Pensieve starts to close work (cards.RESOLVE_PROMPTS): a close-out, not a thread
 CLOSE_MARKS = ("[pensieve ship]", "[pensieve discard]")
-VERSION = 3  # of the cache files: a new version reads every transcript again
+VERSION = 4  # of the cache files: a new version reads every transcript again
 
 
 @dataclass
@@ -56,6 +68,7 @@ class Facts:
     ticket_urls: list = field(default_factory=list)
     prs: dict = field(default_factory=dict)        # PR url -> times named
     links: list = field(default_factory=list)      # published Artifact links
+    docs: list = field(default_factory=list)       # [url, service, made | read | named] web documents, in order
     tail: list = field(default_factory=list)       # the last TAIL_TURNS turns, [role, text]
     n_turns: int = 0
     state: dict = field(default_factory=dict)      # the reader's own state between two reads
@@ -290,6 +303,16 @@ def _read(f: Facts, path: Path):
                         pending[blk.get("id", "")] = [args.get("command", ""), cwd, b]
                     elif name in EDIT_TOOLS:
                         _written(f, args)
+                    elif name.startswith("mcp__"):  # a page or message tool: the documents it opens or makes
+                        made = bool(WRITE_TOOL.search(name.rsplit("__", 1)[-1]))
+                        _web_docs(f, json.dumps(args), "made" if made else "read")
+                        if made:
+                            st.setdefault("mcp_made", {})[blk.get("id", "")] = name
+                elif blk.get("type") == "tool_result" and blk.get("tool_use_id") in st.get("mcp_made", {}):
+                    st["mcp_made"].pop(blk["tool_use_id"])
+                    rc = blk.get("content")
+                    _web_docs(f, " ".join(x.get("text", "") for x in rc if isinstance(x, dict))
+                              if isinstance(rc, list) else str(rc or ""), "made")
                 elif blk.get("type") == "tool_result" and blk.get("tool_use_id") in pending:
                     cmd, bcwd, recorded = pending.pop(blk["tool_use_id"])
                     rc = blk.get("content")
@@ -348,6 +371,23 @@ def _text_facts(f: Facts, text: str):
     for u in ARTIFACT_URL.findall(text):
         if u not in f.links:
             f.links.append(u)
+    _web_docs(f, text, "named")
+
+
+def _web_docs(f: Facts, text: str, how: str):
+    """Keep the web documents in `text`, each once, with the strongest way the session met it."""
+    if "https://" not in text:
+        return
+    have = {d[0]: d for d in f.docs}
+    for service, rx in WEB_DOCS:
+        for u in rx.findall(text):
+            u = u.rstrip(".,);]'\"")
+            d = have.get(u)
+            if d is None:
+                have[u] = d = [u, service, how]
+                f.docs.append(d)
+            elif DOC_RANK[how] < DOC_RANK[d[2]]:
+                d[2] = how
 
 
 def _written(f: Facts, args: dict):
@@ -438,11 +478,12 @@ def branches(path: str) -> dict[tuple[str, str], float]:
 
 def text_facts(f: Facts) -> dict:
     """The text facts in the shape work.group reads: keys as counted (prefix, number) pairs, ticket links, PR
-    links counted, Artifact links, the last words, the ending, and the last turns."""
+    links counted, Artifact links, web documents (made first), the last words, the ending, and the last turns."""
     turns = [tuple(t) for t in f.tail]
     texts = [f"{'User' if r == 'user' else 'Assistant'}: {t}" for r, t in turns]
     return dict(keys=Counter({tuple(k.split("-", 1)): n for k, n in f.keys.items()}),
                 ticket_urls=[tuple(x) for x in f.ticket_urls], prs=Counter(f.prs), links=list(f.links),
+                docs=sorted((tuple(d) for d in f.docs), key=lambda d: DOC_RANK[d[2]]),
                 last=_tail(texts[-1]) if texts else "", ending=_tail("\n".join(texts[-2:]), 2400) if texts else "",
                 turns=turns)
 
