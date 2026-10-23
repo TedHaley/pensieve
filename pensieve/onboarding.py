@@ -11,7 +11,7 @@ from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
     "Pensieve tracks your work across agent sessions, branches, PRs and tickets.",
-    "Threads mode reads your agent sessions, git and issue tracker.",
+    "Threads mode reads your agent sessions, git, and issue tracker to give them structure.",
     "Developer mode also indexes the repos and files you choose, so your agents can search them.",
     "Everything stays on this Mac.",
 ]
@@ -20,7 +20,7 @@ ABOUT = [
 # git repos and files into an index, so that sessions get richer context.
 PROFILES = [
     dict(id="session", label="Threads mode", categories=["agents"],
-         description="Reads your agent sessions, git and issue tracker. No index."),
+         description="Reads your agent sessions, git, and issue tracker to give them structure. No index."),
     dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
          description="Also indexes the repos and files you choose, so your agents can search them. Adds the Map, "
                      "People and Insights."),
