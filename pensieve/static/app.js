@@ -4042,13 +4042,13 @@ async function loadAgents() {
     S.agents = {...d, startName: by?.name};
   } catch {}
 }
-function wkActions(t, d) {
+function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header wraps up: the card has no button
   const resume = t.resume ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(t.resume.session)}" ${wkAgentMissing(t.resume.session) ? `disabled title="${esc(wkAgentMissing(t.resume.session))}"` : `title="Open Terminal in ${esc(homeTilde(t.resume.command.split(' && ')[0].slice(3)))} and resume “${esc(t.resume.title)}” in ${esc(wkAgentName(t.resume.session))}"`}>${WK_IC.play}Resume session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(t.resume.command)}" aria-label="Copy the resume command" title="Copy the resume command (${esc(t.resume.session.split(':')[0])} only: a session resumes in the agent that wrote it)">${WK_IC.copy}</button></span>` : '';
   const adj = `<button class="wk-btn icon ${S.work.adj[t.id] ? 'on' : ''}" data-wk-adj="${esc(t.id)}" title="Coworkers and related work">${WK_IC.people}</button>`;
   const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const open = S.work.details.has(t.id);
   const details = S.work.view === 'expanded' ? '' : `<button class="wk-btn" data-wk-details="${esc(t.id)}" aria-expanded="${open}" title="The problem, goal and state, and where the work is, its PRs, tickets and sessions">${open ? 'Hide details' : 'Details'}</button>`;
-  const wrap = wkWrapUp({key: `thread|${t.id}`, state: t.state, branch: t.branches?.[0]?.branch || t.claim?.branch || '', tasks: [t]});
+  const wrap = cluster ? '' : wkWrapUp({key: `thread|${t.id}`, state: t.state, branch: t.branches?.[0]?.branch || t.claim?.branch || '', tasks: [t]});
   return `<div class="wk-bar">${resume}${fresh}${details}${wrap}<span class="wk-loc"></span>${adj}${wkCardBtns(t)}</div>`;
 }
 // A thread is named by its anchor (its first PR, else its ticket, else its branch), which stays the same while the
@@ -4201,7 +4201,7 @@ function wkCard(t, d, cluster = '') {
       <div class="wk-main">${head}
         ${open ? `<div class="wk-detail">${wkAbout(t)}${wkKin(t)}${wkSections(t)}${wkAdjacent(t)}</div>` : ''}
       </div>
-      ${wkActions(t, d)}
+      ${wkActions(t, d, cluster)}
     </article>`;
 }
 // What the session is about: its summary when the note writer has one, else the user's last words and the agent's
