@@ -424,6 +424,8 @@ async def _collect_own_async(cfg: dict, r: dict, calls: int) -> list[tuple]:
         recipe = [(t, connectors.fill(a, _since_time(r["id"]))) for t, a in
                   (connectors.PROFILES[pid]["recipe"] if pid else []) if t in names]
         done = [await call(t, a) for t, a in recipe[:calls]]
+        for t, a in connectors.then(pid, out, _since_time(r["id"]))[:calls]:
+            done.append(await call(t, a))
         if not any(done):
             menu = "\n".join(f"- {t.name}: {(t.description or '')[:300]} Input schema: "
                              f"{json.dumps(_attr(t, 'input_schema'))[:600]}" for t in tools)
@@ -718,7 +720,7 @@ def _when(v) -> int | None:
 
 
 def _url(d: dict) -> str:
-    return next((d[k] for k in ("html_url", "webUrl", "url", "permalink", "link") if isinstance(d.get(k), str)
+    return next((d[k] for k in ("html_url", "webUrl", "url", "permalink", "permalink_url", "link") if isinstance(d.get(k), str)
                  and d[k].startswith("http") and "://api." not in d[k]), "")
 
 

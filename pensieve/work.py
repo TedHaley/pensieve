@@ -134,8 +134,9 @@ def _merge_tickets(tickets: list[dict]) -> list[dict]:
 
 def _ticket_body(text: str) -> str:
     """The ticket's description out of a stored item's text, which starts with a heading and a list of fields (key,
-    URL, author, status), and holds the description after a `description:` line."""
-    m = re.search(r"^description:\s*", text, re.M)
+    URL, author, status), and holds the description last, after a `description:` (Jira, Linear) or `notes:` (Asana)
+    line."""
+    m = re.search(r"^(description|notes):\s*", text, re.M)
     if m:
         return text[m.end():].strip()
     lines = [ln for ln in text.splitlines() if not ln.startswith(("# ", "- ")) and ":" not in ln[:12]]

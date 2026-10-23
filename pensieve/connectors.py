@@ -304,6 +304,60 @@ def linear_follow(d: dict, names: set) -> tuple | None:
     return None
 
 
+ASANA_FIELDS = ("name,notes,completed,completed_at,assignee.name,assignee.email,created_by.name,created_at,"
+                "modified_at,due_on,permalink_url,projects.name,memberships.section.name,parent.name,tags.name")
+
+
+def asana_parse(tool: str, args: dict, data) -> list[dict] | None:
+    """The items in an Asana result, which wraps them in {"data": …}: the tasks of a search, one task, or the user
+    with their workspaces. A task has no short key, so it gets `_key` ASANA-<the last six digits of its gid>, and a
+    status: Done when completed, else the section it sits in."""
+    rows = data.get("data", data) if isinstance(data, dict) else data
+    rows = rows if isinstance(rows, list) else [rows] if isinstance(rows, dict) else []
+    out = []
+    for d in rows:
+        if not isinstance(d, dict) or not d.get("gid"):
+            continue
+        if d.get("resource_type") == "task" or "completed" in d:
+            sections = [m["section"].get("name") for m in d.get("memberships") or []
+                        if isinstance(m, dict) and isinstance(m.get("section"), dict)]
+            d = {**{k: v for k, v in d.items() if k != "notes"}, "_key": f"ASANA-{str(d['gid'])[-6:]}",
+                 "status": "Done" if d.get("completed") else next((s for s in sections if s), "") or "Open",
+                 **({"notes": d["notes"]} if d.get("notes") else {})}  # last: the text after it is the description
+        out.append(d)
+    return out
+
+
+def asana_norm(d: dict) -> dict:
+    return dict(title=d.get("name") or "", created=_iso(d.get("created_at")), updated=_iso(d.get("modified_at")))
+
+
+def asana_follow(d: dict, names: set) -> tuple | None:
+    if d.get("gid") and "completed" in d and "notes" not in d and "asana_get_task" in names:
+        return "asana_get_task", {"task_id": str(d["gid"]), "opt_fields": ASANA_FIELDS}
+    return None
+
+
+def asana_then(results: list[tuple]) -> list[tuple]:
+    """After the recipe: a task search in each workspace that `asana_get_user` listed, for the user's tasks that
+    changed since the start time."""
+    calls = []
+    for tool, args, text in results:
+        if tool != "asana_get_user":
+            continue
+        try:
+            data = json.loads(text)
+        except ValueError:
+            continue
+        user = data.get("data", data) if isinstance(data, dict) else {}
+        for w in user.get("workspaces") or [] if isinstance(user, dict) else []:
+            if isinstance(w, dict) and w.get("gid"):
+                calls.append(("asana_search_tasks", {"workspace": str(w["gid"]), "assignee.any": "me",
+                                                     "modified_at.after": "{iso}", "sort_by": "modified_at",
+                                                     "opt_fields": ASANA_FIELDS, "limit": 50}))
+    return calls
+
+
 def notion_norm(d: dict) -> dict:
     title = d.get("title")
     props = d.get("properties") if isinstance(d.get("properties"), dict) else {}
@@ -458,6 +512,21 @@ PROFILES = {
                   prefix="Bearer ", placeholder="lin_api_…",
                   help="Linear's own MCP server with a personal API key.",
                   docs="https://linear.app/settings/account/security")]),
+    "asana": dict(
+        label="Asana", match=r"asana",
+        reads={"asana_list_workspaces", "asana_search_tasks", "asana_get_task", "asana_get_task_stories",
+               "asana_get_multiple_tasks_by_gid", "asana_get_project", "asana_get_project_sections",
+               "asana_get_project_task_counts", "asana_get_project_status", "asana_get_project_statuses",
+               "asana_get_tasks_for_tag", "asana_get_tags_for_workspace", "asana_get_teams_for_user",
+               "asana_get_teams_for_workspace", "asana_list_workspace_users", "asana_get_user",
+               "asana_typeahead_search"},
+        recipe=[("asana_get_user", {"user_id": "me", "opt_fields": "name,email,workspaces.name"})],
+        then=asana_then,
+        hint="Get the user (me) for their workspaces. Then search each workspace for the tasks assigned to the user "
+             "that changed since {iso}, and get each task with its notes and stories.",
+        parse=asana_parse, norm=asana_norm, follow=asana_follow,
+        add=[dict(kind="oauth", label="Sign in to Asana", url="https://mcp.asana.com/sse",
+                  help="Asana's own MCP server. You sign in in the browser.")]),
 }
 ORDER = list(PROFILES)
 
@@ -492,6 +561,13 @@ def hint(pid: str | None, when: datetime) -> str:
 def parse(pid: str | None, tool: str, args: dict, data) -> list[dict] | None:
     fn = PROFILES[pid].get("parse") if pid else None
     return fn(tool.rsplit(".", 1)[-1], args or {}, data) if fn else None
+
+
+def then(pid: str | None, results: list[tuple], when: datetime) -> list[tuple]:
+    """The calls that a profile plans from the recipe's results (a search per workspace the user is in), with the
+    start time put in."""
+    fn = PROFILES[pid].get("then") if pid else None
+    return [(t, fill(a, when)) for t, a in fn(results)] if fn else []
 
 
 def follow(pid: str | None, item: dict, names: set) -> tuple | None:
