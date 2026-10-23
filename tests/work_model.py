@@ -72,6 +72,13 @@ def run():
     results.append(check("other fields come from the row that has them", (merged[0]["assignee"], merged[0]["url"]),
                          ("Me", "https://j/ABC-1")))
 
+    known = {"ABC-12", "ABC-7"}
+    results.append(check("a lower case key in a branch, for a known ticket", work.branch_keys("abc-12-fix-login", known), ["ABC-12"]))
+    results.append(check("an underscore and a folder in a branch", work.branch_keys("feature/abc_7-heap", known), ["ABC-7"]))
+    results.append(check("an upper case key counts as in text", work.branch_keys("team/ABC-9-x", known), ["ABC-9"]))
+    results.append(check("a lower case key of an unknown ticket is not a key", work.branch_keys("abc-99-x", known), []))
+    results.append(check("words with numbers are not keys", work.branch_keys("fix-2-bugs sha-256", known), []))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 

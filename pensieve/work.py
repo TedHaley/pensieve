@@ -20,6 +20,15 @@ from pathlib import Path
 from pensieve import cardtext, connections, repos as repos_mod, task_states
 
 KEY = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
+BRANCH_KEY = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,9})[-_](\d{1,6})(?![0-9])")  # dp-4575-x, feat/DP_12
+
+
+def branch_keys(branch: str, known=()) -> list[str]:
+    """The ticket keys in a branch name. Upper case (DP-4575) as in text; another case or an underscore (dp-4575,
+    Dp_4575) only for a ticket in `known`, since `fix-2-bugs` or `sha-256` look like keys too."""
+    out = [f"{a}-{b}" for a, b in KEY.findall(branch)]
+    out += [k for a, b in BRANCH_KEY.findall(branch) if (k := f"{a.upper()}-{b}") in known and k not in out]
+    return out
 # a ticket's page: Jira (…/browse/KEY) and Linear (…/issue/KEY); group 1 is the site part that comes before the key
 TICKET_URL = re.compile(r"(https://[\w-]+\.atlassian\.net/browse|https://linear\.app/[\w-]+/issue)/([A-Z][A-Z0-9]{1,9}-\d{1,6})\b")
 # pull and merge requests on GitHub, GitLab, Bitbucket and Azure DevOps
@@ -153,6 +162,7 @@ def _older_items(items: list[dict], prefixes: set, S: dict, facts: dict, commits
     prefixes = prefixes | documents.ticket_prefixes(db, srcs)
     have = {i["doc"] for i in items}
     keys = {f"{a}-{b}" for s in S.values() for t in [s["title"], s["branch"]] for a, b in KEY.findall(t) if a in prefixes}
+    keys |= {f"{a.upper()}-{b}" for s in S.values() for a, b in BRANCH_KEY.findall(s["branch"]) if a.upper() in prefixes}
     keys |= {f"{a}-{b}" for s in S.values() for a, b in facts[s["id"]]["keys"] if a in prefixes}
     keys |= {f"{a}-{b}" for c in commits for a, b in KEY.findall(c[4]) if a in prefixes}
     keys |= {i["key"] for i in items if i["key"]}  # older copies of a window's ticket (another tool's, with its people)
@@ -473,6 +483,12 @@ def group(inp: Inputs) -> list[dict]:
     def keys_in(text):
         return [f"{a}-{b}" for a, b in KEY.findall(text) if a in prefixes]
 
+    known = {i["key"] for i in items if i["key"]}
+
+    def keys_of(title, branch):
+        """The keys in a session's or PR's title and branch: a branch's key in any case, for a known ticket."""
+        return list(dict.fromkeys(keys_in(title) + [k for k in branch_keys(branch, known) if k.split("-")[0] in prefixes]))
+
     u = _Union()
     # branches: feature branches only; a branch with many sessions over many days holds many tasks
     by_branch = defaultdict(list)
@@ -486,7 +502,7 @@ def group(inp: Inputs) -> list[dict]:
             continue
         for s in v:
             u.join(f"s:{s['id']}", f"b:{k[0]}@{k[1]}")
-        for key in keys_in(k[1]):
+        for key in keys_of("", k[1]):
             u.join(f"b:{k[0]}@{k[1]}", f"t:{key}")
     # A pull request linked from a session, whose title or head branch names a ticket, ties the ticket to the PR and
     # to the PR's head branch, when the session worked on that branch at some point. A long session moves on to other
@@ -503,7 +519,7 @@ def group(inp: Inputs) -> list[dict]:
             if not head or head in DEFAULT_BRANCHES or (repo, head) in long_lived \
                     or ((repo, head) not in worked_of[sid] and (repo, head) not in branch_nodes):
                 continue
-            ks = keys_in(f"{info.get('title', '')} {head}")
+            ks = keys_of(info.get("title", ""), head)
             for key in ks:
                 u.join(f"b:{repo}@{head}", f"t:{key}")
             if ks:
@@ -513,7 +529,7 @@ def group(inp: Inputs) -> list[dict]:
     # session that just quotes another repo's ticket does not join that ticket's task.
     home = defaultdict(set)
     for s in S.values():
-        for key in keys_in(s["title"] + " " + s["branch"]):
+        for key in keys_of(s["title"], s["branch"]):
             if s["repo"]:
                 home[key].add(s["repo"])
     for repo, sha, ts, author, subject in commits:
@@ -526,7 +542,7 @@ def group(inp: Inputs) -> list[dict]:
     homes = lambda k: home[k] or home_project[k.split("-")[0]]
     for s in S.values():
         found = said(s["id"])
-        strong = set(keys_in(s["title"] + " " + s["branch"]))
+        strong = set(keys_of(s["title"], s["branch"]))
         weak = {k for k in found if k not in strong and s["repo"] and (not homes(k) or s["repo"] in homes(k))}
         # one ticket per session from its text, so a session that mentions two tickets doesn't merge them; more than
         # three keys: a list of tickets, not one task
