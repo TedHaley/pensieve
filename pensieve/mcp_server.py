@@ -16,7 +16,7 @@ from pensieve import actions, migrate, onboarding, scopes, settings, sources, us
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "people", "repo", "projects", "list_repos", "current_scope", "open",
-               "index_path", "report_feedback", "stale", "threads", "thread", "share_thread"}
+               "index_path", "report_feedback", "stale", "threads", "thread", "cluster", "thread_page"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -791,22 +791,67 @@ def thread(id: str, full: bool = False, version: str = "") -> str:
     return text + (f"\nThread: {th} · {history.saves(th)} saved versions (thread(id, version=\"list\"))" if th else "")
 
 
+def _on_branch(t: dict, branch: str) -> bool:
+    """True when a thread holds the branch, or its session wrote to it and lost it to another thread."""
+    return any(b["branch"] == branch for b in t.get("branches", [])) or branch in (t.get("claims") or {}) \
+        or any(b["branch"] == branch for b in (t.get("contributed") or {}).get("branches", []))
+
+
+def _branch_threads(branch: str) -> list[dict]:
+    """The threads of one branch within this connection's scope, newest session first."""
+    ts = [t for t in _tasks_in_scope() if _on_branch(t, branch)]
+    return sorted(ts, key=lambda t: -((t.get("sessions") or [{}])[0].get("updated") or t["updated"]))
+
+
 @tool()
-def share_thread(id: str, ask: str = "") -> dict:
-    """A thread made fit to send, as the Share button on the Threads tab makes it: the problem, goal, state and next,
-    the links its reader can open, and summaries (read from the whole documents now) of what they can't, such as
-    transcripts and uncommitted changes. No local paths, session ids or secrets. ask: what the user needs from the
-    reader, in their words. Saves one HTML page in ~/Downloads, which people open and agents read (the page holds the
-    thread's JSON), and returns the file's path and the thread. To send it, attach the file with your Slack, email or
-    PR tool, and write your own message: the user approves what you send."""
+def cluster(branch: str) -> str:
+    """The threads of one branch (the last 30 days, within this connection's scope), newest session first: what
+    each session did on the branch and its share of the lines, each thread's state, and the steps left to wrap the
+    branch up, with who can do each (you, the agent; the user; or the tracker). Pensieve only reads: do the steps in
+    git, GitHub or the tracker. branch: its name as `threads` and `thread` print it. thread(id) gives one thread
+    whole; thread_page(branch=...) saves the page of them all."""
+    from datetime import datetime
+    from pensieve import cards
+    ts = _branch_threads(branch)
+    if not ts:
+        raise KeyError(f"no thread of the last 30 days wrote to branch {branch!r}")
+    day = lambda ts_: datetime.fromtimestamp(ts_).strftime("%Y-%m-%d")
+    who = {"agent": "you, the agent", "you": "the user", "parent": "in its tracker or on GitHub"}
+    out = [f"# Branch {branch}: {len(ts)} sessions wrote to it, newest first"]
+    for t in ts:
+        me = next((k for k in t.get("kin", []) if k.get("me")), {})
+        share = f", {round(me['share'] * 100)}% of the branch" if me.get("share") else ""
+        at = (t.get("sessions") or [{}])[0].get("updated") or t["updated"]
+        out.append(f"- {day(at)} {t['title']} [{t['id']} {t['state']}]: {me.get('did') or 'no changes'}{share}")
+    steps = cards.wrapup_steps(ts)
+    out += ["", "Left to wrap this branch up (Pensieve only reads: these are steps, not changes it made):"]
+    out += [f"- {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for s in steps] or ["- nothing: every step is done"]
+    can = any(t["state"] in ("open", "loose_ends", "forgotten") for t in ts)
+    out.append(f"\nWrap-up: {'open: the steps above close it' if can else 'done: every thread is closed'}")
+    return "\n".join(out)
+
+
+@tool()
+def thread_page(id: str = "", branch: str = "") -> dict:
+    """A thread's page for people, or the page of every thread of one branch (newest first), saved as one HTML file
+    in ~/Downloads. The page holds the threads' JSON too, so agents read it as data. Give `id` (a thread) or `branch`
+    (its name). Returns the file's path and the thread ids on it. To send it, attach the file with your own tool and
+    write your own message: the user approves what you send."""
     from pensieve import cards, history, task_states, work
-    tid = (history.task_of(id) or id) if id.startswith("th_") else id
-    t = next((x for x in _tasks_in_scope() if x["id"] == tid), None)
-    if not t:
-        raise KeyError(id)
     store = _c()["store"]
-    out = cards.share(cards.draft_share(cards.build(t, work.notes().get(tid, {}), task_states.history(store, tid)), store), ask)
-    return {"file": cards.save(out, Path.home() / "Downloads"), "thread": cards.render_agent(out)}
+    build = lambda t: cards.build(t, work.notes().get(t["id"], {}), task_states.history(store, t["id"]))
+    if branch:
+        ts = _branch_threads(branch)
+        if not ts:
+            raise KeyError(f"no thread of the last 30 days wrote to branch {branch!r}")
+        page, name = cards.render_cluster_html([build(t) for t in ts], branch), branch
+    else:
+        tid = (history.task_of(id) or id) if id.startswith("th_") else id
+        t = next((x for x in _tasks_in_scope() if x["id"] == tid), None)
+        if not t:
+            raise KeyError(id)
+        ts, page, name = [t], cards.render_html(build(t)), t["title"]
+    return {"file": cards.save_page(page, name, Path.home() / "Downloads"), "threads": [t["id"] for t in ts]}
 
 
 @tool()

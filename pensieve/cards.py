@@ -12,7 +12,6 @@ and `render_agent` for agents (the data as compact JSON). Agents in a Pensieve s
 import html
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from pensieve import cardtext, resources as res
@@ -20,16 +19,6 @@ from pensieve import task_states, work
 
 SCHEMA = "pensieve-thread/2"
 PAGE_ID = "pensieve-thread"  # the id of the <script> that holds the JSON; pages before version 2 used "context-card"
-_SECRET = re.compile(
-    r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|"
-    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|"
-    r"(?i:(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*)['\"]?[^\s'\"]{6,})")
-_LOCAL_PATH = re.compile(r"(?:/Users/|/home/|~/)[^\s`'\")\]>,;]+|\.claude/worktrees/[^\s`'\")\]>,;]*")
-# a sentence about the owner's own machine (a file to delete on the Desktop, a memory note): kept on the local card,
-# dropped from the shared one
-_OWN_MACHINE = re.compile(r"\b(Desktop|Downloads|Documents folder|MEMORY\.md|memory files?|on (this|my|your|the) "
-                          r"(Mac|machine|laptop)|local (file|folder)s?)\b", re.I)
-SUMMARIES = 6  # local and restricted resources that get a summary when a card is shared, the most useful first
 
 
 def _iso(ts) -> str:
@@ -115,93 +104,6 @@ def handoff(card: dict) -> dict:
                        start=start, refresh=refresh))
 
 
-def draft_share(card: dict, store, include: list[int] | None = None) -> dict:
-    """The shared card to preview: the local card's resources (those in `include`, by position; default all), and
-    a summary of each local or restricted one, written from the whole document now. Nothing leaves the Mac; `share`
-    then makes the card fit to send."""
-    rs = [dict(r) for i, r in enumerate(card.get("resources", [])) if include is None or i in include]
-    todo = sorted((r for r in rs if r["reach"] in (res.LOCAL, res.RESTRICTED) and r["kind"] != "folder"),
-                  key=lambda r: -r.get("relevance", 0))[:SUMMARIES]
-
-    def one(r):
-        obj = res.Resource(r["kind"], r["title"], r.get("ref", {}), relevance=r.get("relevance", 0.5), reach=r["reach"])
-        r["summary"] = res.summarize(obj, res.read_full(obj, store), card)
-    with ThreadPoolExecutor(4) as ex:
-        list(ex.map(one, todo))
-    return share(dict(card, resources=rs))
-
-
-def share(card: dict, ask: str = "") -> dict:
-    """The card to send. No `local` part and no local path anywhere: a local resource keeps its summary and loses its
-    path, or is left out when it has no summary. A private resource (a direct or group message, a private channel)
-    and its timeline points are left out whole; another message keeps its link and loses its text (its title is the
-    message's first line) and any summary. Secrets become [secret], a branch card's id becomes the same on
-    every machine (b:org/repo@branch), and `ask` (what the sender needs from the reader) leads the card."""
-    c = json.loads(json.dumps(card))
-    c.pop("local", None)
-    c.pop("last_words", None)  # a transcript's words: the session's summary says what matters
-    c["core"] = {k: v if k == "as_of" else " ".join(s for s in re.split(r"(?<=[.;!?])\s+", v) if not _OWN_MACHINE.search(s))
-                 for k, v in c.get("core", {}).items()}
-    c["timeline"] = [dict(x, title="A message") if x.get("source") == "message" else x
-                     for x in c.get("timeline", []) if not x.get("private")]
-    kept = []
-    for r in c.get("resources", []):
-        if r["reach"] == res.PRIVATE:  # a direct or group message, or a private channel: not even its link
-            continue
-        if r["kind"] == "message":  # a message's title is its own text: the reader gets the link, not the words
-            src = (r.get("ref") or {}).get("source") or ""
-            r["title"] = f"{src} message" if src else "A message"
-            r.pop("summary", None)
-        if r["reach"] == res.LOCAL:
-            if not r.get("summary") or r["kind"] == "folder":
-                continue
-            r.pop("ref", None)
-        elif r.get("ref"):
-            r["ref"] = {k: v for k, v in r["ref"].items() if k not in ("path", "session", "root")}
-        kept.append(r)
-    c["resources"] = kept
-    if c["id"].startswith("b:"):
-        repo = next((re.sub(r"^https?://[^/]+/", "", r["ref"]["web"]).split("/tree/")[0] for r in kept
-                     if r["kind"] == "branch" and r.get("ref", {}).get("web")), "")
-        c["id"] = f"b:{repo or c['id'][2:].rsplit('@', 1)[0].rsplit('/', 1)[-1]}@{c['id'].rsplit('@', 1)[-1]}"
-    if ask.strip():
-        c["ask"] = ask.strip()
-    c["handoff"] = handoff(c)
-
-    def scrub(x):
-        if isinstance(x, str):
-            return _SECRET.sub("[secret]", _LOCAL_PATH.sub("[local path]", x))
-        if isinstance(x, list):
-            return [scrub(v) for v in x]
-        if isinstance(x, dict):
-            return {k: scrub(v) for k, v in x.items()}
-        return x
-    c = scrub(c)
-    c["locality"] = "shared"
-    return _clean(c)
-
-
-def local_parts(card: dict) -> list[str]:
-    """Why a card is not fit to share: its `local` part, a local resource with a path, and each field that still holds a
-    local path. [] when it is fit. A shared space refuses a card that this finds anything in."""
-    found = ["local"] if "local" in card else []
-    found += [f"resources[{i}]" for i, r in enumerate(card.get("resources", []))
-              if r.get("reach") == res.PRIVATE or (r.get("reach") == res.LOCAL and r.get("ref"))]
-    found += [f"timeline[{i}]" for i, x in enumerate(card.get("timeline", [])) if x.get("private")]
-
-    def walk(x, at):
-        if isinstance(x, str) and _LOCAL_PATH.search(x):
-            found.append(at)
-        elif isinstance(x, list):
-            for i, v in enumerate(x):
-                walk(v, f"{at}[{i}]")
-        elif isinstance(x, dict):
-            for k, v in x.items():
-                walk(v, f"{at}.{k}" if at else k)
-    walk({k: v for k, v in card.items() if k != "local"}, "")
-    return found
-
-
 def render_agent(card: dict) -> str:
     """The card for an agent: its data as compact JSON, newest timeline first and cut short, with a line on how to
     read it. Agents follow ids, URLs and commands; they don't need layout."""
@@ -259,6 +161,7 @@ blockquote{margin:0;padding:10px 14px;border-left:3px solid var(--line);color:va
 color:var(--ink);border-radius:8px;padding:3px 9px;cursor:pointer}
 .local{border:1px dashed var(--line);border-radius:12px;padding:4px 14px 12px;margin-top:22px}.local h2{margin-top:12px}
 footer{margin-top:26px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+.cluster-card{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}.cluster-card h1{font-size:20px}
 @media (max-width:560px){main{padding:20px 16px}dl{grid-template-columns:1fr}dt{margin-top:6px}}
 """
 
@@ -290,6 +193,41 @@ def render_html(card: dict) -> str:
     """The thread for people: one page with no outside files, light and dark, that leads with the ask and the core.
     The page holds the thread's JSON in <script type="application/json" id="pensieve-thread">, so `from_html` and
     any tool can read it back."""
+    return _page(card["title"], _card_html(card) + f"<footer>{_foot(card)}</footer>", card)
+
+
+def render_cluster_html(cards: list[dict], branch: str) -> str:
+    """The threads of one branch for people, newest first, on one page: each thread as on its own page. The page
+    holds the threads' JSON as a list."""
+    e = lambda s: html.escape(str(s or ""))
+    head = (f"<h1>{e(branch)}</h1><div class=\"meta\"><span>{len(cards)} sessions wrote to this branch, newest first</span>"
+            f"<span>{e(', '.join(c['id'] for c in cards))}</span></div>")
+    body = "".join(f'<section class="cluster-card">{_card_html(c)}</section>' for c in cards)
+    return _page(branch, head + body + f"<footer>{_foot(cards[0]) if cards else ''}</footer>", cards)
+
+
+def _page(title: str, body: str, data) -> str:
+    e = lambda s: html.escape(str(s or ""))
+    payload = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
+    return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
+            '<meta name=viewport content="width=device-width,initial-scale=1">'
+            f"<title>{e(title)}</title><style>{CSS}</style></head><body><main>"
+            + body + "</main>"
+            f'<script type="application/json" id="{PAGE_ID}">{payload}</script></body></html>')
+
+
+def _foot(card: dict) -> str:
+    e = lambda s: html.escape(str(s or ""))
+    day = lambda s: (s or "")[:10]
+    th = card.get("thread") or {}
+    return (f"Pensieve thread · {e(card.get('schema'))} · made {e(day(card.get('made_at')))} by "
+            f"{e((card.get('origin') or {}).get('generator'))}"
+            + (f' · <a href="{e(th["url"])}">thread</a> revision {e(th.get("revision"))}' if th.get("url") else "")
+            + " · this page holds the thread as JSON")
+
+
+def _card_html(card: dict) -> str:
+    """One thread's part of a page: its state, title, core, links, last words and timeline."""
     e = lambda s: html.escape(str(s or ""))
     day = lambda s: (s or "")[:10]
     st, core, rs = card.get("state", {}), card.get("core", {}), card.get("resources", [])
@@ -335,17 +273,7 @@ def render_html(card: dict) -> str:
         out += ['<section class="local"><h2>On this Mac only</h2><ul class="rows">' + "".join(
             f'<li><span class="badge">{e(r["kind"])}</span><span class="grow">{e(r["title"])}<p><code>{e(r["ref"]["path"])}</code></p></span></li>'
             for r in mine) + "</ul></section>"]
-    th = card.get("thread") or {}
-    foot = (f"Pensieve thread · {e(card.get('schema'))} · made {e(day(card.get('made_at')))} by "
-            f"{e((card.get('origin') or {}).get('generator'))}"
-            + (f' · <a href="{e(th["url"])}">thread</a> revision {e(th.get("revision"))}' if th.get("url") else "")
-            + " · this page holds the thread as JSON")
-    data = json.dumps(card, ensure_ascii=False).replace("<", "\\u003c")
-    return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
-            '<meta name=viewport content="width=device-width,initial-scale=1">'
-            f"<title>{e(card['title'])}</title><style>{CSS}</style></head><body><main>"
-            + "".join(out) + f"<footer>{foot}</footer></main>"
-            f'<script type="application/json" id="{PAGE_ID}">{data}</script></body></html>')
+    return "".join(out)
 
 
 def _link_row(r: dict, e) -> str:
@@ -426,6 +354,45 @@ def revive_cluster_command(cards: list[dict], branch: str, folder, agent: str = 
     return _revive_start(cards, agent, _cluster_head(cards, branch, f"their copies in {path}"))
 
 
+WRAPUP_PROMPT = ("Wrap up the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+                 "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
+                 "{copy}. The steps left to close this work, in order:\n{steps}\n"
+                 "Do the agent's steps with your own tools, in this order, and stop before each step that is mine or "
+                 "the tracker's: tell me what it is and what you need from me. Before anything that leaves this Mac "
+                 "(a push, a pull request, a comment, a ticket change), show me what you will do and wait for my yes. "
+                 "When a step is done, say what you checked to know it is done.")
+
+
+def wrapup_steps(threads: list[dict]) -> list[dict]:
+    """The steps left to close a cluster: each thread's closeout steps that are not done, one of each, in order."""
+    out, seen = [], set()
+    for t in threads:
+        for s in t.get("closeout", []):
+            key = s.get("text", "")
+            if s.get("done") or key in seen:
+                continue
+            seen.add(key)
+            out.append(dict(text=key, who=s.get("who", ""), ref=s.get("ref", ""), stage=s.get("stage", "")))
+    return out
+
+
+def _wrapup_head(cards: list[dict], branch: str, steps: list[dict], copy: str) -> str:
+    who = {"agent": "you, the agent", "you": "me, the user", "parent": "the tracker or GitHub"}
+    lines = [f"{i + 1}. {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for i, s in enumerate(steps)] or ["(nothing left: check that the work is done)"]
+    return WRAPUP_PROMPT.format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards), copy=copy,
+                                steps="\n".join(lines))
+
+
+def wrapup_prompt(cards: list[dict], branch: str, steps: list[dict]) -> str:
+    return _wrapup_head(cards, branch, steps, "their copies below") + "\n\n" + _cluster_text(cards)
+
+
+def wrapup_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "") -> str:
+    """The shell command that starts a new agent session to wrap a cluster up: the steps left lead its prompt."""
+    path = _revive_copy(folder, f"wrap-up-{branch or 'branch'}", _cluster_text(cards))
+    return _revive_start(cards, agent, _wrapup_head(cards, branch, steps, f"their copies in {path}"))
+
+
 def revive_command(card: dict, folder, agent: str = "") -> str:
     """The shell command that starts a new agent session on a thread: the agent reads the live thread with Pensieve's
     `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder. `agent`: the
@@ -437,11 +404,16 @@ def revive_command(card: dict, folder, agent: str = "") -> str:
 
 def save(card: dict, folder) -> str:
     """Write the thread's HTML page into folder, named after its title; returns the path."""
+    return save_page(render_html(card), card["title"], folder)
+
+
+def save_page(page: str, name: str, folder) -> str:
+    """Write a page into folder as <name slug>.thread.html; returns the path."""
     from pathlib import Path
-    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:60] or "thread"
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:60] or "thread"
     path = Path(folder).expanduser() / f"{slug}.thread.html"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_html(card))
+    path.write_text(page)
     return str(path)
 
 

@@ -3968,7 +3968,7 @@ const wkSearch = debounce(async () => {
   S.work.hits = hits; S.work.page = 0;
   if (S.view === 'work') renderWork();
 }, 220);
-const closeWkMenu = () => { if (S.work.menu) { S.work.menu = false; renderWork(); } };
+const closeWkMenu = () => { if (S.work.menu || S.work.wrap) { S.work.menu = false; S.work.wrap = null; renderWork(); } };
 document.addEventListener('click', closeWkMenu);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeWkMenu(); });
 const WK_SRC = {session: 'Session', commit: 'Commit', ticket: 'Ticket', pr: 'PR', message: 'Message', change: 'Change', branch: 'Branch'};
@@ -4064,8 +4064,7 @@ async function openThread(tid, title) {
   });
 }
 function wkCardBtns(t) {
-  return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this thread as a page">${WK_IC.eye}</button>`
-    + `<button class="wk-btn icon" data-wk-share="${esc(t.id)}" title="Share: preview what goes, then save a page to Downloads that people open and agents read">${WK_IC.share}</button>`;
+  return `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this thread as a page">${WK_IC.eye}</button>`;
 }
 // The page in an iframe's srcdoc: the Mac app's web view can't open a second window
 async function openPreview(load, title) {
@@ -4082,51 +4081,6 @@ async function openPreview(load, title) {
     f.title = title; f.srcdoc = await r.text();
     $('.pv-body', m).replaceChildren(f);
   } catch (e) { $('.pv-body', m).innerHTML = `<div class="empty">Could not show the thread: ${esc(e.message)}</div>`; }
-}
-// The Share dialog: Pensieve drafts the shared card (summaries of what the reader can't open, read whole now); the
-// person writes what they need, edits the core, unticks what doesn't belong, and saves the page to Downloads.
-const REACH_TXT = {local: 'summary only', git: 'link (git)', mcp: 'link (via MCP)', restricted: 'link, may need access', public: 'link'};
-async function openShare(id) {
-  const m = document.createElement('div');
-  m.className = 'modal'; m.id = 'sharemodal';
-  m.innerHTML = `<div class="palette share-dlg"><div class="sh-head"><h3>Share this thread</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
-    <div class="sh-body"><p class="cap">Reading the sessions, changes and files of this work, and writing a summary of each one that your reader can’t open…</p><div class="shimmer" style="height:160px"></div></div></div>`;
-  document.body.append(m);
-  const close = () => m.remove();
-  m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) close(); };
-  let d;
-  try { d = await api('/api/thread/share/draft', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, days: S.work.days})}); }
-  catch (e) { $('.sh-body', m).innerHTML = `<div class="empty">Could not draft the thread: ${esc(e.message)}</div>`; return; }
-  const c = d.thread, core = c.core || {}, rs = c.resources || [];
-  const left = d.resources.filter(r => r.reach === 'local' && r.kind !== 'folder').length - rs.filter(r => r.reach === 'local').length;
-  const priv = d.resources.filter(r => r.reach === 'private').length;
-  $('.sh-body', m).innerHTML = `
-    <label class="sh-f"><span>What do you need from them?</span><textarea data-sh="ask" rows="2" placeholder="Can you review #12 before Friday? / It’s yours while I’m away."></textarea></label>
-    ${NOTE_ROWS.map(([k, l, tip]) => `<label class="sh-f"><span title="${tip}">${l}</span><textarea data-sh-core="${k}" rows="${k === 'state' ? 3 : 2}">${esc(core[k] || '')}</textarea></label>`).join('')}
-    <h4>What goes with it</h4><p class="cap">Links stay links for anyone who can open them. What only this Mac has goes as a summary, without its path.${left > 0 ? ` ${plural(left, 'local item')} had nothing worth sending and ${left === 1 ? 'is' : 'are'} left out.` : ''}${priv ? ` ${plural(priv, 'private message')} (direct, group or private channel) ${priv === 1 ? 'stays' : 'stay'} on this Mac.` : ''}</p>
-    ${rs.map((r, i) => `<div class="sh-r"><label><input type="checkbox" data-sh-keep="${i}" checked><b>${esc(r.title)}</b><span class="muted">${esc(REACH_TXT[r.reach] || r.reach)}</span></label>
-      ${r.summary || r.reach === 'local' || r.reach === 'restricted' ? `<textarea data-sh-sum="${i}" rows="3">${esc(r.summary || '')}</textarea>` : ''}</div>`).join('')}
-    <div class="sh-foot"><span class="muted">Saved to Downloads as one page: people open it, agents read the data in it.</span><button class="btn" data-close>Cancel</button><button class="btn" data-sh-preview>Preview</button><button class="btn primary" data-sh-save>Save to Downloads</button></div>`;
-  const edited = () => {  // the thread as the person edited it in this dialog
-    const th = JSON.parse(JSON.stringify(c));
-    th.core = {...th.core};
-    $$('[data-sh-core]', m).forEach(t => { const v = t.value.trim(); if (v) th.core[t.dataset.shCore] = v; else delete th.core[t.dataset.shCore]; });
-    th.resources = rs.map((r, i) => ({...r, summary: ($(`[data-sh-sum="${i}"]`, m)?.value ?? r.summary ?? '').trim()}))
-      .filter((r, i) => $(`[data-sh-keep="${i}"]`, m).checked);
-    return th;
-  };
-  $('[data-sh-preview]', m).onclick = () => openPreview(() => fetch('/api/thread/share/render', {method: 'POST', headers: {'content-type': 'application/json'},
-    body: JSON.stringify({thread: edited(), ask: $('[data-sh="ask"]', m).value})}), 'Preview: the page you would send');
-  $('[data-sh-save]', m).onclick = async e => {
-    e.target.disabled = true;
-    const thread = edited();
-    try {
-      const r = await api('/api/thread/share/save', {method: 'POST', headers: {'content-type': 'application/json'},
-        body: JSON.stringify({id, days: S.work.days, thread, ask: $('[data-sh="ask"]', m).value})});
-      await api('/api/open', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: 'file:' + r.path, action: 'reveal'})}).catch(() => {});
-      toast(`Saved ${r.path.split('/').pop()} to Downloads`); close();
-    } catch (err) { toast('Could not save the thread: ' + err.message); e.target.disabled = false; }
-  };
 }
 const wkSt = (text, kind = '') => `<span class="wk-st ${kind}">${esc(text)}</span>`;
 const PR_ORDER = {open: 0, draft: 1, merged: 2, closed: 3};
@@ -4295,6 +4249,30 @@ function wkKin(t) {
   const n = rows.filter(k => !k.me).length;
   return `<section class="wk-sec wk-kin"><h5>Related sessions${branch && kin.length ? ` · <span class="wk-kin-b">${WK_IC.branch}${esc(branch)}</span>` : ''} <span class="muted">${n}</span></h5><ol class="wk-kin-list">${html}</ol></section>`;
 }
+// A cluster's Wrap up button and its dropdown: the steps left to close the branch's work (each thread's steps that
+// are not done, one of each), who does each, and a button that starts a session to do them, when the work is not
+// closed yet.
+const WRAP_STATES = new Set(['open', 'loose_ends', 'forgotten']);
+function wkWrapSteps(tasks) {
+  const seen = new Set(), out = [];
+  for (const t of tasks) for (const s of t.closeout || []) {
+    if (s.done || seen.has(s.text)) continue;
+    seen.add(s.text); out.push(s);
+  }
+  return out;
+}
+function wkWrapUp(c) {
+  const key = `${c.state}|${c.branch}`, open = S.work.wrap === key, steps = wkWrapSteps(c.tasks), ids = c.tasks.map(t => t.id).join(',');
+  const menu = !open ? '' : `<div class="wk-menu wk-wrap-menu" role="menu">
+      <div class="wk-wrap-h">To close the work on ${WK_IC.branch}${esc(c.branch)}</div>
+      ${steps.length ? steps.map(s => `<div class="wk-step"><span class="box" aria-hidden="true"></span>
+        <span class="what">${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</span>
+        ${s.who ? `<span class="who">${esc(WK_WHO[s.who]?.[0] || s.who)}</span>` : ''}</div>`).join('') : '<div class="wk-step muted">Nothing left: every step is done</div>'}
+      <div class="wk-menu-foot">${WRAP_STATES.has(c.state)
+        ? `<button class="wk-btn primary" data-wk-wrapup-start="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does the agent's steps, asking you before each of yours">${WK_IC.spark}Start a session to wrap up</button>`
+        : `<span class="muted">${esc(wkModel(c.state).label)}: nothing to wrap up</span>`}</div></div>`;
+  return `<span class="wk-wrap"><button class="wk-btn ${open ? 'on' : ''}" data-wk-wrap="${esc(key)}" aria-haspopup="menu" aria-expanded="${open}" title="The steps left to close the work on this branch">Wrap up<span class="wk-n">${steps.length}</span></button>${menu}</span>`;
+}
 // A thread's session's own time: the holder of a branch adopts the time of the newest session on it (t.updated)
 const wkOwnTime = t => t.sessions?.[0]?.updated || t.updated;
 // The threads of a page as clusters: the threads of one state that wrote to the same branch sit together, the
@@ -4395,13 +4373,15 @@ function renderWork() {
       const prev = i ? items[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== c.state) ? `<h3 class="wk-group" style="--acc:${wkModel(c.state).color}" title="${esc(def(wkModel(c.state)))}">${esc(wkModel(c.state).label)}<span>${count(c.state)}</span></h3>` : '';
       if (!c.branch) return head + wkCard(c.tasks[0], d);
+      const ids = c.tasks.map(t => t.id).join(',');
       // the cluster's header says where the work is, so its cards do not: the checkout, its branch (linked when
       // pushed) and its uncommitted files, from the place of the thread that holds the branch
       const p = c.tasks.map(t => (t.places || []).find(x => x.branch === c.branch)).find(Boolean) || {};
       const repo = p.repo || (p.path || '').split('/').pop();
       const link = p.remote_url ? `<a class="wk-branch" href="${esc(p.remote_url)}" target="_blank" rel="noopener">${WK_IC.branch}${esc(c.branch)}</a>` : `<span class="wk-branch">${WK_IC.branch}${esc(c.branch)}</span>`;
-      return head + `<section class="wk-cluster" data-branch="${esc(c.branch)}" style="--acc:${wkModel(c.state).color}"><header class="wk-cluster-h">${repo ? `<span class="wk-where-repo" title="${esc(p.path || '')}">${esc(repo)}</span>` : ''}${link}${p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : ''}<span class="n">${plural(c.tasks.length, 'session')} on this branch</span>
-        <span class="wk-split"><button class="wk-btn" data-wk-revive-cluster="${esc(c.tasks.map(t => t.id).join(','))}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads all ${c.tasks.length} threads of this branch first">${WK_IC.spark}Fork from all ${c.tasks.length}</button><button class="wk-btn copy" data-wk-revive-cluster-copy="${esc(c.tasks.map(t => t.id).join(','))}" data-branch="${esc(c.branch)}" aria-label="Copy a prompt with every thread of this branch in it" title="Copy a prompt with every thread of this branch in it, to start the work in any agent">${WK_IC.copy}</button></span></header>${c.tasks.map(t => wkCard(t, d, c.branch)).join('')}</section>`;
+      return head + `<section class="wk-cluster" data-branch="${esc(c.branch)}" style="--acc:${wkModel(c.state).color}"><header class="wk-cluster-h">${repo ? `<span class="wk-where-repo" title="${esc(p.path || '')}">${esc(repo)}</span>` : ''}${link}${p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : ''}<span class="wk-cl-btns">${wkWrapUp(c)}
+        <span class="wk-split"><button class="wk-btn" data-wk-revive-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads all ${c.tasks.length} threads of this branch first">${WK_IC.spark}Fork from all ${c.tasks.length}</button><button class="wk-btn copy" data-wk-revive-cluster-copy="${esc(ids)}" data-branch="${esc(c.branch)}" aria-label="Copy a prompt with every thread of this branch in it" title="Copy a prompt with every thread of this branch in it, to start the work in any agent">${WK_IC.copy}</button></span>
+        <button class="wk-btn icon" data-wk-preview-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Preview the ${c.tasks.length} threads of this branch as one page">${WK_IC.eye}</button></span></header>${c.tasks.map(t => wkCard(t, d, c.branch)).join('')}</section>`;
     }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.threads.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
@@ -4469,7 +4449,6 @@ function wkBind(el, d) {
     try { await api('/api/thread/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
     catch (e) { toast('Could not resume it: ' + e.message); }
   });
-  $$('[data-wk-share]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openShare(b.dataset.wkShare); });
   $$('[data-wk-jump]', el).forEach(b => b.onclick = e => { e.stopPropagation(); goThread(b.dataset.wkJump); });
   $$('[data-wk-thread]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
@@ -4487,7 +4466,19 @@ function wkBind(el, d) {
   $$('[data-wk-resume-copy]', el).forEach(b => b.onclick = e => {
     e.stopPropagation(); navigator.clipboard?.writeText(b.dataset.wkResumeCopy); toast('Resume command copied');
   });
-  const cluster = b => ({ids: b.dataset.wkReviveCluster?.split(',') || b.dataset.wkReviveClusterCopy.split(','), branch: b.dataset.branch, days: S.work.days});
+  const cluster = b => ({ids: (b.dataset.wkReviveCluster || b.dataset.wkReviveClusterCopy || b.dataset.wkWrapupStart || b.dataset.wkPreviewCluster).split(','), branch: b.dataset.branch, days: S.work.days});
+  $$('[data-wk-wrap]', el).forEach(b => b.onclick = e => { e.stopPropagation(); S.work.wrap = S.work.wrap === b.dataset.wkWrap ? null : b.dataset.wkWrap; S.work.menu = false; renderWork(); });
+  $$('.wk-wrap-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
+  $$('[data-wk-wrapup-start]', el).forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({...cluster(b), intent: 'wrap_up'})}); S.work.wrap = null; renderWork(); toast(`Starting a session to wrap up ${b.dataset.branch} in Terminal`); }
+    catch (err) { toast('Could not start it: ' + err.message); }
+  });
+  $$('[data-wk-preview-cluster]', el).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const q = cluster(b);
+    openPreview(() => fetch(`/api/thread?ids=${enc(q.ids.join(','))}&branch=${enc(q.branch)}&days=${S.work.days}`), `${q.branch}: ${plural(q.ids.length, 'thread')}`);
+  });
   $$('[data-wk-revive-cluster]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
     try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(cluster(b))}); toast(`Starting a new session from the ${cluster(b).ids.length} threads of ${b.dataset.branch} in Terminal`); }
@@ -4532,6 +4523,7 @@ function wkBind(el, d) {
   $$('[data-wk-adj]', el).forEach(b => b.onclick = async () => {
     const id = b.dataset.wkAdj;
     if (S.work.adj[id] && !S.work.adj[id].loading) { delete S.work.adj[id]; return renderWork(); }  // a second click hides it
+    if (S.work.view !== 'expanded') S.work.details.add(id);  // the panel draws in the card's details: open them
     S.work.adj[id] = {loading: true}; renderWork();
     try { S.work.adj[id] = await api(`/api/thread/adjacent?id=${enc(id)}&days=${S.work.days}`); }
     catch (e) { S.work.adj[id] = {coworkers: [], related: []}; toast('Could not look: ' + e.message); }

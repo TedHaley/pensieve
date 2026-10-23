@@ -1666,13 +1666,18 @@ def search_threads(q: str, days: int = 30):
 
 
 @app.get("/api/thread")
-def get_thread(id: str, format: str = "html", share: bool = False, days: int = 30, version: int | None = None):
+def get_thread(id: str = "", format: str = "html", days: int = 30, version: int | None = None, ids: str = "", branch: str = ""):
     """One thread (pensieve-thread/2): the id of a thread on the Threads tab, or a th_ id. `format`: html (the page
-    for people, which holds the JSON), agent (compact JSON with a line on how to read it) or json. `share`: the thread
-    to send: no local part or path, and a summary of each local or restricted resource, read whole now (this takes a
-    few model calls). `version`: a saved version instead of the thread now (-1 is the last)."""
+    for people, which holds the JSON), agent (compact JSON with a line on how to read it) or json. `version`: a saved
+    version instead of the thread now (-1 is the last). `ids` (comma-separated) with `branch`: the threads of one
+    branch on one page, newest first."""
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     from pensieve import cards, history
+    if ids:
+        got = [_local_card(i, days) for i in _csv(ids)]
+        if format == "html":
+            return HTMLResponse(cards.render_cluster_html(got, branch))
+        return PlainTextResponse(cards._cluster_text(got)) if format == "agent" else JSONResponse(got)
     if version is not None:
         saves = history.history(id if id.startswith("th_") else history.thread_of(id) or "")
         if not saves:
@@ -1680,7 +1685,6 @@ def get_thread(id: str, format: str = "html", share: bool = False, days: int = 3
         card = saves[version]["card"]
     else:
         card = _local_card(history.task_of(id) or id if id.startswith("th_") else id, days)
-        card = cards.draft_share(card, store) if share else card
     if format == "html":
         return HTMLResponse(cards.render_html(card))
     return PlainTextResponse(cards.render_agent(card)) if format == "agent" else JSONResponse(card)
@@ -1692,22 +1696,6 @@ def _local_card(task_id: str, days: int) -> dict:
     if not t:
         raise HTTPException(404, f"no thread {task_id}")
     return cards.build(t, work.notes().get(task_id, {}), task_states.history(store, task_id))
-
-
-class CardDraftReq(BaseModel):
-    id: str
-    days: int = 30  # the Threads tab's period, where the id comes from
-    include: list[int] | None = None  # the local thread's resources to keep, by position; default all
-
-
-@app.post("/api/thread/share/draft")
-def draft_share(req: CardDraftReq):
-    """The Share button's preview: the local thread's resources (what the person can untick) and the shared thread
-    drafted from them, with a summary of each local or restricted one. Nothing is saved."""
-    from pensieve import cards
-    card = _local_card(req.id, req.days)
-    return {"resources": [{k: r.get(k) for k in ("kind", "title", "reach")} for r in card.get("resources", [])],
-            "thread": cards.draft_share(card, store, req.include)}
 
 
 def _repo_rows():
@@ -1910,38 +1898,6 @@ def get_thread_versions(id: str):
     return [{**{k: v for k, v in s.items() if k != "card"}, "thread": s["card"]} for s in saves]
 
 
-class CardRenderReq(BaseModel):
-    thread: dict
-    ask: str = ""
-
-
-@app.post("/api/thread/share/render")
-def render_share(req: CardRenderReq):
-    """The Share dialog's preview: the edited thread's page exactly as saving would write it (made fit to send)."""
-    from fastapi.responses import HTMLResponse
-    from pensieve import cards
-    return HTMLResponse(cards.render_html(cards.share(req.thread, req.ask)))
-
-
-class CardSaveReq(BaseModel):
-    id: str
-    days: int = 30
-    thread: dict | None = None  # the shared thread as the person edited it; default: a draft of the whole thread
-    ask: str = ""
-
-
-@app.post("/api/thread/share/save")
-def save_share(req: CardSaveReq):
-    """The Share button's save: the shared thread as an HTML page in ~/Downloads (the app's web view can't
-    download). An edited thread is made fit to send again, and refused if it still holds anything local. Returns the
-    file's path."""
-    from pensieve import cards
-    card = cards.share(req.thread if req.thread else cards.draft_share(_local_card(req.id, req.days), store), req.ask)
-    if cards.local_parts(card):
-        raise HTTPException(422, f"the thread still holds something local: {', '.join(cards.local_parts(card)[:5])}")
-    return {"path": cards.save(card, Path.home() / "Downloads")}
-
-
 class TaskStateReq(BaseModel):
     id: str
     state: str  # todo | open | loose_ends | complete | forgotten | auto
@@ -2003,6 +1959,7 @@ class ReviveReq(BaseModel):
     id: str = ""  # a thread on the Threads tab, as it is now
     ids: list[str] = []  # or a cluster: the threads of one branch, newest first
     branch: str = ""  # the cluster's branch
+    intent: str = ""  # "wrap_up": the new session closes the cluster's steps left, instead of picking the work up
     days: int = 30
     thread: str = ""  # or a saved version of a thread (th_ id), number `version` (default the last)
     version: int = -1
@@ -2024,6 +1981,14 @@ def revive_thread(req: ReviveReq):
     from pensieve import cards, history
     if req.ids:
         got = [_local_card(i, req.days) for i in req.ids]
+        if req.intent == "wrap_up":
+            ts = [t for t in work.tasks(store, req.days) if t["id"] in set(req.ids)]
+            steps = cards.wrapup_steps(sorted(ts, key=lambda t: req.ids.index(t["id"])))
+            if not req.run:
+                return {"ok": True, "prompt": cards.wrapup_prompt(got, req.branch, steps), "steps": steps}
+            cmd = cards.wrapup_command(got, req.branch, steps, config.V2_DIR / "revive", req.agent)
+            _terminal(cmd)
+            return {"ok": True, "command": cmd, "steps": steps}
         if not req.run:
             return {"ok": True, "prompt": cards.revive_cluster_prompt(got, req.branch)}
         cmd = cards.revive_cluster_command(got, req.branch, config.V2_DIR / "revive", req.agent)
