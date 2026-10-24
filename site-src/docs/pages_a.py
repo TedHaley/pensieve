@@ -36,8 +36,9 @@ page("", "Overview",
      "Pensieve documentation",
      "This page tells you what Pensieve is, what its parts do, and where to start.",
      f"""
-<p>Pensieve keeps the context of your work in one place on your Mac. It indexes your files, git repos, AI agent
-sessions, tickets and messages. You search it from a panel. Your coding agents search it over MCP. Each person's
+<p>Pensieve keeps the context of your work in one place on your Mac. It reads your AI agent sessions, git, GitHub
+and your issue tracker, and it makes a thread for each piece of work. In Developer mode, it also indexes the repos and
+files that you choose. You search them from a panel, and your coding agents search them over MCP. Each person's
 context is different, so Pensieve builds it from your own work and keeps it on your Mac.</p>
 <p>Pensieve is free and open source under the MIT license. It is for developers and their AI agents.</p>
 
@@ -48,17 +49,27 @@ context is different, so Pensieve builds it from your own work and keeps it on y
   <a href="/docs/benchmark/"><b><i style="--c:var(--c-owners)"></i>Benchmark</b><span>The method, the results and what we did not measure.</span></a>
 </div>
 
+<h2 id="modes">Two modes</h2>
+<p>You choose a mode at setup. We recommend Threads mode to start. To change the mode, go to Settings. The setup then
+starts again at the mode step.</p>
+{table(["Mode", "What it does", "What it needs"], [
+    ["Threads mode (the default)", "Reads your agent sessions, git, GitHub and your issue tracker, and makes threads from them.", "No index and no model."],
+    ["Developer mode", "Everything that Threads mode does. It also indexes the repos and files that you choose, so that your agents can search them. It adds the Map, People and Insights tabs.", "The search model. It runs on the GPU of your Mac."],
+])}
+
 <h2 id="parts">The main parts</h2>
 
 <h3 id="threads">Threads</h3>
-<p>Pensieve makes one thread for each goal of your work. A thread joins the agent sessions, the branch, the PRs,
-the tickets and the messages of that goal. It says the problem, the goal, the state and what is next. It also
-gives the steps left to close it, and the command that resumes the last agent session. Each thread has one of five
-states: <span class="state" style="--sc:var(--s-todo)">To do</span>,
+<p>Pensieve makes one thread for each agent session that wrote something: edits, commits, a branch or a PR. A thread
+joins the session with its branch, PRs and tickets. It gives the steps left to close the work, and the command that
+resumes the session. The threads of one branch sit together in a cluster. A ticket that is assigned to you, with no
+work on it yet, is a to-do. Each thread has one of six states:
 <span class="state" style="--sc:var(--s-open)">Open</span>,
+<span class="state" style="--sc:var(--s-todo)">To-do</span>,
+<span class="state" style="--sc:var(--s-thoughts)">Thoughts</span>,
 <span class="state" style="--sc:var(--s-loose-ends)">Loose ends</span>,
-<span class="state" style="--sc:var(--s-complete)">Complete</span> or
-<span class="state" style="--sc:var(--s-forgotten)">Forgotten</span>. You can share a thread as one HTML file.
+<span class="state" style="--sc:var(--s-complete)">Closed</span> or
+<span class="state" style="--sc:var(--s-forgotten)">Forgotten</span>. Threads need no index and no model.
 <a href="/docs/threads/">Read about threads</a>.</p>
 
 <h3 id="mcp-server">MCP server</h3>
@@ -68,7 +79,8 @@ in a scope. By default, the scope is the repo that the agent started in.
 <a href="/docs/agents/">Connect your agent</a>, or read the <a href="/docs/mcp-tools/">MCP tools reference</a>.</p>
 
 <h3 id="search">Search</h3>
-<p>Search finds items by meaning and by exact words. It blends a vector search with a full-text search. Then it
+<p>Search is part of Developer mode. It finds items by meaning and by exact words. It blends a vector search with
+a full-text search. Then it
 gives more weight to exact text and to names that a file defines. A search takes about 0.1 to 0.2 seconds. On a Mac,
 press <kbd>Control</kbd>+<kbd>Shift</kbd> to open the search panel.</p>
 {table(["Query", "Finds"], [
@@ -85,21 +97,24 @@ press <kbd>Control</kbd>+<kbd>Shift</kbd> to open the search panel.</p>
 ])}
 
 <h3 id="who-knows">Who knows what</h3>
-<p>Pensieve reads git blame for each indexed repo. Ask about a subject, not a file, and it names the people who
-wrote the most related code. Agents get the same data from the <code>people</code> tool.</p>
+<p>In Developer mode, Pensieve reads git blame for each indexed repo. Ask about a subject, not a file, and it names
+the people who wrote the most related code. Agents get the same data from the <code>people</code> tool.</p>
 
 <h3 id="knowledge-gaps">Knowledge gaps</h3>
-<p>A knowledge gap is an area of a repo that people who are no longer active wrote most of. For each area, Pensieve
+<p>A knowledge gap is an area of a repo that people who are no longer active wrote most of. In Developer mode, the
+Insights tab shows the gaps. For each area, Pensieve
 shows who wrote it, which active person knows it best, and its bus factor. The bus factor is the number of active
 people who hold 10% or more of the lines. By default, a person with no commit in 180 days is not active.</p>
 
 <h3 id="connections">Connections</h3>
-<p>Connections collect your tickets, threads and pages from MCP servers such as Jira, Slack and Linear. Pensieve
-calls only read-only tools. Each connection is off until you switch it on.
+<p>Connections collect your tickets, messages and pages from MCP servers. To connect Jira, Linear or Asana, sign in
+at setup or in Settings → Sources → Cloud connectors. Your tickets then become to-do threads, and a ticket that is done
+closes its thread. Pensieve calls only read-only tools.
 <a href="/docs/connections/">Read about connections</a>.</p>
 
 <h2 id="what-gets-indexed">What Pensieve indexes</h2>
-<p>You choose each source at setup. You can change your choice in Settings → Sources.</p>
+<p>Threads mode reads your agent sessions and indexes nothing. In Developer mode, you choose each source at setup. You
+can change your choice in Settings → Sources.</p>
 <ul>
   <li><strong>AI agent sessions:</strong> Claude Code, Codex and Qwen Code transcripts.</li>
   <li><strong>Files and folders:</strong> documents in <code>~/Documents</code>, <code>~/Desktop</code>, <code>~/Downloads</code> and the folders that you add.</li>
@@ -110,12 +125,13 @@ calls only read-only tools. Each connection is off until you switch it on.
 <p>Pensieve never indexes files that look like secrets, such as <code>.env</code> files, keys and credentials.</p>
 
 <h2 id="models">Models</h2>
-<p>Pensieve runs one model: the search model. It turns text into vectors, and it always runs on your computer. The
-default for a new index is EmbeddingGemma 2.</p>
-<p>Thread notes, summaries and insights are written in the background. Setup asks what writes them: a command-line
-agent (Claude Code with Haiku), the built-in Qwen 3.5 9B on your Mac, or a model server that you run, such as LM
-Studio or Ollama. The built-in model runs only when there is work, and only one copy runs. Search, agent context,
-ownership and knowledge gaps need none of them.</p>
+<p>Threads mode runs no model. Developer mode runs one model: the search model. It turns text into vectors, and it
+always runs on your computer. The default for a new index is EmbeddingGemma 2.</p>
+<p>Session summaries, topic names and insights are text jobs. By default, Pensieve runs no text model of its own. The
+agent that you connect over MCP does the jobs when you ask it to do Pensieve's pending work. In Settings → Models →
+Summaries and insights, you can choose another engine: the built-in Qwen 3.5 9B on your Mac, a command-line agent, or a
+model server that you run, such as LM Studio or Ollama. Threads, search, agent context, ownership and knowledge gaps
+need none of them.</p>
 """)
 
 page("install", "Install",
@@ -161,26 +177,31 @@ installs only and does not open the app.</p>
 adds three hooks. <a href="/docs/agents/">Connect your agent</a> lists each change, file by file.</p>
 
 <h2 id="setup">Choose what to index</h2>
-<p>Pensieve indexes nothing until you finish setup. This is also true after a reset. When the app opens, it shows
-these steps:</p>
+<p>Pensieve reads and indexes nothing until you finish setup. This is also true after a reset. When the app opens,
+it shows these steps:</p>
 <ol>
-  <li>Read what Pensieve does.</li>
-  <li>Choose how you use your computer: software development, AI coding agents, documents and office work, or research and notes.</li>
-  <li>Let Pensieve look for sources in the folders that those choices need. macOS can ask you to allow access to some folders.</li>
-  <li>Choose what to index. Add folders or repos that Pensieve did not find.</li>
-  <li>Choose whether Pensieve reads images, video and audio by what they show or say. These are off by default.</li>
-  <li>Choose the search model.</li>
-  <li>Start indexing.</li>
+  <li><strong>Welcome:</strong> read what Pensieve does.</li>
+  <li><strong>Choose a mode:</strong> Threads mode or Developer mode (see <a href="/docs/#modes">Two modes</a>). We recommend Threads mode to start.</li>
+  <li><strong>Connect your issue tracker:</strong> click Sign in for Jira, Linear or Asana. The sign-in opens in your browser. This step is optional. You can also connect a tracker later in Settings → Sources → Cloud connectors.</li>
 </ol>
+<p>In Threads mode, click <strong>Start Threads mode</strong> after step 3. In Developer mode, these steps follow:</p>
+<ol start="4">
+  <li><strong>Allow Pensieve to look:</strong> Pensieve looks for sources in the folders that it lists. macOS can ask you to allow access to some folders.</li>
+  <li><strong>Choose what Pensieve indexes:</strong> add folders or repos that Pensieve did not find. Choose whether Pensieve reads images, video and audio by what they show or say. These are off by default.</li>
+  <li><strong>Choose your search model.</strong></li>
+  <li><strong>Start indexing.</strong></li>
+</ol>
+<p>When you switch the mode in Settings, the setup starts again at the mode step.</p>
 <p>To do setup from a terminal, use these commands:</p>
-{pre('''pensieve setup                  # list the sources that Pensieve found, with their sizes
+{pre('''pensieve setup threads          # Threads mode: read every agent session folder, index nothing
+pensieve setup                  # Developer mode: list the sources that Pensieve found, with their sizes
 pensieve setup recommended      # index the sources marked [x]
 pensieve setup recommended images audio   # also read images and sound by content''')}
 <p>An agent can also do setup in its chat. Until setup is done, every MCP connection gets the tools
 <code>setup_guide</code>, <code>setup_scan</code>, <code>setup_add_source</code> and <code>setup_start</code>.</p>
 
 <h2 id="first-index">The first index</h2>
-<p>The first index uses a lot of energy. The search model runs until it finishes, at about 500 code files a minute
+<p>This applies to Developer mode only. The first index uses a lot of energy. The search model runs until it finishes, at about 500 code files a minute
 on Apple Silicon. A repo with 35,000 files takes a little more than one hour. Search works while Pensieve indexes.
 Settings → Sources shows what is syncing now.</p>
 <div class="note"><p>If you use a laptop, connect it to power before the first index.</p></div>

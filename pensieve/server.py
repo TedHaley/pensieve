@@ -25,7 +25,8 @@ files: Files | None = None
 datamap: DataMap | None = None
 searcher: search_mod.Searcher | None = None
 subscribers: set[asyncio.Queue] = set()
-status = {"indexing": False, "message": "starting", "layout": False, "insights_running": False, "insights_scope": None}
+status = {"indexing": False, "message": "starting", "layout": False, "insights_running": False, "insights_scope": None,
+          "collecting": None}  # collecting: the name of the connection that collects now
 wake_files = asyncio.Event()  # set (thread-safely) by the file watcher
 wake_repos = asyncio.Event()
 wake_sessions = asyncio.Event()
@@ -148,6 +149,10 @@ async def watcher():
             status.update(indexing=False, message="waiting for setup")
             await _wait(wake_files, config.POLL_SECONDS)
             continue
+        if settings.get("mode") != "developer":  # threads mode indexes no files: the threads read the transcripts
+            status.update(indexing=False, message="idle")
+            await _wait(wake_files, config.POLL_SECONDS)
+            continue
         try:
             d = watch.take()
             if sorted(str(p) for p in files.roots()) != sorted(watch.folders):  # a folder appeared or went away
@@ -199,16 +204,29 @@ async def session_watcher():
             continue
         try:
             paths = watch.take_sessions() if watch else set()
-            if not last_sweep or store.behind or time.time() - last_sweep > SESSION_SWEEP_SECONDS:
-                last_sweep = time.time()  # every folder: new folders, and what the watcher missed
-                n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
-                    on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
-                if not store.behind:  # every session is indexed
-                    await _run(migrate.mark_indexed, "sessions")
-            elif paths or store.waiting:  # the transcripts that changed, at once
-                n = await _run(lambda: store.sync_paths(paths))
+            # Threads read the transcripts themselves (transcripts.py), in every mode: the changed ones at once,
+            # every folder now and then for new files
+            from pensieve import cardbuild, transcripts
+            sweep = not last_sweep or time.time() - last_sweep > SESSION_SWEEP_SECONDS
+            if sweep:
+                changed, _ = await _run(transcripts.sync)
             else:
-                n = 0
+                changed = [p for p in paths if await _run(transcripts.facts, p)]
+            if changed:
+                have = transcripts.all_facts()
+                cardbuild.emit(cardbuild.SESSION, [have[p].id for p in changed if p in have])
+            # the index of the sessions' text (search, the Map) is developer mode's: threads mode reads no index
+            n = 0
+            if settings.get("mode") == "developer":
+                if sweep or store.behind:
+                    n = await _run(lambda: store.sync_files(budget=SESSION_BATCH_SECONDS,
+                        on_progress=lambda k: loop.call_soon_threadsafe(broadcast, {"type": "updated", "sessions": k})))
+                    if not store.behind:  # every session is indexed
+                        await _run(migrate.mark_indexed, "sessions")
+                elif paths or store.waiting:  # the transcripts that changed, at once
+                    n = await _run(lambda: store.sync_paths(paths))
+            if sweep:
+                last_sweep = time.time()
             if n:
                 broadcast({"type": "updated", "sessions": n})
                 _indexed()
@@ -232,14 +250,7 @@ def _start_cards(loop):
     def changed(ids, removed):
         loop.call_soon_threadsafe(broadcast, {"type": "thread", "ids": ids, "removed": removed})
 
-    def note(t) -> bool:
-        try:
-            work.write_note(t, [])
-            return True
-        except llm.Queued:  # your agent answers it later, and agent_pass writes it then
-            return False
     b.listeners.append(changed)
-    b.note_fn = note
     indexer.session_listeners.append(lambda sid: cardbuild.emit(cardbuild.SESSION, [sid]))
     connections.listeners.append(lambda r: cardbuild.emit(cardbuild.DOCUMENT, [r.id]))
     repos_mod.commit_listeners.append(lambda root: cardbuild.emit(cardbuild.COMMIT, [root]))
@@ -288,7 +299,7 @@ async def upstream_watcher():
 async def repo_watcher():
     last_full = 0
     while True:
-        if not settings.get("setup_done"):
+        if not settings.get("setup_done") or settings.get("mode") != "developer":
             await _wait(wake_repos, 30)
             continue
         try:
@@ -449,10 +460,6 @@ async def agent_pass(loop, pool):
         broadcast({"type": "topics"})
     if not status["insights_running"] and store.topics() and await _run(_insights_due):
         await run_insights()
-    ts = await asyncio.to_thread(work.tasks, store, 30)
-    todo = [t for t in work.stale_notes(ts, limit=AGENT_BATCH * 3) if t["state"] in ("open", "loose_ends")][:AGENT_BATCH]
-    if ok(await asyncio.gather(*[asyncio.to_thread(work.write_note, t, ts) for t in todo], return_exceptions=True)):
-        broadcast({"type": "threads"})
 
 
 async def engine_worker():
@@ -483,27 +490,6 @@ async def enricher():
         except Exception as e:
             status["message"] = f"enricher: {e!r}"[:200]
             await asyncio.sleep(30)
-
-
-async def card_keeper():
-    """Every history.CHECK seconds: mark what later commits did (work.check_done), link the cards to threads
-    (history.current) and save the ones that changed; once a day, prune the history."""
-    from pensieve import history, work
-    await asyncio.sleep(60)  # after the first index pass has settled
-    history.current, pruned = history.Keeper(store), 0.0
-    while True:
-        try:
-            await asyncio.to_thread(lambda: work.check_done(work.tasks(store, 30)))
-            saved = await asyncio.to_thread(history.current.run_once)
-            if saved:
-                print(f"Saved {len(saved)} context cards to their threads' history", flush=True)
-            if time.time() - pruned > 86400:
-                await asyncio.to_thread(history.prune)
-                pruned = time.time()
-        except Exception:
-            import traceback
-            traceback.print_exc()
-        await asyncio.sleep(history.CHECK)
 
 
 def _drop_plugin_duplicates():
@@ -559,8 +545,7 @@ async def lifespan(app):
     loop.run_in_executor(None, _drop_plugin_duplicates)
     loop.run_in_executor(None, searcher._folder_index)  # starts its first build, so searches find folders sooner
     threading.Thread(target=store.backfill_usage, daemon=True, name="usage-backfill").start()
-    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(card_keeper()),
-             asyncio.create_task(engine_worker())]
+    tasks = [asyncio.create_task(watcher()), asyncio.create_task(enricher()), asyncio.create_task(engine_worker())]
     async with mcp_server.mcp.session_manager.run():
         yield
     for t in tasks:
@@ -659,7 +644,8 @@ async def model_switcher():
     """Embeds the index with the model chosen in Settings, in the background (see reembed). Ends in a restart."""
     loop = asyncio.get_running_loop()
     while True:
-        if settings.get("setup_done") and reembed.wanted() != config.EMBED_MODEL or store.meta("next_model"):
+        if settings.get("setup_done") and settings.get("mode") == "developer" and reembed.wanted() != config.EMBED_MODEL \
+                or store.meta("next_model"):
             try:
                 if reembed.switch_empty(store, [store, repos, files]):
                     broadcast({"type": "status", **status})
@@ -1303,6 +1289,14 @@ async def hook_repo_check(request: Request):
     except ValueError:
         return {}
     c = await asyncio.to_thread(_repo_check, cwd)
+    if settings.get("mode") != "developer":  # Threads mode indexes no repo: nothing to ask, only the repo's threads
+        if c.get("state") == "none":
+            return {}
+        try:
+            note = integrations.threads_note(c["name"], c["root"], await asyncio.to_thread(work.tasks, store, 30))
+        except Exception:
+            note = None
+        return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": note}} if note else {}
     notes = [integrations.repo_note(c)]
     if c.get("state") == "indexed":  # a cleanup hint, from the last stale report only: the hook may wait 3 s at most
         items = stale_mod.cached(c["root"])
@@ -1440,19 +1434,23 @@ class SetupReq(BaseModel):
     embed_model: str | None = None  # the search model (config.EMBED_MODELS)
     content: list[str] | None = None  # images, video, audio: read by content (needs EmbeddingGemma 2)
     text_engine: str | None = None  # what writes notes and summaries (onboarding.engines)
+    mode: str | None = None  # session (threads only, no index) or developer; default: developer when a repo is chosen
 
 
 @app.post("/api/setup")
 async def post_setup(req: SetupReq):
-    """Index exactly the chosen sources: every other candidate is switched off, then indexing starts."""
+    """Choose the sources and the mode: every other candidate is switched off. In developer mode indexing starts; in
+    session mode the threads read the transcripts themselves and nothing is indexed."""
     try:
         res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.embed_model, req.content,
-                                                  req.text_engine))
+                                                  req.text_engine, req.mode))
     except ValueError as e:
         raise HTTPException(400, str(e))
     wake_files.set()
-    wake_repos.set()
-    wake_model.set()
+    wake_sessions.set()
+    if settings.get("mode") == "developer":
+        wake_repos.set()
+        wake_model.set()
     return res
 
 
@@ -1541,9 +1539,21 @@ async def collect_connection(sid: str):
     """Collect from one connection now, with its read-only tools."""
     if sid not in {r["id"] for r in connections.servers()}:
         raise HTTPException(404, f"unknown connection {sid!r}")
-    run = await asyncio.to_thread(connections.collect, sid)
+    run = await _collect(sid)
     wake_files.set()
     return {"run": run, "sources": sources.catalog(store, repos, files)}
+
+
+async def _collect(sid: str):
+    """Collect from one connection, with its name in the status while it runs."""
+    name = next((r["name"] for r in connections.servers() if r["id"] == sid), sid)
+    status["collecting"] = name.removeprefix("claude.ai ")
+    broadcast({"type": "status", **status})
+    try:
+        return await asyncio.to_thread(connections.collect, sid)
+    finally:
+        status["collecting"] = None
+        broadcast({"type": "status", **status})
 
 
 class McpServerReq(BaseModel):
@@ -1604,6 +1614,7 @@ async def add_connector(pid: str, req: ConnectorReq):
     except ValueError as e:
         raise HTTPException(400, str(e))
     sid = connections.slug(name)
+    settings.set_enabled(f"connections/{sid}", True)  # added by hand: collected from the first sign-in on
     out = {}
     if a["kind"] == "oauth":
         r = await asyncio.to_thread(connections.sign_in, sid)
@@ -1650,49 +1661,26 @@ def remove_mcp_server(path: str):
 
 @app.get("/api/threads")
 def get_threads(days: int = 30, ids: str = ""):
-    """The Threads tab: the threads with their state, their data points from every source, each one's note, and its
-    saved history (id and number of saved versions) once the keeper has linked it. With `ids` (comma-separated),
-    only those threads: the page asks for them after a `thread` event."""
-    from pensieve import history
+    """The Threads tab: the threads with their state and their data points from every source. With `ids`
+    (comma-separated), only those threads: the page asks for them after a `thread` event."""
     only = set(_csv(ids)) if ids else None
     ts = work.tasks(store, days, ids=only)
-    have = work.notes()
-    stale = {t["id"] for t in work.stale_notes(ts, limit=len(ts))}
-    of = {t["id"]: history.thread_of(t["id"]) for t in ts}
-    if only is None:
-        work.warm_card_search(ts, have)
-    # each note's core (problem, goal, state, next, question); notes in an older format show until written again
-    return dict(threads=ts, notes={t["id"]: {**work.core(have[t["id"]]), "title": have[t["id"]].get("title", ""),
-                                             "stale": t["id"] in stale}
-                                   for t in ts if work.core(have.get(t["id"], {}))},
-                history={k: dict(id=v, saves=history.saves(v)) for k, v in of.items() if v},
-                states=task_states.models(), writing=status.get("work_notes") or [])
-
-
-@app.get("/api/threads/search")
-def search_threads(q: str, days: int = 30):
-    """The threads of the last `days` days that match `q`, best first: {results: [{id, score}]}. Meaning words rank
-    the threads, "exact phrases" and -words filter them."""
-    ts = work.tasks(store, days)
-    return dict(results=work.search_cards(ts, work.notes(), q))
+    return dict(threads=ts, states=task_states.models())
 
 
 @app.get("/api/thread")
-def get_thread(id: str, format: str = "html", share: bool = False, days: int = 30, version: int | None = None):
-    """One thread (pensieve-thread/2): the id of a thread on the Threads tab, or a th_ id. `format`: html (the page
-    for people, which holds the JSON), agent (compact JSON with a line on how to read it) or json. `share`: the thread
-    to send: no local part or path, and a summary of each local or restricted resource, read whole now (this takes a
-    few model calls). `version`: a saved version instead of the thread now (-1 is the last)."""
+def get_thread(id: str = "", format: str = "html", days: int = 30, ids: str = "", branch: str = ""):
+    """One thread (pensieve-thread/2): the id of a thread on the Threads tab. `format`: html (the page for people,
+    which holds the JSON), agent (compact JSON with a line on how to read it) or json. `ids` (comma-separated) with
+    `branch`: the threads of one branch on one page, newest first."""
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-    from pensieve import cards, history
-    if version is not None:
-        saves = history.history(id if id.startswith("th_") else history.thread_of(id) or "")
-        if not saves:
-            raise HTTPException(404, f"no saved versions of {id}")
-        card = saves[version]["card"]
-    else:
-        card = _local_card(history.task_of(id) or id if id.startswith("th_") else id, days)
-        card = cards.draft_share(card, store) if share else card
+    from pensieve import cards
+    if ids:
+        got = [_local_card(i, days) for i in _csv(ids)]
+        if format == "html":
+            return HTMLResponse(cards.render_cluster_html(got, branch))
+        return PlainTextResponse(cards._cluster_text(got)) if format == "agent" else JSONResponse(got)
+    card = _local_card(id, days)
     if format == "html":
         return HTMLResponse(cards.render_html(card))
     return PlainTextResponse(cards.render_agent(card)) if format == "agent" else JSONResponse(card)
@@ -1703,23 +1691,7 @@ def _local_card(task_id: str, days: int) -> dict:
     t = next((x for x in work.tasks(store, days) if x["id"] == task_id), None)
     if not t:
         raise HTTPException(404, f"no thread {task_id}")
-    return cards.build(t, work.notes().get(task_id, {}), task_states.history(store, task_id))
-
-
-class CardDraftReq(BaseModel):
-    id: str
-    days: int = 30  # the Threads tab's period, where the id comes from
-    include: list[int] | None = None  # the local thread's resources to keep, by position; default all
-
-
-@app.post("/api/thread/share/draft")
-def draft_share(req: CardDraftReq):
-    """The Share button's preview: the local thread's resources (what the person can untick) and the shared thread
-    drafted from them, with a summary of each local or restricted one. Nothing is saved."""
-    from pensieve import cards
-    card = _local_card(req.id, req.days)
-    return {"resources": [{k: r.get(k) for k in ("kind", "title", "reach")} for r in card.get("resources", [])],
-            "thread": cards.draft_share(card, store, req.include)}
+    return cards.build(t, task_states.history(store, task_id))
 
 
 def _repo_rows():
@@ -1894,66 +1866,6 @@ async def fetch_people_profiles():
     return res
 
 
-@app.get("/api/threads/history")
-def get_thread_history_index():
-    """The threads with saved versions: id, title, number of saves, first and last save; and which saved thread each
-    current thread belongs to (`of`)."""
-    from pensieve import history
-    return {"threads": history.listing(), "of": history.current.of_task if history.current else {}}
-
-
-@app.post("/api/threads/save")
-async def save_threads():
-    """Save the threads that changed now, as the keeper does every history.CHECK seconds. Returns what was saved."""
-    from pensieve import history
-    if history.current is None:
-        raise HTTPException(503, "the thread keeper starts a minute after Pensieve")
-    return {"saved": await asyncio.to_thread(history.current.run_once)}
-
-
-@app.get("/api/thread/versions")
-def get_thread_versions(id: str):
-    """A thread's saved versions, oldest first: {at, reasons, snapshot, thread}. GET /api/thread?version=n gives one
-    as a page."""
-    from pensieve import history
-    saves = history.history(id if id.startswith("th_") else history.thread_of(id) or "")
-    if not saves:
-        raise HTTPException(404, f"no saved versions of {id}")
-    return [{**{k: v for k, v in s.items() if k != "card"}, "thread": s["card"]} for s in saves]
-
-
-class CardRenderReq(BaseModel):
-    thread: dict
-    ask: str = ""
-
-
-@app.post("/api/thread/share/render")
-def render_share(req: CardRenderReq):
-    """The Share dialog's preview: the edited thread's page exactly as saving would write it (made fit to send)."""
-    from fastapi.responses import HTMLResponse
-    from pensieve import cards
-    return HTMLResponse(cards.render_html(cards.share(req.thread, req.ask)))
-
-
-class CardSaveReq(BaseModel):
-    id: str
-    days: int = 30
-    thread: dict | None = None  # the shared thread as the person edited it; default: a draft of the whole thread
-    ask: str = ""
-
-
-@app.post("/api/thread/share/save")
-def save_share(req: CardSaveReq):
-    """The Share button's save: the shared thread as an HTML page in ~/Downloads (the app's web view can't
-    download). An edited thread is made fit to send again, and refused if it still holds anything local. Returns the
-    file's path."""
-    from pensieve import cards
-    card = cards.share(req.thread if req.thread else cards.draft_share(_local_card(req.id, req.days), store), req.ask)
-    if cards.local_parts(card):
-        raise HTTPException(422, f"the thread still holds something local: {', '.join(cards.local_parts(card)[:5])}")
-    return {"path": cards.save(card, Path.home() / "Downloads")}
-
-
 class TaskStateReq(BaseModel):
     id: str
     state: str  # todo | open | loose_ends | complete | forgotten | auto
@@ -1969,37 +1881,6 @@ def set_thread_state(req: TaskStateReq):
         raise HTTPException(400, str(e))
     broadcast({"type": "thread", "ids": [req.id], "removed": []})
     return r
-
-
-_notes_running = threading.Lock()
-
-
-@app.post("/api/threads/notes")
-async def write_thread_notes(days: int = 30, ids: str = ""):
-    """Write the notes that are missing or out of date, for the threads in `ids` (comma-separated; default: the
-    first 10), in the background."""
-    if _notes_running.locked():
-        return {"started": False}
-
-    async def run():
-        with _notes_running:
-            ts = work.tasks(store, days)
-            todo = work.stale_notes(ts, ids=set(_csv(ids)) or None)
-            status["work_notes"] = [t["id"] for t in todo]  # the notes being written, for their "Updating…" mark
-            for t in todo:
-                try:
-                    await asyncio.to_thread(work.write_note, t, ts)
-                except llm.Queued:  # it waits for your agent; the next one can too
-                    pass
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
-                status["work_notes"] = [x for x in status["work_notes"] if x != t["id"]]
-                broadcast({"type": "thread", "ids": [t["id"]], "removed": []})
-            status["work_notes"] = []
-            broadcast({"type": "thread", "ids": [t["id"] for t in todo], "removed": []})
-    asyncio.create_task(run())
-    return {"started": True}
 
 
 class ResumeReq(BaseModel):
@@ -2019,19 +1900,35 @@ def resume_session(req: ResumeReq):
     return {"ok": True, "command": cmd}
 
 
+AGENT_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_BRIDGE_SESSION_ID",
+                 "CLAUDE_PID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_ENTRYPOINT",
+                 "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_EFFORT", "CLAUDE_CODE_EXECPATH")
+
+
+def _outside_env() -> dict:
+    """This process's environment without the marks of an agent session. A Pensieve server that an agent started
+    (a dev server from a Claude Code session, say) carries CLAUDE_CODE_CHILD_SESSION and the session's id; a new
+    agent that inherits them takes itself for a child of that session and does not save its transcript. The
+    PENSIEVE_* variables of such a server (its data folder, its port) are its own, not the new session's."""
+    return {k: v for k, v in os.environ.items() if k not in AGENT_MARKERS and not k.startswith("PENSIEVE_")}
+
+
 def _terminal(cmd: str):
-    """Run a shell command in a new Terminal window."""
+    """Run a shell command in a new Terminal window, as a session of its own: not a child of the agent that started
+    this server (see _outside_env)."""
     import subprocess
+    cmd = f"unset {' '.join(AGENT_MARKERS)}; {cmd}"
     script = cmd.replace("\\", "\\\\").replace('"', '\\"')
     subprocess.run(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
-                    "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True)
+                    "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True, env=_outside_env())
 
 
 class ReviveReq(BaseModel):
     id: str = ""  # a thread on the Threads tab, as it is now
+    ids: list[str] = []  # or a cluster: the threads of one branch, newest first
+    branch: str = ""  # the cluster's branch
+    intent: str = ""  # "ship" or "discard": the new session closes the work that way, instead of picking it up
     days: int = 30
-    thread: str = ""  # or a saved version of a thread (th_ id), number `version` (default the last)
-    version: int = -1
     run: bool = True  # false: only the prompt with the thread in it, to paste into any agent
     agent: str = ""  # the agent to start (agents.AGENTS); "" = the user's default agent
 
@@ -2043,18 +1940,54 @@ def list_agents():
     return {"agents": agents.listing(settings.get("default_agent")), "default": settings.get("default_agent") or ""}
 
 
+class StartReq(BaseModel):
+    id: str  # a to-do thread
+    days: int = 30
+    repo: str = ""  # the repo the work starts in; remembered for the ticket's project after the first start
+    agent: str = ""
+
+
+@app.post("/api/thread/start")
+def start_thread(req: StartReq):
+    """Start a to-do in Terminal: a worktree on a branch named from the ticket, in the ticket project's repo, and an
+    agent session there that reads the ticket first. Without a repo for the project, returns {choose: [repos]} for
+    the page to ask."""
+    from pensieve import cardbuild, todo
+    t = next((x for x in work.tasks(store, req.days) if x["id"] == req.id), None)
+    if not t:
+        raise HTTPException(404, f"unknown thread {req.id!r}")
+    try:
+        res = todo.start(t, req.repo or None, req.agent)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if res.get("command"):
+        _terminal(res["command"])
+        cardbuild.emit(cardbuild.REFRESH, [req.id])  # the new branch and worktree reach the card
+    return {k: v for k, v in res.items() if k != "command"}
+
+
 @app.post("/api/thread/revive")
 def revive_thread(req: ReviveReq):
     """Start a new agent session in Terminal with a thread as its first context: the thread now, or a version that
     the history saved, such as one from work that ended. With run=false, the prompt with the thread in it."""
-    from pensieve import cards, history
-    if req.thread:
-        saves = history.history(req.thread)
-        if not saves:
-            raise HTTPException(404, f"no saved versions of {req.thread}")
-        card = saves[req.version]["card"]
-    else:
-        card = _local_card(req.id, req.days)
+    from pensieve import cards
+    if req.ids:
+        got = [_local_card(i, req.days) for i in req.ids]
+        intent = {"wrap_up": "ship", "merge": "ship"}.get(req.intent, req.intent)  # the names of older pages
+        if intent in ("ship", "discard"):
+            ts = [t for t in work.tasks(store, req.days) if t["id"] in set(req.ids)]
+            steps = cards.resolve_steps(sorted(ts, key=lambda t: req.ids.index(t["id"])), intent)
+            if not req.run:
+                return {"ok": True, "prompt": cards.resolve_prompt(got, req.branch, steps, intent), "steps": steps}
+            cmd = cards.resolve_command(got, req.branch, steps, config.V2_DIR / "revive", req.agent, intent)
+            _terminal(cmd)
+            return {"ok": True, "command": cmd, "steps": steps}
+        if not req.run:
+            return {"ok": True, "prompt": cards.revive_cluster_prompt(got, req.branch)}
+        cmd = cards.revive_cluster_command(got, req.branch, config.V2_DIR / "revive", req.agent)
+        _terminal(cmd)
+        return {"ok": True, "command": cmd}
+    card = _local_card(req.id, req.days)
     if not req.run:
         return {"ok": True, "prompt": cards.revive_prompt(card)}
     cmd = cards.revive_command(card, config.V2_DIR / "revive", req.agent)
@@ -2062,25 +1995,24 @@ def revive_thread(req: ReviveReq):
     return {"ok": True, "command": cmd}
 
 
-@app.get("/api/thread/adjacent")
-async def thread_adjacent(id: str, days: int = 30):
-    """For one thread: coworkers' recent commits in the same folders, and tickets and pages on the same subject."""
-    t = next((t for t in work.tasks(store, days) if t["id"] == id), None)
-    if not t:
-        raise HTTPException(404, f"unknown thread {id!r}")
-    people, rel = await asyncio.gather(asyncio.to_thread(work.coworkers, t), asyncio.to_thread(work.related, t, searcher))
-    return dict(coworkers=people, related=rel)
-
-
 CONNECTIONS_CHECK_SECONDS = 300
 DISCOVER_SECONDS = 6 * 3600
 
 
+wake_connections = asyncio.Event()  # set after a sign-in, so that the new connection collects at once
+
+
 async def connections_worker():
-    """Read the engine's MCP servers now and then, and collect from each connection that is on when it is due."""
+    """Read the agents' MCP servers now and then, and collect from each connection that is on when it is due."""
+    loop = asyncio.get_running_loop()
+    connections.signed_in_listeners.append(lambda sid: loop.call_soon_threadsafe(wake_connections.set))
     wait = 20  # soon after start, then every CONNECTIONS_CHECK_SECONDS
     while True:
-        await asyncio.sleep(wait)
+        try:
+            await asyncio.wait_for(wake_connections.wait(), wait)
+        except asyncio.TimeoutError:
+            pass
+        wake_connections.clear()
         wait = CONNECTIONS_CHECK_SECONDS
         if not settings.get("setup_done"):
             continue
@@ -2095,7 +2027,7 @@ async def connections_worker():
                 await asyncio.to_thread(connections.discover)
                 broadcast({"type": "repos"})  # the Sources list changed
             for sid in connections.due():
-                await asyncio.to_thread(connections.collect, sid)
+                await _collect(sid)
                 wake_files.set()
                 broadcast({"type": "repos"})
             await asyncio.to_thread(migrate.mark_indexed, "documents")  # each connection that is due was collected
@@ -2188,6 +2120,14 @@ async def factory_reset(req: ResetReq):
     """Delete the index (and the settings too if asked) and restart, which rebuilds everything from scratch."""
     from pensieve import reset
     reset.request(req.settings)
+    asyncio.get_running_loop().call_later(0.6, reset.restart)  # after this response is sent
+    return {"ok": True}
+
+
+@app.post("/api/restart")
+async def restart_server():
+    """Start this server again in place. The index and the settings stay."""
+    from pensieve import reset
     asyncio.get_running_loop().call_later(0.6, reset.restart)  # after this response is sent
     return {"ok": True}
 

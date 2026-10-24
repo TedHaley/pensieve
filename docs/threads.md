@@ -1,59 +1,55 @@
 # Threads
 
-A thread follows one goal over time, so you can see how a piece of work changed, pick it up again, or hand it off. This page defines a thread and its parts, the rules that put evidence into a thread, and the events of its life.
+A thread follows the work of one agent session, so you can see where the work stands, pick it up again, or close it out. This page defines a thread and its parts, the rules that put evidence into a thread, and the states of its life.
 
 ## Terms
 
 | Term | Meaning |
 |---|---|
-| **Goal** | One outcome that someone works toward: "keep placeholder companies out of record linkage", "ship 0.10.0", "find why the nightly gate failed". |
-| **Thread** | One goal, followed over time. The goal is the identity of the thread. |
-| **Member** | Work done for the goal: a ticket, a pull request (PR), a feature branch, a commit, an agent session, an edited file. |
-| **Reference** | Something that only mentions the thread: a standup session that names the ticket, a PR description that links another PR. |
-| **Snapshot** | A thread at one point in time: its members and its core (problem, goal, state, next). A thread page shows one snapshot: the thread now, or a saved version. |
-| **History** | The snapshots of a thread, oldest first, with the events between them. |
-| **Collection** | A set of threads: a person's, a team's or a project's. |
+| **Session** | One agent transcript. Pensieve reads it from the agent's transcript folder. |
+| **Data source** | A place that a session writes to and that can be checked as done: a pull request (PR), a branch, a ticket. |
+| **Thread** | One session that wrote something (edits, commits, a branch, a PR), with the data sources it wrote to. |
+| **Thought** | A session with no data source: no PR, branch or ticket that it wrote to. |
+| **To-do** | A ticket assigned to you that is not done, with no session, branch or PR on it yet. |
+| **Cluster** | The threads of one branch, newest session first. |
+| **Holder** | The session of a cluster that holds the branch (rule 4). |
 
 ```
-member ─▶ snapshot (a version at time t) ─▶ thread (one goal over time) ─▶ collection (many threads)
+session ─▶ thread (the data sources it wrote to) ─▶ cluster (the threads of one branch)
 ```
 
-A thread has two ids:
-
-- **Thread id:** it never changes. Hand-set states, notes, published copies and agent references use it.
-- **Snapshot id:** a hash of the members at one time. It changes when a member is added or removed.
+Each thread has an id that stays the same. Hand-set states and the `thread` MCP tool use it. The id button on a card copies it.
 
 ## Rules
 
-### 1. One goal
+### 1. One session, one thread
 
-A thread has one goal. The steps that serve the goal stay in the thread: a CI fix on its PR, a rebase, a review round. When the goal itself changes, the work becomes a new thread that is forked from the old one.
+Each session that wrote something is one thread. A thread holds only what its own session wrote to. Several threads can hold the same data source.
 
-### 2. Members and references
+### 2. What a session writes to
 
-A member is work done for the goal. A reference only mentions the thread. The thread shows references, but references never decide which thread an item belongs to.
+A session writes to a branch when it commits or pushes on it. It also writes to a branch when lines that it wrote are still in the uncommitted diff of a checkout of that branch. It writes to a PR when it opens or merges the PR with `gh`.
 
-### 3. Who owns a member
+Git commands that only appear in quoted text or heredocs (test inputs, commit messages, PR bodies) are not writes.
 
-| Member | Owners |
-|---|---|
-| Ticket, PR, feature branch | One thread at a time |
-| Commit | The thread of its branch |
-| Agent session | One or more threads. A session can work toward several goals, one after the other (rule 10). |
-| Edited file | No owner. A file is evidence only (rule 4). |
+### 3. Tickets
 
-When two threads claim one ticket, PR or branch, the claim becomes a split or a merge (rule 7). Two threads never share it silently.
+A thread joins a ticket by its key (`ABC-123`) in:
 
-### 4. The order of evidence
+- the branch name, in any case (`abc-123-fix`, `feature/ABC_123`), for a ticket that Pensieve knows;
+- the session title;
+- commit subjects;
+- PR titles.
 
-| Rank | Evidence | Can join | Can split |
-|---|---|---|---|
-| 1 | Explicit: a person or an agent links or unlinks the item, or a branch name holds the ticket key | Yes | Yes |
-| 2 | Structural: the same ticket, PR or feature branch, or a commit on that branch | Yes | No |
-| 3 | Activity: a session on the feature branch, or two sessions that edit the same specific files within a few days | Only with rank 2, or with a second rank-3 item | No |
-| 4 | Semantic: the distance between the embeddings of two goals | No: it only suggests a link | Yes |
+### 4. Who holds a branch
 
-A higher rank wins over a lower rank. An embedding never joins items alone.
+When several sessions wrote to one branch, their threads are a cluster. Each session claims the lines that it wrote with its edit tools. A line counts when it is still on the branch's current version of the file. A line belongs to the latest session that wrote it.
+
+The session with the largest share of the surviving lines holds the branch. On a tie, the later session holds it. Its card says "holds the branch · N% of the branch's lines". Its Resume session button takes the state color.
+
+The other sessions show their share. A session that does not hold the branch takes its state from its own data sources. When it has none, it takes the state of the branch that it contributed to. It is never a thought.
+
+A card that lost its branch links to the thread that holds it.
 
 ### 5. What is never evidence
 
@@ -62,98 +58,57 @@ A higher rank wins over a lower rank. An embedding never joins items alone.
 - The repo or the folder alone.
 - A ticket that a session mentions in passing.
 
-### 6. Continuity
+### 6. States
 
-A new snapshot continues a thread when both of these are true:
+A thread has one of six states, in this order:
 
-- It shares a strong member (ticket, PR, feature branch) with the thread, or enough weighted members.
-- Its goal is near the goal of the thread (the embeddings of problem and goal).
-
-When the members match and the goal is far, the new snapshot is a fork (rule 7).
-
-### 7. Events
-
-Each event goes into the history of the thread. Old ids and old links continue to point to the thread after an event.
-
-| Event | When |
+| State | When |
 |---|---|
-| **Start** | A snapshot matches no thread. |
-| **Continue** | A snapshot matches one thread (rule 6). |
-| **Split** | One thread turns out to hold two goals. The part with the larger overlap keeps the thread id. The other part starts a thread that is "split from" it. |
-| **Merge** | Two threads turn out to be one goal. The older thread continues. The other thread is "merged into" it. |
-| **Fork** | The members match, but the goal moved: a new thread "forked from" the old one. |
-| **End** | The goal is done (Complete) or left (Forgotten). |
-| **Revive** | New work on an ended thread, with the same goal. The thread opens again, with no time limit. A different goal starts a new thread. |
+| **Open** | A session is running, or the thread has work in the last 3 days and is not done. |
+| **To-do** | A ticket assigned to you, not done, with no session, branch or PR on it yet. |
+| **Thoughts** | A session with no data source, active in the last 2 days. |
+| **Loose ends** | Work that is not done, with no activity in the last 3 days. |
+| **Closed** | Every data source is verified done: the PR is merged or closed, the ticket is done, the branch is merged or deleted. |
+| **Forgotten** | A thought quiet for 2 days, or a thread that you set aside by hand. Work with a data source that is not done stays a loose end. |
 
-### 8. Threads cross repos and people
+A closed thread does not open again: new work starts a new thread. You can set a state by hand. It holds until the thread has new activity. Agents never set states: they close threads in git, GitHub or the tracker.
+
+### 7. Threads cross repos and people
 
 A ticket can have work in two repos. A teammate's PR joins a thread through its ticket or its branch, not through a folder on your machine.
 
-### 9. Size
+### 8. Size
 
 A thread is the smallest unit that you hand off or report in a standup. These items are not threads:
 
-- A session that only asked a question and changed nothing. It is a reference.
+- A session that only asked a question and changed nothing. It is a thought.
 - A long-lived branch.
-- An epic or a project. It is a collection.
-- A ticket with no work yet. It is a thread in the To do state: a goal with no members.
+- An epic or a project.
 
-### 10. A goal in a session becomes a thread when data outside the session supports it
+## Ship and Discard
 
-A long session can work toward several goals. Each goal that has its own PR, ticket or commit is a thread. A goal that only the session talks about is a line on the thread of the main goal ("Also in these sessions"). It becomes a thread when its first PR, ticket or commit appears.
+**Ship** and **Discard** open a modal with the steps left. A card has them, except a card inside a cluster: the cluster header has them.
 
-The main goal is the newest goal that a session did work toward: it changed code, made a commit or PR, ran a job or made a decision. A session that only explained code or answered questions does not set the main goal. A step that serves a goal (a change it needs, a revert, a CI fix, a review round) is part of that goal (rule 1). Each PR, commit and ticket belongs to the goal that it was made for.
+- **Ship:** commit, push, open a PR, review and merge, mark the ticket done after the merge.
+- **Discard:** drop uncommitted files, close the PR without merging, delete the branch (local and remote), mark the ticket cancelled.
 
-`bench/goals.py` measures this rule on labelled examples: is the main goal right, and do the PRs, tickets and commits land in the right goals?
+The modal's button (Start shipping or Start discarding) starts an agent session in Terminal. The agent does the steps and asks before each step that leaves the Mac.
 
-Pensieve finds the goals in the note that the agent writes for each thread: each goal names its evidence (PR numbers, ticket keys, commit hashes). Pensieve keeps only the evidence that is real: a PR or ticket of the thread, or a commit that git has in the thread's repos. A model cannot add a member.
+## Starting a thread again
 
-## History
+To continue the session of a thread, use Resume session. Pensieve reads the session's folder from its transcript.
 
-The snapshots of a thread form its history, as commits form the history of a branch. The history shows how the goal, the state and the next step changed over time.
+To start a new agent session from a thread, use Fork session. Pensieve writes the thread to a file and opens the agent in the work's folder. The prompt tells the agent to read the thread, to get the live state of its branch, PRs and tickets, and to report before it changes anything. A cluster header has **Fork from all N**: it starts a session that reads all the threads of the branch.
 
-To start a thread again, start a new agent session from it: the thread now, or a saved version. Pensieve writes the thread to a file and opens the agent in the work's folder. The prompt tells the agent to read the thread, to get what changed since (the thread's refresh commands), and to report before it changes anything. When the folder is gone, the thread's start commands get the work back.
+A to-do (a ticket of yours with no session, branch or PR) has **Start session in worktree**. It makes `<repo>/.claude/worktrees/<branch>`, on a branch named from the ticket's key and title, from the repo's default branch. The agent starts there with the ticket's title, URL and description, and reads the ticket's page before it plans. The first to-do of a ticket project asks which repo to use. Pensieve keeps the answer in the `ticket_repos` setting. The `start_todo` MCP tool does the same for an agent.
 
-## How Pensieve links snapshots
+## What threads read
 
-1. Pensieve builds the snapshots from the sessions, git, PRs, tickets and connections, as for the Threads tab.
-2. For each snapshot, it calculates the weighted overlap of members with the snapshots that it built before:
-
-   | Member | Weight |
-   |---|---|
-   | Ticket key, PR, feature branch | Strong |
-   | Commit, session | Medium |
-   | Specific edited file | Weak |
-
-3. It finds the best match for each snapshot, not the full connected component. A full component joins everything on a long-lived branch.
-4. It compares the embeddings of problem and goal for each match, and applies rule 6.
-5. It records the event (rule 7), and keeps the thread id.
-
-The thresholds for overlap and for embedding distance come from a replay of past days (`bench/threads_replay.py`). Pensieve builds the snapshots as of each day, links them, and compares the links with labels of "same work" and "different work". On one Mac, over 30 days and 551 labelled pairs:
-
-| Linker | Wrong joins | Wrong splits | F1 for "same goal" |
-|---|---:|---:|---:|
-| Members only (overlap 0.4) | 9 | 7 | 0.74 |
-| Goals only (similarity 0.8) | 6 | 10 | 0.71 |
-| Both (overlap 0.4, similarity 0.6) | 9 | 7 | 0.74 |
-
-Members do the work. The goal check adds nothing on this data, and it stays as a guard for forks. A suggestion at similarity 0.85 finds one missed link, with no wrong suggestion. Most wrong joins come from snapshots that join two goals on one branch before the linker sees them.
-
-## Local history
-
-Pensieve saves a version of each thread when it changes (`pensieve/history.py`). It checks every 10 minutes, and it saves a version when:
-
-- the linker records an event (start, fork, split, merge, revive);
-- the state of the thread changes;
-- a ticket, PR, branch, commit or session comes or goes (edited files alone do not count);
-- a push: the remote branch of one of its folders moves;
-- the embedding of the problem and goal moves 0.05 or more since the last save.
-
-A thread is saved at most once in 30 minutes, except for an event, a state change or a push. A save on a timer alone gives no new information: in the replay, a save at every 12-hour build made 1,365 copies, and the rules above made 29. After 30 days, one save a day is kept for each thread, with every event and state change.
+Threads read the transcript folders of the agents, git and gh, and the tickets that connections collected when there are any (`pensieve/transcripts.py`). They read no index and no model. A transcript is read once, and only its new lines after that; the facts persist on disk, so a restart reads nothing twice.
 
 ## Examples
 
-- **One goal, three PRs.** A change merges into the wrong branch, a revert undoes it, and a new PR carries the same change. All three PRs are one thread, because the goal is the same.
-- **A shared branch.** Two sessions work on a long-lived branch: one changes the logo, one measures search. The branch is not evidence (rule 5), so they are two threads.
-- **A PR that another thread owns.** A thread about a model fix shows the merged PR of a different feature, which one of its sessions mentions. That PR is a reference on the model fix, and a member of its own thread (rules 2 and 3).
-- **A fork.** A session starts on a bug and ends on a new feature. The members match, but the goal moved, so the feature is a new thread, forked from the bug.
+- **One session, three PRs.** A change merges into the wrong branch, a revert undoes it, and a new PR carries the same change. The session wrote to all three PRs, so they are one thread. The thread closes when all three PRs are merged or closed.
+- **A shared branch.** Two sessions work on a long-lived branch: one changes the logo, one measures search. The branch is not evidence (rule 5), so they are two threads, and not a cluster.
+- **A feature branch with two sessions.** One session writes most of a feature, and a later session fixes a test on the same branch. They are a cluster. The first session holds the branch, because most of the surviving lines are its lines (rule 4).
+- **A question.** A session explains how a module works and changes nothing. It is a thought. After 2 quiet days it is forgotten.

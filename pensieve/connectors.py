@@ -1,5 +1,5 @@
 """Connector profiles: what Pensieve knows about the cloud services that people connect most (Slack, Notion, Google
-Drive, HubSpot, GitHub, Granola, Linear).
+Drive, HubSpot, GitHub, Granola, Linear, Jira, Asana).
 
 The collection itself is the generic one in connections.py. A profile adds what the generic code can not guess:
 - the read tools of the service's MCP servers, also the ones whose names fail the verb rule (`API-post-search`);
@@ -304,6 +304,93 @@ def linear_follow(d: dict, names: set) -> tuple | None:
     return None
 
 
+ASANA_FIELDS = ("name,notes,completed,completed_at,assignee.name,assignee.email,created_by.name,created_at,"
+                "modified_at,due_on,permalink_url,projects.name,memberships.section.name,parent.name,tags.name")
+
+
+def asana_parse(tool: str, args: dict, data) -> list[dict] | None:
+    """The items in an Asana result, which wraps them in {"data": …}: the tasks of a search, one task, or the user
+    with their workspaces. A task has no short key, so it gets `_key` ASANA-<the last six digits of its gid>, and a
+    status: Done when completed, else the section it sits in."""
+    rows = data.get("data", data) if isinstance(data, dict) else data
+    rows = rows if isinstance(rows, list) else [rows] if isinstance(rows, dict) else []
+    out = []
+    for d in rows:
+        if not isinstance(d, dict) or not d.get("gid"):
+            continue
+        if d.get("resource_type") == "task" or "completed" in d:
+            sections = [m["section"].get("name") for m in d.get("memberships") or []
+                        if isinstance(m, dict) and isinstance(m.get("section"), dict)]
+            d = {**{k: v for k, v in d.items() if k != "notes"}, "_key": f"ASANA-{str(d['gid'])[-6:]}",
+                 "status": "Done" if d.get("completed") else next((s for s in sections if s), "") or "Open",
+                 **({"notes": d["notes"]} if d.get("notes") else {})}  # last: the text after it is the description
+        out.append(d)
+    return out
+
+
+def asana_norm(d: dict) -> dict:
+    return dict(title=d.get("name") or "", created=_iso(d.get("created_at")), updated=_iso(d.get("modified_at")))
+
+
+def asana_follow(d: dict, names: set) -> tuple | None:
+    if d.get("gid") and "completed" in d and "notes" not in d and "asana_get_task" in names:
+        return "asana_get_task", {"task_id": str(d["gid"]), "opt_fields": ASANA_FIELDS}
+    return None
+
+
+JIRA_FIELDS = ["summary", "status", "assignee", "reporter", "created", "updated", "resolution", "description",
+               "issuetype", "priority", "parent"]
+
+
+def jira_then(results: list[tuple], keys=()) -> list[tuple]:
+    """After the recipe: in each Jira site that `getAccessibleAtlassianResources` listed, the issues assigned to the
+    user that changed since the start time, and the issues `keys` (the tickets of threads that are not closed), so
+    that a ticket closed since the last collection closes its thread."""
+    calls = []
+    for tool, args, text in results:
+        if tool != "getAccessibleAtlassianResources":
+            continue
+        try:
+            sites = json.loads(text)
+        except ValueError:
+            continue
+        sites = sites if isinstance(sites, list) else sites.get("resources", []) if isinstance(sites, dict) else []
+        for s in sites:
+            if not isinstance(s, dict) or not s.get("id") or not any("jira" in str(x) for x in s.get("scopes") or ["jira"]):
+                continue
+            q = dict(cloudId=s["id"], fields=JIRA_FIELDS, maxResults=50)
+            calls.append(("searchJiraIssuesUsingJql",
+                          {**q, "jql": 'assignee = currentUser() AND updated >= "{day}" ORDER BY updated DESC'}))
+            ks = sorted({k for k in keys if re.fullmatch(r"[A-Z][A-Z0-9]{1,9}-\d{1,6}", k)})
+            for i in range(0, len(ks), 50):
+                calls.append(("searchJiraIssuesUsingJql", {**q, "jql": f"key in ({','.join(ks[i:i + 50])})"}))
+    return calls
+
+
+def jira_follow(d: dict, names: set) -> tuple | None:
+    return None  # the searches ask for every field a card reads, the description too
+
+
+def asana_then(results: list[tuple], keys=()) -> list[tuple]:
+    """After the recipe: a task search in each workspace that `asana_get_user` listed, for the user's tasks that
+    changed since the start time."""
+    calls = []
+    for tool, args, text in results:
+        if tool != "asana_get_user":
+            continue
+        try:
+            data = json.loads(text)
+        except ValueError:
+            continue
+        user = data.get("data", data) if isinstance(data, dict) else {}
+        for w in user.get("workspaces") or [] if isinstance(user, dict) else []:
+            if isinstance(w, dict) and w.get("gid"):
+                calls.append(("asana_search_tasks", {"workspace": str(w["gid"]), "assignee.any": "me",
+                                                     "modified_at.after": "{iso}", "sort_by": "modified_at",
+                                                     "opt_fields": ASANA_FIELDS, "limit": 50}))
+    return calls
+
+
 def notion_norm(d: dict) -> dict:
     title = d.get("title")
     props = d.get("properties") if isinstance(d.get("properties"), dict) else {}
@@ -458,6 +545,34 @@ PROFILES = {
                   prefix="Bearer ", placeholder="lin_api_…",
                   help="Linear's own MCP server with a personal API key.",
                   docs="https://linear.app/settings/account/security")]),
+    "jira": dict(
+        label="Jira", match=r"atlassian|jira",
+        reads={"getAccessibleAtlassianResources", "atlassianUserInfo", "searchJiraIssuesUsingJql", "getJiraIssue",
+               "getJiraIssueRemoteIssueLinks", "getVisibleJiraProjects", "getTransitionsForJiraIssue",
+               "lookupJiraAccountId", "getConfluencePage", "searchConfluenceUsingCql", "search", "fetch"},
+        recipe=[("getAccessibleAtlassianResources", {})],
+        then=jira_then,
+        hint="Find the user's Jira sites, then search each one with JQL for the issues assigned to the user that "
+             "changed since {day}, with their summary, status, assignee and description.",
+        follow=jira_follow,
+        add=[dict(kind="oauth", label="Sign in to Jira", url="https://mcp.atlassian.com/v1/mcp",
+                  help="Atlassian's own MCP server. You sign in with your Atlassian account in the browser. "
+                       "Pensieve only calls its read tools.")]),
+    "asana": dict(
+        label="Asana", match=r"asana",
+        reads={"asana_list_workspaces", "asana_search_tasks", "asana_get_task", "asana_get_task_stories",
+               "asana_get_multiple_tasks_by_gid", "asana_get_project", "asana_get_project_sections",
+               "asana_get_project_task_counts", "asana_get_project_status", "asana_get_project_statuses",
+               "asana_get_tasks_for_tag", "asana_get_tags_for_workspace", "asana_get_teams_for_user",
+               "asana_get_teams_for_workspace", "asana_list_workspace_users", "asana_get_user",
+               "asana_typeahead_search"},
+        recipe=[("asana_get_user", {"user_id": "me", "opt_fields": "name,email,workspaces.name"})],
+        then=asana_then,
+        hint="Get the user (me) for their workspaces. Then search each workspace for the tasks assigned to the user "
+             "that changed since {iso}, and get each task with its notes and stories.",
+        parse=asana_parse, norm=asana_norm, follow=asana_follow,
+        add=[dict(kind="oauth", label="Sign in to Asana", url="https://mcp.asana.com/sse",
+                  help="Asana's own MCP server. You sign in in the browser.")]),
 }
 ORDER = list(PROFILES)
 
@@ -492,6 +607,13 @@ def hint(pid: str | None, when: datetime) -> str:
 def parse(pid: str | None, tool: str, args: dict, data) -> list[dict] | None:
     fn = PROFILES[pid].get("parse") if pid else None
     return fn(tool.rsplit(".", 1)[-1], args or {}, data) if fn else None
+
+
+def then(pid: str | None, results: list[tuple], when: datetime, keys=()) -> list[tuple]:
+    """The calls that a profile plans from the recipe's results (a search per workspace the user is in), with the
+    start time put in. `keys`: the ticket keys of threads that are not closed, whose status the calls read again."""
+    fn = PROFILES[pid].get("then") if pid else None
+    return [(t, fill(a, when)) for t, a in fn(results, keys)] if fn else []
 
 
 def follow(pid: str | None, item: dict, names: set) -> tuple | None:

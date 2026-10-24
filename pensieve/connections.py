@@ -247,6 +247,20 @@ def discover_own() -> list[dict]:
     return servers()
 
 
+def _open_ticket_keys() -> list[str]:
+    """The ticket keys of the threads that are not closed, from the cards the card builder saved."""
+    from pensieve import work
+    try:
+        views = work._card_views() or []
+    except Exception:
+        return []
+    return sorted({k["key"] for t in views if t.get("state") not in ("closed", "complete")
+                   for k in t.get("tickets", []) if k.get("key")})
+
+
+signed_in_listeners = []  # fn(sid) after a sign-in to one of the user's own servers ends connected
+
+
 def sign_in(sid: str) -> dict:
     """Start the OAuth sign-in of one of the user's own servers: {url} of the sign-in page, {done}, or {error}.
     When the user comes back from the sign-in page, the server's tools are listed and saved."""
@@ -259,6 +273,8 @@ def sign_in(sid: str) -> dict:
         _update(lambda st: st.setdefault("own", {}).__setitem__(sid, r))
         if r["status"] != "connected":
             raise RuntimeError(r["error"])
+        for fn in signed_in_listeners:
+            fn(sid)
     return mcp_oauth.start(sid, run)
 
 
@@ -424,6 +440,8 @@ async def _collect_own_async(cfg: dict, r: dict, calls: int) -> list[tuple]:
         recipe = [(t, connectors.fill(a, _since_time(r["id"]))) for t, a in
                   (connectors.PROFILES[pid]["recipe"] if pid else []) if t in names]
         done = [await call(t, a) for t, a in recipe[:calls]]
+        for t, a in connectors.then(pid, out, _since_time(r["id"]), _open_ticket_keys())[:calls]:
+            done.append(await call(t, a))
         if not any(done):
             menu = "\n".join(f"- {t.name}: {(t.description or '')[:300]} Input schema: "
                              f"{json.dumps(_attr(t, 'input_schema'))[:600]}" for t in tools)
@@ -718,7 +736,7 @@ def _when(v) -> int | None:
 
 
 def _url(d: dict) -> str:
-    return next((d[k] for k in ("html_url", "webUrl", "url", "permalink", "link") if isinstance(d.get(k), str)
+    return next((d[k] for k in ("html_url", "webUrl", "url", "permalink", "permalink_url", "link") if isinstance(d.get(k), str)
                  and d[k].startswith("http") and "://api." not in d[k]), "")
 
 

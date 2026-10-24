@@ -229,7 +229,7 @@ CREATE TABLE cards (              -- one piece of the user's work
   kind        TEXT NOT NULL CHECK (kind IN ('ticket', 'branch', 'work', 'goal')),
   goal_of     TEXT REFERENCES cards(id) ON DELETE CASCADE,  -- for a goal split from another card
   title       TEXT NOT NULL,
-  state       TEXT NOT NULL CHECK (state IN ('todo', 'open', 'loose_ends', 'complete', 'forgotten')),
+  state       TEXT NOT NULL CHECK (state IN ('todo', 'open', 'thoughts', 'loose_ends', 'complete', 'forgotten')),
   first_at    INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,                   -- the newest member's time
   built_at    INTEGER NOT NULL,                   -- when the builder last wrote this row
@@ -327,7 +327,7 @@ CREATE TABLE thread_snapshots (   -- a saved card, at one time
   thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   at         INTEGER NOT NULL,
   snapshot   TEXT NOT NULL,                       -- the snapshot id (a hash of the members)
-  state      TEXT NOT NULL CHECK (state IN ('todo', 'open', 'loose_ends', 'complete', 'forgotten')),
+  state      TEXT NOT NULL CHECK (state IN ('todo', 'open', 'thoughts', 'loose_ends', 'complete', 'forgotten')),
   structure  TEXT NOT NULL,                       -- a hash of the members other than files
   pushed     TEXT NOT NULL,                       -- the remote commits of the card's folders, space-separated
   goal_vec   BLOB,
@@ -352,7 +352,12 @@ Three exceptions to the rules above, and why:
 - `card_notes` has no foreign key to `cards`. A note outlives its card's row: a card leaves the 30-day window and
   comes back, and a split goal's note is written before its card.
 
-The linker of `pensieve/threads.py` keeps each thread's members, weights, repos and events, so these are tables too.
+The state `complete` is the stored name of the Closed state (`task_states.stored`).
+
+Threads no longer use some of these tables. Pensieve writes no AI note, no done check and no thread history, and the
+linker (`pensieve/threads.py`) is removed. So nothing writes `card_notes`, `card_done`, `card_done_checks`,
+`threads`, `thread_members`, `thread_repos`, `thread_cards`, `thread_events`, `thread_snapshots` or
+`thread_snapshot_reasons`. The tables stay in the schema. Threads use `cards`, `card_members` and `card_states`.
 
 ### Other user data
 
@@ -523,7 +528,7 @@ and `projects` come in phase 4, with their modules.
 - Search adds the hits of the documents to the other hits, with the id `doc:<id>`. `kind:doc` and a scope with
   `connections/<source>` select them. `read`, `similar`, `/api/item` and the cards accept `doc:<id>`. They also
   accept the path of a v1 connection file, for one release.
-- The Context tab reads the documents of its 30 days with one range query on `documents_time`. It also reads the
+- The Threads tab reads the documents of its 30 days with one range query on `documents_time`. It also reads the
   older tickets that the 30 days name by key, and the older pull requests of the branches of the 30 days. v1 read
   every item of every age. So in v2, a ticket that no work of the 30 days names, and that did not change in the 30
   days, is not a card.
@@ -560,9 +565,7 @@ incremental:
 5. It writes the rows of `cards` and `card_members` whose view changed, deletes the cards that went, and sends a
    `card` event with the ids. The page asks for those cards only (`/api/work?ids=`), and draws again only those
    cards when the others stay in their places.
-6. A card whose signature changed gets a new AI note after 20 seconds without more changes, so that a running
-   session does not start a note for each turn. Only cards in the states open and loose_ends get one.
-7. Pull request states come from `gh` in a full build every 5 minutes, and in a build of its own right after a
+6. Pull request states come from `gh` in a full build every 5 minutes, and in a build of its own right after a
    card with an open PR changed. The full build also moves the window.
 
 A full build gives the same cards as a build of v1 on the same data (checked on a copy of real data: 156 of 156

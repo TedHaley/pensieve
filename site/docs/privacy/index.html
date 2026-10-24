@@ -52,7 +52,7 @@
 </ul>
 
 <h2 id="network">When Pensieve uses the network</h2>
-<div class="tbl"><table><thead><tr><th>When</th><th>What goes over the network</th><th>To</th></tr></thead><tbody><tr><td>Install</td><td>The app download and the Python packages</td><td>GitHub Releases, the Python package index</td></tr><tr><td>First run, and when you switch models</td><td>Model downloads: the search model (550 MB), and the media parts if you switch them on</td><td>Hugging Face</td></tr><tr><td>Update checks</td><td>A request for the latest release</td><td>GitHub</td></tr><tr><td>Every 30 minutes</td><td><code>git fetch</code> of the default branch of each indexed repo, to show how far your branch is behind. It does not change your working tree.</td><td>Each repo's own remote</td></tr><tr><td>When a thread shows PRs</td><td><code>gh pr list</code> and <code>gh pr view</code>, if the GitHub CLI is installed, with your own login</td><td>GitHub</td></tr><tr><td>Connections that you switch on</td><td>Read calls to those MCP servers.</td><td>Each server</td></tr><tr><td>When your agent does Pensieve's pending work</td><td>The text of each job (a thread note, a summary, an insight) goes to your agent.</td><td>Your agent's model provider</td></tr></tbody></table></div>
+<div class="tbl"><table><thead><tr><th>When</th><th>What goes over the network</th><th>To</th></tr></thead><tbody><tr><td>Install</td><td>The app download and the Python packages</td><td>GitHub Releases, the Python package index</td></tr><tr><td>First run in Developer mode, and when you switch models</td><td>Model downloads: the search model (550 MB), and the media parts if you switch them on</td><td>Hugging Face</td></tr><tr><td>Update checks</td><td>A request for the latest release</td><td>GitHub</td></tr><tr><td>Every 30 minutes</td><td><code>git fetch</code> of the default branch of each indexed repo, to show how far your branch is behind. It does not change your working tree.</td><td>Each repo's own remote</td></tr><tr><td>When a thread shows PRs, and every minute for the threads that are not done</td><td><code>gh pr list</code>, <code>gh pr view</code> and <code>gh api graphql</code> (one call per repo), if the GitHub CLI is installed, with your own login</td><td>GitHub</td></tr><tr><td>Connections that you sign in to or switch on</td><td>The sign-in in your browser, then read calls to those MCP servers, every 6 hours by default.</td><td>Each server</td></tr><tr><td>When your agent does Pensieve's pending work</td><td>The text of each job (a session summary, a topic name, an insight) goes to your agent.</td><td>Your agent's model provider</td></tr><tr><td>When you click Start session in worktree, Fork session, Start shipping or Start discarding</td><td>Pensieve starts your agent in Terminal. What the agent reads goes to its provider. For Ship and Discard, the agent asks you before each step that leaves your Mac, such as a push or a PR.</td><td>Your agent's model provider, and GitHub or the tracker</td></tr></tbody></table></div>
 
 <h2 id="agents">Your agent</h2>
 <p>Pensieve is a tool that your agent calls. If you use a cloud agent, such as Claude Code or Codex, what the agent
@@ -60,15 +60,15 @@ reads from Pensieve goes to its provider, the same as a file that it reads with 
 agent until the agent calls a tool. The Claude Code prompt hook is the exception: it adds context to each prompt in
 an indexed repo.</p>
 
-<h2 id="sharing">Shared threads and feedback</h2>
+<h2 id="sharing">Thread pages and feedback</h2>
 <ul>
-  <li><strong>Shared threads:</strong> Pensieve saves a shared thread as a file in Downloads. It does not send it. Before you save, you see the thread and can edit it. A shared thread has no local paths, session ids, resume command, secrets or private messages (see <a href="/docs/threads/#reach">What a shared thread keeps</a>).</li>
+  <li><strong>Thread pages:</strong> the <code>thread_page</code> MCP tool saves a thread's page as a file in Downloads. Pensieve does not send it. If your agent attaches it to a message, you approve what the agent sends.</li>
   <li><strong>Feedback:</strong> reports from you and from agents stay in <code>~/.pensieve/feedback.jsonl</code>. Settings → Feedback lists them. Send to GitHub opens an issue with the text filled in, and you read it before you post it.</li>
 </ul>
 
 <h2 id="private-messages">Private messages</h2>
 <p>Items from direct messages, group messages and private channels are context for your own threads and agents only.
-A shared thread leaves them out whole. See <a href="/docs/connections/#private">Connections</a>.</p>
+See <a href="/docs/connections/#private">Connections</a>.</p>
 
 <h2 id="site">This website</h2>
 <p>pensieve.tools counts page views with <a href="https://www.goatcounter.com/">GoatCounter</a>, which sets no

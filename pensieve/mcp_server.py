@@ -16,7 +16,7 @@ from pensieve import actions, migrate, onboarding, scopes, settings, sources, us
 # Tool descriptions are sent to the agent on every turn, so connections get the tools for finding code and people by
 # default; ?tools=all (or `pensieve mcp --all-tools`) adds the ones that manage Pensieve itself.
 AGENT_TOOLS = {"search", "read", "similar", "people", "repo", "projects", "list_repos", "current_scope", "open",
-               "index_path", "report_feedback", "stale", "threads", "thread", "share_thread"}
+               "index_path", "report_feedback", "stale", "threads", "thread", "cluster", "thread_page", "start_todo"}
 # Until the user has chosen what to index, every connection also gets the setup tools, so the agent that installed
 # Pensieve can walk the user through it in its conversation.
 SETUP_TOOLS = {"setup_guide", "setup_scan", "setup_add_source", "setup_start"}
@@ -259,22 +259,22 @@ def read(id: str, max_chars: int = 12000) -> dict:
 
 
 def prompt_context(prompt: str, cwd: str, card_format: str = "text") -> str:
-    """For Claude Code's UserPromptSubmit hook, for a prompt sent in an indexed repo: the thread of the work it is
-    about, the list of threads for a standup or open loops, the past sessions for a question about a decision, or
-    else the best code matches as the search tool shows them. "" for a slash command, a few words, or a folder
-    Pensieve doesn't index."""
+    """For Claude Code's UserPromptSubmit hook: the thread of the work a prompt is about, or the list of threads for
+    a standup or open loops. In an indexed repo also the past sessions for a question about a decision, or else the
+    best code matches as the search tool shows them. "" for a slash command, a few words, or nothing found."""
     text = (prompt or "").strip()
     if not cwd or text.startswith("/") or len(text.split()) < 3:
         return ""
     sc = scopes.resolve("auto", cwd, _c()["repos"])
-    if sc is None or getattr(sc, "unindexed", False) or not sc.repos:
+    if sc is None:
         return ""
+    index = not getattr(sc, "unindexed", False) and bool(sc.repos)  # no index (Threads mode): only the threads
     q = re.sub(r"\s+", " ", text.replace('"', " "))[:400]  # a prompt's quotes aren't search syntax
     t, tokens = time.perf_counter(), (scopes.current.set(sc), agent_cwd.set(cwd))
     res = []
     try:
         kind, found = _work_for_prompt(text, card_format)  # a prompt about the user's work: a thread or the list
-        if found:
+        if found or not index:
             pass
         elif WHO_WORDS.search(text):  # who knows or should review some code: its authors
             kind, found = "people", _people(text)
@@ -295,8 +295,8 @@ def prompt_context(prompt: str, cwd: str, card_format: str = "text") -> str:
     if not found:
         return ""
     head = {
-        "thread": "Pensieve found the thread this prompt is about. Its problem, goal, state and next are as of the "
-                  "last session; the folders and PRs are live. Use it, and look up only what it doesn't answer.",
+        "thread": "Pensieve found the thread this prompt is about. Where its session stopped is as of that session; "
+                  "the state, folders, PRs and steps left are live. Use it, and look up only what it doesn't answer.",
         "threads": "Pensieve listed the user's threads for this prompt. Offer to close the one closest to done.",
         "people": "Pensieve looked up who knows the code this prompt is about.",
         "sessions": f"Pensieve searched the past agent sessions in {sc.name} for this prompt. read(id) shows one; "
@@ -347,7 +347,6 @@ def _work_for_prompt(text: str, card_format: str = "text") -> tuple[str, str]:
     ("threads", the thread lines for a prompt about all of the user's work: a standup, what is still open), or
     ("", ""); within the current scope."""
     from pensieve import task_states, work
-    have = work.notes()
     if work.LIST_WORDS.search(text):
         standup = work.STANDUP_WORDS.search(text)
         ts = [t for t in _tasks_in_scope() if _material(t) and (standup or t["state"] in ("open", "loose_ends", "todo"))]
@@ -361,15 +360,15 @@ def _work_for_prompt(text: str, card_format: str = "text") -> tuple[str, str]:
                    "\"updated:>=<start date>\"` (a PR opened before the period can merge in it). Threads without a PR "
                    "(a repair, an investigation) are work done too."
                    if standup else "for every open PR, also run `gh pr list --author @me --state open`."))
-        return ("threads", head + "\n" + "\n".join(work.brief(t, have.get(t["id"], {})) for t in ts)) if ts else ("", "")
-    t = work.card_for_prompt(_tasks_in_scope(), text, have)
+        return ("threads", head + "\n" + "\n".join(work.brief(t) for t in ts)) if ts else ("", "")
+    t = work.card_for_prompt(_tasks_in_scope(), text)
     if not t:
         return "", ""
     hist = task_states.history(_c()["store"], t["id"])
     if card_format == "json":
         from pensieve import cards
-        return "thread", cards.render_agent(cards.build(t, have.get(t["id"], {}), hist))
-    return "thread", work.compact(t, have.get(t["id"], {}), hist)
+        return "thread", cards.render_agent(cards.build(t, hist))
+    return "thread", work.compact(t, hist)
 
 
 def _material(t: dict) -> bool:
@@ -731,25 +730,23 @@ WHO = {"you": "you", "agent": "agent", "parent": "tracker"}  # who can do a step
 
 
 @tool()
-def threads(state: str = "open,loose_ends", query: str = "", limit: int = 10) -> str:
+def threads(state: str = "open,todo,loose_ends", query: str = "", limit: int = 10) -> str:
     """The user's threads of work of the last 30 days, joined across agent sessions, commits, PRs and tickets, the
     closest to done first (fewest steps left). Under each thread, the steps left to close it: who can do each one
     ("you": only the user, such as an answer, a review or a merge; "agent": you can, in a session; "tracker": a change
     in the system the item lives in, such as a ticket's status) and what it acts on. Pensieve only reads: do each
     step in git, GitHub or the tracker, and Pensieve sees the change. state: comma-separated, from open (worked on
-    now), loose_ends (not done and gone quiet: close it out), todo (a ticket with no work yet), complete, forgotten,
-    or "all". query: words, a ticket key, branch or PR number; threads that match more of them come first, and the
+    now), todo (a ticket of the user's with no work yet: start_todo starts it), thoughts (a session with no branch,
+    PR or ticket), loose_ends (not done and gone quiet: close it out), closed, forgotten, or "all". query: words, a ticket key, branch or PR number; threads that match more of them come first, and the
     others are left out. Within this connection's scope (its repo by default). Call thread(id) before you pick one
     up. At a natural pause, offer the user to close the first one."""
-    from pensieve import history, work
+    from pensieve import work
     want = None if state.strip() == "all" else {task_states_name(s) for s in state.split(",") if s.strip()}
-    have = work.notes()
     ts = [t for t in _tasks_in_scope() if not want or t["state"] in want]
-    ts = work.matching(ts, query, have) if query.strip() else sorted((t for t in ts if _material(t)), key=_closest)
+    ts = work.matching(ts, query) if query.strip() else sorted((t for t in ts if _material(t)), key=_closest)
     out = []
     for t in ts[:max(1, min(limit, 50))]:
-        th = history.thread_of(t["id"])
-        out.append(work.brief(t, have.get(t["id"], {})) + (f" · {th}" if th else ""))
+        out.append(work.brief(t))
         out += [f"  - {x['text']} ({WHO.get(x['how'], x['how'])}{', ' + x['ref'] if x.get('ref') else ''})"
                 for x in t.get("left") or []]
     return "\n".join(out) or f"No threads in state {state}."
@@ -762,72 +759,118 @@ def task_states_name(s: str) -> str:
 
 
 @tool()
-def thread(id: str, full: bool = False, version: str = "") -> str:
-    """One thread: its state and why, where the work is (folder, branch, uncommitted files), PRs, tickets, what
-    changed since the last session, the steps left, where that session stopped, its main files and the command that
-    resumes it. id: a thread id (th_…) or an id from threads. full=true adds every file its sessions made and its
-    timeline. version: Pensieve saves a thread when it changes (a PR, a commit, a state, what is next); "list" lists
-    the saved versions, oldest first (number, date, why it was saved, state, what was next then), and a number gives
-    that version whole (-1 is the last). Use the versions to see how work got where it is, or to start ended work
-    again from its last version."""
-    from datetime import datetime
-    from pensieve import cards, history, task_states, work
-    if version:
-        th = id if id.startswith("th_") else history.thread_of(id)
-        saves = history.history(th) if th else []
-        if not saves:
-            raise KeyError(f"{id}: no saved versions")
-        if version != "list":
-            return cards.render_agent(saves[int(version)]["card"])
-        return "\n".join(f"{i} · {datetime.fromtimestamp(s['at']).strftime('%Y-%m-%d %H:%M')} · {', '.join(s['reasons'])} · "
-                         f"{task_states_name(s['card'].get('state', {}).get('value', ''))} · next: "
-                         f"{(s['card'].get('core', {}).get('next') or '')[:140]}" for i, s in enumerate(saves))
-    tid = (history.task_of(id) or id) if id.startswith("th_") else id
-    t = next((x for x in _tasks_in_scope() if x["id"] == tid), None)
+def thread(id: str, full: bool = False) -> str:
+    """One thread: its state and why, where the work is (folder, branch, uncommitted files), PRs, tickets, the
+    sessions of the same work, the steps left, where its session stopped, its main files and the command that
+    resumes it. id: a thread id (th_…) from threads or cluster. full=true adds every file its session made and its
+    timeline."""
+    from pensieve import task_states, work
+    t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
     if not t:
-        raise KeyError(f"{id}: not a current thread; thread(id, version=\"list\") lists its saved versions")
-    text = (work.detail if full else work.compact)(t, work.notes().get(tid, {}), task_states.history(_c()["store"], tid))
-    th = history.thread_of(tid)
-    return text + (f"\nThread: {th} · {history.saves(th)} saved versions (thread(id, version=\"list\"))" if th else "")
+        raise KeyError(f"{id}: not a current thread; threads lists the current ones")
+    return (work.detail if full else work.compact)(t, task_states.history(_c()["store"], id))
+
+
+def _on_branch(t: dict, branch: str) -> bool:
+    """True when a thread holds the branch, or its session wrote to it and lost it to another thread."""
+    return any(b["branch"] == branch for b in t.get("branches", [])) or branch in (t.get("claims") or {}) \
+        or any(b["branch"] == branch for b in (t.get("contributed") or {}).get("branches", []))
+
+
+def _branch_threads(branch: str) -> list[dict]:
+    """The threads of one branch within this connection's scope, newest session first."""
+    ts = [t for t in _tasks_in_scope() if _on_branch(t, branch)]
+    return sorted(ts, key=lambda t: -((t.get("sessions") or [{}])[0].get("updated") or t["updated"]))
 
 
 @tool()
-def share_thread(id: str, ask: str = "") -> dict:
-    """A thread made fit to send, as the Share button on the Threads tab makes it: the problem, goal, state and next,
-    the links its reader can open, and summaries (read from the whole documents now) of what they can't, such as
-    transcripts and uncommitted changes. No local paths, session ids or secrets. ask: what the user needs from the
-    reader, in their words. Saves one HTML page in ~/Downloads, which people open and agents read (the page holds the
-    thread's JSON), and returns the file's path and the thread. To send it, attach the file with your Slack, email or
-    PR tool, and write your own message: the user approves what you send."""
-    from pensieve import cards, history, task_states, work
-    tid = (history.task_of(id) or id) if id.startswith("th_") else id
-    t = next((x for x in _tasks_in_scope() if x["id"] == tid), None)
+def cluster(branch: str) -> str:
+    """The threads of one branch (the last 30 days, within this connection's scope), newest session first: what
+    each session did on the branch, its share of the lines (the largest share holds the branch: pick the work up
+    from that session), each thread's state, and the two ways to close the
+    work, each as steps with who can do each (you, the agent; the user; or the tracker): ship it (commit, push,
+    open and merge the PR, close the ticket) or discard it (drop the changes, close the PR, delete the branch,
+    cancel the ticket). Pensieve only reads: do the steps in git, GitHub or the tracker, and ask the user before
+    each step that deletes or closes. branch: its name as `threads` and `thread` print it. thread(id) gives one
+    thread whole; thread_page(branch=...) saves the page of them all."""
+    from datetime import datetime
+    from pensieve import cards
+    ts = _branch_threads(branch)
+    if not ts:
+        raise KeyError(f"no thread of the last 30 days wrote to branch {branch!r}")
+    day = lambda ts_: datetime.fromtimestamp(ts_).strftime("%Y-%m-%d")
+    who = {"agent": "you, the agent", "you": "the user", "parent": "in its tracker or on GitHub"}
+    out = [f"# Branch {branch}: {len(ts)} sessions wrote to it, newest first"]
+    for t in ts:
+        me = next((k for k in t.get("kin", []) if k.get("me")), {})
+        share = f", {round(me['share'] * 100)}% of the branch" if me.get("share") else ""
+        if (t.get("claims") or {}).get(branch, {}).get("lost") is False:
+            share += ", holds the branch"
+        at = (t.get("sessions") or [{}])[0].get("updated") or t["updated"]
+        out.append(f"- {day(at)} {t['title']} [{t['id']} {t['state']}]: {me.get('did') or 'no changes'}{share}")
+    can = any(t["state"] in ("open", "loose_ends", "forgotten") for t in ts)
+    for intent, label in (("ship", "To ship this work and close it"), ("discard", "To discard this work and close it")):
+        steps = cards.resolve_steps(ts, intent)
+        out += ["", f"{label} (Pensieve only reads: these are steps, not changes it made):"]
+        out += [f"- {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for s in steps] or ["- nothing: every step is done"]
+    out.append(f"\nState: {'open: one of the two lists above closes it' if can else 'done: every thread is closed'}")
+    return "\n".join(out)
+
+
+@tool()
+def thread_page(id: str = "", branch: str = "") -> dict:
+    """A thread's page for people, or the page of every thread of one branch (newest first), saved as one HTML file
+    in ~/Downloads. The page holds the threads' JSON too, so agents read it as data. Give `id` (a thread) or `branch`
+    (its name). Returns the file's path and the thread ids on it. To send it, attach the file with your own tool and
+    write your own message: the user approves what you send."""
+    from pensieve import cards, task_states
+    store = _c()["store"]
+    build = lambda t: cards.build(t, task_states.history(store, t["id"]))
+    if branch:
+        ts = _branch_threads(branch)
+        if not ts:
+            raise KeyError(f"no thread of the last 30 days wrote to branch {branch!r}")
+        page, name = cards.render_cluster_html([build(t) for t in ts], branch), branch
+    else:
+        t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
+        if not t:
+            raise KeyError(id)
+        ts, page, name = [t], cards.render_html(build(t)), t["title"]
+    return {"file": cards.save_page(page, name, Path.home() / "Downloads"), "threads": [t["id"] for t in ts]}
+
+
+@tool()
+def start_todo(id: str, repo: str = "") -> dict:
+    """Start a to-do (a thread in state todo: a ticket of the user's that nothing picked up yet): makes a worktree
+    on a branch named from the ticket's key in the ticket project's repo, from its default branch, and returns
+    {path, branch, repo, key, prompt}: cd to `path` and do what `prompt` says. `repo`: the repo to use; without one
+    Pensieve takes the one remembered for the project, else returns {choose: [repos]} to ask the user."""
+    from pensieve import todo
+    t = next((x for x in _tasks_in_scope() if x["id"] == id), None)
     if not t:
         raise KeyError(id)
-    store = _c()["store"]
-    out = cards.share(cards.draft_share(cards.build(t, work.notes().get(tid, {}), task_states.history(store, tid)), store), ask)
-    return {"file": cards.save(out, Path.home() / "Downloads"), "thread": cards.render_agent(out)}
+    res = todo.start(t, repo or None)
+    return {k: v for k, v in res.items() if k != "command"}
 
 
 @tool()
 def set_thread_state(id: str, state: str, reason: str = "") -> dict:
-    """Set a thread's state by hand, as the user can on the Threads tab: todo, open, loose_ends, complete, forgotten,
+    """Set a thread's state by hand, as the user can on the Threads tab: open, todo, loose_ends, closed, forgotten,
     or "auto" to let Pensieve decide again. Pensieve sets each state from the evidence, so a thread closes when its PR
     merges or its ticket closes: use this only when the user asks for it."""
-    from pensieve import history, work
-    tid = (history.task_of(id) or id) if id.startswith("th_") else id
-    if not any(x["id"] == tid for x in _tasks_in_scope()):
+    from pensieve import work
+    if not any(x["id"] == id for x in _tasks_in_scope()):
         raise KeyError(id)
-    return work.set_state(_c()["store"], tid, state, "agent", reason)
+    return work.set_state(_c()["store"], id, state, "agent", reason)
 
 
 @tool()
 def pending_work(limit: int = 5, kind: str = "") -> str:
-    """Pensieve's text jobs that wait for an answer (Pensieve runs no text model of its own): thread notes, session summaries, topic names, insights, team
-    summaries and collection plans. Call it when the user asks you to do Pensieve's pending work. For each job, follow
-    its instructions, answer from its data only, and send the answer with submit_work. kind: one kind only, e.g.
-    "thread note". The jobs are yours for 10 minutes: other sessions get different ones. The list is empty when nothing
-    waits."""
+    """Pensieve's text jobs that wait for an answer (Pensieve runs no text model of its own): session summaries, topic
+    names, insights, team summaries and collection plans. Call it when the user asks you to do Pensieve's pending
+    work. For each job, follow its instructions, answer from its data only, and send the answer with submit_work.
+    kind: one kind only, e.g. "session summary". The jobs are yours for 10 minutes: other sessions get different
+    ones. The list is empty when nothing waits."""
     from pensieve import agent_jobs
     jobs = agent_jobs.pending(max(1, min(limit, 20)), kind, agent_conn.get() or agent_client.get() or "")
     left = sum(agent_jobs.counts().values())
@@ -1004,17 +1047,20 @@ def setup_guide() -> dict:
     categories with the folders scanning each one reads, the search models and the energy note. Reads no
     folders. Walk the user through it in order, one question at a time:
     1. Tell them what Pensieve is, from `about`.
-    2. Ask which profiles fit them (several can).
-    3. Tell them which folders the scan reads (`reads` of each profile's categories) and that macOS may ask them to
-       allow access. When they agree, call setup_scan with those profiles.
-    4. Show what the scan found, pre-checked items first, and ask what to index. Offer setup_add_source for folders
-       or repos it missed.
-    5. Ask which of images, video and audio to read by what they show or say (`content`: each entry's note says
-       what it costs). All three are off by default: then those files are found by name.
-    6. Ask what writes Pensieve's notes, summaries and insights in the background: one of `engines` (its `about`
-       says what it costs; leave out the ones with `unavailable`). `text_engine` is the default. They can change it
-       later in Settings → Models.
-    7. Tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call setup_start."""
+    2. Ask which mode they want, from `profiles`: "session" (Threads mode: recommended to start; no index, no
+       model) or "developer" (also indexes the repos and files they choose, for search, the Map, People and Insights).
+    3. Ask whether they track work in Jira, Linear or Asana. The sign-in is in the browser: send them to
+       Settings → Sources → Cloud connectors in the app, now or later. Their tickets then become to-do threads, and
+       a ticket's status closes its thread.
+    4. Threads mode: call setup_scan with profiles=["session"], then setup_start(recommended=true, mode="session").
+       That is all.
+    5. Developer mode: tell them which folders the scan reads (`reads` of the categories) and that macOS may ask them
+       to allow access. When they agree, call setup_scan with profiles=["developer"]. Show what it found, pre-checked
+       items first, and ask what to index. Offer setup_add_source for folders or repos it missed.
+    6. Developer mode: ask which of images, video and audio to read by what they show or say (`content`: each
+       entry's note says what it costs). All three are off by default: then those files are found by name.
+    7. Developer mode: tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call
+       setup_start with mode="developer"."""
     return onboarding.guide()
 
 
@@ -1036,14 +1082,16 @@ def setup_add_source(kind: str, path: str) -> dict:
 
 @tool()
 def setup_start(sources: list[str] | None = None, recommended: bool = False, content: list[str] | None = None,
-                text_engine: str | None = None) -> dict:
+                text_engine: str | None = None, mode: str | None = None) -> dict:
     """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
-    ones); everything else is switched off. `content`: which of "images", "video" and "audio" to read by what they show or say (this selects the
-    EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by name.
-    `text_engine`: the id of the engine from setup_guide's `engines` that the user chose.
-    Indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left, counting only what isn't
-    indexed yet), the `energy` note when minutes > 1, and `next` (how to search and see the map)."""
-    res = onboarding.start(sources, recommended, kinds=content, text_engine=text_engine)
+    ones); everything else is switched off. `mode`: "session" (threads mode: the agent sources only, read as they
+    are, no index and no model) or "developer" (the repos and files are indexed too); by default developer when a
+    repo is chosen. `content`: which of "images", "video" and "audio" to read by what they show or say (this selects
+    the EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by
+    name. `text_engine`: the id of the engine from setup_guide's `engines` that the user chose.
+    In developer mode indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left,
+    counting only what isn't indexed yet), the `energy` note when minutes > 1, and `next`."""
+    res = onboarding.start(sources, recommended, kinds=content, text_engine=text_engine, mode=mode)
     from pensieve import server
     server.watch.force_full()
     return res

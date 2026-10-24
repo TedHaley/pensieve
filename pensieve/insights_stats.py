@@ -168,7 +168,7 @@ def week(cards: list, now: float) -> dict:
     closed, days, open_ = [], set(), []
     for cid, state, updated, v in cards:
         title = (v.get("anchor") or {}).get("title") or v.get("title") or cid  # the Threads tab's title
-        if state == "complete":
+        if state in ("closed", "complete"):  # "complete" is the name before the rename
             if updated >= start:
                 closed.append(dict(id=cid, title=title, at=updated))
                 days.add(date.fromtimestamp(updated))
@@ -325,7 +325,7 @@ def output_events(idx, store, graph, now: float, prs: list[dict], roots: set | N
         if roots is not None and not roots & set(v.get("repos") or []):
             continue
         cards.append((cid, state, updated, v))
-        if state == "complete" and updated >= since:
+        if state in ("closed", "complete") and updated >= since:
             ev.append(("thread_closed", updated, cid))
     card_ids = {c[0] for c in cards}
     card_tickets = {k.get("key") for c in cards for k in c[3].get("tickets", [])}
@@ -519,7 +519,7 @@ def momentum(cards: list, idx, ev: list, now: float, sel: set | None = None) -> 
         return "quiet"
     threads, left_by_repo = [], Counter()
     for cid, state, updated, v in cards:
-        if state in ("complete", "forgotten"):
+        if state in ("closed", "complete", "closing", "forgotten"):
             continue
         ts = [e.get("ts") for e in v.get("events", []) if e.get("ts")]
         ts += [c.get("ts") for c in v.get("commits", []) if c.get("ts")]

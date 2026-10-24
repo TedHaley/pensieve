@@ -28,11 +28,19 @@ class DocIndex:
         _path().parent.mkdir(parents=True, exist_ok=True)
         self.index = IdMapIndex.load(str(_path())) if _path().exists() else IdMapIndex(dim=config.EMBED_DIM, bit_width=4)
         self.progress = None
-        missing, ids = [], []
-        for cid, blob in docchunks.vectors(self.idx_db):
-            if not self.index.contains(cid):
-                ids.append(cid)
-                missing.append(np.frombuffer(blob, np.float16).astype(np.float32))
+        missing, ids, stale = [], [], set()
+        for cid, doc_id, blob in list(docchunks.vectors(self.idx_db)):
+            if self.index.contains(cid):
+                continue
+            vec = np.frombuffer(blob, np.float16).astype(np.float32)
+            if vec.shape[0] != self.index.dim:  # a chunk another model embedded: its document is chunked again at sync
+                stale.add(doc_id)
+                continue
+            ids.append(cid)
+            missing.append(vec)
+        if stale:
+            print(f"document index: {len(stale)} documents have vectors of another width; indexing them again", flush=True)
+            docchunks.forget(self.idx_db, stale)
         if ids:
             self.index.add_with_ids(np.stack(missing), np.array(ids, dtype=np.uint64))
             self.index.sync(str(_path()))

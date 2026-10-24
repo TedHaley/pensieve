@@ -5,10 +5,9 @@ A task joins agent sessions, git branches, commits and connection items (tickets
 - the git branch a session ran on (feature branches only: a default or long-lived branch holds many tasks);
 - for work without a ticket: sessions in the same repo, a few days apart, that edited the same specific files.
 
-`adjacent` finds what coworkers did near a task: their recent commits on remote branches in the same folders, and
-tickets and threads about the same subject."""
-import hashlib
+`coworkers` finds what coworkers did near a task: their recent commits on remote branches in the same folders."""
 from dataclasses import asdict
+from functools import lru_cache
 import json
 import re
 import subprocess
@@ -18,11 +17,18 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import numpy as np
-
-from pensieve import cardtext, connections, repos as repos_mod, task_states
+from pensieve import cardtext, connections, repos as repos_mod, task_states, transcripts
 
 KEY = re.compile(r"\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b")
+BRANCH_KEY = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,9})[-_](\d{1,6})(?![0-9])")  # abc-123-x, feat/ABC_12
+
+
+def branch_keys(branch: str, known=()) -> list[str]:
+    """The ticket keys in a branch name. Upper case (ABC-123) as in text; another case or an underscore (abc-123,
+    Abc_123) only for a ticket in `known`, since `fix-2-bugs` or `sha-256` look like keys too."""
+    out = [f"{a}-{b}" for a, b in KEY.findall(branch)]
+    out += [k for a, b in BRANCH_KEY.findall(branch) if (k := f"{a.upper()}-{b}") in known and k not in out]
+    return out
 # a ticket's page: Jira (…/browse/KEY) and Linear (…/issue/KEY); group 1 is the site part that comes before the key
 TICKET_URL = re.compile(r"(https://[\w-]+\.atlassian\.net/browse|https://linear\.app/[\w-]+/issue)/([A-Z][A-Z0-9]{1,9}-\d{1,6})\b")
 # pull and merge requests on GitHub, GitLab, Bitbucket and Azure DevOps
@@ -36,7 +42,6 @@ _TITLE_WORD = re.compile(r"[a-z0-9][a-z0-9.+#-]*")
 _STOP = {"a", "an", "the", "and", "or", "for", "of", "to", "in", "on", "with", "from", "into", "by", "at", "is", "it",
          "this", "that", "my", "our", "how", "what", "why", "do", "does", "can", "we", "i", "vs", "via", "new"}
 _TEMP = ("/private/tmp/", "/tmp/", "/private/var/folders/", "/var/folders/")
-_branch_cache = {}       # transcript path -> (mtime, branch)
 _roots = {}              # folder -> its git root, or ""
 _cache = {}
 
@@ -47,37 +52,45 @@ def _not_users(project: str) -> bool:
     return p.startswith(_TEMP) or p.startswith(str(Path.home() / "Library") + "/")
 
 
-_GIT_BRANCH = re.compile(rb'"gitBranch":"([^"]*)"')
-_LINE_CWD = re.compile(rb'"cwd":"([^"]*)"')
-_LINE_TS = re.compile(rb'"timestamp":"([^"]*)"')
+def _in_temp(project: str) -> bool:
+    """A session in a system temp folder, when `skip_temp_sessions` is on (as the indexer skips them)."""
+    from pensieve import indexer
+    return indexer.in_temp(project)
 
 
 def _branches(path: str) -> dict[tuple[str, str], float]:
-    """Every git branch that a Claude Code transcript records, by (cwd, branch), with the time of its last message.
-    "HEAD" is left out: Claude Code records it during some git operations, so it is not the branch the work is on."""
-    try:
-        size = Path(path).stat().st_size
-    except OSError:
-        return {}
-    hit = _branch_cache.get(path)
-    if hit and hit[0] == size:
-        return hit[1]
-    start, out = (hit[0], dict(hit[1])) if hit and hit[0] < size else (0, {})  # a transcript only grows: read the end
-    try:
-        with open(path, "rb") as f:
-            f.seek(start)
-            data = f.read()
-    except OSError:
-        return out
-    end = data.rfind(b"\n") + 1  # whole lines only: the last one can be half written
-    for line in data[:end].splitlines():
-        b = _GIT_BRANCH.search(line)
-        if not b or b.group(1) in (b"", b"HEAD"):
-            continue
-        c, t = _LINE_CWD.search(line), _LINE_TS.search(line)
-        k = ((c.group(1) if c else b"").decode(errors="replace"), b.group(1).decode(errors="replace"))
-        out[k] = max(out.get(k, 0), _ts(t.group(1).decode()) if t else 0)
-    _branch_cache[path] = (start + end, out)
+    """Every git branch that a Claude Code transcript records, by (cwd, branch), with the time of its last message
+    (pensieve/transcripts.py). "HEAD" is left out: Claude Code records it during some git operations, so it is not
+    the branch the work is on."""
+    from pensieve import transcripts
+    return transcripts.branches(path)
+
+
+def _worktrees(root: str) -> dict[str, tuple[str, str]]:
+    """{worktree path: (repo root, branch)} of a repo, from git."""
+    out, path, branch = {}, "", ""
+    for line in _git(root, "worktree", "list", "--porcelain", ttl=60).splitlines():
+        if line.startswith("worktree "):
+            path, branch = line[9:], ""
+        elif line.startswith("branch "):
+            branch = line[7:].removeprefix("refs/heads/")
+        elif not line.strip() and path:
+            out[path] = (root, branch)
+            path = ""
+    if path:
+        out[path] = (root, branch)
+    return out
+
+
+def _commits(root: str, since: float, end: float) -> list[tuple]:
+    """(repo, sha, ts, author, subject) of a repo's commits on any branch in the window, from git."""
+    out = []
+    raw = _git(root, "log", "--all", "--no-merges", f"--since={int(since)}", f"--until={int(end)}", "-n", "2000",
+               "--format=%H%x1f%ct%x1f%an%x1f%s", ttl=300)
+    for line in raw.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) == 4 and parts[1].isdigit():
+            out.append((root, parts[0], int(parts[1]), parts[2], parts[3]))
     return out
 
 
@@ -110,6 +123,35 @@ def _items(since: float = 0, until: float | None = None) -> list[dict]:
     return [_item(d, ppl) for d, ppl in zip(docs, _assignees(db, [d.id for d in docs]))]
 
 
+def _merge_tickets(tickets: list[dict]) -> list[dict]:
+    """One entry per key, newest first. Several rows hold one ticket (the keeper's copy and the copies an agent's
+    tool calls returned): the newest row gives the status, and each other field comes from the newest row that has
+    it, since a copy from a tool call often has the key for a title and no description."""
+    fields = ("key", "title", "status", "assignee", "url", "server", "path", "updated")
+    by_key: dict[str, list[dict]] = {}
+    for i in sorted(tickets, key=lambda i: -i["updated"]):
+        by_key.setdefault(i["key"], []).append(i)
+    out = []
+    for key, rows in by_key.items():
+        t = {**{k: rows[0][k] for k in fields}, "text": ""}
+        for k in ("title", "assignee", "url", "server"):
+            t[k] = next((r.get(k) for r in rows if r.get(k) and (k != "title" or r[k] != key)), rows[0].get(k) or "")
+        t["text"] = _ticket_body(max((r.get("text") or "" for r in rows), key=len))[:2000]  # the fullest description
+        out.append(t)
+    return out
+
+
+def _ticket_body(text: str) -> str:
+    """The ticket's description out of a stored item's text, which starts with a heading and a list of fields (key,
+    URL, author, status), and holds the description last, after a `description:` (Jira, Linear) or `notes:` (Asana)
+    line."""
+    m = re.search(r"^(description|notes):\s*", text, re.M)
+    if m:
+        return text[m.end():].strip()
+    lines = [ln for ln in text.splitlines() if not ln.startswith(("# ", "- ")) and ":" not in ln[:12]]
+    return "\n".join(lines).strip()
+
+
 def _older_items(items: list[dict], prefixes: set, S: dict, facts: dict, commits, until) -> list[dict]:
     """Items from before the window that the window's work names: tickets by their keys (in session titles, branches
     and text, commit subjects, and the window's own tickets) and pull requests by their head branches. A ticket that last changed 40 days ago
@@ -120,6 +162,7 @@ def _older_items(items: list[dict], prefixes: set, S: dict, facts: dict, commits
     prefixes = prefixes | documents.ticket_prefixes(db, srcs)
     have = {i["doc"] for i in items}
     keys = {f"{a}-{b}" for s in S.values() for t in [s["title"], s["branch"]] for a, b in KEY.findall(t) if a in prefixes}
+    keys |= {f"{a.upper()}-{b}" for s in S.values() for a, b in BRANCH_KEY.findall(s["branch"]) if a.upper() in prefixes}
     keys |= {f"{a}-{b}" for s in S.values() for a, b in facts[s["id"]]["keys"] if a in prefixes}
     keys |= {f"{a}-{b}" for c in commits for a, b in KEY.findall(c[4]) if a in prefixes}
     keys |= {i["key"] for i in items if i["key"]}  # older copies of a window's ticket (another tool's, with its people)
@@ -326,46 +369,51 @@ class Inputs:
         self.load_repos(store)
         self.items = {i["doc"]: i for i in _items(self.since, self.until)}
 
-    def load_sessions(self, store, ids=None):
+    def load_sessions(self, store=None, ids=None):
         """The sessions of the window (or only `ids`, which leave when they are no longer in it), their text facts
-        and their edited files."""
-        sql = ("SELECT id, project, title, summary, updated, started, path FROM sessions WHERE updated > ? AND "
-               "coalesce(started, updated) <= ? AND n_chunks > 0 AND path NOT LIKE '%.md'")
-        args = [self.since_iso, self.upto_iso]
-        if ids is not None:
-            ids = list(ids)
-            sql += f" AND id IN ({','.join('?' * len(ids))})"
-            args += ids
-        db = store.db
-        rows = db.execute(sql + " ORDER BY updated DESC", args).fetchall() if ids is None or ids else []
-        got = [r[0] for r in rows]
-        texts, edits = defaultdict(list), defaultdict(set)
-        for i in range(0, len(got), 50):  # 50 sessions at a time
-            part = got[i:i + 50]
-            q = ",".join("?" * len(part))
-            for sid, t in db.execute(f"SELECT session_id, text FROM chunks WHERE session_id IN ({q}) "
-                                     "ORDER BY session_id, idx", part).fetchall():
-                texts[sid].append(t)
-            for sid, p in db.execute(f"SELECT session_id, path FROM session_files WHERE edited=1 AND session_id "
-                                     f"IN ({q})", part).fetchall():
-                if not p.startswith(_TEMP):  # scratch files are not the work
-                    edits[sid].add(p)
-        for sid in ids or []:
+        and their edited files, from the transcripts (pensieve/transcripts.py: read once, incrementally). With no
+        `ids`, the transcript folders are read for changes first."""
+        from pensieve import transcripts
+        if ids is None:
+            transcripts.sync()
+            by_id = {f.id: f for f in transcripts.sessions_since(self.since)}
+        else:
+            by_id = {f.id: f for f in transcripts.all_facts().values()}
+        for sid in (list(ids) if ids is not None else list(by_id)):
             self.sessions.pop(sid, None)
             self.facts.pop(sid, None)
             self.edits.pop(sid, None)
-        for r in rows:
-            self.sessions[r[0]] = r
-            self.facts[r[0]] = _facts(texts.get(r[0], []))
-            self.edits[r[0]] = edits.get(r[0], set())
+            f = by_id.get(sid)
+            if not f or not f.n_turns or not f.updated or f.state.get("own") or _in_temp(f.project):
+                continue
+            upd, started = f.updated_ts(), _ts(f.started)
+            if not (self.since < upd and (started or upd) <= self.end):
+                continue
+            self.sessions[sid] = (sid, f.project, f.title, "", f.updated, f.started, f.path)
+            self.facts[sid] = transcripts.text_facts(f)
+            self.edits[sid] = {p for p in f.edited if not p.startswith(_TEMP)}  # scratch files are not the work
 
-    def load_repos(self, store):
-        """The repos, worktrees and commits of the window."""
-        db = store.db
-        self.roots = [r[0] for r in db.execute("SELECT root FROM repos").fetchall()]
-        self.wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
-        self.commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
-                                  (self.since, self.end)).fetchall()
+    def load_repos(self, store=None):
+        """The repos, worktrees and commits of the window: from the index when the repo indexer runs (developer
+        mode), else from git, for the repos the window's sessions ran in."""
+        rows = []
+        if store is not None:
+            try:
+                rows = store.db.execute("SELECT root FROM repos").fetchall()
+            except Exception:
+                rows = []
+        if rows:
+            db = store.db
+            self.roots = [r[0] for r in rows]
+            self.wts = {w: (r, b) for w, r, b in db.execute("SELECT path, repo, branch FROM worktrees").fetchall()}
+            self.commits = db.execute("SELECT repo, sha, ts, author, subject FROM commits WHERE ts > ? AND ts <= ?",
+                                      (self.since, self.end)).fetchall()
+            return
+        roots = sorted({r for r in (_git_root(s[1]) for s in self.sessions.values() if s[1]) if r})
+        self.roots, self.wts, self.commits = roots, {}, []
+        for root in roots:
+            self.wts.update(_worktrees(root))
+            self.commits += _commits(root, self.since, self.end)
 
     def load_items(self, ids):
         """The collected items `ids` again: a changed one is replaced, one that left the window or the switched-on
@@ -380,18 +428,6 @@ class Inputs:
                 and (not self.until or (d.time or 0) <= self.until)]
         for d, ppl in zip(docs, _assignees(db, [d.id for d in docs])):
             self.items[d.id] = _item(d, ppl)
-
-
-def _facts(texts: list[str]) -> dict:
-    """What a session's text names, kept so that a card build does not read the text again: ticket keys (as
-    (prefix, number) pairs, counted), ticket links, pull request links (counted), published Artifact links, and how
-    the session ended."""
-    joined = "\n".join(texts)
-    return dict(keys=Counter(KEY.findall(joined)), ticket_urls=TICKET_URL.findall(joined),
-                prs=Counter(PR_URL.findall(joined)), links=list(dict.fromkeys(ARTIFACT_URL.findall(joined))),
-                last=_tail(texts[-1]) if texts else "",  # where the session stopped
-                ending=_tail("\n".join(texts[-2:]), 2400) if texts else "",  # what the note reads
-                turns=cardtext.turns_from_chunks(texts[-8:]))  # the last turns: the user's words, the agent's reply
 
 
 def group(inp: Inputs) -> list[dict]:
@@ -447,6 +483,12 @@ def group(inp: Inputs) -> list[dict]:
     def keys_in(text):
         return [f"{a}-{b}" for a, b in KEY.findall(text) if a in prefixes]
 
+    known = {i["key"] for i in items if i["key"]}
+
+    def keys_of(title, branch):
+        """The keys in a session's or PR's title and branch: a branch's key in any case, for a known ticket."""
+        return list(dict.fromkeys(keys_in(title) + [k for k in branch_keys(branch, known) if k.split("-")[0] in prefixes]))
+
     u = _Union()
     # branches: feature branches only; a branch with many sessions over many days holds many tasks
     by_branch = defaultdict(list)
@@ -460,7 +502,7 @@ def group(inp: Inputs) -> list[dict]:
             continue
         for s in v:
             u.join(f"s:{s['id']}", f"b:{k[0]}@{k[1]}")
-        for key in keys_in(k[1]):
+        for key in keys_of("", k[1]):
             u.join(f"b:{k[0]}@{k[1]}", f"t:{key}")
     # A pull request linked from a session, whose title or head branch names a ticket, ties the ticket to the PR and
     # to the PR's head branch, when the session worked on that branch at some point. A long session moves on to other
@@ -477,7 +519,7 @@ def group(inp: Inputs) -> list[dict]:
             if not head or head in DEFAULT_BRANCHES or (repo, head) in long_lived \
                     or ((repo, head) not in worked_of[sid] and (repo, head) not in branch_nodes):
                 continue
-            ks = keys_in(f"{info.get('title', '')} {head}")
+            ks = keys_of(info.get("title", ""), head)
             for key in ks:
                 u.join(f"b:{repo}@{head}", f"t:{key}")
             if ks:
@@ -487,7 +529,7 @@ def group(inp: Inputs) -> list[dict]:
     # session that just quotes another repo's ticket does not join that ticket's task.
     home = defaultdict(set)
     for s in S.values():
-        for key in keys_in(s["title"] + " " + s["branch"]):
+        for key in keys_of(s["title"], s["branch"]):
             if s["repo"]:
                 home[key].add(s["repo"])
     for repo, sha, ts, author, subject in commits:
@@ -500,7 +542,7 @@ def group(inp: Inputs) -> list[dict]:
     homes = lambda k: home[k] or home_project[k.split("-")[0]]
     for s in S.values():
         found = said(s["id"])
-        strong = set(keys_in(s["title"] + " " + s["branch"]))
+        strong = set(keys_of(s["title"], s["branch"]))
         weak = {k for k in found if k not in strong and s["repo"] and (not homes(k) or s["repo"] in homes(k))}
         # one ticket per session from its text, so a session that mentions two tickets doesn't merge them; more than
         # three keys: a list of tickets, not one task
@@ -607,15 +649,16 @@ def group(inp: Inputs) -> list[dict]:
                          if n >= 2 and k not in keys][:3],
             repos=sorted({s["repo"] for s in ss if s["repo"]} | {c["repo"] for c in cs}),
             branches=[dict(repo=b.split("@", 1)[0], branch=b.split("@", 1)[1]) for b in brs],
-            tickets=[{k: i[k] for k in ("key", "title", "status", "assignee", "url", "server", "path", "updated")}
-                     for i in sorted(tickets, key=lambda i: -i["updated"])] +
+            tickets=_merge_tickets(tickets) +
                     [dict(key=k, title="", status="", assignee="", url=f"{sites[k.split('-')[0]]}/{k}", server="",
                           path="", updated=0) for k in keys
                      if k not in {i["key"] for i in tickets} and k.split("-")[0] in sites],  # known only by its key
             items=[{k: i[k] for k in ("title", "url", "server", "path", "updated", "private")}
                    for i in sorted(its, key=lambda i: -i["updated"]) if not i["key"]][:30],
             sessions=[dict(id=s["id"], title=s["title"], updated=s["updated"], branch=s["branch"], repo=s["repo"],
-                           project=s["project"], artifacts=_artifacts(s, facts[s["id"]]["links"])) for s in ss],
+                           project=s["project"], summary=(s["summary"] or "")[:600],
+                           artifacts=_artifacts(s, facts[s["id"]]["links"], facts[s["id"]].get("docs", ()),
+                                                facts[s["id"]].get("read_docs", ()))) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
     # A ticket that a thread in another repo works on belongs there: sessions here that only name it (a pasted log,
@@ -662,43 +705,346 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
         for t in out:
             t["places"] = []
     _own_prs(out)
-    have, manual = notes(), task_states.latest(store)
+    from pensieve import session_threads
+    out = session_threads.split(out, inp.facts)  # one thread per writing session, each with only its own sinks
+    from pensieve import claims
+    claims.apply(out)  # a branch shared by several threads goes to the session with the most of its lines
+    _adopt(out)  # the holder of a branch takes the activity of the other sessions that wrote to it
+    manual = task_states.latest(store)
     if inp.until is None:
-        _integrated(out, have)
-    out += _goal_tasks(out, have)
+        _integrated(out)
     for t in out:
         _attention(t)
-        _thread(t, inp, have.get(t["id"], {}))
-        task_states.apply(t, have.get(t["id"], {}), manual.get(t["id"]))
+        _thread(t, inp)
+        t["events"] = sorted(t["events"] + _branch_events(t), key=lambda e: -e["ts"])[:80]
+        task_states.apply(t, manual.get(t["id"]))
+        _title(t)
+    _kin(out)
+    _related_cards(out)
+    for t in out:
         t.pop("_sessions")
         t.pop("_shared", None)
         t.pop("_named", None)
+        t.pop("_siblings", None)
+        t.pop("_writes", None)
     out.sort(key=_order)
     return out
 
 
-def _thread(t: dict, inp: "Inputs", note: dict):
+def _sink_names(t: dict) -> set[str]:
+    """The branches (by name), PRs and tickets a thread's session touched: what it wrote to, the branches it holds,
+    and the branch its session ran on."""
+    names = {key.split("@", 1)[-1] if kind == "branch" else key for kind, key in t.get("_writes", [])}
+    names |= {b["branch"] for b in t.get("branches", [])}
+    s = t["_sessions"][0] if t.get("_sessions") else {}
+    if s.get("branch") and s["branch"] not in DEFAULT_BRANCHES:
+        names.add(s["branch"])
+    return names
+
+
+def _adopt(threads: list[dict]) -> None:
+    """A thread that holds a branch takes the other sessions that wrote to the branch as shared sessions: their
+    activity keeps it fresh, a running one marks it active, and the card lists them. (claims.apply gave the branch
+    to one thread; the others keep their own cards.)"""
+    from pensieve import session_threads
+    by_id = {t["id"]: t for t in threads}
+    for t in threads:
+        held = {b["branch"] for b in t.get("branches", [])}
+        if not held or not t.get("_siblings"):
+            continue
+        for s in t["_siblings"]:
+            o = by_id.get(session_threads.thread_id(s["id"]))
+            if not o or not o.get("_sessions"):
+                continue
+            wrote = {key.split("@", 1)[-1] for kind, key in o.get("_writes", []) if kind == "branch"}
+            if not wrote & held:
+                continue
+            os_ = o["_sessions"][0]
+            t["_shared"].append((dict(id=os_["id"], title=os_.get("title", ""), path=os_.get("path", "")), os_.get("updated") or 0))
+            t["events"].append(dict(ts=os_.get("updated") or 0, source="session", title=os_.get("title") or "Agent session",
+                                    detail=os_.get("branch", ""), ref=os_["id"]))
+            t["updated"] = max(t["updated"], os_.get("updated") or 0)
+        t["shared_sessions"] = [dict(id=s["id"], title=s["title"], at=at)
+                                for s, at in sorted(t["_shared"], key=lambda x: -x[1])[:5]]
+
+
+def _did(evs: list[str]) -> str:
+    """What a session did to a branch, from the evidence of its write edges: created, committed, pushed, or
+    uncommitted edits."""
+    done = []
+    if any(e.startswith("created") for e in evs):
+        done.append("created")
+    if any(e == "git commit" for e in evs):
+        done.append("committed")
+    if any(e.startswith("git push") for e in evs):
+        done.append("pushed")
+    if not done:
+        return "uncommitted edits on"
+    return ", ".join(done[:-1]) + " and " + done[-1] if len(done) > 1 else done[0]
+
+
+def _kin(threads: list[dict]) -> None:
+    """Each thread's `kin`: the sessions of the same work, oldest first: those that touched a branch, PR or ticket
+    this thread's session touched. Each row says what that session did there, its thread's state and its claim on the
+    branch. The thread itself is in the list, marked `me`, so the card can draw one piece of work in time order."""
+    from pensieve import session_threads
+    by_id = {t["id"]: t for t in threads}
+    for t in threads:
+        sibs = t.get("_siblings")
+        if sibs is None:
+            continue
+        mine = _sink_names(t)
+        me = t["_sessions"][0]
+        rows = [dict(id=t["id"], session=me["id"], title=t["title"], updated=me.get("updated") or t["updated"],
+                     state=t["state"], me=True, did=_what(t, mine), share=_share(t), active=bool(t.get("active")))]
+        for s in sibs:
+            o = by_id.get(session_threads.thread_id(s["id"]))
+            if not o or not mine & _sink_names(o):
+                continue
+            os_ = o["_sessions"][0]
+            rows.append(dict(id=o["id"], session=s["id"], title=o["title"], updated=os_.get("updated") or o["updated"],
+                             state=o["state"], me=False, did=_what(o, mine), share=_share(o), active=bool(o.get("active"))))
+        t["kin"] = sorted(rows, key=lambda r: r["updated"]) if len(rows) > 1 else []
+
+
+def _what(o: dict, names: set[str]) -> str:
+    """What thread `o`'s session did on the sinks in `names`: "committed and pushed session-summaries", "opened #12",
+    "uncommitted edits on x", or "worked on x, no changes" when it only ran there."""
+    from pensieve import session_threads
+    ev = session_threads.evidence(o["_sessions"][0].get("path", ""))
+    parts = []
+    for kind, key in dict.fromkeys(o.get("_writes", [])):
+        name = key.split("@", 1)[-1] if kind == "branch" else key
+        if name not in names:
+            continue
+        if kind == "branch":
+            parts.append(f"{_did(ev.get((kind, key), []))} {name}")
+        elif kind == "pr":
+            merged = any(e == "gh pr merge" for e in ev.get((kind, key), []))
+            parts.append(f"{'merged' if merged else 'opened'} #{key.rsplit('#', 1)[-1]}")
+    if parts:
+        return ", ".join(parts)
+    ran = o["_sessions"][0].get("branch", "")
+    return f"worked on {ran}, no changes" if ran in names else "no changes"
+
+
+def _share(o: dict) -> float | None:
+    c = o.get("claim")
+    return round(c["share"], 2) if c and c.get("share") is not None else None
+
+
+RELATED_MAX = 5          # the related threads a card lists
+RELATED_FILES = 0.25     # the weighted share of edited files two sessions have in common that relates their threads
+
+
+def _sinks(t: dict) -> dict[str, str]:
+    """The sinks a card writes to, each with the reason a shared sink makes two cards related: its branches, its
+    pull requests and its tickets."""
+    out = {}
+    for b in t.get("branches", []):
+        out[f"branch:{b['branch']}"] = f"same branch {b['branch']}"
+    for p in t.get("prs", []):
+        out[f"pr:{p['url']}"] = f"same pull request #{p['url'].rstrip('/').rsplit('/', 1)[-1]}"
+    for k in t.get("tickets", []):
+        if not k.get("ref"):
+            out[f"ticket:{k['key']}"] = f"same ticket {k['key']}"
+    return out
+
+
+def _related_cards(tasks_: list[dict]) -> None:
+    """Each card's `related`: the other cards that share a sink (the reason names it), then the cards whose sessions
+    edited the same files (the reason names the rarest ones). At most RELATED_MAX, in that order."""
+    if len(tasks_) < 2:
+        for t in tasks_:
+            t["related"] = []
+        return
+    by_id = {t["id"]: t for t in tasks_}
+    sinks = {t["id"]: _sinks(t) for t in tasks_}
+    holders = defaultdict(list)
+    for tid, ss in sinks.items():
+        for key in ss:
+            holders[key].append(tid)
+    files = _file_kin(tasks_)
+    for tid in by_id:
+        rel, seen = [], {tid}
+        for key, why in sinks[tid].items():
+            for other in holders[key]:
+                if other not in seen:
+                    seen.add(other)
+                    rel.append(dict(id=other, reason=why))
+        for other, why in files.get(tid, []):
+            if other not in seen:
+                seen.add(other)
+                rel.append(dict(id=other, reason=why))
+        t = by_id[tid]
+        t["related"] = [dict(id=r["id"], title=by_id[r["id"]]["title"], state=by_id[r["id"]]["state"], reason=r["reason"],
+                             updated=by_id[r["id"]]["updated"]) for r in rel[:RELATED_MAX]]
+
+
+def _file_kin(tasks_: list[dict]) -> dict[str, list[tuple[str, str]]]:
+    """For each thread, the threads whose session edited the same files, best first, with the reason "edited the
+    same files: a.py, b.py +2". A file that many sessions edit says little, so each shared file weighs
+    1 / log(1 + sessions that edited it), and the share is that weight over the weight of both sessions' files."""
+    import math
+    edited = {t["id"]: {str(p) for p in ((t.get("_sessions") or [{}])[0].get("edited") or ()) if "/.claude/" not in str(p)}
+              for t in tasks_}
+    n_edits = Counter(p for fs in edited.values() for p in fs)
+    weight = lambda p: 1 / math.log(1 + n_edits[p]) if n_edits[p] > 1 else 0.0  # a file one session edited links nothing
+    out: dict[str, list] = {}
+    ids = list(edited)
+    for i, a in enumerate(ids):
+        if not edited[a]:
+            continue
+        found = []
+        for b in ids[i + 1:]:
+            common = edited[a] & edited[b]
+            if not common:
+                continue
+            both = sum(weight(p) for p in edited[a] | edited[b])
+            share = sum(weight(p) for p in common) / both if both else 0
+            if share >= RELATED_FILES:
+                names = list(dict.fromkeys(Path(p).name for p in sorted(common, key=lambda p: (n_edits[p], p))))
+                why = "edited the same files: " + ", ".join(names[:3]) + (f" +{len(names) - 3}" if len(names) > 3 else "")
+                found.append((share, b, why))
+                out.setdefault(b, []).append((share, a, why))
+        out.setdefault(a, []).extend(found)
+    return {k: [(other, why) for _, other, why in sorted(v, key=lambda x: -x[0])] for k, v in out.items()}
+
+
+
+
+def _thread(t: dict, inp: "Inputs"):
     """What the card says about its thread (pensieve/cardtext.py): its anchor, the user's last words and the agent's
-    last reply in its newest own session, and what is left to close it. The note writer's `resolved` judgment, which
-    reads all of the card's sources, turns an open ticket into "close it"."""
+    last reply in its newest own session, and what is left to close it."""
     s = cardtext.pick_session(t)
     turns = (inp.facts.get(s["id"]) or {}).get("turns", []) if s else []
     reply = cardtext.agent_reply(turns) if turns else None
     t["anchor"] = asdict(cardtext.anchor(t))
     t["mine"] = cardtext.my_messages(turns)
     t["reply"] = asdict(reply) if reply and (reply.text or reply.waiting) else None
-    t["left"] = [asdict(x) for x in cardtext.pending(t, reply, resolved=bool(note.get("resolved")))]
+    t["left"] = [asdict(x) for x in cardtext.pending(t, reply)]
+    t["closeout"] = cardtext.closeout(t, reply)  # the steps that merge the work
+    t["discard"] = cardtext.discard(t)  # the steps that close it without merging
+
+
+_REFLOG_CREATED = re.compile(r"^(\S+)@\{(\d+)\}\|branch: Created")
+
+
+@lru_cache(maxsize=512)
+def _branch_created(path: str, branch: str) -> float:
+    """When a branch was made in its checkout: the time of its reflog's "branch: Created" entry, or 0 when the reflog
+    does not say (git keeps a branch's reflog for 90 days by default, and a clone has none)."""
+    r = subprocess.run(["git", "-C", path, "reflog", "show", "--date=unix", "--format=%gd|%gs", f"refs/heads/{branch}"],
+                       capture_output=True, text=True, timeout=10)
+    for line in r.stdout.splitlines():
+        m = _REFLOG_CREATED.match(line)
+        if m:
+            return float(m.group(2))
+    return 0.0
+
+
+def _branch_events(t: dict) -> list[dict]:
+    """A "Branch created" event for each of the card's branches whose checkout still has its reflog."""
+    out = []
+    for b in t.get("branches", []):
+        pl = next((p for p in t.get("places", []) if p.get("branch") == b["branch"] and p.get("path")), None)
+        if not pl:
+            continue
+        at = _branch_created(pl["path"], b["branch"])
+        if at:
+            out.append(dict(ts=at, source="branch", title=f"Branch {b['branch']} created",
+                            detail=b.get("repo", ""), ref=""))
+    return out
+
+
+def _title(t: dict):
+    """The card's title: its ticket's title, then its pull request's, then its session's. An open ticket or PR comes
+    first. The thread that holds a branch several sessions wrote to is named by the session with the largest share of
+    its lines (claims.apply sets `_lead_title`); a thread that lost the branch keeps its own session's title, so the
+    card says what that session was about."""
+    lead = t.pop("_lead_title", None)
+    lost = bool((t.get("claim") or {}).get("lost"))
+    own = (lead if not lost else "") or (t["sessions"][0]["title"] if t.get("sessions") else t.get("title", ""))
+    tickets = sorted(t.get("tickets", []), key=lambda k: k.get("status", "").lower() in DONE)
+    prs = sorted(t.get("prs", []), key=lambda p: (p.get("state") or "").lower() not in ("open", "draft"))
+    tk = next((k["title"] for k in tickets if k.get("title")), "")
+    pr = next((p["title"] for p in prs if p.get("title")), "")
+    t["title"] = tk or pr or own
 
 
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 
 
-def _artifacts(s: dict, links: list[str], limit: int = 12) -> list[dict]:
-    """What a session made: the files it created or edited that still exist (not scratch files), and the published
-    Artifact links in its text (`links`), newest file first."""
-    files = sorted((p for p in s["edited"] if Path(p).is_file()), key=_mtime, reverse=True)
-    out = [dict(kind="file", path=p, name=Path(p).name) for p in files[:limit]]
-    return out
+def _artifacts(s: dict, links: list[str], docs=(), read_docs=(), limit: int = 20) -> list[dict]:
+    """The documents of a session's Files list: what it made for people (a Notion page it wrote, a Slack message it
+    sent, a published Artifact), then what it used as context (a Slack thread, an email or a page it read, a link
+    in the conversation, a local document it read), `limit` in all. The code files it edited are not on it: the
+    branch and its PRs hold them. `docs`: (url, service, how, title)."""
+    def link(u, svc, how, title):
+        if svc == "Slack" and u.startswith(transcripts.SLACK_HOST + "/"):
+            u = _slack_host() + u[len(transcripts.SLACK_HOST):]
+        return dict(kind="link", url=u, name=title or _doc_name(u, svc), service=svc, how=how)
+    out = [link(*d) for d in docs if d[2] == "made"]
+    out += [dict(kind="link", url=u, name="Artifact", service="Claude", how="made") for u in links]
+    out += [link(*d) for d in docs if d[2] != "made"]
+    files = [p for p in read_docs if Path(p).is_file() and not _agent_own(p)]
+    out += [dict(kind="file", path=p, name=Path(p).name, how="read") for p in files]
+    return out[:limit]
+
+
+AGENT_DIRS = {".claude", ".codex", ".gemini", ".qwen", ".agents", ".cursor", ".pensieve"}
+
+
+def _agent_own(path: str) -> bool:
+    """An agent's own file, not context about the work: its memory, skills, plugins and tool output (in an agent's
+    folder, the user's or a repo's, or in a temp folder)."""
+    return bool(AGENT_DIRS & set(Path(path).parts)) or path.startswith(("/tmp/", "/private/tmp/", "/var/folders/",
+                                                                         "/private/var/folders/"))
+
+
+_slack = []
+
+
+def _slack_host() -> str:
+    """The Slack workspace's own address, from a Slack link that Pensieve holds, else slack.com (which opens the
+    workspace you are signed in to)."""
+    if not _slack:
+        host = transcripts.SLACK_HOST
+        try:
+            from pensieve import store as v2
+            row = v2.store_db().execute("SELECT url FROM documents WHERE url LIKE 'https://%.slack.com/%' LIMIT 1").fetchone()
+            if row:
+                host = "https://" + row[0].split("/")[2]
+        except Exception:
+            pass
+        _slack.append(host)
+    return _slack[0]
+
+
+GOOGLE_KIND = {"document": "Google Doc", "spreadsheets": "Google Sheet", "presentation": "Google Slides",
+               "forms": "Google Form"}
+
+
+def _doc_name(url: str, service: str) -> str:
+    """A web document's name from its URL: a Notion or Confluence page's title words, else what it is."""
+    from urllib.parse import unquote
+    path = unquote(url.split("://", 1)[-1].split("?", 1)[0].split("#", 1)[0]).rstrip("/")
+    last = path.rsplit("/", 1)[-1]
+    if service == "Notion":
+        words = re.sub(r"-?[0-9a-f]{32}$", "", last).replace("-", " ").strip()
+        return words or "Notion page"
+    if service == "Confluence":
+        return last.replace("+", " ") if not last.isdigit() else "Confluence page"
+    if service == "Gmail":
+        return "Email"
+    if service == "Slack":
+        return "Slack message" if "thread_ts" in url or (last[:1] == "p" and last[1:].isdigit()) else "Slack channel"
+    if service == "Google Docs":
+        return next((v for k, v in GOOGLE_KIND.items() if f"/{k}/" in url), "Google Doc")
+    if service == "Figma":
+        parts = path.split("/")
+        return parts[3].replace("-", " ") if len(parts) > 3 else "Figma file"
+    return service
 
 
 def _own_prs(ts: list[dict]):
@@ -727,13 +1073,12 @@ _squash_cache = {}  # (repo, default branch tip, branch tips) -> the squash-merg
 PR_SUBJECT = re.compile(r"^Merge pull request #(\d+)\b|\(#(\d+)\)\s*$")  # a GitHub merge commit, a squash commit
 
 
-def _integrated(ts: list[dict], have: dict):
+def _integrated(ts: list[dict]):
     """Where a task's work reached the default branch of its repo, from git. Pensieve only reads: the merge is the
-    evidence, and task_states.derive turns it into a state. Without an open PR, a task is integrated when:
+    evidence, and the card names the PR that merged it. A thread's state comes from its sinks, not from this. Without an
+    open PR, a task is integrated when:
     - it has a feature branch and every commit of the task is in the default branch (a merge or a fast-forward);
-    - its feature branch is squash-merged (stale._squashed);
-    - it has no feature branch (its commits are on a shared branch), every commit of the task is in the default
-      branch, and its note says that nothing is left.
+    - its feature branch is squash-merged (stale._squashed).
     Sets task["integrated"] (why, and the PR that merged it) and adds that PR to the card, so the record names it."""
     from pensieve import stale
     bases, webs, squash = {}, {}, defaultdict(list)
@@ -756,10 +1101,6 @@ def _integrated(ts: list[dict], have: dict):
             root, name = cs[0]["repo"], base(cs[0]["repo"]).rsplit("/", 1)[-1]
             if feature:
                 _mark(t, root, base(root), cs[0]["sha"], f"its branch {feature[0]['branch']} is merged into {name}", webs)
-                continue
-            # a check_done match is a model's guess, not evidence: only a note that says nothing is left counts
-            if task_states._nothing_left(core(have.get(t["id"], {}))):
-                _mark(t, root, base(root), cs[0]["sha"], f"its commits are in {name}, and nothing is left", webs)
                 continue
         for b in feature:
             if base(b["repo"]) and _git(b["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b['branch']}", ttl=300):
@@ -799,11 +1140,13 @@ def _mark(t: dict, root: str, base: str, sha: str, why: str, webs: dict):
 
 ACTIVE_MINUTES = 10      # a transcript written this recently: the session is running now
 ACTIVE_TURN_MINUTES = 30  # ... and its last turn this recent
-DONE = task_states.DONE
+DONE = {"done", "closed", "resolved", "won't do", "wont do", "cancelled", "canceled", "merged", "complete", "completed",
+        "fixed", "invalid", "duplicate", "released", "shipped"}  # ticket statuses that count as finished
 
 
 def _order(t):
-    return task_states.ORDER.index(task_states.State(t["state"])), not t.get("active"), -t["updated"]
+    return task_states.ORDER.index(task_states.State(task_states.RENAMED.get(t["state"], t["state"]))), \
+        not t.get("active"), -t["updated"]
 
 
 def _attention(task: dict):
@@ -838,15 +1181,13 @@ def _ago(ts: float) -> str:
         else f"{int(s // 86400)} days ago"
 
 
-def matching(ts: list[dict], query: str, notes_: dict) -> list[dict]:
-    """The tasks whose title, keys, branches, PRs, session titles or note contain words of the query, the most
-    matched words first (ties keep their order)."""
+def matching(ts: list[dict], query: str) -> list[dict]:
+    """The tasks whose title, keys, branches, PRs or session titles contain words of the query, the most matched
+    words first (ties keep their order)."""
     words = {w for w in re.findall(r"[a-z0-9][a-z0-9_.-]+", query.lower().replace("#", " ")) if len(w) > 2 or w.isdigit()}
     def text(t):
-        n = core(notes_.get(t["id"], {}))
         return " ".join([t["title"], *t["keys"], *(b["branch"] for b in t["branches"]), *(p["url"] + " " + (p.get("title") or "")
-                         for p in t["prs"]), *(s["title"] for s in t["sessions"][:8]), n.get("problem", ""),
-                         n.get("goal", ""), n.get("next", "")]).lower()
+                         for p in t["prs"]), *(s["title"] for s in t["sessions"][:8])]).lower()
     scored = [(sum(1 for w in words if re.search(rf"(?<![a-z0-9]){re.escape(w)}", tx)), i, t)
               for i, t in enumerate(ts) for tx in [text(t)]]
     return [t for s, i, t in sorted(scored, key=lambda x: (-x[0], x[1])) if s]
@@ -860,7 +1201,7 @@ LIST_WORDS = re.compile(r"\b(standup|stand-up|unfinished|open loops|still open|i
 STANDUP_WORDS = re.compile(r"\b(standup|stand-up|what (have|did) i|last \d+ days|this week)\b", re.I)
 
 
-def card_for_prompt(ts: list[dict], prompt: str, notes_: dict) -> dict | None:
+def card_for_prompt(ts: list[dict], prompt: str) -> dict | None:
     """The task that a prompt is about, or None: a prompt that names its ticket key, branch or PR number, or one that
     asks to pick work up ("where did I leave off on …") and matches one task clearly better than the next."""
     low = prompt.lower()
@@ -872,7 +1213,7 @@ def card_for_prompt(ts: list[dict], prompt: str, notes_: dict) -> dict | None:
             return t
     if not RESUME_WORDS.search(prompt):
         return None
-    ranked = sorted(((len(_words_hit(t, prompt, notes_)), -i, t) for i, t in enumerate(ts)), key=lambda x: x[:2],
+    ranked = sorted(((len(_words_hit(t, prompt)), -i, t) for i, t in enumerate(ts)), key=lambda x: x[:2],
                     reverse=True)
     if not ranked:
         return None
@@ -880,10 +1221,8 @@ def card_for_prompt(ts: list[dict], prompt: str, notes_: dict) -> dict | None:
     return ranked[0][2] if first >= 2 and first > second else None
 
 
-def _words_hit(t, prompt, notes_):
-    n = core(notes_.get(t["id"], {}))
-    text = " ".join([t["title"], *(s["title"] for s in t["sessions"][:8]), n.get("problem", ""), n.get("goal", ""),
-                     n.get("next", "")]).lower()
+def _words_hit(t, prompt):
+    text = " ".join([t["title"], *(s["title"] for s in t["sessions"][:8])]).lower()
     words = {w for w in re.findall(r"[a-z0-9][a-z0-9_.-]+", prompt.lower()) if len(w) > 3} - _STOP
     return [w for w in words if re.search(rf"(?<![a-z0-9]){re.escape(w)}", text)]
 
@@ -893,17 +1232,16 @@ _STOP = {"where", "what", "with", "that", "this", "from", "back", "left", "pick"
          "folder", "branch", "state", "there", "which", "when", "they", "them", "then", "does", "into", "anything"}
 
 
-def brief(t: dict, note: dict) -> str:
+def brief(t: dict) -> str:
     """One line for an agent: id, state, title, where, PRs and what is left."""
-    note = reconcile(note, t)[0] if note else note
     p = (t.get("places") or [{}])[0]
     where = ", ".join(x for x in (Path(p.get("path", "")).name, p.get("branch", ""),
                                   p.get("changed") and f"{p['changed']} uncommitted",
                                   p.get("ahead") and f"{p['ahead']} not pushed") if x)
     prs = ", ".join(f"PR #{(re.search(r'(\d+)/?$', x['url']) or [0, '?'])[1]} {x['state'] or ''}".strip() for x in t["prs"][:2])
     bits = [f"[{t['state']}]" + (" (session running)" if t.get("active") else ""), t["title"][:90], where, prs,
-            ", ".join(t["keys"][:2]), f"next: {note['next']}" if note.get("next") else "",
-            f"waits on you: {note['question']}" if note.get("question") else "", _ago(t["updated"])]
+            ", ".join(t["keys"][:2]), f"next: {t['left'][0]['text']}" if t.get("left") else "",
+            f"waits on you: {q}" if (q := asked_question(t)) else "", _ago(t["updated"])]
     return f"{t['id']}  " + " · ".join(b for b in bits if b)
 
 
@@ -923,15 +1261,10 @@ def _tail(text: str, n: int = 600) -> str:
     return cut.split("\n", 1)[1] if "\n" in cut[:n // 2] else cut
 
 
-def detail(t: dict, note: dict, hist: list[dict]) -> str:
+def detail(t: dict, hist: list[dict]) -> str:
     """The whole card for an agent, as Markdown: enough to pick the task up and finish it."""
     out = [f"# {t['title']}", f"id: {t['id']} · state: {t['state']} ({t['state_why']}) · last activity {_ago(t['updated'])}"]
     last = max((s["updated"] for s in t.get("sessions", [])), default=0)
-    note = reconcile(note, t)[0] if note else note
-    if note:
-        out += ["", f"From the sessions (as of {datetime.fromtimestamp(last).strftime('%Y-%m-%d') if last else 'the last session'}; "
-                    "the folders and PRs below are live):"]
-        out += [f"{label}: {note[k]}" for k, label in CORE_LABELS if note.get(k)]
     since = [p for p in t["prs"] + t.get("branch_prs", []) if last and (p.get("merged_at") or 0) > last]
     if since:
         out += ["", "## Since the last session"] + [
@@ -971,166 +1304,9 @@ def detail(t: dict, note: dict, hist: list[dict]) -> str:
     return "\n".join(out)
 
 
-_PUSH = re.compile(r"\b(push|unpushed|not pushed|ahead of|committed locally|local commits?)\b", re.I)
-_UNCOMMITTED = re.compile(r"\buncommitted\b", re.I)
-_PR_OPEN = re.compile(r"(?:PR\s*)?#(\d+)[^.;]*\b(open|draft|review|merge it|to merge|waiting|pending)\b|"
-                      r"\b(merge|review|open)\b[^.;]*#(\d+)", re.I)
-
-
-CORE_LABELS = (("problem", "Problem"), ("goal", "Goal"), ("state", "State"), ("next", "Next"), ("question", "Waiting on you"))
-
-
-def reconcile(note: dict, t: dict) -> tuple[dict, list[str]]:
-    """The note's core (problem, goal, state, next, question) with each sentence that the live state contradicts
-    marked as outdated, and what the live state says instead. A note is written from the sessions; git and gh show
-    what happened after them (a push, a merged PR). A claim about the checkout (pushed, uncommitted) can be outdated
-    anywhere but the problem and goal; a claim that a PR waits, only in what is left to do (next, question)."""
-    note = core(note)
-    places = [p for p in t.get("places", []) if p.get("git")]
-    pushed = bool(places) and all(p.get("upstream") and not p.get("ahead") for p in places if p.get("branch"))
-    clean = bool(places) and not any(p.get("changed") for p in places)
-    state = {m: (p.get("state") or "") for p in t["prs"] + t.get("branch_prs", [])
-             for m in re.findall(r"/pull/(\d+)", p["url"])}
-    done = _done_items().get(t.get("id"), {}).get("done", {})
-    changes, out = [], {}
-    for k, v in note.items():
-        keep = []
-        for s in re.split(r"(?<=[.;])\s+", v):
-            why = None
-            if k in ("state", "next", "question") and pushed and clean and _PUSH.search(s):  # uncommitted: a push still waits
-                why = "every commit is pushed now"
-            elif k in ("state", "next", "question") and places and _PUSH.search(s) and (on := _on_remote(places, s)):
-                why = on
-            elif k in ("state", "next", "question") and _PUSH.search(s) and not _SHA.search(s) and _commits_pushed(t):
-                why = "its commits are pushed now"
-            elif k in ("state", "next", "question") and clean and _UNCOMMITTED.search(s):
-                why = "nothing is uncommitted now"
-            elif k in ("next", "question") and s.strip() in done:
-                why = done[s.strip()]
-            else:
-                for m in _PR_OPEN.finditer(s):
-                    n = m.group(1) or m.group(4)
-                    if state.get(n) in ("merged", "closed") and k in ("next", "question"):  # work to do, not done
-                        why = f"PR #{n} is {state[n]} now"
-            if why:  # marked, not dropped: the rest of the sentence ("push, then deploy") can still be open
-                changes.append(why)
-                s = f"{s.rstrip()} [outdated: {why}]"
-            keep.append(s)
-        out[k] = " ".join(keep).strip()
-    return out, list(dict.fromkeys(changes))
-
-
-DONE_PROMPT = """A developer's thread of work has things left to do, from a note written when its last agent session ended.
-Commits made since that session, in the thread's repos, on any branch (hash, author, subject, body):
-{commits}
-
-Left to do:
-{items}
-
-For each item that one of these commits clearly does in full, give the item's number and the commit's hash. Leave out
-an item that a commit only starts or only resembles. A commit that only writes a plan, a design note or docs does not
-do an item that asks for a change to code. A commit never does an item about a pull request (mark it ready, review or
-merge it), a ticket, or a person's answer: those happen outside git."""
-DONE_CHECK_VERSION = 2  # in each check's key: a new version checks every task again
-# a step that happens outside git (a PR, a review, a ticket, an answer): check_done never asks about it
-OUTSIDE_GIT = re.compile(r"#\d+|\bPRs?\b|pull request|\b[A-Z][A-Z0-9]+-\d+\b|^(?:mark|merge|review|approve|ask|answer|"
-                         r"wait|decide|confirm|tell|close)\b", re.I)
-DONE_SCHEMA = {"type": "object", "properties": {"done": {"type": "array", "items": {
-    "type": "object", "properties": {"item": {"type": "integer"}, "commit": {"type": "string"}},
-    "required": ["item", "commit"], "additionalProperties": False}}}, "required": ["done"], "additionalProperties": False}
-
-
-def _done_items() -> dict:
-    """{task: {key, done: {sentence: why}}}: what check_done found (the tables card_done and card_done_checks)."""
-    from pensieve import store as v2
-    from pensieve.store import cards as store_cards
-    db = v2.store_db()
-    done = store_cards.done(db)
-    return {k: dict(key=key, done=done.get(k, {})) for k, key in store_cards.done_checks(db).items()}
-
-
-def _left_items(note: dict) -> list[str]:
-    """What a note says is left: the sentences of next and question, and the goals that only the sessions talk
-    about (also), which a later commit can have built."""
-    c = core(note)
-    return [s.strip() for k in ("next", "question") for s in re.split(r"(?<=[.;])\s+", c.get(k, "")) if s.strip()] + \
-        [a for a in note.get("also", []) if a]
-
-
-def check_done(ts: list[dict], limit: int = 15) -> int:
-    """Mark what a note says is left to do but a later commit did: for each task, the commits on any branch of its
-    repos after its last session, and one model call when there are any and they are new. A sentence that a commit
-    does in full gets [outdated: done in <hash> (subject)] in reconcile. Returns the number of model calls."""
-    from pensieve import llm
-    have, saved, calls = notes(), dict(_done_items()), 0
-    for t in [t for t in ts if t["state"] not in DONE and t["sessions"]][:limit]:
-        items = [s for s in _left_items(have.get(t["id"], {})) if not OUTSIDE_GIT.search(s)]
-        if not items:
-            continue
-        since = datetime.fromtimestamp(t["sessions"][0]["updated"]).isoformat(timespec="seconds")
-        log = []
-        for root in t["repos"]:
-            if Path(root).is_dir():
-                out = _git(root, "log", "--all", "--no-merges", f"--since={since}", "-n", "30",
-                           "--format=%h%x1f%an%x1f%s%x1f%b%x1e", ttl=300)
-                log += [x.strip().split("\x1f") for x in out.split("\x1e") if x.strip()]
-        log = [c for c in log if len(c) == 4]
-        if not log:
-            continue
-        key = json.dumps([DONE_CHECK_VERSION, have[t["id"]].get("at"), items, sorted(c[0] for c in log)])
-        if saved.get(t["id"], {}).get("key") == key:
-            continue
-        try:
-            ans = llm.complete(DONE_PROMPT.format(
-                commits="\n".join(f"- {h} {a}: {s}" + (f" — {re.sub(r'\s+', ' ', b)[:300]}" if b.strip() else "")
-                                  for h, a, s, b in log),
-                items="\n".join(f"{i + 1}. {s}" for i, s in enumerate(items))),
-                max_tokens=200, schema=DONE_SCHEMA, kind="done check")
-        except llm.Offline:  # Queued too: the agent engine takes it later
-            break
-        except Exception:
-            continue
-        calls += 1
-        subj = {h: s for h, _, s, _ in log}
-        done = {}
-        for d in ans.get("done", []):
-            h = next((x for x in subj if d.get("commit", "").startswith(x) or x.startswith(d.get("commit", "") or "-")), None)
-            if h and 1 <= d.get("item", 0) <= len(items):
-                done[items[d["item"] - 1]] = f"done in {h} ({subj[h][:80]})"
-        saved[t["id"]] = dict(key=key, done=done)
-        from pensieve import store as v2
-        from pensieve.models import CardDone, CardDoneCheck
-        from pensieve.store import cards as store_cards
-        now = int(time.time())
-        store_cards.put_done(v2.store_db(), t["id"], [CardDone(t["id"], s, now, why) for s, why in done.items()],
-                             CardDoneCheck(t["id"], key, now))
-    return calls
-
-
-_SHA = re.compile(r"\b[0-9a-f]{7,40}\b")
-
-
-def _on_remote(places: list[dict], s: str) -> str:
-    """What says that the commits a sentence names ("committed locally as 1a2b3c4d") are pushed: "1a2b3c4d is
-    pushed now" when every one is on a remote branch, or ""."""
-    shas = list(dict.fromkeys(h for h in _SHA.findall(s) if not h.isdigit()))
-    if not shas or not all(_git(places[0]["path"], "branch", "-r", "--contains", h, ttl=300) for h in shas):
-        return ""
-    return f"{' and '.join(shas)} {'is' if len(shas) == 1 else 'are'} pushed now"
-
-
-def _commits_pushed(t: dict) -> bool:
-    """Every commit of the task (the first 5) is on a remote branch: a push that a note asks for without naming the
-    commits ("push the two local commits") is done."""
-    cs = [c for c in t.get("commits", [])[:5] if Path(c.get("repo", "")).is_dir()]
-    return bool(cs) and all(_git(c["repo"], "branch", "-r", "--contains", c["sha"], ttl=300) for c in cs)
-
-
 def asked_question(t: dict) -> str:
-    """The last session's own final question, checked like a note against the live state ("Push them all?" after
-    the push gets [outdated: …]), or ""."""
-    q = last_question(t.get("last_words") or "") if not t.get("goals_split") else ""
-    return reconcile({"v": NOTE_VERSION, "question": q}, t)[0].get("question", "") if q else ""
+    """The last session's own final question, or ""."""
+    return last_question(t.get("last_words") or "")
 
 
 def last_question(words: str) -> str:
@@ -1154,7 +1330,7 @@ def _pr_short(p: dict) -> str:
             (f", {p['review']}" if p.get("review") else "") + (f": {p['title'][:80]}" if p.get("title") else ""))
 
 
-def compact(t: dict, note: dict, hist: list[dict]) -> str:
+def compact(t: dict, hist: list[dict]) -> str:
     """The card in about a quarter of the tokens of `detail`: its state, where the work is, PRs, what changed since
     the last session, what is left, the last session's last words, the main files and the resume command."""
     home = str(Path.home())
@@ -1181,27 +1357,21 @@ def compact(t: dict, note: dict, hist: list[dict]) -> str:
     if t["tickets"]:
         out.append("Tickets: " + "; ".join(f"{k['key']} {k['status']}".strip() + (f": {k['title'][:60]}" if k["title"] else "")
                                            for k in t["tickets"][:3]))
-    note, changed = reconcile(note, t) if note else ({}, [])
+    if t.get("kin"):
+        out.append("Sessions of this work, oldest first: " + "; ".join(
+            f"{day(k['updated'])} {'this session' if k['me'] else k['title'][:50]} ({k['did']}" +
+            (f", {round(k['share'] * 100)}% of the branch" if k.get("share") else "") + (", running" if k.get("active") else "") +
+            f") [{k['id']} {k['state']}]" for k in t["kin"][:8]))
     since = [f"{_pr_short(p).split(' ')[0]} merged {day(p['merged_at'])}" for p in prs if last and (p.get("merged_at") or 0) > last]
-    since += [c for c in changed if not c.startswith("PR #")]  # a PR's state is on the PRs line already
     if since:
         out.append("Since the last session: " + "; ".join(since))
-    if note:
-        out += ["", "As of the last session:"] + [f"{label}: {note[k]}" for k, label in CORE_LABELS[:4] if note.get(k)]
-    asked = asked_question(t)  # the session's own words, over the note's
-    if asked or note.get("question"):
-        out.append(f"Waiting on you: {asked or note['question']}")
+    asked = asked_question(t)
+    if asked:
+        out.append(f"Waiting on you: {asked}")
     who = {"agent": "you, the agent", "you": "the user", "parent": "in its tracker or on GitHub"}
     if t.get("left"):
         out += ["", "Left to close this thread (Pensieve only reads: these are steps, not changes it made):"] + \
             [f"- {x['text']} ({who.get(x['how'], x['how'])})" for x in t["left"]]
-    raw = notes().get(t["id"], {})
-    if raw.get("also"):
-        done = _done_items().get(t["id"], {}).get("done", {})
-        out.append("Also talked about in these sessions, with no PR, ticket or commit apart from this thread's then: " + "; ".join(
-            a + (f" [outdated: {done[a]}]" if a in done else "") for a in raw["also"]))
-    if split := [s for s in raw.get("split") or [] if not _part_of_main(s, raw)]:
-        out.append("Other goals of these sessions, each its own thread: " + ", ".join(s["id"] for s in split))
     if t.get("last_words"):
         out += ["", "Last words of the last session:", _clean_words(t["last_words"])[-450:]]
     roots = [p["path"] + "/" for p in t.get("places", [])]
@@ -1228,11 +1398,10 @@ def set_state(store, task_id: str, state: str, by: str = "user", reason: str = "
     from pensieve import cardbuild
     ch = task_states.set_state(store, task_id, state, by, reason)
     cardbuild.emit(cardbuild.STATE, [task_id], wait=2)
-    have = notes()
     for _, ts in _cache.values():
         for t in ts:
             if t["id"] == task_id:
-                task_states.apply(t, have.get(task_id, {}), ch)
+                task_states.apply(t, ch)
         ts.sort(key=_order)
     return dict(id=task_id, state=state, by=by)
 
@@ -1304,7 +1473,8 @@ def _gh_pr(url: str) -> dict:
     checks: passing | failing | pending; review: approved | changes requested | review required."""
     import shutil
     hit = _gh_cache.get(url)
-    if hit and (time.time() - hit[0] < 600 or _net["off"]):
+    # a merged or closed PR seldom changes: a day; an open one, or one gh could not read: 10 minutes
+    if hit and (time.time() - hit[0] < (86400 if hit[1].get("state") in ("merged", "closed") else 600) or _net["off"]):
         return hit[1]
     out = {}
     if _net["off"]:  # no network now (the first build after a start): the last answer kept on disk, so that a
@@ -1347,19 +1517,125 @@ def _gh_pr(url: str) -> dict:
     return out
 
 
+POLL_STATES = {"open", "todo", "loose_ends"}  # threads whose PRs and branches can still change
+GH_SLUG = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/(?:pull/(\d+)|tree/(.+))")
+
+
+def _pr_of(p: dict, head: str = "") -> dict:
+    """A pull request from GitHub's GraphQL answer, in the shape _gh_pr keeps."""
+    out = dict(title=p["title"], state="draft" if p.get("isDraft") and p["state"] == "OPEN" else p["state"].lower(),
+               head=p.get("headRefName") or head, merged_at=_ts(p["mergedAt"]) if p.get("mergedAt") else 0)
+    if p["state"] == "OPEN":
+        roll = (((p.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}).get("statusCheckRollup") or {}
+        out.update({"checks": {"SUCCESS": "passing", "FAILURE": "failing", "ERROR": "failing"}.get(roll.get("state"),
+                    "pending")} if roll else {})
+        review = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes requested",
+                  "REVIEW_REQUIRED": "review required"}.get(p.get("reviewDecision") or "")
+        if review:
+            out["review"] = review
+    return out
+
+
+PR_FIELDS = "number url title state isDraft mergedAt headRefName reviewDecision " \
+            "commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+
+
+def poll_open(tasks) -> list[str]:
+    """Ask GitHub about the threads that can still change, in one GraphQL call per repo: the state, checks and review
+    of their open PRs, and the PRs of their branches (a PR just opened). The answers replace the cached ones; returns
+    the ids of the threads whose PRs changed."""
+    import shutil
+    if _net["off"] or not shutil.which("gh"):
+        return []
+    want: dict[tuple, dict] = {}  # (owner, name) -> {"prs": {number: url}, "heads": {branch: root}}
+    owners: dict[str, set] = defaultdict(set)  # PR url or (root, branch) -> thread ids
+    for t in tasks:
+        if t.get("state") not in POLL_STATES:
+            continue
+        for p in t.get("prs", []) + (t.get("contributed") or {}).get("prs", []):
+            m = GH_SLUG.match(p.get("url", ""))
+            if m and m.group(3) and p.get("state") in ("", "open", "draft"):
+                want.setdefault(m.group(1, 2), {"prs": {}, "heads": {}})["prs"][int(m.group(3))] = p["url"]
+                owners[p["url"]].add(t["id"])
+        for pl in t.get("places", []):
+            m = GH_SLUG.match(pl.get("remote_url") or "")
+            if m and m.group(4) and pl.get("branch") and pl.get("path") and pl["branch"] not in DEFAULT_BRANCHES:
+                want.setdefault(m.group(1, 2), {"prs": {}, "heads": {}})["heads"][pl["branch"]] = pl["path"]
+                owners[(pl["path"], pl["branch"])].add(t["id"])
+    changed: set[str] = set()
+    now = time.time()
+    for (owner, name), w in want.items():
+        parts = [f"p{n}: pullRequest(number: {n}) {{ {PR_FIELDS} }}" for n in w["prs"]]
+        heads = list(w["heads"])
+        parts += [f"h{i}: pullRequests(headRefName: {json.dumps(b)}, first: 3, "
+                  f"orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ {PR_FIELDS} }} }}" for i, b in enumerate(heads)]
+        if not parts:
+            continue
+        query = f"query {{ repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{ {' '.join(parts)} }} }}"
+        try:
+            r = subprocess.run(["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, timeout=20)
+            repo = (json.loads(r.stdout or "{}").get("data") or {}).get("repository") or {}
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            continue
+        for n, url in w["prs"].items():
+            p = repo.get(f"p{n}")
+            if not p:
+                continue
+            out = _pr_of(p)
+            if (_gh_cache.get(url) or (0, {}))[1] != out:
+                changed |= owners[url]
+            _gh_cache[url] = (now, out)
+        for i, b in enumerate(heads):
+            nodes = (repo.get(f"h{i}") or {}).get("nodes")
+            if nodes is None:
+                continue
+            k = (w["heads"][b], b)
+            out = [dict(url=p["url"], title=p["title"], source="GitHub", head=b,
+                        **{x: v for x, v in _pr_of(p, b).items() if x in ("state", "merged_at")}) for p in nodes]
+            if [x["url"] for x in (_gh_cache.get(k) or (0, []))[1]] != [x["url"] for x in out]:
+                changed |= owners[k]  # a PR opened (or gone) on the branch
+            _gh_cache[k] = (now, out)
+            for p in nodes:  # the branch's PRs are fresh too
+                _gh_cache[p["url"]] = (now, _pr_of(p, b))
+    return sorted(changed)
+
+
+_origins: dict[str, str] = {}
+
+
+def _origin(root: str) -> str:
+    """org/name of a repo's GitHub origin, once per repo."""
+    if root not in _origins:
+        from pensieve.extract import git_tools
+        _origins[root] = git_tools.origin_repo(root)
+    return _origins[root]
+
+
 def _pickup(task: dict, wts: dict):
     """What the card needs to pick the task back up: the folders where the work happens (worktree or checkout, its
     branch, uncommitted files, the branch on the remote), its pull requests, and how to resume the last session."""
     places, seen = [], set()
     feature = {x["branch"] for x in task["branches"]}  # the task's own feature branches (not long-lived ones)
-    cands = [(w, b) for w, (r, b) in wts.items() if any(b == x["branch"] and r == x["repo"] for x in task["branches"])]
+    # the task's branches, and the branches its sessions wrote to from another checkout (a push from main to a
+    # worktree's branch): each named by its repo's folder, or by its GitHub repo (org/name) when a push named it
+    named = [(x["repo"], x["branch"]) for x in task["branches"]]
+    named += [tuple(key.split("@", 1)) for s in task["_sessions"] for kind, key in transcripts.writes(s.get("path", ""))
+              if kind == "branch" and "@" in key]
+    cands = [(w, b) for w, (r, b) in wts.items() if any(b == nb and nr in (r, _origin(r)) for nr, nb in named)]
+    # a branch that no worktree has checked out: the checkout its session ran in, which shows another branch now
+    out_of_tree = {nb for nr, nb in named if nb not in DEFAULT_BRANCHES and nb not in {b for _, b in cands}}
+    for s in task["_sessions"]:
+        root = _git_root(s["project"]) if s["project"] and Path(s["project"]).is_dir() else ""
+        cands += [(root, nb) for nr, nb in named if nb in out_of_tree and root and nr in (root, _origin(root))
+                  and _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{nb}", ttl=60)]
     cands += [(s["project"], s["branch"]) for s in task["_sessions"] if s["project"]]
     for c, used in cands:
         root = _git_root(c) if Path(c).is_dir() else ""
         path = root or (c if Path(c).is_dir() else "")
-        if not path or path in seen or path.startswith(_TEMP):
+        # (path, used): two sessions of the task in one checkout on two branches give two places, one per branch
+        if not path or (path, used) in seen or (not used and any(p == path for p, _ in seen)) or path.startswith(_TEMP):
             continue
-        seen.add(path)
+        seen.add((path, used))
         p = dict(path=path, git=bool(root))
         if root:
             head = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
@@ -1370,6 +1646,12 @@ def _pickup(task: dict, wts: dict):
             p["changed"] = 0 if p.get("head") else \
                 len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
             p["worktree"] = root in wts
+            if p["branch"] not in DEFAULT_BRANCHES:  # each commit of the branch: is its patch already in the default branch
+                from pensieve import stale
+                base = stale._default_branch(root)
+                cherry = _git(root, "cherry", base, p["branch"], ttl=300).splitlines() if base else []
+                p["commits"] = len(cherry)
+                p["unmerged"] = sum(line.startswith("+") for line in cherry)
             # ahead and behind of the task's branch, not of the branch that is open in the checkout now
             ref = p["branch"] if p.get("head") else "HEAD"
             ab = _git(root, "rev-list", "--left-right", "--count", f"{ref}@{{upstream}}...{ref}").split()
@@ -1511,382 +1793,35 @@ def _task_id(keys, branches, sessions, items=()) -> str:
     return f"p:{min(i['url'] for i in items if i['pr'])}"
 
 
-NOTE_PROMPT = """You write the status line of one thread of work on a developer's work dashboard.
-Thread: {title}{keys}{status}
-Pull requests: {prs}
-Working folders: {places}
-Its data points, newest first (date, source, what happened):
-{events}
-{earlier}The last agent session: "{last_title}"
-{last_summary}
-How it ended:
-{last_words}
-The thread is anchored on {anchor}.
-The developer's last words in that session, newest last:
-{mine}
-Where the agent left off: {reply}
-Left to close the thread, from git, GitHub and the tracker:
-{left}
-
-You are the arbiter of this thread: it is what its anchor is for, not the newest message of the session. A question
-asked on the way does not change the thread.
-
-Sessions, a long one most of all, can work on more than one goal. The main goal is the newest goal that a session
-did work toward (changed code, made a commit or PR, ran a job, made a decision). A session that only explained code
-or answered questions does not set the main goal. A question the developer asked on the way (explain this, reply to
-that) is not a goal, and neither is a step that serves a goal (a change it needs, a revert, a CI fix, a rebase, a
-review round): that is part of the goal. Each PR, commit and ticket in the data belongs to the goal it was made for:
-a PR made for another goal makes that goal one of the goals below, with the PR as its evidence. The first six fields are about the main goal only: what is done and left for
-another goal goes in that goal's fields, not in these.
-Answer with these fields:
-- title: at most 8 words that name the thread's goal as an outcome, in sentence case, with no ticket key or branch
-  name. When the thread is anchored on a ticket, name what the ticket asks for.
-- problem: at most 25 words on what is wrong or missing, to bring it back to mind.
-- goal: at most 20 words on what "done" looks like, and why it matters.
-- state: at most 50 words on where it stands: what has been done, the key findings (a cause found, a number measured,
-  an idea ruled out, with what it was), and what was decided and why (an approach chosen or dropped).
-- next: at most 25 words on the steps left to close the thread, from "Left to close" and where the agent left off,
-  and where each one happens (the tracker, the pull request, a session); "Nothing" if it is done. Pensieve only reads:
-  say what the developer or their agent should do.
-- resolved: true when the sessions show that the thread's problem is fixed (a fix made and checked, or the developer
-  says it is done), even if its ticket is still open; false otherwise.
-- question: at most 20 words on the question that the last session asked the developer and that is not answered;
-  "None" if there is no such question.
-- evidence: the PR numbers (#12), ticket keys and commit hashes from the data above that the main goal's work is in.
-- goals: the other goals (0 to 2), each with a title, its evidence (as above; [] when only the sessions talk about
-  it), and its state, next and question in at most 20 words each ("None" if none).
-State facts from the data above only. Name the real PRs, tickets, functions and errors from the data, but no local
-folders or file paths: someone on another machine reads this too. Say how something was done or why it worked only
-in the data's own words; if the data doesn't say, leave it out."""
-CORE = ("problem", "goal", "state", "next", "question")
-_REFS = {"type": "array", "items": {"type": "string"}}
-NOTE_SCHEMA = {"type": "object", "properties": {
-    **{k: {"type": "string"} for k in ("title",) + CORE}, "resolved": {"type": "boolean"}, "evidence": _REFS,
-    "goals": {"type": "array", "items": {"type": "object", "properties": {
-        "title": {"type": "string"}, "evidence": _REFS, **{k: {"type": "string"} for k in ("state", "next", "question")}},
-        "required": ["title", "evidence", "state", "next", "question"], "additionalProperties": False}}},
-    "required": ["title", *CORE, "resolved", "evidence", "goals"], "additionalProperties": False}
-NOTE_VERSION = 11  # a new version writes every note again; 9: a title that names the goal; 10: the sessions' other
-# goals; 11: the arbiter: the thread's anchor, the user's last words, the agent's reply, what is left, `resolved`
-
-
-def core(note: dict) -> dict:
-    """A note's core (problem, goal, state, next, question), from a note in the format of NOTE_VERSION 8 or older
-    (recap, current, decisions, left). Empty fields and "None" answers are left out."""
-    if not note:
-        return {}
-    if "problem" not in note and "goal" not in note:  # a split goal's note has no problem
-        note = dict(problem=note.get("recap"), state=" ".join(x for x in (note.get("current"), note.get("decisions"))
-                                                              if x and x.strip(" .").lower() != "none"),
-                    next=note.get("left"), question=note.get("question"))
-    return {k: note[k].strip() for k in CORE if isinstance(note.get(k), str) and note[k].strip(" .").lower() not in ("", "none")}
-
-
-def card_text(t: dict, note: dict | None) -> str:
-    """The words of one card that a search reads: its titles, its note, where the work is, its PRs, tickets and
-    sessions."""
-    note = note or {}
-    places = [" ".join(x for x in (p.get("repo"), p.get("branch")) if x) for p in t.get("places", [])]
-    return "\n".join(x for x in [t["title"], note.get("title", ""), *core(note).values(), *places,
-                                 *(f"#{p['url'].rstrip('/').rsplit('/', 1)[-1]} {p.get('title') or ''}" for p in t["prs"]),
-                                 *(f"{k['key']} {k.get('title') or ''}" for k in t.get("tickets", [])),
-                                 *(s.get("title") or "" for s in t["sessions"][:8])] if x.strip())
-
-
-_card_vecs: dict[str, np.ndarray] = {}  # card text hash -> embedding
-# Meaning scores of cards are close together (0.6 to 0.8 on real cards), so a share of the best keeps almost all.
-# A card stays when it is this close to the best one; the best few always stay.
-CARD_SEARCH_MARGIN, CARD_SEARCH_MIN = 0.06, 3
-CARD_SEARCH_WORDS = 0.08  # added to the meaning score when a card has all the query's words, a share for some
-
-
-def _card_vectors(tasks: list[dict], have: dict) -> dict[str, np.ndarray]:
-    """Each task's card vector, by task id. A card's vector is made again only when its text changes."""
-    from pensieve import indexer
-    keys = {t["id"]: hashlib.sha1(card_text(t, have.get(t["id"])).encode()).hexdigest() for t in tasks}
-    todo = {keys[t["id"]]: card_text(t, have.get(t["id"])) for t in tasks if keys[t["id"]] not in _card_vecs}
-    if todo:
-        for k, v in zip(todo, indexer.embed(list(todo.values()))):
-            _card_vecs[k] = v
-    return {i: _card_vecs[k] for i, k in keys.items()}
-
-
-def warm_card_search(tasks: list[dict], have: dict) -> None:
-    """Make the card vectors in the background, so the first card search does not wait for them."""
-    threading.Thread(target=_card_vectors, args=(tasks, have), daemon=True).start()
-
-
-def search_cards(tasks: list[dict], have: dict, q: str) -> list[dict]:
-    """The cards that match a query, best first: {id, score}. The query is read as in search.parse: "exact phrases"
-    and -excluded words filter the cards, the other words rank them by meaning. With no other words, the cards
-    keep their order."""
-    from pensieve import indexer, search
-    pq = search.parse(q)
-    if not (pq["semantic"] or pq["exact"] or pq["exclude"]):
-        return []
-    texts = {t["id"]: card_text(t, have.get(t["id"])) for t in tasks}
-    low = {k: v.lower() for k, v in texts.items()}
-    keep = [t for t in tasks if all(p.lower() in low[t["id"]] for p in pq["exact"])
-            and not any(x.lower() in low[t["id"]] for x in pq["exclude"])]
-    if not pq["semantic"] or not keep:
-        return [dict(id=t["id"], score=1.0) for t in keep]
-    vecs = _card_vectors(keep, have)
-    qv = indexer.embed([pq["semantic"]], query=True)[0]
-    # a card that has the query's words goes up: a near-empty card ("hello") is close in meaning to almost anything
-    words = [w for w in re.findall(r"\w+", pq["semantic"].lower()) if len(w) >= 3]
-    lex = {t["id"]: sum(w in low[t["id"]] for w in words) / len(words) if words else 0 for t in keep}
-    scored = sorted(((float(vecs[t["id"]] @ qv) + CARD_SEARCH_WORDS * lex[t["id"]], t["id"]) for t in keep), reverse=True)
-    best = scored[0][0]
-    return [dict(id=i, score=round(s, 4)) for n, (s, i) in enumerate(scored)
-            if n < CARD_SEARCH_MIN or s >= best - CARD_SEARCH_MARGIN]
-NOTE_MIN_AGE = 600  # seconds before a note is written again for new data
-
-
-_NOTE_FIELDS = ("title", "problem", "goal", "state", "next", "question")
-_notes_cache = [None, {}]  # [(the read connection's data_version, its thread), {task id: note}]
-
-
-def notes() -> dict:
-    """{task id: note} from the card_notes table: the note's fields, the rest of the model's answer (`extra`), and
-    `sig`, `at` and `v`. Read again only after a commit (SQLite's data_version). Do not change the notes in place:
-    they are shared."""
-    from pensieve import store as v2
-    from pensieve.store import cards as store_cards
-    db = v2.store_db()
-    key = (db.one("PRAGMA data_version")[0], threading.get_ident())
-    if _notes_cache[0] != key:
-        out = {}
-        for n in store_cards.notes(db).values():
-            d = {k: getattr(n, k) for k in _NOTE_FIELDS if getattr(n, k) is not None}
-            d.update(json.loads(n.extra), sig=n.signature, at=n.written_at, v=n.version)
-            out[n.card_id] = d
-        _notes_cache[:] = [key, out]
-    return dict(_notes_cache[1])
+SIGNATURE_VERSION = 11  # in each card's signature: a new version marks every card as changed
 
 
 def _signature(task: dict) -> str:
     import hashlib
-    data = [NOTE_VERSION, [(e["ts"], e["title"]) for e in task["events"][:30]], [(p["url"], p["state"]) for p in task["prs"]],
-            [(p["path"], p.get("branch"), p.get("changed")) for p in task.get("places", [])]]
+    data = [SIGNATURE_VERSION, [(e["ts"], e["title"]) for e in task["events"][:30]], [(p["url"], p["state"]) for p in task["prs"]],
+            [(p["path"], p.get("branch"), p.get("changed")) for p in task.get("places", [])],
+            task.get("state"), [(k.get("key"), k.get("status")) for k in task.get("tickets", [])],
+            task.get("chains", [])]  # the state and chains come from the sinks: a change in either rewrites the card
     return hashlib.sha1(json.dumps(data).encode()).hexdigest()[:16]
 
 
-def stale_notes(ts: list[dict], limit: int = 10, ids=None, min_age: float = NOTE_MIN_AGE) -> list[dict]:
-    """The tasks (the first `limit`, or those in `ids`) whose note is missing, of an older format, or older than their
-    data points. A note younger than `min_age` is kept: a running session changes its data on every turn. (The card
-    builder waits for its card to be quiet instead, and gives 0.)"""
-    have, now = notes(), time.time()
-
-    def stale(t):
-        n = have.get(t["id"])
-        if not n or n.get("v") != NOTE_VERSION:
-            return True
-        return n.get("sig") != _signature(t) and now - n.get("at", 0) > min_age
-    pick = [t for t in ts if t["id"] in ids] if ids else ts[:limit]
-    return [t for t in pick if not t.get("goal_of") and stale(t)]  # a goal's note comes with its task's
-
-
 def resume_command(store, session_id: str) -> str | None:
-    """The shell command that resumes an agent session in its folder, built from the index (never from client text)."""
+    """The shell command that resumes an agent session in its folder. The folder comes from the session's transcript
+    (the threads' own reading), else from the index (never from client text)."""
     import shlex
+    from pensieve import agents, transcripts
     source, _, sid = session_id.partition(":")
     if not re.fullmatch(r"[A-Za-z0-9-]{8,80}", sid or ""):
         return None
-    row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
-    if not row or not row[0] or not Path(row[0]).is_dir():
+    f = transcripts.find(session_id)
+    folder = f.project if f else ""
+    if not folder and store is not None:
+        row = store.db.execute("SELECT project FROM sessions WHERE id=?", (session_id,)).fetchone()
+        folder = row[0] if row and row[0] else ""
+    if not folder or not Path(folder).is_dir():
         return None
-    from pensieve import agents
     cmd = agents.resume(source, sid)  # only the agent that wrote a session can resume it
-    return f"cd {shlex.quote(row[0])} && {cmd}" if cmd else None
-
-
-def write_note(task: dict, all_tasks: list[dict]) -> str:
-    """Ask the insights engine for the task's note, and keep it with the signature of the data it saw."""
-    note = _split_goals(task, make_note(task))
-    from pensieve import store as v2
-    from pensieve.models import CardNote
-    from pensieve.store import cards as store_cards
-    sig, now, model = _signature(task), int(time.time()), "agent"
-    goals = []
-    for s in note["split"]:
-        g = note["goals"][s["n"]]
-        goals.append(CardNote(s["id"], NOTE_VERSION, g["title"], None, g["title"], g["state"], g["next"], g["question"],
-                              sig, model, now, json.dumps({"goal_of": task["id"]})))
-    extra = {k: v for k, v in note.items() if k not in _NOTE_FIELDS}
-    main = CardNote(task["id"], NOTE_VERSION, *(note.get(k) for k in _NOTE_FIELDS), sig, model, now, json.dumps(extra))
-    store_cards.put_note_tree(v2.store_db(), main, goals)
-    from pensieve import cardbuild
-    cardbuild.emit(cardbuild.NOTE, [task["id"]])  # the goals it splits off are cards of their own
-    return notes()[task["id"]]
-
-
-def note_fields(task: dict) -> dict:
-    """The task's data for NOTE_PROMPT: its PRs, folders, data points and how its last session ended."""
-    day = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-    events = "\n".join(f"- {day(e['ts'])} {e['source']}: {e['title'][:140]}" + (f" ({e['detail'][:60]})" if e.get("detail") else "")
-                       for e in [e for e in task["events"] if not e.get("private")][:25])  # the note goes on shared cards
-    prs = "; ".join(f"{p['url']} ({p['state'] or 'state unknown'})" + (f": {p['title'][:90]}" if p.get("title") else "")
-                    for p in task["prs"]) or "none"
-    places = "; ".join(f"{p['path']}" + (f" on {p['branch']}, {p['changed']} uncommitted files" if p.get("branch") else "")
-                       for p in task.get("places", [])) or "none"
-    return dict(title=task["title"], keys=f" [{', '.join(task['keys'][:3])}]" if task["keys"] else "",
-                status=f", ticket status {task['status']}" if task["status"] else "", prs=prs, places=places, events=events,
-                last_words=task.get("ending") or task.get("last_words") or "(none)",
-                last_title=(task["sessions"] or [{}])[0].get("title", "(none)"), last_summary=task.get("last_summary") or "",
-                anchor=_anchor_line(task), mine="\n".join(f"- {m}" for m in task.get("mine") or []) or "(none)",
-                reply=_reply_line(task), left="\n".join(f"- {x['text']} ({x['how']})" for x in task.get("left") or []) or "(nothing)",
-                earlier="".join(f'An earlier session: "{title}"\n{summary}\n' for title, summary in task.get("earlier", []) if summary))
-
-
-def _anchor_line(task: dict) -> str:
-    a = task.get("anchor") or {}
-    what = {"ticket": "the ticket", "pr": "the pull request", "branch": "the branch", "goal": "the goal",
-            "session": "the session"}.get(a.get("kind"), "the work")
-    return f'{what} "{a.get("title") or task["title"]}"' + (f" ({a['ref']})" if a.get("kind") in ("ticket", "branch") else "")
-
-
-def _reply_line(task: dict) -> str:
-    r = task.get("reply") or {}
-    if not r:
-        return "(no session)"
-    text = (r.get("text") or "")[-700:]
-    return ("the agent had not replied to the last message; its reply before that: " if r.get("waiting") else "") + (text or "(none)")
-
-
-def make_note(task: dict) -> dict:
-    """The insights engine's note for a task ({problem, goal, state, next, question}), not saved: write_note keeps
-    it; a replay writes notes for past snapshots with it."""
-    from pensieve import llm
-    ans = llm.complete(NOTE_PROMPT.format(**note_fields(task)), max_tokens=700, schema=NOTE_SCHEMA, kind="thread note")
-    note = {k: str(ans.get(k, "")).strip() for k in ("title",) + CORE}
-    note["resolved"] = bool(ans.get("resolved"))
-    note["evidence"] = [str(x) for x in ans.get("evidence") or []]
-    note["goals"] = [{k: (g.get(k) if k == "evidence" else str(g.get(k, "")).strip()) for k in ("title", "evidence", "state", "next", "question")}
-                     for g in (ans.get("goals") or [])[:2] if isinstance(g, dict) and g.get("title")]
-    return note
-
-
-def _evidence(t: dict, refs: list) -> dict:
-    """The refs that a note gives for a goal ("#12", "ABC-12", "1a2b3c4d") that are real: the task's PRs (urls) and
-    ticket keys, and commits that are the task's or in its repos ({sha, ts, author, subject, repo}). Any other ref
-    is left out: the model can't make up a member."""
-    out = dict(prs=[], keys=[], commits=[])
-    known = set(t["keys"]) | {k["key"] for k in t.get("ticket_refs", [])}
-    for r in (str(x).strip() for x in refs or []):
-        if KEY.fullmatch(r) and r in known:
-            out["keys"].append(r)
-        elif m := re.fullmatch(r"(?:PR\s*)?#?(\d{1,6})", r, re.I):
-            out["prs"] += [p["url"] for p in t["prs"] if p["url"].rstrip("/").endswith(f"/pull/{m.group(1)}")]
-        elif _SHA.fullmatch(r.lower()) and not r.isdigit():
-            c = next((c for c in t["commits"] if c["sha"].startswith(r.lower()[:10])), None) or _commit(t, r.lower())
-            if c and c["sha"] not in {x["sha"] for x in out["commits"]}:
-                out["commits"].append(c)
-    return {k: v if k == "commits" else list(dict.fromkeys(v)) for k, v in out.items()}
-
-
-def _commit(t: dict, sha: str) -> dict | None:
-    """A commit of one of the task's repos, by its hash, as work.tasks keeps commits, or None."""
-    for root in t["repos"]:
-        if Path(root).is_dir():
-            f = _git(root, "log", "-1", "--format=%h%x1f%at%x1f%ae%x1f%s", "--abbrev=10", sha, "--", ttl=3600).split("\x1f")
-            if len(f) == 4 and f[0].startswith(sha[:7]):
-                return dict(repo=root, sha=f[0], ts=int(f[1]), author=f[2], subject=f[3])
-    return None
-
-
-def _split_goals(task: dict, note: dict) -> dict:
-    """The note with its other goals sorted by the rule of docs/threads.md: a goal with data outside the sessions (a
-    PR, ticket or commit of the task) is its own card, `split` (id and evidence); one that only the sessions talk
-    about, or whose data the main goal also names, is a line on the main card, `also`."""
-    note = dict(note, split=[], also=[])
-    note["main"] = _evidence(task, note.get("evidence"))
-    for i, g in enumerate(note.get("goals", [])):
-        ev = _evidence(task, g.get("evidence"))
-        if not any(ev.values()) or _part_of_main(ev, note) or _own_work(task, ev):
-            note["also"].append(g["title"])
-            continue
-        first = (ev["keys"] or [f"pr{u.rstrip('/').rsplit('/', 1)[-1]}" for u in ev["prs"]] or [ev["commits"][0]["sha"][:8]])[0]
-        gid, n = f"{task['id']}~{first}", 1
-        while gid in {s["id"] for s in note["split"]}:
-            n, gid = n + 1, f"{task['id']}~{first}-{n + 1}"
-        note["split"].append(dict(id=gid, n=i, **ev))
-    return note
-
-
-def _own_work(task: dict, ev: dict) -> bool:
-    """True when a goal's evidence is only the thread's own work: PRs from its own branches and commits on them,
-    with no ticket. That work is the thread itself, so a second card for it would hold the same sessions twice."""
-    if ev["keys"]:
-        return False
-    branches = {b.get("branch") for b in task.get("branches", [])}
-    own_prs = {p["url"] for p in task["prs"] if p.get("own") or p.get("head") in branches}
-    own_commits = {c["sha"] for c in task["commits"]}
-    return set(ev["prs"]) <= own_prs and {c["sha"] for c in ev["commits"]} <= own_commits
-
-
-def _refs(ev: dict) -> set:
-    return set(ev.get("prs", [])) | set(ev.get("keys", [])) | {c["sha"] for c in ev.get("commits", [])}
-
-
-def _part_of_main(ev: dict, note: dict) -> bool:
-    """True when a goal is part of the main work, not a second card with the same PR: the main goal's evidence has
-    every PR, ticket and commit of the goal, and the main goal's next step names one of them. The note model often
-    lists the PR of another goal as main evidence too, so the evidence alone does not show this."""
-    own = _refs(ev)
-    if not own or not own <= _refs(note.get("main") or {}):
-        return False
-    nxt = (note.get("next") or "").lower()
-    names = [u.rstrip("/").rsplit("/", 1)[-1] for u in ev.get("prs", [])] + [k.lower() for k in ev.get("keys", [])]
-    names += [c["sha"][:7].lower() for c in ev.get("commits", [])]
-    return any(re.search(rf"(?<![\w-]){re.escape(x)}(?![\w-])", nxt) for x in names)
-
-
-def _in_branch(root: str, head: str, branch: str) -> bool:
-    """True when the tip of branch `head` (the remote copy first) is already in `branch`."""
-    tip = next((x for x in (_git(root, "rev-parse", "--verify", "-q", ref, ttl=300) for ref in (f"origin/{head}", head)) if x), "")
-    return bool(tip) and _git(root, "merge-base", tip, branch, ttl=300) == tip
-
-
-def _folded(t: dict, g: dict) -> bool:
-    """A goal whose work went back into the task's own branch: it has PRs and no ticket, every PR was closed without
-    a merge on GitHub, and each PR's branch is already in one of the task's branches. Its goal became part of the
-    main work, so it stays on the main card (a merge, docs/threads.md) and is not a card of its own."""
-    prs = [p for p in t["prs"] if p["url"] in g["prs"]]
-    if not prs or g["keys"] or any(p.get("state") != "closed" for p in prs):
-        return False
-    homes = [(b["repo"], b["branch"]) for b in t.get("branches", [])] + \
-            [(p["path"], p["branch"]) for p in t.get("places", []) if p.get("path") and p.get("branch")]
-    homes = [(r, b) for r, b in homes if Path(r).is_dir()]
-    return all(p.get("head") and any(_in_branch(r, p["head"], b) for r, b in homes) for p in prs)
-
-
-def _goal_tasks(out: list[dict], have: dict) -> list[dict]:
-    """The cards of the goals that the notes split off their tasks (_split_goals): the same sessions and folders,
-    with only the goal's own PRs, tickets and commits. A PR or commit that only another goal names leaves the main
-    card, so the two link to different threads; a commit that the main goal names and the task didn't have joins it."""
-    extra = []
-    for t in out:
-        n = have.get(t["id"]) or {}
-        if n.get("v") != NOTE_VERSION:
-            continue
-        main = n.get("main") or {}
-        t["commits"] = t["commits"] + [c for c in main.get("commits", []) if c["sha"] not in {x["sha"] for x in t["commits"]}]
-        split = [g for g in n.get("split") or [] if not _part_of_main(g, n)  # notes written before that rule
-                 and not _folded(t, g)]
-        if not split:
-            continue
-        mine = set(main.get("prs", [])) | {c["sha"] for c in main.get("commits", [])}
-        theirs = {x for g in split for x in g["prs"] + [c["sha"] for c in g["commits"]]} - mine
-        for g in split:
-            gn = have.get(g["id"]) or {}
-            extra.append(dict(t, id=g["id"], goal_of=t["id"], title=gn.get("title") or g["id"], kind="work",
-                              keys=g["keys"], tickets=[k for k in t["tickets"] if k["key"] in g["keys"]], ticket_refs=[],
-                              prs=[p for p in t["prs"] if p["url"] in g["prs"]], branch_prs=[], commits=g["commits"],
-                              branches=[], files=[], last_words="", ending=""))
-        t["prs"] = [p for p in t["prs"] if p["url"] not in theirs]
-        t["commits"] = [c for c in t["commits"] if c["sha"] not in theirs]
-        t["goals_split"] = True  # the last session's own question can be another goal's
-    return extra
+    return f"cd {shlex.quote(folder)} && {cmd}" if cmd else None
 
 
 def _me(root: str) -> set[str]:
@@ -1949,29 +1884,3 @@ def coworkers(task: dict, days: int = 21) -> list[dict]:
             for p in sorted(people.values(), key=lambda p: -p["last"])][:12]
 
 
-def related(task: dict, searcher, limit: int = 8) -> list[dict]:
-    """Tickets, threads and pages about the same subject as the task that are not part of it."""
-    from pensieve import scopes
-    mine = {t["path"] for t in task["tickets"]} | {i["path"] for i in task["items"]}
-    q = " ".join([task["title"]] + task["keys"][:3])
-    try:
-        hits = searcher.find(q, limit=limit * 3, kinds=["doc"], scope=scopes._build("data-tab", ["connections"]),
-                             retry=False)
-    except Exception:
-        return []
-    hits = hits.get("results", hits) if isinstance(hits, dict) else hits
-    from pensieve import store as v2
-    from pensieve.store import documents
-    out = []
-    for h in hits:
-        p = h.get("id") or h.get("path", "")
-        if p.startswith("doc:") and p not in mine:
-            d = documents.get(v2.store_db(), int(p[4:]))
-            if d is None:
-                continue
-            it = _item(d, _assignees(v2.store_db(), [d.id])[0])
-            out.append(dict(path=p, title=it["title"], url=it["url"], status=it["status"], assignee=it["assignee"],
-                            server=it["server"], snippet=h.get("snippet", "")))
-        if len(out) >= limit:
-            break
-    return out

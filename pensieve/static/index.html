@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <script>try{const t=localStorage.getItem('pensieve.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
-<body data-view="work">
+<body data-view="work" data-mode="session">
 <div id="app">
   <main id="center">
     <section id="stage">
@@ -44,9 +44,9 @@
     </div>
     <nav id="tabs" role="tablist" class="glass">
       <button role="tab" data-view="work" class="on" title="Threads: each thread of your work, where it left off and what is left to close it (1)">Threads</button>
-      <button role="tab" data-view="people" title="People: who you work with, nearest first (2)">People</button>
-      <button role="tab" data-view="data" title="Code, files and agent sessions on one map (3)">Map</button>
-      <button role="tab" data-view="insights" title="Insights (4)">Insights</button>
+      <button role="tab" class="dev-only" data-view="people" title="People: who you work with, nearest first (2)">People</button>
+      <button role="tab" class="dev-only" data-view="data" title="Code, files and agent sessions on one map (3)">Map</button>
+      <button role="tab" class="dev-only" data-view="insights" title="Insights (4)">Insights</button>
       <button role="tab" data-view="settings" title="Settings (5)">Settings</button>
     </nav>
     <div class="top-r">

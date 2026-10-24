@@ -4,7 +4,7 @@ Each file's schema is a dict of parts, one per aggregate, so that each phase add
 `IF NOT EXISTS`: a new table needs no migration. A change to a table that exists (a new column) is a step in
 MIGRATIONS, and VERSION goes up by one; `schema_version` holds the version of the file."""
 
-STORE_VERSION = 4
+STORE_VERSION = 5
 INDEX_VERSION = 1
 
 STORE = {
@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS cards (
   kind        TEXT NOT NULL CHECK (kind IN ('ticket', 'branch', 'work', 'goal')),
   goal_of     TEXT REFERENCES cards(id) ON DELETE CASCADE,
   title       TEXT NOT NULL,
-  state       TEXT NOT NULL CHECK (state IN ('todo', 'open', 'loose_ends', 'complete', 'forgotten')),
+  state       TEXT NOT NULL CHECK (state IN ('todo', 'open', 'thoughts', 'loose_ends', 'complete', 'forgotten')),
   first_at    INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,
   built_at    INTEGER NOT NULL,
@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS thread_snapshots (
   thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   at         INTEGER NOT NULL,
   snapshot   TEXT NOT NULL,
-  state      TEXT NOT NULL CHECK (state IN ('todo', 'open', 'loose_ends', 'complete', 'forgotten')),
+  state      TEXT NOT NULL CHECK (state IN ('todo', 'open', 'thoughts', 'loose_ends', 'complete', 'forgotten')),
   structure  TEXT NOT NULL,
   pushed     TEXT NOT NULL,
   goal_vec   BLOB,
@@ -464,11 +464,11 @@ _V4_STATE = ("CASE state WHEN 'latent' THEN 'todo' WHEN 'conscious' THEN 'open' 
              "WHEN 'etched' THEN 'complete' ELSE state END")
 
 
-def _v4_table(name: str) -> str:
-    """The CREATE TABLE of `name` from STORE, as a new table `<name>_v4`."""
+def _v4_table(name: str, suffix: str = "_v4") -> str:
+    """The CREATE TABLE of `name` from STORE, as a new table `<name><suffix>`."""
     import re
     m = re.search(rf"CREATE TABLE IF NOT EXISTS {name} \(.*?\) STRICT", "\n".join(STORE.values()), re.S)
-    return m.group(0).replace(f"CREATE TABLE IF NOT EXISTS {name} (", f"CREATE TABLE {name}_v4 (", 1)
+    return m.group(0).replace(f"CREATE TABLE IF NOT EXISTS {name} (", f"CREATE TABLE {name}{suffix} (", 1)
 
 
 # version -> the statements that take a file from version - 1 to version.
@@ -507,6 +507,14 @@ STORE_MIGRATIONS: dict[int, list[str]] = {
          "CREATE INDEX thread_snapshots_thread ON thread_snapshots (thread_id, at)"))
         for s in (_v4_table(t), f"INSERT INTO {t}_v4 SELECT {cols.format(state=_V4_STATE)} FROM {t}",
                   f"DROP TABLE {t}", f"ALTER TABLE {t}_v4 RENAME TO {t}", extra)],
+    # 5: a session with no data source is a thought, so cards and their snapshots may hold the state 'thoughts'.
+    5: [s for t, cols, extra in (
+        ("cards", "id, kind, goal_of, title, state, first_at, updated_at, built_at, signature, view",
+         "CREATE INDEX cards_updated ON cards (updated_at)"),
+        ("thread_snapshots", "id, thread_id, at, snapshot, state, structure, pushed, goal_vec, card",
+         "CREATE INDEX thread_snapshots_thread ON thread_snapshots (thread_id, at)"))
+        for s in (_v4_table(t, "_v5"), f"INSERT INTO {t}_v5 SELECT {cols} FROM {t}",
+                  f"DROP TABLE {t}", f"ALTER TABLE {t}_v5 RENAME TO {t}", extra)],
 }
 INDEX_MIGRATIONS: dict[int, list[str]] = {}
 

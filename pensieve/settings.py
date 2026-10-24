@@ -47,6 +47,8 @@ DEFAULTS = {
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "search_gate_holdout": 5,  # the search gate (gate.py) leaves 1 session in this many unblocked, as a control; 0 = none
     # What writes the notes, summaries and insights (engine.py): cli | server. "" = not chosen: load() picks one
+    "mode": "session",  # session: threads only; developer: also indexing, Map, People and Insights
+    "ticket_repos": {},  # ticket project prefix (ABC) -> the repo its work starts in (a to-do's worktree)
     "text_engine": "",
     "cli_command": "",         # cli: a command-line agent, run once per job (templates: engine.TEMPLATES)
     "llm_url": "http://localhost:1234/v1",  # server: an OpenAI-compatible URL that the user runs (LM Studio here)
@@ -82,18 +84,20 @@ DESCRIPTIONS = {
     "chunk_chars": "Characters in each piece of a document. Larger pieces keep more context together in one result.",
     "max_chunks": "Pieces read from each document (0 = all). Text after this limit is not searchable.",
     "session_folders": "More folders of agent sessions, as agent:path (claude, codex or qwen). Easier to add from Sources.",
+    "ticket_repos": "Which repo a ticket project's work starts in, by its key prefix (ABC): a to-do's worktree is made there. Set the first time you start one.",
     "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
     "default_scope": "Scope used by the search panel and Map search; empty means everything.",
     "hotkey": "Shortcut for the search panel. ⌘Space turns off the Spotlight shortcut while Pensieve runs. "
               "Choose another shortcut to give ⌘Space back to Spotlight.",
     "editor": "Where code results open: default, vscode, cursor or zed.",
+    "mode": "Session: only your agent sessions, as threads. Developer: also your repos and files, indexed, and the Map, People and Insights.",
     "appearance": "System, light or dark. System follows macOS.",
     "embed_model": "The model that turns text into vectors for search. Switching embeds the text already indexed "
                    "again with the new model, in the background; search keeps working meanwhile.",
     "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
     "search_gate_holdout": "The search gate (Claude Code add-on) leaves one session in this many unblocked, so you can compare Pensieve with grep. 0 blocks every session.",
-    "text_engine": "What writes thread notes, summaries and insights in the background: builtin (Qwen 3.5 9B on this Mac, which Pensieve starts when there is work), cli (a command-line agent, once per job) or server (a model server that you run, local or hosted).",
+    "text_engine": "What writes summaries and insights in the background: builtin (Qwen 3.5 9B on this Mac, which Pensieve starts when there is work), cli (a command-line agent, once per job) or server (a model server that you run, local or hosted).",
     "cli_command": "The command-line agent that writes them when text_engine is cli. It gets the prompt on stdin, or in place of {prompt}; {out} is a file it can write its answer to.",
     "llm_url": "The OpenAI-compatible URL of a model server that you run, when text_engine is server: LM Studio (http://localhost:1234/v1), Ollama (http://localhost:11434/v1) or a hosted API.",
     "llm_model": "The model on that server.",
@@ -121,17 +125,13 @@ def _overrides():
     return o
 
 
-ENGINES = ("builtin", "cli", "server")
+ENGINES = ("", "builtin", "cli", "server")  # "" is the connected agent, which writes the text over MCP
 
 
 def _default_engine(s: dict) -> dict:
-    """The text engine for someone who hasn't chosen one: Claude Code with Haiku when Claude Code is installed, else
-    the built-in model when this Mac can run it, else a model server at llm_url (LM Studio's address by default).
-    Setup asks, and Settings → Models changes it."""
-    from pensieve import engine
-    if config.find_exe("claude"):
-        return dict(text_engine="cli", cli_command=s["cli_command"] or engine.TEMPLATES[0]["command"])
-    return dict(text_engine="server" if engine.builtin_unsupported() else "builtin")
+    """The text engine for someone who hasn't chosen one: none. The agent the user connects over MCP writes the text
+    (its queue, agent_jobs); no background model runs. Settings → Models can still pick one."""
+    return dict(text_engine="")
 
 
 def load() -> dict:
@@ -216,6 +216,8 @@ def update(changes: dict) -> dict:
             raise ValueError("chunk_chars must be between 200 and 20000")
         if k == "appearance" and v not in ("system", "light", "dark"):
             raise ValueError("appearance must be system, light or dark")
+        if k == "mode" and v not in ("session", "developer"):
+            raise ValueError("mode must be session or developer")
         if k == "text_engine" and v not in ENGINES:
             raise ValueError("text_engine must be builtin, cli or server")
         if k == "llm_url" and v and not v.startswith(("http://", "https://")):

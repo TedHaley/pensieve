@@ -12,7 +12,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Pensieve">
 <meta property="og:title" content="Pensieve: never lose the thread · MCP server for AI agents">
-<meta property="og:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A thread for every goal. Free and open source, for Mac.">
+<meta property="og:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A thread for every piece of work. Free and open source, for Mac.">
 <meta property="og:url" content="https://pensieve.tools/">
 <meta property="og:image" content="https://pensieve.tools/og.png?v=2">
 <meta property="og:image:width" content="1200">
@@ -21,7 +21,7 @@
 <meta name="twitter:image:alt" content="Pensieve: never lose the thread. A thread that links a Slack message, a Jira ticket, a Notion spec, a spreadsheet, a PR and a Claude Code session.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Pensieve: never lose the thread · MCP server for AI agents">
-<meta name="twitter:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A thread for every goal. Free and open source, for Mac.">
+<meta name="twitter:description" content="Pensieve for developers: a local MCP server that gives Claude Code, Codex and Cursor your context. A thread for every piece of work. Free and open source, for Mac.">
 <meta name="twitter:image" content="https://pensieve.tools/og.png?v=2">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23121211'/%3E%3Cpath fill='%23f4f3ee' fill-rule='evenodd' d='M6.39 6.5a2.42 2.42 0 1 0 4.84 0a2.42 2.42 0 1 0-4.84 0ZM6.39 17.5a2.42 2.42 0 1 0 4.84 0a2.42 2.42 0 1 0-4.84 0ZM7.93 8.92a4.84 4.84 0 1 0 9.68 0a4.84 4.84 0 1 0-9.68 0Z'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -49,16 +49,17 @@
    "applicationCategory": "DeveloperApplication",
    "applicationSubCategory": "MCP server",
    "operatingSystem": "macOS 14 or later (Apple Silicon)",
-   "description": "Pensieve is a local MCP server and Mac app for developers and their AI coding agents (Claude Code, Codex, Cursor, Gemini CLI and others). A thread for every goal, joined across agent sessions, branches, pull requests, tickets and messages. The MCP server helps coding agents find the right code in fewer tool calls: in a benchmark, it solved as many tasks as grep with 47% fewer tool calls and 23% lower cost per lookup. Threads that you share as one HTML file. Code ownership and knowledge gaps from git blame. Everything runs on the Mac. Free and open source.",
+   "description": "Pensieve is a local MCP server and Mac app for developers and their AI coding agents (Claude Code, Codex, Cursor, Gemini CLI and others). A thread for each agent session, joined with its branch, pull requests and tickets, and to-dos from Jira, Linear and Asana. Ship or discard the work with the steps left. The MCP server helps coding agents find the right code in fewer tool calls: in a benchmark, it solved as many tasks as grep with 47% fewer tool calls and 23% lower cost per lookup. Code ownership and knowledge gaps from git blame. Everything runs on the Mac. Free and open source.",
    "keywords": "MCP server, Claude Code, Codex, Cursor, AI coding agents, context engineering, threads, semantic code search, local, open source",
    "featureList": [
-    "Threads: one thread per goal with its sessions, branch, worktree, pull requests, tickets and messages, a state and an AI note",
+    "Threads: one thread per agent session with its branch, pull requests and tickets, one of six states and the steps left; the threads of one branch grouped in a cluster",
+    "To-dos: tickets from Jira, Linear and Asana, with a session in a new worktree in one click",
+    "Ship and Discard: the steps left to close the work, done by your agent in Terminal",
     "MCP server that points coding agents to the most relevant passages, scoped to the repo they work in",
-    "Shared threads: one HTML page with the thread's JSON inside, for a teammate or their agent",
     "Who knows what: code ownership and domain knowledge from git blame",
     "Knowledge gaps: code mostly written by people no longer active in the repo",
-    "Local semantic and exact search over files, repos and agent sessions, on Control+Shift",
-    "Runs entirely on your Mac; your own agent writes the notes"
+    "Local semantic and exact search over files, repos and agent sessions, on Control+Shift (Developer mode)",
+    "Runs entirely on your Mac; Threads mode needs no index and no model"
    ],
    "url": "https://pensieve.tools/",
    "installUrl": "https://pensieve.tools/install.sh",
@@ -82,7 +83,7 @@
   --night:#121211;--night-2:#1c1c1a;--night-3:#272724;--night-ink:#f4f3ee;--night-ink-2:#a3a199;--night-line:rgba(244,243,238,.12);
   --c-context:#ff6a3d;--c-agents:#3d7bff;--c-share:#a35cff;--c-owners:#1fae6a;
   /* the app's state colors, from pensieve/task_states.py */
-  --s-open:#34c759;--s-loose-ends:#ff9f0a;--s-todo:#5e5ce6;--s-complete:#8e8e93;--s-forgotten:#ff453a;
+  --s-open:#34c759;--s-loose-ends:#ff9f0a;--s-todo:#bf5af2;--s-thoughts:#5ac8fa;--s-complete:#8e8e93;--s-forgotten:#ff453a;
   --shadow:0 40px 80px -30px rgba(18,18,17,.35),0 12px 30px -12px rgba(18,18,17,.18);
   --r:22px;--gut:max(16px,4vw);--max:1200px;
   --sans:"Inter Tight",-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;
@@ -457,7 +458,7 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
   <a class="home" href="#top" aria-label="Top"><svg aria-hidden="true"><use href="#mark"/></svg></a>
   <a href="#context" style="--c:var(--c-context)"><i></i><span>Context</span></a>
   <a href="#agents" style="--c:var(--c-agents)"><i></i><span>Agents</span></a>
-  <a href="#share" style="--c:var(--c-share)"><i></i><span>Share</span></a>
+  <a href="#ship" style="--c:var(--c-share)"><i></i><span>Ship</span></a>
   <a href="#owners" style="--c:var(--c-owners)"><i></i><span>Owners</span></a>
   <a class="get" href="#get">Install</a>
 </nav>
@@ -521,7 +522,7 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
 <section class="words" aria-label="What Pensieve does">
   <a class="rv" href="#context" style="--c:var(--c-context)"><span class="ico"><svg><use href="#i-card"/></svg></span>Remember</a>
   <a class="rv d1" href="#agents" style="--c:var(--c-agents)"><span class="ico"><svg><use href="#i-bolt"/></svg></span>Accelerate</a>
-  <a class="rv d2" href="#share" style="--c:var(--c-share)"><span class="ico"><svg><use href="#i-send"/></svg></span>Share</a>
+  <a class="rv d2" href="#ship" style="--c:var(--c-share)"><span class="ico"><svg><use href="#i-send"/></svg></span>Ship</a>
   <a class="rv d3" href="#owners" style="--c:var(--c-owners)"><span class="ico"><svg><use href="#i-people"/></svg></span>Ask</a>
 </section>
 
@@ -532,12 +533,13 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
       <div>
         <div class="num rv"><b>01</b>Threads</div>
         <h2 class="rv">One task.<br><em>One thread.</em></h2>
-        <p class="lede rv d1">Pensieve joins your agent sessions, branch, PRs, tickets and messages into <b>one thread per goal</b>: the problem, the goal, where it stands, and what's left to close it. Resume the last session in one click.</p>
+        <p class="lede rv d1">Pensieve joins each agent session with its branch, PRs and tickets into <b>one thread</b>: where it stands, and what's left to close it. Resume the session in one click. No index and no model needed.</p>
         <div class="states-row rv d2">
-          <span class="state" style="--sc:var(--s-todo)">To do</span>
           <span class="state" style="--sc:var(--s-open)">Open</span>
+          <span class="state" style="--sc:var(--s-todo)">To-do</span>
+          <span class="state" style="--sc:var(--s-thoughts)">Thoughts</span>
           <span class="state" style="--sc:var(--s-loose-ends)">Loose ends</span>
-          <span class="state" style="--sc:var(--s-complete)">Complete</span>
+          <span class="state" style="--sc:var(--s-complete)">Closed</span>
           <span class="state" style="--sc:var(--s-forgotten)">Forgotten</span>
         </div>
       </div>
@@ -546,31 +548,31 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
           <div class="hd">
             <div>
               <div class="ttl">Retry declined card payments</div>
-              <div class="where">acme-app · fix-card-retries · 3 files changed</div>
+              <div class="where">acme-app · fix-card-retries · 20 min ago</div>
             </div>
             <span class="state" style="--sc:var(--s-open)">Open</span>
           </div>
           <dl class="core">
-            <div><dt>Problem</dt><dd>Card payments aren't retried after a soft decline, so renewals fail.</dd></div>
-            <div><dt>State</dt><dd>Backoff added in <code>payments/retry.py</code>. PR #412 is open; checks pass.</dd></div>
+            <div><dt>Snippet</dt><dd>Backoff is in <code>payments/retry.py</code>, and the tests pass. PR #412 is open.</dd></div>
+            <div><dt>Branch</dt><dd>Holds the branch · 82% of the branch's lines</dd></div>
           </dl>
           <div class="next">
-            <span>Next: get a review on #412<small>then close PAY-142</small></span>
+            <span>Left: review and merge #412<small>then mark PAY-142 done</small></span>
             <span class="resume">▶ Resume session</span>
           </div>
           <div class="links">
             <span class="tag"><span class="ok"></span><b>#412</b> checks pass</span>
             <span class="tag"><b>PAY-142</b> in progress</span>
-            <span class="tag"><b>2</b> sessions</span>
-            <span class="tag"><b>#payments</b> 3 messages</span>
+            <span class="tag"><b>2</b> related sessions</span>
+            <span class="tag"><b>3</b> files</span>
           </div>
         </article>
       </div>
     </div>
     <div class="points">
-      <div class="rv"><h3>Sorts itself</h3><p>Each thread's state comes from its sessions, PRs and tickets. Quiet work becomes a loose end, so you see what to close.</p></div>
-      <div class="rv d1"><h3>Reads your other tools</h3><p>Tickets and threads from Jira, Linear or Slack, through the MCP servers you already use. Read-only.</p></div>
-      <div class="rv d2"><h3>Remembers over time</h3><p>Each thread follows one goal across days, with a saved version at each change. Start a new agent session from any thread.</p></div>
+      <div class="rv"><h3>Sorts itself</h3><p>Each thread's state comes from its PRs, branches and tickets. Quiet work becomes a loose end, so you see what to close.</p></div>
+      <div class="rv d1"><h3>Reads your tracker</h3><p>Sign in to Jira, Linear or Asana. Your tickets become to-dos, and a ticket that is done closes its thread. Read-only.</p></div>
+      <div class="rv d2"><h3>Groups by branch</h3><p>The sessions of one branch sit together. The one that wrote most of the branch holds it. Fork a new session from all of them.</p></div>
     </div>
   </div>
 </section>
@@ -628,47 +630,37 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
   </div>
 </section>
 
-<!-- 03 SHARE -->
-<section class="feat" id="share" style="--c:var(--c-share)">
+<!-- 03 SHIP -->
+<section class="feat" id="ship" style="--c:var(--c-share)">
   <div class="wrap">
     <div class="grid2">
       <div>
-        <div class="num rv"><b>03</b>Share a thread</div>
-        <h2 class="rv">Hand off the thread, <em>not a wall of text.</em></h2>
-        <p class="lede rv d1">Share any thread as <b>one open HTML file</b>: the whole context of a goal, ready to pass on or keep a project on track. Your teammate reads the page; their agent reads the thread inside it. Pensieve links what they can open, summarizes what they can't, and leaves out your paths and secrets.</p>
-        <div class="recall rv d2">
-          <div class="bar"><span>With a shared thread</span><span class="t"><i style="--w:85%"></i></span><b>85%</b></div>
-          <div class="bar muted"><span>With no thread</span><span class="t"><i style="--w:11%"></i></span><b>11%</b></div>
-          <p class="cap">Facts a teammate's agent recalled in a fresh clone, with no wrong claims.</p>
-        </div>
+        <div class="num rv"><b>03</b>Ship or discard</div>
+        <h2 class="rv">Close the work, <em>not just the tab.</em></h2>
+        <p class="lede rv d1">Ship and Discard turn a thread into <b>the steps left to close it</b>. Ship commits, pushes, opens the PR, merges it and marks the ticket done. Discard drops the changes, closes the PR, deletes the branch and cancels the ticket. Your agent does the steps in Terminal, and it asks before each step that leaves your Mac.</p>
       </div>
       <div class="stage rv d1">
-        <div class="window" aria-label="Example shared thread page">
-          <div class="chrome"><i></i><i></i><i></i><div class="url">~/Downloads/retry-declined-card-payments.thread.html</div></div>
+        <div class="window" aria-label="Example Ship modal">
+          <div class="chrome"><i></i><i></i><i></i><div class="url">Pensieve · Threads</div></div>
           <div class="body">
             <div class="sc-hd">
-              <div><div class="sc-ttl">Retry declined card payments</div><div class="sc-by">Shared from Pensieve · Oct 17</div></div>
+              <div><div class="sc-ttl">Ship the work on fix-card-retries</div><div class="sc-by">acme-app · 2 sessions · 1 file uncommitted</div></div>
               <span class="state" style="--sc:var(--s-open)">Open</span>
             </div>
-            <dl class="sc-core">
-              <div><dt>Goal</dt><dd>Retry soft declines with backoff, so renewals go through.</dd></div>
-              <div><dt>State</dt><dd>Backoff is in; PR #412 is open and its checks pass.</dd></div>
-              <div><dt>Next</dt><dd>Review #412, then close PAY-142.</dd></div>
-            </dl>
             <div class="res">
-              <div><span class="ic">⎇</span><p>PR #412 · fix-card-retries<small>on GitHub</small></p><span class="reach link">Linked</span></div>
-              <div><span class="ic">&gt;_</span><p>2 agent sessions<small>what was tried, what's left</small></p><span class="reach sum">Summarized</span></div>
-              <div><span class="ic">±</span><p>Uncommitted changes<small>retry.py, gateway.py</small></p><span class="reach sum">Summarized</span></div>
+              <div><span class="ic">1</span><p>Commit and push<small>1 uncommitted file</small></p><span></span></div>
+              <div><span class="ic">2</span><p>Review and merge PR #412<small>checks pass</small></p><span></span></div>
+              <div><span class="ic">3</span><p>Mark PAY-142 done<small>after the merge</small></p><span></span></div>
             </div>
-            <div class="json"><span class="k">"goal"</span>: <span class="s">"Retry soft declines with backoff"</span>, <span class="k">"next"</span>: <span class="s">"Review #412"</span> …</div>
+            <div class="next" style="margin-top:18px;display:flex;justify-content:flex-end"><span class="resume">▶ Start shipping</span></div>
           </div>
         </div>
       </div>
     </div>
     <div class="points">
-      <div class="rv"><h3>Open by default</h3><p>No account and no server. A page anyone can open, with the thread's JSON inside for any agent.</p></div>
-      <div class="rv d1"><h3>You approve it</h3><p>Preview before you share: edit the summaries and untick anything that doesn't belong.</p></div>
-      <div class="rv d2"><h3>Agents can share too</h3><p>Your agent hands off with <code>share_thread</code>. The next one picks up from the file.</p></div>
+      <div class="rv"><h3>Only the steps left</h3><p>The modal reads git, GitHub and your tracker, and lists only what is still to do.</p></div>
+      <div class="rv d1"><h3>You approve each step</h3><p>The agent asks before each step that leaves your Mac: a push, a PR, a merge or a delete.</p></div>
+      <div class="rv d2"><h3>To-dos start in one click</h3><p>Start session in worktree makes a branch and a worktree from a ticket, and starts your agent with the ticket.</p></div>
     </div>
   </div>
 </section>
@@ -705,9 +697,9 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
   <div class="wrap">
     <h2 class="rv">And it stays out of your way.</h2>
     <div class="tiles">
-      <div class="tile rv"><div class="g"><kbd>⌃</kbd><kbd>⇧</kbd></div><h3>Search from anywhere</h3><p>Files, code and past agent sessions, by meaning or by exact words. Tap Control+Shift.</p></div>
+      <div class="tile rv"><div class="g"><kbd>⌃</kbd><kbd>⇧</kbd></div><h3>Search from anywhere</h3><p>In Developer mode: files, code and past agent sessions, by meaning or by exact words. Tap Control+Shift.</p></div>
       <div class="tile rv d1"><div class="g"><span class="pulse"></span></div><h3>Always current</h3><p>Edit a file and search it seconds later. Uncommitted changes and every worktree count.</p></div>
-      <div class="tile rv d2"><div class="g"><svg width="40" height="40" style="color:var(--ink)"><use href="#mark"/></svg></div><h3>Stays on your Mac</h3><p>A local search model and a local index. No account, no cloud. Your own agent writes the notes.</p></div>
+      <div class="tile rv d2"><div class="g"><svg width="40" height="40" style="color:var(--ink)"><use href="#mark"/></svg></div><h3>Stays on your Mac</h3><p>No account, no cloud. Threads mode needs no index and no model. Developer mode adds a local search model and a local index.</p></div>
     </div>
   </div>
 </section>
@@ -726,7 +718,7 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
       </div>
       <div class="step rv d1">
         <h3>2. Ask your agent to connect it <span>in any coding agent</span></h3>
-        <pre id="prompt" class="prompt">Pensieve is installed on my Mac. Run pensieve integrate recommended to connect my coding agents. Then run pensieve setup, show me what it found and how long each source takes to index, ask me which sources to index, and run pensieve setup with my choices.</pre>
+        <pre id="prompt" class="prompt">Pensieve is installed on my Mac. Run pensieve integrate recommended to connect my coding agents. Then help me set it up: recommend Threads mode to start (pensieve setup threads), and tell me how to connect my issue tracker.</pre>
         <button class="copy" data-copy-from="prompt">Copy prompt</button>
       </div>
     </div>
@@ -738,9 +730,10 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
 <section class="faq">
   <div class="wrap">
     <h2>Questions.</h2>
-    <details><summary>What does Pensieve index?</summary><p>Your files and folders, your git repos with uncommitted changes and worktrees, and your agent sessions. With MCP connections, also information such as tickets from Jira or Linear and posts from Slack. You choose each source. Pensieve doesn't expose private messages.</p></details>
+    <details><summary>What does Pensieve index?</summary><p>Threads mode, the default, indexes nothing: it reads your agent sessions, git, GitHub and your issue tracker (Jira, Linear or Asana). Developer mode also indexes the files, folders and git repos that you choose, with uncommitted changes and worktrees. With MCP connections, it also collects information such as posts from Slack. You choose each source. Pensieve doesn't expose private messages.</p></details>
+    <details><summary>Threads mode or Developer mode?</summary><p>Start with Threads mode. It needs no index and no model. Developer mode adds search for your agents, the Map, People and Insights, and it runs the search model on the GPU. You can switch in Settings.</p></details>
     <details><summary>Does anything leave my Mac?</summary><p>Your files, code and sessions don't. Indexing and search run on your Mac. Pensieve downloads its models and checks GitHub for updates. Pensieve is a tool that your own agent drives. If you use a cloud agent with Pensieve, what that agent reads goes to its provider.</p></details>
-    <details><summary>Do I need an AI model?</summary><p>No. Search, agent context, ownership and knowledge gaps need none. The notes on threads come from the engine that you pick at setup: Claude Code with Haiku, the built-in Qwen 3.5 9B on your Mac, or a model server that you run, such as LM Studio.</p></details>
+    <details><summary>Do I need an AI model?</summary><p>No. Threads, search, agent context, ownership and knowledge gaps need no text model. Developer mode runs a local search model. Session summaries and insights come from the agent that you connect over MCP, or from an engine that you choose in Settings → Models: the built-in Qwen 3.5 9B on your Mac, a command-line agent, or a model server that you run, such as LM Studio.</p></details>
     <details><summary>How do I get my agent to use it instead of grep?</summary><p><code>pensieve integrate recommended</code> adds Pensieve as an MCP server to each agent on your Mac, plus a short “search before you grep” block and skills. In the benchmark, the agent used Pensieve in 143 or more of 144 runs.</p></details>
     <details><summary>Does it work on Intel Macs or Linux?</summary><p>The app needs Apple Silicon. On Linux and Intel Macs, the same install command installs the backend and the browser app.</p></details>
     <details><summary>Is it free?</summary><p>Yes. Pensieve is free and open source under the MIT license. The code is on <a href="https://github.com/TedHaley/pensieve">GitHub</a>.</p></details>

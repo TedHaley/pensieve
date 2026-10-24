@@ -194,11 +194,9 @@ def test_merged_pr_means_close_the_ticket():
     assert pending(c) == [Pending("Close ABC-12: its pull request merged", "parent", "ABC-12")]
 
 
-def test_resolved_thread_means_close_the_ticket():
-    """No PR, but the note writer judged from all of the card's sources that the sessions fixed the problem: close the
-    ticket. Without that judgment, the ticket is still the work to do."""
+def test_open_ticket_with_no_pr_is_the_work():
+    """No PR and an open ticket: the ticket is still the work to do."""
     c = card(tickets=[dict(key="OPS-3", title="Nightly job fails", status="In Progress")])
-    assert pending(c, resolved=True) == [Pending("Close OPS-3: the work in its sessions is done", "parent", "OPS-3")]
     assert pending(c) == [Pending("Work on OPS-3", "agent", "OPS-3")]
 
 
@@ -214,7 +212,30 @@ def test_unpushed_and_uncommitted_on_own_branch():
     c = card(branches=[dict(repo="/r", branch="retry")],
              places=[dict(branch="retry", changed=2, ahead=1), dict(branch="retry", head="main", changed=9)])
     got = [p.text for p in pending(c)]
-    assert got == ["Commit 2 changed files on retry", "Push 1 commits on retry"]
+    assert got == ["Commit 2 changed files on retry", "Push 1 commits on retry", "Open a pull request for retry"]
+
+
+def test_discard_steps():
+    """Discarding closes without a merge: drop the changes, close the open PR, delete the branch (and its remote copy
+    when pushed), cancel the ticket that is not done."""
+    from pensieve.cardtext import discard
+    c = card(branches=[dict(repo="/r", branch="retry")], places=[dict(branch="retry", changed=2, upstream=True)],
+             prs=[dict(url=PR + "4", state="open", head="retry"), dict(url=PR + "3", state="merged", head="old")],
+             tickets=[dict(key="ABC-1", status="In Progress"), dict(key="ABC-2", status="Done")])
+    assert [s["text"] for s in discard(c)] == ["Discard 2 uncommitted files on retry", "Close #4 without merging",
+                                               "Delete branch retry (local and remote)", "Mark ABC-1 as cancelled (won't do)"]
+    assert [s["who"] for s in discard(c)] == ["agent", "you", "agent", "parent"]
+    assert discard(card()) == []
+
+
+def test_branch_with_a_pull_request_needs_none():
+    """A branch that has a pull request, open or merged, needs no new one; a branch with nothing on it needs none
+    either."""
+    c = card(branches=[dict(repo="/r", branch="retry")], places=[dict(branch="retry", commits=3)],
+             prs=[dict(url=PR + "4", state="open", head="retry")])
+    assert [p.text for p in pending(c)] == ["Get #4 reviewed"]
+    bare = card(branches=[dict(repo="/r", branch="retry")], places=[dict(branch="retry")])
+    assert pending(bare) == []
 
 
 def test_agent_question_comes_first():
@@ -238,14 +259,15 @@ def test_one_ticket_from_two_sources():
 
 
 def test_card_title():
-    """A thread shows its anchor's title, whatever the note says, so that a new note does not rename it. Only a thread
-    with no anchor title takes the note's title."""
+    """A thread shows its anchor's title, which stays the same while the thread goes on. A thread with no anchor
+    title shows its own."""
     t = dict(anchor=dict(kind="ticket", title="Stop retrying hard declines"), title="t")
-    assert card_title(t, dict(title="Something the note made up")) == "Stop retrying hard declines"
+    assert card_title(t) == "Stop retrying hard declines"
     b = dict(anchor=dict(kind="branch", title="Retry cards"), title="b")
-    assert card_title(b, dict(title="limit card payment retries")) == "Retry cards"
-    s = dict(anchor=dict(kind="session", title=""), title="")
-    assert card_title(s, dict(title="explore caching")) == "Explore caching"
+    assert card_title(b) == "Retry cards"
+    assert card_title(dict(anchor={}, title="own words")) == "own words"
+    s = dict(anchor=dict(kind="session", title=""), title="Explore caching")
+    assert card_title(s) == "Explore caching"
 
 
 def test_turns_from_chunks():
@@ -257,21 +279,6 @@ def test_turns_from_chunks():
                                          ("assistant", "Found it in the client.\n\nIt retries without a limit."),
                                          ("user", "ok"), ("assistant", "Added a limit of three.")]
 
-
-
-def test_goal_with_the_threads_own_pr_stays_on_the_thread():
-    """A goal whose only evidence is the thread's own PR is the thread itself: no second card with its sessions.
-    A goal with another branch's PR, or a ticket, is still a card of its own."""
-    from pensieve import work
-    repo = "https://github.com/example/app/pull/"
-    task = dict(id="b:/r@main", keys=[], ticket_refs=[], repos=[], commits=[],
-                branches=[dict(repo="/r", branch="feature")],
-                prs=[dict(url=repo + "49", head="feature", own=True), dict(url=repo + "50", head="other")])
-    note = dict(evidence=[], next="Push the fix", goals=[dict(title="Fix the map", evidence=["#49"]),
-                                                         dict(title="Fix the login", evidence=["#50"])])
-    out = work._split_goals(task, note)
-    assert out["also"] == ["Fix the map"]
-    assert [s["id"] for s in out["split"]] == ["b:/r@main~pr50"]
 
 
 if __name__ == "__main__":

@@ -12,7 +12,6 @@ and `render_agent` for agents (the data as compact JSON). Agents in a Pensieve s
 import html
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from pensieve import cardtext, resources as res
@@ -20,16 +19,6 @@ from pensieve import task_states, work
 
 SCHEMA = "pensieve-thread/2"
 PAGE_ID = "pensieve-thread"  # the id of the <script> that holds the JSON; pages before version 2 used "context-card"
-_SECRET = re.compile(
-    r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|"
-    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|"
-    r"(?i:(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*)['\"]?[^\s'\"]{6,})")
-_LOCAL_PATH = re.compile(r"(?:/Users/|/home/|~/)[^\s`'\")\]>,;]+|\.claude/worktrees/[^\s`'\")\]>,;]*")
-# a sentence about the owner's own machine (a file to delete on the Desktop, a memory note): kept on the local card,
-# dropped from the shared one
-_OWN_MACHINE = re.compile(r"\b(Desktop|Downloads|Documents folder|MEMORY\.md|memory files?|on (this|my|your|the) "
-                          r"(Mac|machine|laptop)|local (file|folder)s?)\b", re.I)
-SUMMARIES = 6  # local and restricted resources that get a summary when a card is shared, the most useful first
 
 
 def _iso(ts) -> str:
@@ -53,27 +42,22 @@ def _num(url: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def build(t: dict, note: dict, hist: list[dict]) -> dict:
-    """The local context-card/1 object of a task. Its core has the same validation as the text card: sentences
-    that git or GitHub contradict are marked, and the last session's own question wins over the model's."""
-    core, changed = work.reconcile(note, t) if note else ({}, [])
+def build(t: dict, hist: list[dict]) -> dict:
+    """The local pensieve-thread/2 object of a task: its state, the last session's open question, what changed
+    since that session, what is left, its resources, last words, timeline and state history."""
     last = max((s["updated"] for s in t.get("sessions", [])), default=0)
     since = [f"PR #{_num(p['url'])} merged {_iso(p['merged_at'])[:10]}" for p in t["prs"] + t.get("branch_prs", [])
              if last and (p.get("merged_at") or 0) > last]
-    since += [c for c in changed if not c.startswith("PR #")]
     asked = work.asked_question(t)
-    if asked:
-        core["question"] = asked
-    if core:
-        core["as_of"] = _iso(last)
+    core = dict(question=asked, as_of=_iso(last)) if asked else {}
     root = next((p["path"] for p in t.get("places", []) if p.get("git")), "")
     card = dict(
-        schema=SCHEMA, id=t["id"], title=cardtext.card_title(t, note), label=t["title"],
+        schema=SCHEMA, id=t["id"], title=cardtext.card_title(t), label=t["title"],
         kind=t.get("kind", "work"), locality="local",
         state=dict(value=t["state"], why=t.get("state_why", ""), set_by=t.get("state_by") or "auto"),
         made_at=_iso(datetime.now().timestamp()), last_activity=_iso(t["updated"]), last_session=_iso(last),
         origin=_clean(dict(by=work._git(root, "config", "user.name", ttl=3600) if root else "", generator=_version())),
-        core=core, since_last_session=since, outdated=changed,
+        core=core, since_last_session=since,
         left=[dict(step=x["text"], who=x["how"], ref=x.get("ref") or None) for x in t.get("left") or []],
         resources=[r.to_dict() for r in res.collect(t)],
         last_words=work._clean_words(t.get("last_words") or ""),
@@ -115,107 +99,19 @@ def handoff(card: dict) -> dict:
                        start=start, refresh=refresh))
 
 
-def draft_share(card: dict, store, include: list[int] | None = None) -> dict:
-    """The shared card to preview: the local card's resources (those in `include`, by position; default all), and
-    a summary of each local or restricted one, written from the whole document now. Nothing leaves the Mac; `share`
-    then makes the card fit to send."""
-    rs = [dict(r) for i, r in enumerate(card.get("resources", [])) if include is None or i in include]
-    todo = sorted((r for r in rs if r["reach"] in (res.LOCAL, res.RESTRICTED) and r["kind"] != "folder"),
-                  key=lambda r: -r.get("relevance", 0))[:SUMMARIES]
-
-    def one(r):
-        obj = res.Resource(r["kind"], r["title"], r.get("ref", {}), relevance=r.get("relevance", 0.5), reach=r["reach"])
-        r["summary"] = res.summarize(obj, res.read_full(obj, store), card)
-    with ThreadPoolExecutor(4) as ex:
-        list(ex.map(one, todo))
-    return share(dict(card, resources=rs))
-
-
-def share(card: dict, ask: str = "") -> dict:
-    """The card to send. No `local` part and no local path anywhere: a local resource keeps its summary and loses its
-    path, or is left out when it has no summary. A private resource (a direct or group message, a private channel)
-    and its timeline points are left out whole; another message keeps its link and loses its text (its title is the
-    message's first line) and any summary. Secrets become [secret], a branch card's id becomes the same on
-    every machine (b:org/repo@branch), and `ask` (what the sender needs from the reader) leads the card."""
-    c = json.loads(json.dumps(card))
-    c.pop("local", None)
-    c.pop("last_words", None)  # a transcript's words: the session's summary says what matters
-    c["core"] = {k: v if k == "as_of" else " ".join(s for s in re.split(r"(?<=[.;!?])\s+", v) if not _OWN_MACHINE.search(s))
-                 for k, v in c.get("core", {}).items()}
-    c["timeline"] = [dict(x, title="A message") if x.get("source") == "message" else x
-                     for x in c.get("timeline", []) if not x.get("private")]
-    kept = []
-    for r in c.get("resources", []):
-        if r["reach"] == res.PRIVATE:  # a direct or group message, or a private channel: not even its link
-            continue
-        if r["kind"] == "message":  # a message's title is its own text: the reader gets the link, not the words
-            src = (r.get("ref") or {}).get("source") or ""
-            r["title"] = f"{src} message" if src else "A message"
-            r.pop("summary", None)
-        if r["reach"] == res.LOCAL:
-            if not r.get("summary") or r["kind"] == "folder":
-                continue
-            r.pop("ref", None)
-        elif r.get("ref"):
-            r["ref"] = {k: v for k, v in r["ref"].items() if k not in ("path", "session", "root")}
-        kept.append(r)
-    c["resources"] = kept
-    if c["id"].startswith("b:"):
-        repo = next((re.sub(r"^https?://[^/]+/", "", r["ref"]["web"]).split("/tree/")[0] for r in kept
-                     if r["kind"] == "branch" and r.get("ref", {}).get("web")), "")
-        c["id"] = f"b:{repo or c['id'][2:].rsplit('@', 1)[0].rsplit('/', 1)[-1]}@{c['id'].rsplit('@', 1)[-1]}"
-    if ask.strip():
-        c["ask"] = ask.strip()
-    c["handoff"] = handoff(c)
-
-    def scrub(x):
-        if isinstance(x, str):
-            return _SECRET.sub("[secret]", _LOCAL_PATH.sub("[local path]", x))
-        if isinstance(x, list):
-            return [scrub(v) for v in x]
-        if isinstance(x, dict):
-            return {k: scrub(v) for k, v in x.items()}
-        return x
-    c = scrub(c)
-    c["locality"] = "shared"
-    return _clean(c)
-
-
-def local_parts(card: dict) -> list[str]:
-    """Why a card is not fit to share: its `local` part, a local resource with a path, and each field that still holds a
-    local path. [] when it is fit. A shared space refuses a card that this finds anything in."""
-    found = ["local"] if "local" in card else []
-    found += [f"resources[{i}]" for i, r in enumerate(card.get("resources", []))
-              if r.get("reach") == res.PRIVATE or (r.get("reach") == res.LOCAL and r.get("ref"))]
-    found += [f"timeline[{i}]" for i, x in enumerate(card.get("timeline", [])) if x.get("private")]
-
-    def walk(x, at):
-        if isinstance(x, str) and _LOCAL_PATH.search(x):
-            found.append(at)
-        elif isinstance(x, list):
-            for i, v in enumerate(x):
-                walk(v, f"{at}[{i}]")
-        elif isinstance(x, dict):
-            for k, v in x.items():
-                walk(v, f"{at}.{k}" if at else k)
-    walk({k: v for k, v in card.items() if k != "local"}, "")
-    return found
-
-
 def render_agent(card: dict) -> str:
     """The card for an agent: its data as compact JSON, newest timeline first and cut short, with a line on how to
     read it. Agents follow ids, URLs and commands; they don't need layout."""
     c = dict(card, timeline=card.get("timeline", [])[:5], history=card.get("history", [])[-3:])
     c["resources"] = [{k: v for k, v in r.items() if k != "relevance"} for r in card.get("resources", [])]
-    head = ("Pensieve thread (pensieve-thread/2). 'core' (problem, goal, state, next, question) is a model's note as of "
-            "core.as_of; a sentence marked [outdated: …] is wrong now. Each resource has a reach: git, mcp and public "
-            "ones can be opened with their ref; local and restricted ones are summarized. 'handoff' says how to start "
-            "and how to get the live state. "
+    head = ("Pensieve thread (pensieve-thread/2). 'core.question' is what the last session asked and nobody answered. "
+            "'left' is what closes the thread, with who acts. Each resource has a reach: git, mcp and public ones can "
+            "be opened with their ref. 'handoff' says how to start and how to get the live state. "
             + ("'local' works only on this machine." if card.get("locality") == "local" else "Shared: start with 'ask' and handoff.start."))
     return head + "\n" + json.dumps(_clean(c), ensure_ascii=False, separators=(",", ":"))
 
 
-STATE_LABEL = {"todo": "To do", "open": "Open", "loose_ends": "Loose ends", "complete": "Complete",
+STATE_LABEL = {"open": "Open", "todo": "To-do", "loose_ends": "Loose ends", "closed": "Closed", "complete": "Closed",
                "forgotten": "Forgotten"}
 NOTE_LABEL = {"session": "Session", "memory": "Memory", "change": "Changes", "file": "File", "artifact": "Artifact",
               "message": "Message", "page": "Page", "ticket": "Ticket"}
@@ -259,6 +155,7 @@ blockquote{margin:0;padding:10px 14px;border-left:3px solid var(--line);color:va
 color:var(--ink);border-radius:8px;padding:3px 9px;cursor:pointer}
 .local{border:1px dashed var(--line);border-radius:12px;padding:4px 14px 12px;margin-top:22px}.local h2{margin-top:12px}
 footer{margin-top:26px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+.cluster-card{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}.cluster-card h1{font-size:20px}
 @media (max-width:560px){main{padding:20px 16px}dl{grid-template-columns:1fr}dt{margin-top:6px}}
 """
 
@@ -290,6 +187,41 @@ def render_html(card: dict) -> str:
     """The thread for people: one page with no outside files, light and dark, that leads with the ask and the core.
     The page holds the thread's JSON in <script type="application/json" id="pensieve-thread">, so `from_html` and
     any tool can read it back."""
+    return _page(card["title"], _card_html(card) + f"<footer>{_foot(card)}</footer>", card)
+
+
+def render_cluster_html(cards: list[dict], branch: str) -> str:
+    """The threads of one branch for people, newest first, on one page: each thread as on its own page. The page
+    holds the threads' JSON as a list."""
+    e = lambda s: html.escape(str(s or ""))
+    head = (f"<h1>{e(branch)}</h1><div class=\"meta\"><span>{len(cards)} sessions wrote to this branch, newest first</span>"
+            f"<span>{e(', '.join(c['id'] for c in cards))}</span></div>")
+    body = "".join(f'<section class="cluster-card">{_card_html(c)}</section>' for c in cards)
+    return _page(branch, head + body + f"<footer>{_foot(cards[0]) if cards else ''}</footer>", cards)
+
+
+def _page(title: str, body: str, data) -> str:
+    e = lambda s: html.escape(str(s or ""))
+    payload = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
+    return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
+            '<meta name=viewport content="width=device-width,initial-scale=1">'
+            f"<title>{e(title)}</title><style>{CSS}</style></head><body><main>"
+            + body + "</main>"
+            f'<script type="application/json" id="{PAGE_ID}">{payload}</script></body></html>')
+
+
+def _foot(card: dict) -> str:
+    e = lambda s: html.escape(str(s or ""))
+    day = lambda s: (s or "")[:10]
+    th = card.get("thread") or {}
+    return (f"Pensieve thread · {e(card.get('schema'))} · made {e(day(card.get('made_at')))} by "
+            f"{e((card.get('origin') or {}).get('generator'))}"
+            + (f' · <a href="{e(th["url"])}">thread</a> revision {e(th.get("revision"))}' if th.get("url") else "")
+            + " · this page holds the thread as JSON")
+
+
+def _card_html(card: dict) -> str:
+    """One thread's part of a page: its state, title, core, links, last words and timeline."""
     e = lambda s: html.escape(str(s or ""))
     day = lambda s: (s or "")[:10]
     st, core, rs = card.get("state", {}), card.get("core", {}), card.get("resources", [])
@@ -307,9 +239,11 @@ def render_html(card: dict) -> str:
         out.append(f'<div class="box req"><b>{e(by or "The sender")} asks you</b>{e(card["ask"])}</div>')
     if core.get("question"):
         out.append(f'<div class="box ask"><b>Waiting on {e(by) if shared and by else "you"}</b>{e(core["question"])}</div>')
-    rows = [f"<dt>{label}</dt><dd>{_marked(core[k])}</dd>" for k, label in work.CORE_LABELS[:4] if core.get(k)]
-    if rows:
-        out += [f"<h2>The work · as of {e(day(core.get('as_of')))}</h2>", f"<dl>{''.join(rows)}</dl>"]
+    left = card.get("left") or []
+    if left:
+        who = {"agent": "your agent", "you": "you", "parent": "the tracker"}
+        out += ["<h2>Left to close it</h2>", "<ul>" + "".join(
+            f"<li>{e(x['step'])} <span class=\"note\">{e(who.get(x.get('who'), x.get('who') or ''))}</span></li>" for x in left) + "</ul>"]
     if card.get("since_last_session"):
         out += ["<h2>Since then</h2>", "<ul>" + "".join(f"<li>{e(x)}</li>" for x in card["since_last_session"]) + "</ul>"]
     h, loc = card.get("handoff", {}), card.get("local", {})
@@ -335,17 +269,7 @@ def render_html(card: dict) -> str:
         out += ['<section class="local"><h2>On this Mac only</h2><ul class="rows">' + "".join(
             f'<li><span class="badge">{e(r["kind"])}</span><span class="grow">{e(r["title"])}<p><code>{e(r["ref"]["path"])}</code></p></span></li>'
             for r in mine) + "</ul></section>"]
-    th = card.get("thread") or {}
-    foot = (f"Pensieve thread · {e(card.get('schema'))} · made {e(day(card.get('made_at')))} by "
-            f"{e((card.get('origin') or {}).get('generator'))}"
-            + (f' · <a href="{e(th["url"])}">thread</a> revision {e(th.get("revision"))}' if th.get("url") else "")
-            + " · this page holds the thread as JSON")
-    data = json.dumps(card, ensure_ascii=False).replace("<", "\\u003c")
-    return ("<!doctype html><html lang=en><head><meta charset=utf-8>"
-            '<meta name=viewport content="width=device-width,initial-scale=1">'
-            f"<title>{e(card['title'])}</title><style>{CSS}</style></head><body><main>"
-            + "".join(out) + f"<footer>{foot}</footer></main>"
-            f'<script type="application/json" id="{PAGE_ID}">{data}</script></body></html>')
+    return "".join(out)
 
 
 def _link_row(r: dict, e) -> str:
@@ -358,13 +282,18 @@ def _link_row(r: dict, e) -> str:
             + (f"<p>{e(r['summary'])}</p>" if r.get("summary") else "") + f'</span><span class="reach">{e(REACH_LABEL[r["reach"]])}</span></li>')
 
 
+REVIVE_TAIL = ("Then check the live state of its branch, pull requests and tickets, "
+               "and review what has been done. What is left says who can do each step: the agent's steps are yours, "
+               "the user's steps are mine, and the rest happen in the system the item lives in (close a ticket in "
+               "its tracker, for example). Tell me where the work stands and how you will close the remaining "
+               "items with your own tools, and ask me before you change anything, here or in another system.")
 REVIVE_PROMPT = ("Pick up this thread: \"{title}\" (Pensieve thread {id}). Read it first with Pensieve's `thread` tool "
                  "(id {id}): it gives the thread as it is now, with what is left to close it. If you do not have "
-                 "Pensieve's tools, read {copy}. Then check the live state of its branch, pull requests and tickets, "
-                 "and review what has been done. What is left says who can do each step: the agent's steps are yours, "
-                 "the user's steps are mine, and the rest happen in the system the item lives in (close a ticket in "
-                 "its tracker, for example). Tell me where the work stands and how you will close the remaining "
-                 "items with your own tools, and ask me before you change anything, here or in another system.")
+                 "Pensieve's tools, read {copy}. " + REVIVE_TAIL)
+CLUSTER_PROMPT = ("Pick up the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+                  "first). Read each one first with Pensieve's `thread` tool: together they give the work as it is now, "
+                  "what each session did on the branch, and what is left to close it. If you do not have Pensieve's "
+                  "tools, read {copy}. " + REVIVE_TAIL)
 REVIVE_KEEP_DAYS = 7  # copies for agents without Pensieve's tools are deleted after this
 
 
@@ -373,12 +302,21 @@ def revive_prompt(card: dict) -> str:
     return REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy="its copy below") + "\n\n" + render_agent(card)
 
 
-def revive_command(card: dict, folder, agent: str = "") -> str:
-    """The shell command that starts a new agent session on a thread: the agent reads the live thread with Pensieve's
-    `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder. `agent`: the
-    agent to start (agents.AGENTS); by default the user's default agent, else one that worked on the thread (this Mac's checkout, or the home folder when it is
-    gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
-    import shlex
+def _cluster_text(cards: list[dict]) -> str:
+    return "\n\n".join(f"# Thread {i + 1} of {len(cards)}: {c['title']}\n\n{render_agent(c)}" for i, c in enumerate(cards))
+
+
+def _cluster_head(cards: list[dict], branch: str, copy: str) -> str:
+    return CLUSTER_PROMPT.format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards), copy=copy)
+
+
+def revive_cluster_prompt(cards: list[dict], branch: str) -> str:
+    """CLUSTER_PROMPT with every card of the cluster in it, for any agent."""
+    return _cluster_head(cards, branch, "their copies below") + "\n\n" + _cluster_text(cards)
+
+
+def _revive_copy(folder, slug: str, text: str):
+    """Write `text` as a dated copy in `folder` for an agent without Pensieve's tools, and drop old copies."""
     from pathlib import Path
     import time
     folder = Path(folder).expanduser()
@@ -386,25 +324,102 @@ def revive_command(card: dict, folder, agent: str = "") -> str:
     for old in folder.glob("*.md"):  # the copies are for one start each: old ones only fill the folder
         if time.time() - old.stat().st_mtime > REVIVE_KEEP_DAYS * 86400:
             old.unlink(missing_ok=True)
-    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:50] or "thread"
+    slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")[:50] or "thread"
     path = folder / f"{slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
-    path.write_text(render_agent(card))
-    where = next((r["ref"]["path"] for r in card.get("resources", []) if r["kind"] == "folder"
-                  and Path(r.get("ref", {}).get("path", "")).is_dir()), str(Path.home()))
+    path.write_text(text)
+    return path
+
+
+def _revive_start(cards: list[dict], agent: str, prompt: str) -> str:
+    """The shell command: cd to the work's folder (the first card's checkout on this Mac, else the home folder) and
+    start the agent (`agent` from agents.AGENTS, else the user's default, else one that worked on the threads)."""
+    import shlex
+    from pathlib import Path
     from pensieve import agents, settings
-    worked = [r.get("ref", {}).get("session", "").split(":", 1)[0] for r in card.get("resources", []) if r["kind"] == "session"]
+    where = next((r["ref"]["path"] for c in cards for r in c.get("resources", []) if r["kind"] == "folder"
+                  and Path(r.get("ref", {}).get("path", "")).is_dir()), str(Path.home()))
+    worked = [r.get("ref", {}).get("session", "").split(":", 1)[0] for c in cards for r in c.get("resources", [])
+              if r["kind"] == "session"]
     agent = agent if agent in agents.AGENTS else agents.choose(settings.get("default_agent"), worked)
-    prompt = REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=f"its copy in {path}")
     return f"cd {shlex.quote(where)} && {agents.start(agent, prompt)}"
+
+
+def revive_cluster_command(cards: list[dict], branch: str, folder, agent: str = "") -> str:
+    """The shell command that starts a new agent session on a cluster: the threads of one branch, newest first."""
+    path = _revive_copy(folder, branch or "branch", _cluster_text(cards))
+    return _revive_start(cards, agent, _cluster_head(cards, branch, f"their copies in {path}"))
+
+
+RESOLVE_PROMPTS = {
+    "ship": ("[pensieve ship] Ship the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+              "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
+              "{copy}. The steps that take this work to merged and closed, in order:\n{steps}\n"
+              "Do the agent's steps with your own tools, in this order, and stop before each step that is mine or "
+              "the tracker's: tell me what it is and what you need from me. Before anything that leaves this Mac "
+              "(a push, a pull request, a comment, a ticket change), show me what you will do and wait for my yes. "
+              "When a step is done, say what you checked to know it is done."),
+    "discard": ("[pensieve discard] Discard the work on branch {branch}: {n} sessions wrote to it, each a Pensieve thread ({ids}, newest "
+                "first). Read each one first with Pensieve's `thread` tool. If you do not have Pensieve's tools, read "
+                "{copy}. The steps that close this work without merging it, in order:\n{steps}\n"
+                "Nothing here is reversible: before each step, show me exactly what it deletes, closes or changes "
+                "and wait for my yes. Do the agent's steps with your own tools, in this order, and stop before each "
+                "step that is mine or the tracker's: tell me what it is and what you need from me. When a step is "
+                "done, say what you checked to know it is done."),
+}
+
+
+def resolve_steps(threads: list[dict], intent: str = "ship") -> list[dict]:
+    """The steps left to close a cluster one way: `ship` takes each thread's closeout steps that are not done,
+    `discard` its discard steps; one of each text, in order."""
+    out, seen = [], set()
+    for t in threads:
+        for s in t.get("discard" if intent == "discard" else "closeout", []):
+            key = s.get("text", "")
+            if s.get("done") or key in seen:
+                continue
+            seen.add(key)
+            out.append(dict(text=key, who=s.get("who", ""), ref=s.get("ref", ""), stage=s.get("stage", "")))
+    return out
+
+
+def _resolve_head(cards: list[dict], branch: str, steps: list[dict], copy: str, intent: str) -> str:
+    who = {"agent": "you, the agent", "you": "me, the user", "parent": "the tracker or GitHub"}
+    lines = [f"{i + 1}. {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for i, s in enumerate(steps)] or ["(nothing left: check that the work is done)"]
+    return RESOLVE_PROMPTS[intent].format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards),
+                                          copy=copy, steps="\n".join(lines))
+
+
+def resolve_prompt(cards: list[dict], branch: str, steps: list[dict], intent: str = "ship") -> str:
+    return _resolve_head(cards, branch, steps, "their copies below", intent) + "\n\n" + _cluster_text(cards)
+
+
+def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "", intent: str = "ship") -> str:
+    """The shell command that starts a new agent session to merge or discard a cluster: the steps lead its prompt."""
+    path = _revive_copy(folder, f"{intent}-{branch or 'branch'}", _cluster_text(cards))
+    return _revive_start(cards, agent, _resolve_head(cards, branch, steps, f"their copies in {path}", intent))
+
+
+def revive_command(card: dict, folder, agent: str = "") -> str:
+    """The shell command that starts a new agent session on a thread: the agent reads the live thread with Pensieve's
+    `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder. `agent`: the
+    agent to start (agents.AGENTS); by default the user's default agent, else one that worked on the thread (this Mac's checkout, or the home folder when it is
+    gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
+    path = _revive_copy(folder, card["title"], render_agent(card))
+    return _revive_start([card], agent, REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=f"its copy in {path}"))
 
 
 def save(card: dict, folder) -> str:
     """Write the thread's HTML page into folder, named after its title; returns the path."""
+    return save_page(render_html(card), card["title"], folder)
+
+
+def save_page(page: str, name: str, folder) -> str:
+    """Write a page into folder as <name slug>.thread.html; returns the path."""
     from pathlib import Path
-    slug = re.sub(r"[^a-z0-9]+", "-", card["title"].lower()).strip("-")[:60] or "thread"
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:60] or "thread"
     path = Path(folder).expanduser() / f"{slug}.thread.html"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_html(card))
+    path.write_text(page)
     return str(path)
 
 

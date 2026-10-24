@@ -1,4 +1,5 @@
 """Git repo indexing: code chunks + blame, session<->code links, and 'who knows this area' experts."""
+from __future__ import annotations  # Repos.list shadows the builtin list inside the class body; annotations stay lazy
 import hashlib
 import json
 import os
@@ -689,7 +690,7 @@ class Repos:
             return 0
         self._servicing, n = True, 0
         try:
-            if current in roots:  # the repo being swept: refresh its main checkout now, worktrees after the sweep
+            if current in roots and settings.get("mode") == "developer":  # the repo being swept: its main checkout now, worktrees after
                 self._recheck.add(current)
                 state = tree_state(current)
                 sig = _sig(state)
@@ -745,10 +746,11 @@ class Repos:
                 self.db.commit()
         if not row or row[0] != head:
             self._load_commits(root)
-        state = tree_state(root)
+        code = settings.get("mode") == "developer"  # threads mode keeps the commits and worktrees, not the files
+        state = tree_state(root) if code else {}
         n = 0
         main_sig = _sig(state) + ("+images" if images_on() else "")  # switching images on or off redoes the tree
-        main_changed = self.store.meta(f"tree:{root}") != main_sig
+        main_changed = code and self.store.meta(f"tree:{root}") != main_sig
         if main_changed:
             n += self._index_checkout(root, "", state, None, log)
             self.store.meta(f"tree:{root}", main_sig)
@@ -758,6 +760,8 @@ class Repos:
                 continue
             n += self._service(root, log)
             live[wt] = branch
+            if not code:
+                continue
             ws = tree_state(wt)
             sig = _sig(ws) + main_sig
             if self.store.meta(f"tree:{wt}") != sig:

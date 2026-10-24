@@ -106,22 +106,40 @@ class CardKind(StrEnum):
 
 
 class State(StrEnum):
-    """A thread's state (pensieve/task_states.py says what each one means)."""
-    TODO = "todo"
+    """A thread's state as the store saves it (pensieve/task_states.py says what each one means). Closed is saved
+    as complete, the name the store's CHECK allows (task_states.stored)."""
     OPEN = "open"
+    TODO = "todo"
+    THOUGHTS = "thoughts"
     LOOSE_ENDS = "loose_ends"
-    COMPLETE = "complete"
+    CLOSED = "complete"
     FORGOTTEN = "forgotten"
+
+    @classmethod
+    def _missing_(cls, value):  # rows saved under an older name (todo, closing, closed) still load
+        from pensieve.task_states import RENAMED
+        new = "closed" if value == "closed" else RENAMED.get(value)
+        if new == "closed":
+            return cls.CLOSED
+        return cls(new) if new in cls._value2member_map_ else None
 
 
 class StateSet(StrEnum):
-    """What a row of card_states sets: a state, or `auto` (the automatic state applies again)."""
-    TODO = "todo"
+    """What a row of card_states sets: a state, or `auto` (the automatic state applies again). The old names stay
+    so that saved rows still read; task_states.RENAMED maps them to the four states."""
     OPEN = "open"
     LOOSE_ENDS = "loose_ends"
-    COMPLETE = "complete"
+    CLOSED = "closed"
     FORGOTTEN = "forgotten"
     AUTO = "auto"
+    TODO = "todo"
+    CLOSING = "closing"
+    COMPLETE = "complete"
+    DISCARDED = "discarded"
+    LATENT = "latent"
+    CONSCIOUS = "conscious"
+    SUBCONSCIOUS = "subconscious"
+    ETCHED = "etched"
 
 
 class SetBy(StrEnum):
@@ -152,7 +170,7 @@ class ThreadEvent(StrEnum):
 
 
 class SaveReason(StrEnum):
-    """Why a thread's card was saved (pensieve/history.py)."""
+    """Why a thread's card was saved, from the versions that kept a thread history. Kept for the table."""
     START = "start"
     FORK = "fork"
     SPLIT = "split"
@@ -410,8 +428,8 @@ class CardDone:
 
 @dataclass(frozen=True)
 class CardDoneCheck:
-    """The last done check of a card (work.check_done): the note's time, its items and the commits it saw. The same
-    key asks the model nothing again."""
+    """The last done check of a card, from the versions that had model-written notes: its key held the note's time,
+    its items and the commits it saw. Kept for the table; nothing writes it now."""
     __table__ = "card_done_checks"
     card_id: str
     key: str

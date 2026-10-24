@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pensieve connections: collect Jira, Slack and Linear over MCP, read-only</title>
-<meta name="description" content="Pensieve connections collect tickets, threads and pages from MCP servers such as Jira, Slack and Linear with read-only tools, keep each change, and add them to your threads.">
+<title>Pensieve connections: collect Jira, Linear and Asana tickets over MCP, read-only</title>
+<meta name="description" content="Pensieve connections sign in to Jira, Linear and Asana, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.">
 <link rel="canonical" href="https://pensieve.tools/docs/connections/">
 <meta name="robots" content="index,follow">
 <meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Pensieve">
-<meta property="og:title" content="Pensieve connections: collect Jira, Slack and Linear over MCP, read-only">
-<meta property="og:description" content="Pensieve connections collect tickets, threads and pages from MCP servers such as Jira, Slack and Linear with read-only tools, keep each change, and add them to your threads.">
+<meta property="og:title" content="Pensieve connections: collect Jira, Linear and Asana tickets over MCP, read-only">
+<meta property="og:description" content="Pensieve connections sign in to Jira, Linear and Asana, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.">
 <meta property="og:url" content="https://pensieve.tools/docs/connections/">
 <meta property="og:image" content="https://pensieve.tools/og.png?v=2">
 <meta name="twitter:card" content="summary_large_image">
@@ -21,7 +21,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/docs/docs.css">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Connections","description":"Pensieve connections collect tickets, threads and pages from MCP servers such as Jira, Slack and Linear with read-only tools, keep each change, and add them to your threads.","url":"https://pensieve.tools/docs/connections/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Connections","description":"Pensieve connections sign in to Jira, Linear and Asana, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.","url":"https://pensieve.tools/docs/connections/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -41,10 +41,25 @@
 <p class="crumb">Docs</p>
 <h1>Connections</h1>
 <p class="lede">This page tells you how Pensieve collects tickets, messages and pages from your MCP servers, and how it keeps the collection read-only.</p>
-<p>A connection is an MCP server that Pensieve collects data from. Pensieve writes each item as a Markdown file in
-<code>~/.pensieve/connections</code> and indexes it like a document. Each item keeps a list of its changes over time.
-Collected tickets and messages also join your <a href="/docs/threads/">threads</a>.</p>
-<div class="note"><p>Each connection is off until you switch it on in Settings → Sources.</p></div>
+<p>A connection is an MCP server that Pensieve collects data from. Pensieve keeps each item on your Mac and indexes
+it like a document. Each item keeps a list of its changes over time. Collected tickets also join your
+<a href="/docs/threads/">threads</a>.</p>
+<div class="note"><p>A server that you add or sign in to is on at once. You can switch each connection on or off in
+Settings → Sources.</p></div>
+
+<h2 id="trackers">Issue trackers: Jira, Linear and Asana</h2>
+<p>Connect your issue tracker at setup, or later in Settings → Sources → Cloud connectors. Click
+<strong>Sign in</strong>. The sign-in opens in your browser. Pensieve connects to the tracker's own MCP server and
+calls only its read-only tools.</p>
+<div class="tbl"><table><thead><tr><th>Tracker</th><th>Server</th><th>Sign-in</th></tr></thead><tbody><tr><td>Jira</td><td>Atlassian's MCP server (<code>https://mcp.atlassian.com/v1/mcp</code>)</td><td>OAuth</td></tr><tr><td>Linear</td><td>Linear's MCP server</td><td>OAuth or an API key</td></tr><tr><td>Asana</td><td>Asana's MCP server</td><td>OAuth</td></tr></tbody></table></div>
+<p>The tickets that are assigned to you become <a href="/docs/threads/#todo">to-do threads</a>. A ticket that is done
+closes its thread.</p>
+<ul>
+  <li><strong>Jira:</strong> each collection reads the issues that are assigned to you and that changed after the last collection. It also reads again the status of each ticket on a thread that is not closed. Thus a ticket that you close in Jira closes its thread.</li>
+  <li><strong>Asana:</strong> each collection reads your workspaces, then the tasks that are assigned to you, then the notes of each task. An Asana task has no short key, so Pensieve gives it the key <code>ASANA-&lt;the last 6 digits of its id&gt;</code>. Its status is Done, or the name of its section.</li>
+</ul>
+<p>Pensieve does not connect to the connectors inside Claude. To get your tickets, sign in to the tracker's own MCP
+server.</p>
 
 <h2 id="kinds">Where the servers come from</h2>
 <p>Pensieve finds your MCP servers by itself. It never starts an agent of its own:</p>
@@ -67,9 +82,11 @@ Collected tickets and messages also join your <a href="/docs/threads/">threads</
 <h2 id="private">Private messages</h2>
 <p>Pensieve marks an item as private when it comes from a direct message, a group message or a private channel. It
 also marks every item from a tool that can read those, such as a tool with “private” or “dm” in its name. Private
-items are context for your own threads and agents. A shared thread leaves them out whole.</p>
+items are context for your own threads and agents.</p>
 
 <h2 id="schedule">When Pensieve collects</h2>
+<p>A sign-in that ends connected starts a collection at once. After that, Pensieve collects every 6 hours. While a
+connection collects, the status in the top-right menu shows “Collecting from &lt;name&gt;…”.</p>
 <div class="tbl"><table><thead><tr><th>Setting</th><th class=n>Default</th><th>What it does</th></tr></thead><tbody><tr><td><code>connections_every_hours</code></td><td class=n>6</td><td>How often Pensieve collects from each connection that is on. 0 collects only when you ask.</td></tr><tr><td><code>connections_days</code></td><td class=n>30</td><td>How far back the first collection goes.</td></tr></tbody></table></div>
 <p><strong>Collect now</strong> in Sources collects at once.</p>
 <p>See <a href="/docs/privacy/#network">Privacy and data</a> for what goes over the network when Pensieve collects.</p>

@@ -29,8 +29,6 @@ def main():
                     choices=["serve", "mcp", "integrate", "repo", "setup", "search", "open", "thread"])
     ap.add_argument("--json", action="store_true", help="thread only: the thread as JSON instead of an HTML page")
     ap.add_argument("--agent", action="store_true", help="thread only: the thread for an agent (compact JSON)")
-    ap.add_argument("--share", action="store_true",
-                    help="thread only: the thread to send (no local paths, session ids, resume command or secrets)")
     ap.add_argument("-o", "--out", help="thread only: the file to write (default: print it)")
     ap.add_argument("--kind", help="search only: code, doc, session, folder, repo or person")
     ap.add_argument("--limit", type=int, default=8, help="search only: how many results")
@@ -65,13 +63,14 @@ def main():
     if a.command == "search":
         return search(a.port, " ".join(a.items), a.kind, a.limit, a.scope)
     if a.command == "thread":
-        return thread(a.port, " ".join(a.items), "json" if a.json else "agent" if a.agent else "html", a.share, a.out)
+        return thread(a.port, " ".join(a.items), "json" if a.json else "agent" if a.agent else "html", a.out)
     if a.command == "open":  # names under .localhost reach this Mac in Chrome, Firefox and curl
         url = f"http://pensieve.localhost:{a.port}/"
         print(url)
         return webbrowser.open(url) and None
 
     from pensieve import reset
+    reset.settle_version()  # a new version resets the index and drops the thread history, keeping the settings
     done = reset.apply_pending()  # before anything opens the database
     from pensieve import reembed
     reembed.finish()  # a switch to another embedding model whose vectors are ready
@@ -208,7 +207,20 @@ def setup(port, items):
             for c in d["content"]:
                 if c["id"] != "text":
                     print(f"  {c['id']:<8} {'on ' if c['on'] else 'off'}  {c['description']} {c.get('note', '')}")
-            print("\nNext: `pensieve setup recommended`, or `pensieve setup <id> <id> ...` with exactly the ids to index.")
+            print("\nNext: `pensieve setup threads` for Threads mode (no index; recommended to start), or for Developer "
+                  "mode `pensieve setup recommended`, or `pensieve setup <id> <id> ...` with exactly the ids to index.")
+            return
+        if items == ["threads"]:  # Threads mode: every agent session folder found, no index
+            d = httpx.get(f"{base}/api/setup", timeout=300).json()
+            agents = [i["id"] for c in d["candidates"] for i in c["items"] if i["id"].startswith("agents/") and i["available"]]
+            if not agents:
+                sys.exit("No agent sessions found on this Mac. Run a coding agent once, then try again.")
+            r = httpx.post(f"{base}/api/setup", json={"sources": agents, "mode": "session"}, timeout=300)
+            if r.status_code >= 400:
+                sys.exit(r.json().get("detail", r.text))
+            print(f"Threads mode is on: Pensieve reads {len(agents)} agent session folder{'s' if len(agents) != 1 else ''}, "
+                  f"with git and gh. Nothing is indexed.\nTo turn your tickets into to-dos, connect Jira, Linear or Asana "
+                  f"in the app: Settings → Sources → Cloud connectors.")
             return
         kinds = [i for i in items if i in ("images", "video", "audio")]  # content.KINDS
         items = [i for i in items if i not in kinds]
@@ -287,15 +299,15 @@ def search(port, query, kind=None, limit=8, scope="auto"):
         sys.exit(1)
 
 
-def thread(port, thread_id, fmt="html", share=False, out=None):
+def thread(port, thread_id, fmt="html", out=None):
     """A thread as an HTML page, JSON or the agent's text, from the running server."""
     import httpx
     if not thread_id.strip():
-        sys.exit("usage: pensieve thread <id> [--json | --agent] [--share] [-o thread.html]   (ids: the threads MCP tool)")
+        sys.exit("usage: pensieve thread <id> [--json | --agent] [-o thread.html]   (ids: the threads MCP tool)")
     base = f"http://127.0.0.1:{port}"
     _start_server(base, port)
     try:
-        r = httpx.get(f"{base}/api/thread", params=dict(id=thread_id, format=fmt, share=str(share).lower()), timeout=120)
+        r = httpx.get(f"{base}/api/thread", params=dict(id=thread_id, format=fmt), timeout=120)
     except httpx.HTTPError as e:
         sys.exit(f"Couldn't reach Pensieve ({e}). Open the Pensieve app, then try again.")
     if r.status_code >= 400:

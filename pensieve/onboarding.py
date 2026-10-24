@@ -10,22 +10,21 @@ from pathlib import Path
 from pensieve import actions, apps, config, content, settings, sources
 
 ABOUT = [
-    "Pensieve searches everything on this Mac by meaning: documents, git repos and your AI agent sessions.",
-    "Agents get the right context in one search through its MCP server, instead of a disk-wide grep.",
-    "A map shows your work by topic, and git history shows who knows each part of the code.",
-    "Everything is indexed and searched on this Mac. Nothing is uploaded.",
+    "Pensieve tracks your work across agent sessions, branches, PRs and tickets.",
+    "Threads mode reads your agent sessions, git, and issue tracker to give them structure.",
+    "Developer mode extends Threads mode and indexes the repos and files you choose, so your agents can search them "
+    "and gain valuable insights.",
+    "Everything stays on this Mac.",
 ]
 
-# Who the user is decides which categories are worth scanning; the scan then pre-checks what it finds in them.
+# The mode decides which categories are scanned. Threads mode reads only agent sessions. Developer mode also reads
+# git repos and files into an index, so that sessions get richer context.
 PROFILES = [
-    dict(id="developer", label="Software development", categories=["repos", "agents"],
-         description="Code in git repos, with its history and who wrote what."),
-    dict(id="agents", label="AI coding agents", categories=["agents", "repos"],
-         description="Your Claude Code, Codex or Qwen Code conversations, linked to the code they changed."),
-    dict(id="office", label="Documents and office work", categories=["files"],
-         description="Word, PDF, PowerPoint, spreadsheets and text in Documents, Desktop and Downloads."),
-    dict(id="notes", label="Research and notes", categories=["files", "apps"],
-         description="Notes apps such as Obsidian and Apple Notes, and folders of Markdown."),
+    dict(id="session", label="Threads mode", categories=["agents"],
+         description="Reads your agent sessions, git, and issue tracker to give them structure. No index."),
+    dict(id="developer", label="Developer mode", categories=["agents", "repos", "files"],
+         description="Extends Threads mode and indexes the repos and files you choose, so your agents can search "
+                     "them and gain valuable insights. Adds the Map, People and Insights."),
 ]
 
 ENERGY_NOTE = ("Indexing uses a lot of power: it runs the embedding model on your Mac's GPU until it finishes, so the Mac "
@@ -75,16 +74,8 @@ def guide() -> dict:
 
 
 def engines() -> list[dict]:
-    """The text engines that setup offers, with why one can't run on this Mac."""
-    from pensieve import engine
-    claude = None if config.find_exe("claude") else "Claude Code is not installed."
-    return [dict(id="cli", label="Claude Code (Haiku)", command=engine.TEMPLATES[0]["command"], unavailable=claude,
-                 about="Your Claude Code writes them with its smallest model, one job at a time. It uses your Claude plan."),
-            dict(id="builtin", label="Built-in Qwen 3.5 9B", unavailable=engine.builtin_unsupported(),
-                 about="Runs on this Mac, and nothing leaves it. Pensieve starts it when there is work and stops it "
-                       "after 10 minutes without work. It downloads about 5 GB once, or uses LM Studio's copy."),
-            dict(id="server", label="Model server", unavailable=None,
-                 about="A server that you run, such as LM Studio or Ollama, or a hosted API. Set it in Settings → Models.")]
+    """The text engines that setup offers: none. The agent connected over MCP writes the text (settings.ENGINES)."""
+    return []
 
 
 CONTENT_NOTES = {  # what switching a kind on costs; speeds measured on an M4 Max
@@ -256,16 +247,20 @@ def index(path: str, cwd=None) -> dict:
             else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
 
 
-def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_engine=None) -> dict:
+def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_engine=None, mode=None) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
     switched off, then indexing starts. Categories that were never scanned are switched off whole. `embed_model` picks
     the search model (guide()["embed_models"]).
     On an empty index the search model changes at once; otherwise the switch runs in the background (reembed).
     `kinds`: which of images, video and audio to read by content (content.KINDS); the others are found by name. None
     leaves them as they are. They need the EmbeddingGemma 2 search model: with kinds and no `embed_model`, that
-    model is chosen. Their model parts download in the background. `text_engine`: what writes notes (engines())."""
+    model is chosen. Their model parts download in the background. `text_engine`: what writes notes (engines()).
+    `mode`: session (threads only: the agent sources, no index) or developer; by default developer when a repo is
+    chosen."""
     if chosen is None and not recommended:
         raise ValueError("Send the source ids to index, or recommended: true")
+    if mode not in (None, "session", "developer"):
+        raise ValueError("mode must be session or developer")
     if text_engine:
         from pensieve import engine
         settings.update({"text_engine": text_engine, **({"cli_command": settings.get("cli_command") or
@@ -299,7 +294,7 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     unknown = chosen - known
     if unknown:
         raise ValueError(f"unknown sources: {', '.join(sorted(unknown))}; scan lists them")
-    all_cats = [c for c, _, _ in sources.CATEGORIES]
+    all_cats = [c for c, _, _ in sources.CATEGORIES if c != "connections"]  # a connection has its own switch
     off = [d for d in settings.get("disabled") if d not in known and d not in all_cats]
     off += [i for i in known if i not in chosen]
     off += [c for i in items if i["id"] not in chosen for c in i.get("clones", [])]  # else another clone stands in
@@ -307,7 +302,8 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     off += [c for c in all_cats if not any(i in chosen and i.startswith(c + "/") for i in known)]  # incl. never scanned
     # added to the repos setting: big repos, which discovery skips, and repos found only in agent transcripts
     big = [i["id"][6:] for i in items if (i.get("big") or i.get("agents")) and i["id"] in chosen]
-    changes = {"disabled": off, "repos": list(dict.fromkeys(settings.get("repos") + big)), "setup_done": True}
+    changes = {"disabled": off, "repos": list(dict.fromkeys(settings.get("repos") + big)), "setup_done": True,
+               "mode": mode or ("developer" if any(c.startswith("repos/") for c in chosen) else "session")}
     settings.update(changes)
     _cache.clear()
     _scanned.clear()

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thread cards</title>
+<style>
+:root { --bg:#f6f6f4; --ink:#1b1b1d; --muted:#6b6b70; --line:#dcdcd8; --panel:#ffffff; --chip:#ececE8;
+  --open:#1f8a3b; --stale:#b26a00; --closed:#6b6b70; --unknown:#9a9aa0; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#161617; --ink:#ececec; --muted:#9a9aa0;
+  --line:#34343a; --panel:#1f1f21; --chip:#2a2a2e; --open:#4cd46e; --stale:#f0a33a; --closed:#9a9aa0; --unknown:#9a9aa0; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg:#161617; --ink:#ececec; --muted:#9a9aa0; --line:#34343a; --panel:#1f1f21; --chip:#2a2a2e;
+  --open:#4cd46e; --stale:#f0a33a; --closed:#9a9aa0; --unknown:#9a9aa0; color-scheme: dark; }
+body { margin:0; background:var(--bg); color:var(--ink); font:13px/1.45 -apple-system, system-ui, sans-serif;
+  padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); padding-block:18px 40px; }
+main { max-width:1040px; margin:0 auto; display:flex; flex-direction:column; gap:14px; min-width:0; }
+h1 { font-size:20px; margin:0; font-weight:650; }
+.sub, .muted { color:var(--muted); font-size:12px; }
+.bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+select, input { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 9px; min-width:0; }
+input[type=search] { flex:1 1 220px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; min-width:0; }
+.card-h { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; justify-content:space-between; min-width:0; }
+.title { font-weight:650; overflow-wrap:anywhere; }
+.sinks { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+.sink { border-top:1px solid var(--line); padding-top:6px; min-width:0; }
+.line { display:flex; flex-wrap:wrap; gap:6px; align-items:center; min-width:0; overflow-wrap:anywhere; }
+.kind { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+.name { font-weight:550; overflow-wrap:anywhere; }
+.link { color:var(--muted); font-size:12px; }
+.pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:99px; background:var(--chip); white-space:nowrap; }
+.st { font-size:11px; white-space:nowrap; }
+.st::before { content:"● "; }
+.name { font-family: ui-monospace, Menlo, monospace; font-size:12px; }
+.s-open { color:var(--open); } .s-stale { color:var(--stale); } .s-closed { color:var(--closed); } .s-unknown { color:var(--unknown); }
+details.done { margin-top:8px; border-top:1px solid var(--line); padding-top:6px; }
+details.done summary { cursor:pointer; color:var(--muted); font-size:12px; }
+.more { color:var(--muted); font-size:12px; margin-top:6px; }
+.source { margin-top:10px; padding-top:8px; border-top:1px dashed var(--line); font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.source code { font-size:11px; }
+.empty { color:var(--muted); font-size:12px; }
+details.card > summary { cursor:pointer; list-style:none; }
+details.card > summary::-webkit-details-marker { display:none; }
+details.card > summary .counts { color:var(--muted); font-size:12px; margin-left:auto; }
+details.card[open] > summary { margin-bottom:8px; }
+details.src { margin-top:10px; border-top:1px dashed var(--line); padding-top:8px; }
+details.src > summary { cursor:pointer; color:var(--muted); font-size:12px; }
+.actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.actions button { font:inherit; font-size:12px; color:var(--ink); background:var(--chip); border:1px solid var(--line); border-radius:8px; padding:4px 10px; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Thread cards</h1>
+    <div class="sub" id="built"></div>
+  </div>
+  <div class="bar">
+    <select id="state" aria-label="Filter by state">
+      <option value="">All states</option>
+      <option value="open">Open</option>
+      <option value="stale">Loose ends</option>
+      <option value="closed">Closed</option>
+      <option value="unknown">Unknown</option>
+    </select>
+    <input id="q" type="search" placeholder="Search titles, PRs, branches, tickets" aria-label="Search">
+    <span class="muted" id="count"></span>
+  </div>
+  <div id="cards" style="display:flex;flex-direction:column;gap:12px"></div>
+</main>
+<script>
+const DATA = __DATA__;
+const CAP = 20; // closed items shown under the dropdown; more are counted, not drawn
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ago = ts => ts ? new Date(ts * 1000).toISOString().slice(0, 16).replace("T", " ") : "";
+const CLOSED = new Set(["closed", "MERGED", "CLOSED", "DELETED", "done"]);
+const RANK = {open: 0, OPEN: 0, EXISTS: 0, stale: 1, unknown: 2, UNKNOWN: 2};
+const group = s => CLOSED.has(s) ? "closed" : (RANK[s] === 0 ? "open" : (s === "stale" ? "stale" : "unknown"));
+const cls = s => ({open:"s-open", OPEN:"s-open", EXISTS:"s-open", stale:"s-stale", closed:"s-closed", MERGED:"s-closed", CLOSED:"s-closed", DELETED:"s-closed", done:"s-closed"})[s] || "s-unknown";
+const label = s => ({open:"open", OPEN:"open", EXISTS:"open", stale:"loose ends", closed:"closed", MERGED:"merged", CLOSED:"closed", DELETED:"deleted", done:"done", unknown:"unknown", UNKNOWN:"unknown"})[s] || s;
+const pill = s => `<span class="pill ${cls(s)}">${esc(label(s))}</span>`;
+
+// Pairs in one direction: branch -> PR, then PR -> ticket. A ticket with no PR pairs with its branch.
+// Each pair is one line: left(state) -> right(state). Its rank is the better of its two ends.
+function pairsOf(c) {
+  const node = (kind, name, state, title) => ({kind, name, state, title: title || ''});
+  const seen = new Set(), out = [];
+  const add = (a, b) => {
+    const k = a.kind + ':' + a.name + '>' + (b ? b.kind + ':' + b.name : '');
+    if (seen.has(k)) return; seen.add(k);
+    out.push({a, b, rank: b ? Math.min(RANK_OF(a.state), RANK_OF(b.state)) : RANK_OF(a.state)});
+  };
+  const prs = new Map();
+  c.sinks.forEach(s => {
+    if (s.kind === 'pr') prs.set(s.name, {state: s.state, title: s.title, branch: s.branch, tickets: s.tickets});
+    s.prs.forEach(p => prs.set(p.key, {state: p.state, title: p.title, branch: s.name ? s.name : '', tickets: []}));
+  });
+  c.sinks.forEach(s => {
+    if (s.kind !== 'branch') return;
+    if (s.prs.length) s.prs.forEach(p => add(node('branch', s.name, s.state), node('pr', p.key, p.state, p.title)));
+    else if (s.tickets.length) s.tickets.forEach(t => add(node('branch', s.name, s.state), node('ticket', t.key, t.state)));
+    else add(node('branch', s.name, s.state), null);
+  });
+  prs.forEach((p, key) => p.tickets.forEach(t => add(node('pr', key, p.state, p.title), node('ticket', t.key, t.state))));
+  return out;
+}
+const RANK_OF = s => ({open:0, OPEN:0, EXISTS:0, stale:1})[s] ?? 3; // unknown counts as closed
+
+// Short names: the branch without its repo, the PR number, the ticket key. The full name is on hover.
+const short = n => n.kind === 'branch' ? n.name.split('@').pop() : n.kind === 'pr' ? '#' + n.name.split('#').pop() : n.name;
+const word = s => `<span class="st ${cls(s)}">${esc(label(s))}</span>`;
+
+function pairLine(p) {
+  const end = n => `<span class="name" title="${esc(n.name)}${n.title ? ' — ' + esc(n.title) : ''}">${esc(short(n))}</span>${word(n.state)}`;
+  const chain = p.b ? `${end(p.a)} <span class="link">→</span> ${end(p.b)}` : end(p.a);
+  return `<div class="sink"><div class="line">${chain}</div></div>`;
+}
+
+function card(c) {
+  const pairs = pairsOf(c).sort((x, y) => x.rank - y.rank);
+  const active = pairs.filter(p => p.rank < 2);
+  const done = pairs.filter(p => p.rank >= 2);
+  const shown = done.slice(0, CAP), hidden = done.length - shown.length;
+  const doneBlock = done.length ? `<details class="done"><summary>${done.length} closed</summary>
+      ${shown.map(pairLine).join('')}${hidden > 0 ? `<div class="more">+ ${hidden} more not shown</div>` : ''}</details>` : '';
+  const title = DATA.titles?.[c.id] || c.source.title || c.source.session;
+  const bare = c.sinks.filter(s => s.kind === 'pr' && !s.branch && !s.tickets.length);
+  const btn = (k, text) => `<button data-copy="${k}" data-id="${esc(c.id)}">${text}</button>`;
+  return `<details class="card" data-id="${esc(c.id)}">
+    <summary class="card-h"><span class="title">${esc(title)}</span>${pill(c.state)}<span class="counts">${active.length} open · ${done.length} closed</span></summary>
+    <div class="sinks">${active.length ? active.map(pairLine).join('') : '<div class="empty">No open pairs</div>'}</div>
+    ${bare.length ? `<div class="more">Alone: ${bare.map(s => esc(s.name) + ' ' + label(s.state)).join(', ')}</div>` : ''}
+    ${doneBlock}
+    <div class="actions">${c.resume ? btn('resume', 'Copy resume command') : ''}${c.start ? btn('start', 'Copy start command') : ''}</div>
+    <details class="src"><summary>Source</summary>
+      <div class="source">Session <code>${esc(c.source.session)}</code>${c.source.folder ? ' · folder <code>' + esc(c.source.folder) + '</code>' : ''} · last written ${esc(ago(c.source.written))}</div>
+    </details>
+  </details>`;
+}
+
+// Copy a card's command. The text is in DATA, so nothing is read back from the page.
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  const c = DATA.cards.find(x => x.id === b.dataset.id);
+  const text = c && c[b.dataset.copy];
+  if (!text) return;
+  navigator.clipboard?.writeText(text);
+  b.textContent = 'Copied';
+  setTimeout(() => b.textContent = b.dataset.copy === 'resume' ? 'Copy resume command' : 'Copy start command', 1500);
+});
+
+function render() {
+  const st = $("state").value, q = $("q").value.trim().toLowerCase();
+  const rows = DATA.cards.filter(c => {
+    if (st && c.state !== st) return false;
+    if (!q) return true;
+    const hay = [DATA.titles?.[c.id] || '', c.source.title, c.source.session, ...c.sinks.flatMap(s => [s.name, s.title || '', s.branch || '',
+      ...s.prs.map(p => p.key + ' ' + p.title), ...s.tickets.map(t => t.key)])].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  $("count").textContent = rows.length + " of " + DATA.cards.length + " cards";
+  $("cards").innerHTML = rows.map(card).join('') || '<div class="empty">No cards match.</div>';
+}
+
+$("built").textContent = "Built from " + DATA.cards.length + " sessions. Open first, then loose ends, then closed.";
+$("state").addEventListener("input", render);
+$("q").addEventListener("input", render);
+render();
+</script>
+</body>
+</html>
