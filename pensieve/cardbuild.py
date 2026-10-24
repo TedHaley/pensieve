@@ -49,6 +49,13 @@ def emit(kind: str, refs, wait: float = 0) -> bool:
     return b.emit(kind, refs, wait)
 
 
+def rebuild():
+    """Build every card again on the builder's next turn, from the caches. A build running now finishes first: it
+    may have read the old settings."""
+    if current is not None:
+        current.again = True
+
+
 def _plain(x):
     return sorted(x) if isinstance(x, (set, frozenset)) else str(x)
 
@@ -69,6 +76,7 @@ class Builder:
         self.listeners = []                  # fn(changed ids, removed ids), on the builder thread
         self.q: queue.Queue = queue.Queue()
         self.last_full = 0.0
+        self.again = False                   # rebuild(): a full build from the caches on the next turn
         self.builds: list[dict] = []         # the last builds: {at, kind, ms, changed}
         self._thread = None
 
@@ -117,6 +125,9 @@ class Builder:
             try:
                 if time.time() - self.last_full > FULL_SECONDS:
                     self.full(net=True)
+                elif self.again:
+                    self.again = False
+                    self.full(net=False)
                 elif events:
                     self.update(events)
             except Exception:

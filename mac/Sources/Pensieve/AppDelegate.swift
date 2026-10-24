@@ -22,10 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hotkeys = !Debug.enabled
         if Debug.enabled { Debug.listen { [weak self] in self?.handle($0) } }
         HotKeys.shared.action = { [weak self] in self?.panel.toggle() }
-        if hotkeys { HotKeys.shared.configure(backend.hotkey) }
+        // Threads mode has no search, so no search hotkey: it comes on when the backend says Developer mode
+        let hotkey = { Backend.shared.threadsMode ? "" : Backend.shared.hotkey }
+        if hotkeys { HotKeys.shared.configure(hotkey()) }
         applyAppearance()
         backend.onSettingsChange = { [weak self] in
-            if hotkeys { HotKeys.shared.configure(Backend.shared.hotkey) }
+            if hotkeys { HotKeys.shared.configure(hotkey()) }
             self?.applyAppearance()
             self?.askForSourcesIfNeeded()
         }
@@ -247,36 +249,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        let search = item(tap ? "Search Pensieve    \(keys)" : "Search Pensieve", #selector(showSearch))
-        if !tap, let k = HotKeys.parse(spec).key {  // a combo shows right-aligned like any menu shortcut
-            search.keyEquivalent = k == UInt32(kVK_Space) ? " " : HotKeys.parse(spec).keyName.lowercased()
-            search.keyEquivalentModifierMask = HotKeys.parse(spec).flags
+        let threads = Backend.shared.threadsMode  // Threads mode keeps the menu to the app, settings and updates
+        if !threads {
+            let search = item(tap ? "Search Pensieve    \(keys)" : "Search Pensieve", #selector(showSearch))
+            if !tap, let k = HotKeys.parse(spec).key {  // a combo shows right-aligned like any menu shortcut
+                search.keyEquivalent = k == UInt32(kVK_Space) ? " " : HotKeys.parse(spec).keyName.lowercased()
+                search.keyEquivalentModifierMask = HotKeys.parse(spec).flags
+            }
+            menu.addItem(search)
         }
-        menu.addItem(search)
         menu.addItem(item("Open App", #selector(openVisualizer)))
         menu.addItem(item("Open in Browser", #selector(openInBrowser)))
         menu.addItem(.separator())
 
         menu.addItem(item("Settings…", #selector(openSettings), key: ","))
-        let short = NSMenuItem(title: "Search Shortcut", action: nil, keyEquivalent: "")
-        let shorts = NSMenu(title: "Search Shortcut")
-        var known = false
-        for (value, title) in HotKeys.presets {
-            let i = item(title, #selector(pickShortcut(_:)))
-            i.representedObject = value
-            i.state = spec == value ? .on : .off
-            known = known || spec == value
-            shorts.addItem(i)
-        }
-        if !known {  // a combo typed into Settings
-            let i = NSMenuItem(title: HotKeys.display(spec), action: nil, keyEquivalent: "")
-            i.state = .on
-            shorts.addItem(i)
-        }
-        short.submenu = shorts
-        menu.addItem(short)
-        if HotKeys.shared.needsAccessibility {
-            menu.addItem(item("Allow the \(HotKeys.display(spec)) Shortcut…", #selector(openAccessibility)))
+        menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
+        if !threads {
+            let short = NSMenuItem(title: "Search Shortcut", action: nil, keyEquivalent: "")
+            let shorts = NSMenu(title: "Search Shortcut")
+            var known = false
+            for (value, title) in HotKeys.presets {
+                let i = item(title, #selector(pickShortcut(_:)))
+                i.representedObject = value
+                i.state = spec == value ? .on : .off
+                known = known || spec == value
+                shorts.addItem(i)
+            }
+            if !known {  // a combo typed into Settings
+                let i = NSMenuItem(title: HotKeys.display(spec), action: nil, keyEquivalent: "")
+                i.state = .on
+                shorts.addItem(i)
+            }
+            short.submenu = shorts
+            menu.addItem(short)
+            if HotKeys.shared.needsAccessibility {
+                menu.addItem(item("Allow the \(HotKeys.display(spec)) Shortcut…", #selector(openAccessibility)))
+            }
         }
         let look = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
         let looks = NSMenu(title: "Appearance")
@@ -293,22 +301,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(login)
         menu.addItem(.separator())
 
-        let status: String
+        let status: String?
         switch Backend.shared.state {
-        case .up: status = "Backend running"
+        case .up: status = threads ? nil : "Backend running"  // in Threads mode only a problem gets a line
         case .checking, .starting: status = "Backend starting…"
         case .missing: status = "Backend not installed"
         case .installing: status = "Setting up the backend…"
         case .failed: status = "Backend stopped (see ~/.pensieve/server.log)"
         }
-        let s = NSMenuItem(title: status, action: nil, keyEquivalent: "")
-        s.isEnabled = false
-        menu.addItem(s)
-        let version = NSMenuItem(title: "Version \(up.currentVersion)", action: nil, keyEquivalent: "")
-        version.isEnabled = false
-        menu.addItem(version)
-        menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
-        menu.addItem(.separator())
+        if let status {
+            let s = NSMenuItem(title: status, action: nil, keyEquivalent: "")
+            s.isEnabled = false
+            menu.addItem(s)
+        }
+        if !threads {
+            let version = NSMenuItem(title: "Version \(up.currentVersion)", action: nil, keyEquivalent: "")
+            version.isEnabled = false
+            menu.addItem(version)
+        }
+        if status != nil || !threads { menu.addItem(.separator()) }
         menu.addItem(item("Quit Pensieve", #selector(quitPensieve), key: "q"))
     }
 

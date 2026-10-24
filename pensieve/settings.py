@@ -64,7 +64,8 @@ DEFAULTS = {
     "connections_on": [],
     "mcp_servers": [],
     "connections_every_hours": 6,  # how often to collect from each connection that is on; 0 = only on request
-    "default_agent": "",           # the agent that "New session from thread" starts (agents.AGENTS); "" = automatic
+    "default_agent": "",           # the harness that runs the sessions Pensieve starts (agents.known()); "" = automatic
+    "custom_agent": {"name": "", "start": "", "resume": ""},  # default_agent "custom": the user's own commands
     "connections_days": 30,        # how far back the first collection goes
     "projects_stale_days": 21,     # Projects tab: a project with no activity for this many days goes under "Show older"
 }
@@ -108,7 +109,8 @@ DESCRIPTIONS = {
     "connections_on": "Connections switched on by hand (easier to change in Sources). A connection that Pensieve holds data from is on too, unless it is in disabled.",
     "mcp_servers": "MCP servers that Pensieve connects to itself, with a URL and headers, or a command and environment.",
     "connections_every_hours": "How often Pensieve collects from each connection that is on (0 = only when you ask).",
-    "default_agent": "The coding agent that a new session from a thread starts in Terminal: claude, codex, qwen, gemini or cursor. Empty: the thread's own agent, else the first one installed.",
+    "default_agent": "The harness: the coding agent that runs the sessions Pensieve starts in Terminal (new, forked and resumed): claude, codex, qwen, gemini, cursor, or custom (custom_agent). A session another agent wrote is taken over: the harness reads its transcript first. Empty: automatic, so a session resumes in the agent that wrote it, and a new one starts in the thread's own agent, else the first one installed.",
+    "custom_agent": "Your own harness, for default_agent custom: a name, the command that starts a session with {prompt} where the first prompt goes, and optionally the command that resumes one of its own sessions with {sid}.",
     "connections_days": "How many days back the first collection from a connection goes.",
     "projects_stale_days": "In Projects, a project with no activity for this many days goes under Show older.",
 }
@@ -193,6 +195,14 @@ def update(changes: dict) -> dict:
                     raise ValueError(f"scope {n!r} needs a non-empty sources list")
                 if any(not isinstance(x, str) or x.split("/", 1)[0] not in ("agents", "files", "repos", "apps", "connections") for x in sc["sources"]):
                     raise ValueError(f"scope {n!r}: sources are ids like repos/<root>, files/<folder>, agents/claude, apps/obsidian")
+        elif k == "custom_agent":
+            if not isinstance(v, dict) or set(v) - set(d) or not all(isinstance(x, str) for x in v.values()):
+                raise ValueError("custom_agent is {name, start, resume}, each a string")
+            v = {**d, **{x: y.strip() for x, y in v.items()}}
+            if v["start"] and "{prompt}" not in v["start"]:
+                raise ValueError("custom_agent.start must have {prompt} where the first prompt goes, e.g. my-agent -i {prompt}")
+            if v["resume"] and "{sid}" not in v["resume"]:
+                raise ValueError("custom_agent.resume must have {sid} where the session id goes, e.g. my-agent --resume {sid}")
         elif k == "file_types":
             if not isinstance(v, dict):
                 raise ValueError("file_types maps a type to {index: content|name|off, map: true|false}")
@@ -226,6 +236,10 @@ def update(changes: dict) -> dict:
             raise ValueError("engine_rate must be between 1 and 600 jobs a minute")
         if k == "editor" and v not in ("default", "vscode", "cursor", "zed"):
             raise ValueError("editor must be default, vscode, cursor or zed")
+        if k == "default_agent":
+            from pensieve import agents
+            if v not in ("", agents.CUSTOM, *agents.AGENTS):
+                raise ValueError(f"default_agent must be one of: {', '.join([*agents.AGENTS, agents.CUSTOM])}, or empty")
         clean[k] = v
     global _data
     with _lock:

@@ -519,6 +519,9 @@ async def lifespan(app):
             content.resume()
         repos._extra = None  # re-run the repo sweep with the new folders/roots
         watch.force_full()
+        if "default_agent" in keys or "custom_agent" in keys:  # every card's resume command runs in the harness
+            from pensieve import cardbuild
+            cardbuild.rebuild()
         loop.call_soon_threadsafe(broadcast, {"type": "settings", "keys": sorted(keys)})
     settings.on_change(changed)
 
@@ -1435,6 +1438,9 @@ class SetupReq(BaseModel):
     content: list[str] | None = None  # images, video, audio: read by content (needs EmbeddingGemma 2)
     text_engine: str | None = None  # what writes notes and summaries (onboarding.engines)
     mode: str | None = None  # session (threads only, no index) or developer; default: developer when a repo is chosen
+    agent: str | None = None  # the harness: the coding agent the user works in (agents.known())
+    custom_agent: dict | None = None  # agent "custom": {name, start, resume}
+    connect: bool = False  # also add Pensieve's MCP server to that agent
 
 
 @app.post("/api/setup")
@@ -1443,7 +1449,7 @@ async def post_setup(req: SetupReq):
     session mode the threads read the transcripts themselves and nothing is indexed."""
     try:
         res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.embed_model, req.content,
-                                                  req.text_engine, req.mode))
+                                                  req.text_engine, req.mode, req.agent, req.custom_agent, req.connect))
     except ValueError as e:
         raise HTTPException(400, str(e))
     wake_files.set()
@@ -1457,13 +1463,15 @@ async def post_setup(req: SetupReq):
 class AddReq(BaseModel):
     kind: str  # files | repos | agents
     path: str
+    look: bool = True  # false: the user skipped the scan, so its category is not scanned
 
 
 @app.post("/api/setup/add")
 def setup_add(req: AddReq):
-    """A source the setup scan didn't find. Returns its id, to choose in the next POST /api/setup."""
+    """A source the setup scan didn't find, or one added by hand after skipping it. Returns its id, to choose in the
+    next POST /api/setup."""
     try:
-        return {"id": onboarding.add(req.kind, req.path)}
+        return {"id": onboarding.add(req.kind, req.path, req.look)}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -1890,11 +1898,11 @@ class ResumeReq(BaseModel):
 
 @app.post("/api/thread/resume")
 def resume_session(req: ResumeReq):
-    """Open Terminal in the session's folder and resume the agent session there. Only the agent that wrote a
-    session can resume it."""
+    """Open Terminal in the session's folder and pick the session up there, in the user's harness: the agent that
+    wrote it resumes it, and another agent takes it over by reading its transcript first."""
     cmd = work.resume_command(store, req.session)
     if not cmd:
-        raise HTTPException(404, "can't resume that session: its folder is gone, or its agent has no resume command")
+        raise HTTPException(404, "can't resume that session: its folder is gone")
     if req.run:
         _terminal(cmd)
     return {"ok": True, "command": cmd}
@@ -1935,9 +1943,35 @@ class ReviveReq(BaseModel):
 
 @app.get("/api/agents")
 def list_agents():
-    """The coding agents Pensieve can start: each with whether it is installed, and the user's default."""
+    """The coding agents Pensieve can start: each with whether it is installed, the user's harness, and the custom
+    harness's commands."""
     from pensieve import agents
-    return {"agents": agents.listing(settings.get("default_agent")), "default": settings.get("default_agent") or ""}
+    return {"agents": agents.listing(settings.get("default_agent")), "default": settings.get("default_agent") or "",
+            "custom": settings.get("custom_agent")}
+
+
+class NewSessionReq(BaseModel):
+    repo: str = ""  # the folder to start in: a repo from `choose`, or "~" for the home folder; "" asks
+    run: bool = True  # false: only the command, to copy
+
+
+@app.post("/api/session/new")
+def new_session(req: NewSessionReq):
+    """Start a new session of the user's harness in Terminal, with no first prompt. Without a folder, returns
+    {choose: [repos]} for the page to ask."""
+    import shlex
+    from pathlib import Path
+    from pensieve import agents, todo
+    if not req.repo:
+        return {"choose": todo.repos_known()}
+    where = Path(req.repo).expanduser()
+    if not where.is_dir():
+        raise HTTPException(400, f"not a folder: {req.repo}")
+    agent = agents.choose(settings.get("default_agent"))
+    cmd = f"cd {shlex.quote(str(where))} && {agents.open_session(agent)}"
+    if req.run:
+        _terminal(cmd)
+    return {"ok": True, "command": cmd, "agent": agents.get(agent).name, "folder": str(where)}
 
 
 class StartReq(BaseModel):
@@ -1945,6 +1979,7 @@ class StartReq(BaseModel):
     days: int = 30
     repo: str = ""  # the repo the work starts in; remembered for the ticket's project after the first start
     agent: str = ""
+    run: bool = True  # false: make the worktree, and return the command to copy instead of running it
 
 
 @app.post("/api/thread/start")
@@ -1961,9 +1996,10 @@ def start_thread(req: StartReq):
     except ValueError as e:
         raise HTTPException(400, str(e))
     if res.get("command"):
-        _terminal(res["command"])
+        if req.run:
+            _terminal(res["command"])
         cardbuild.emit(cardbuild.REFRESH, [req.id])  # the new branch and worktree reach the card
-    return {k: v for k, v in res.items() if k != "command"}
+    return res if not req.run else {k: v for k, v in res.items() if k != "command"}
 
 
 @app.post("/api/thread/revive")
@@ -1976,7 +2012,7 @@ def revive_thread(req: ReviveReq):
         intent = {"wrap_up": "ship", "merge": "ship"}.get(req.intent, req.intent)  # the names of older pages
         if intent in ("ship", "discard"):
             ts = [t for t in work.tasks(store, req.days) if t["id"] in set(req.ids)]
-            steps = cards.resolve_steps(sorted(ts, key=lambda t: req.ids.index(t["id"])), intent)
+            steps = cards.resolve_steps(sorted(ts, key=lambda t: req.ids.index(t["id"])), intent, req.branch)
             if not req.run:
                 return {"ok": True, "prompt": cards.resolve_prompt(got, req.branch, steps, intent), "steps": steps}
             cmd = cards.resolve_command(got, req.branch, steps, config.V2_DIR / "revive", req.agent, intent)
@@ -2227,6 +2263,10 @@ def put_settings(changes: dict):
         raise HTTPException(400, str(e))
     if "embed_model" in changes:
         wake_model.set()
+    if "default_agent" in changes or "text_engine" in changes:  # the cli engine runs the user's harness
+        from pensieve import engine
+        engine.match_agent()
+        out = {"settings": settings.public(settings.load())}
     return out
 
 

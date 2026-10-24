@@ -34,7 +34,7 @@ TICKET_URL = re.compile(r"(https://[\w-]+\.atlassian\.net/browse|https://linear\
 # pull and merge requests on GitHub, GitLab, Bitbucket and Azure DevOps
 PR_URL = re.compile(r"https://(?:github\.com/[\w.-]+/[\w.-]+/pull/\d+|[\w.-]*gitlab[\w.-]*/[\w./-]+?/-/merge_requests/\d+"
                     r"|bitbucket\.org/[\w.-]+/[\w.-]+/pull-requests/\d+|dev\.azure\.com/[\w./%-]+?/pullrequest/\d+)")
-DEFAULT_BRANCHES = {"", "HEAD", "main", "master", "develop", "dev", "trunk"}
+DEFAULT_BRANCHES = cardtext.DEFAULT_BRANCHES
 SHARED_FILE_MAX = 3      # a file edited by more sessions than this is shared ground, not one task's
 SAME_TASK_DAYS = 3       # sessions this far apart can still be one task through their files
 LONG_BRANCH_SESSIONS, LONG_BRANCH_DAYS = 6, 4  # more sessions than this, or a longer span: a long-lived branch
@@ -733,9 +733,12 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
 
 def _sink_names(t: dict) -> set[str]:
     """The branches (by name), PRs and tickets a thread's session touched: what it wrote to, the branches it holds,
-    and the branch its session ran on."""
-    names = {key.split("@", 1)[-1] if kind == "branch" else key for kind, key in t.get("_writes", [])}
-    names |= {b["branch"] for b in t.get("branches", [])}
+    and the branch its session ran on. A default branch keeps its checkout: main in two repos is not shared work."""
+    def name(key: str) -> str:
+        short = key.split("@", 1)[-1]
+        return key if short in DEFAULT_BRANCHES else short
+    names = {name(key) if kind == "branch" else key for kind, key in t.get("_writes", [])}
+    names |= {name(f"{b.get('repo', '')}@{b['branch']}") for b in t.get("branches", [])}
     s = t["_sessions"][0] if t.get("_sessions") else {}
     if s.get("branch") and s["branch"] not in DEFAULT_BRANCHES:
         names.add(s["branch"])
@@ -842,7 +845,8 @@ def _sinks(t: dict) -> dict[str, str]:
     pull requests and its tickets."""
     out = {}
     for b in t.get("branches", []):
-        out[f"branch:{b['branch']}"] = f"same branch {b['branch']}"
+        where = f"{b.get('repo', '')}@" if b["branch"] in DEFAULT_BRANCHES else ""  # main of another repo is not related
+        out[f"branch:{where}{b['branch']}"] = f"same branch {b['branch']}"
     for p in t.get("prs", []):
         out[f"pr:{p['url']}"] = f"same pull request #{p['url'].rstrip('/').rsplit('/', 1)[-1]}"
     for k in t.get("tickets", []):
@@ -1646,6 +1650,9 @@ def _pickup(task: dict, wts: dict):
             p["changed"] = 0 if p.get("head") else \
                 len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
             p["worktree"] = root in wts
+            if Path(root, ".git").is_file():  # a linked worktree: its own folder, removed from the repo's checkout
+                common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600)
+                p["linked"] = str(Path(common).parent) if common.endswith("/.git") else ""
             if p["branch"] not in DEFAULT_BRANCHES:  # each commit of the branch: is its patch already in the default branch
                 from pensieve import stale
                 base = stale._default_branch(root)
@@ -1680,10 +1687,10 @@ def _pickup(task: dict, wts: dict):
         pr.update({k: v for k, v in _gh_pr(pr["url"]).items() if v})
     last = next((s for s in task["_sessions"] if s["project"]), None)
     if last:
-        sid = last["id"].split(":", 1)[1]
-        cmd = {"claude": f"claude --resume {sid}", "codex": f"codex resume {sid}"}.get(last["id"].split(":", 1)[0])
-        if cmd:
-            task["resume"] = dict(command=f"cd {_quote(last['project'])} && {cmd}", title=last["title"], session=last["id"])
+        from pensieve import agents
+        how = agents.continue_session(last["id"], last["title"])  # in the user's harness
+        task["resume"] = dict(command=f"cd {_quote(last['project'])} && {how['command']}", title=last["title"],
+                              session=last["id"], agent=how["agent"], agent_name=how["name"], handoff=how["handoff"])
 
 
 def _quote(path: str) -> str:
@@ -1806,8 +1813,9 @@ def _signature(task: dict) -> str:
 
 
 def resume_command(store, session_id: str) -> str | None:
-    """The shell command that resumes an agent session in its folder. The folder comes from the session's transcript
-    (the threads' own reading), else from the index (never from client text)."""
+    """The shell command that picks up an agent session in its folder, in the user's harness (agents.continue_session).
+    The folder comes from the session's transcript (the threads' own reading), else from the index (never from client
+    text)."""
     import shlex
     from pensieve import agents, transcripts
     source, _, sid = session_id.partition(":")
@@ -1820,8 +1828,8 @@ def resume_command(store, session_id: str) -> str | None:
         folder = row[0] if row and row[0] else ""
     if not folder or not Path(folder).is_dir():
         return None
-    cmd = agents.resume(source, sid)  # only the agent that wrote a session can resume it
-    return f"cd {shlex.quote(folder)} && {cmd}" if cmd else None
+    how = agents.continue_session(session_id, f.title if f else "")
+    return f"cd {shlex.quote(folder)} && {how['command']}"
 
 
 def _me(root: str) -> set[str]:

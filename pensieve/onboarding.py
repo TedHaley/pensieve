@@ -37,12 +37,16 @@ KEY_NAMES = {"ctrl": "Control", "control": "Control", "shift": "Shift", "cmd": "
 
 
 def next_steps() -> str:
-    keys = "+".join(KEY_NAMES.get(k, k.upper()) for k in settings.get("hotkey").lower().split("+"))
+    if settings.get("mode") != "developer":  # Threads mode has no search, so no search hotkey
+        return (f"Open Pensieve from its menu bar icon, or go to http://localhost:{config.PORT}, to see your "
+                f"threads.")
+    keys ="+".join(KEY_NAMES.get(k, k.upper()) for k in settings.get("hotkey").lower().split("+"))
     return (f"{'Tap' if keys in ('Control+Shift', 'Shift+Control') else 'Press'} {keys} anywhere to search with "
             f"Pensieve. To explore what it indexed, choose Open Map in the Pensieve menu bar icon, or go to "
             f"http://localhost:{config.PORT}.")
 _cache = {}  # categories -> (time, candidates): repo discovery walks the disk
 _scanned = set()  # categories the user has let Pensieve look in; `start` never reads any other
+_added: dict[str, dict] = {}  # source id -> its row: folders added by hand when the user skipped the scan
 
 
 def _tilde(p) -> str:
@@ -64,8 +68,12 @@ def reads(category: str) -> str:
 
 def guide() -> dict:
     """Everything the first step needs, without reading any folder."""
+    from pensieve import agents
     cats = {c: (label, desc) for c, label, desc in sources.CATEGORIES}
+    default = settings.get("default_agent")
     return {"done": settings.get("setup_done"), "about": ABOUT, "profiles": PROFILES,
+            "agents": agents.listing(default), "agent": agents.choose(default),
+            "custom_agent": settings.get("custom_agent"),
             "categories": [dict(id=c, label=label, description=desc, reads=reads(c)) for c, (label, desc) in cats.items()],
             "energy": ENERGY_NOTE, "files_per_minute": REPO_FILES_PER_MINUTE,
             "embed_model": config.EMBED_MODEL,
@@ -186,9 +194,10 @@ def _seconds(chunks) -> int:
     return round(chunks / actions.ctx["repos"].embed_rate())
 
 
-def add(kind: str, path: str) -> str:
+def add(kind: str, path: str, look: bool = True) -> str:
     """Add a folder the scan didn't find: 'files' (documents), 'repos' (a repo, or a folder of repos, whatever their
-    size) or 'agents' (a folder of agent transcripts). Returns the source id to pass to `start`. ValueError if unusable."""
+    size) or 'agents' (a folder of agent transcripts). Returns the source id to pass to `start`. ValueError if unusable.
+    With `look` false (the user skipped the scan), its category is not scanned: `start` knows the folder from here."""
     p = Path(path).expanduser()
     if not p.is_dir():
         raise ValueError(f"not a folder: {path}")
@@ -213,7 +222,11 @@ def add(kind: str, path: str) -> str:
     else:
         raise ValueError(f"unknown kind {kind!r}: use files, repos or agents")
     _cache.clear()
-    _scanned.add(kind)
+    if look:
+        _scanned.add(kind)
+    else:
+        _added[sid] = dict(id=sid, label=p.name or path, detail=_tilde(p), size=None, unit="", available=True,
+                           checked=True)
     return sid
 
 
@@ -247,7 +260,8 @@ def index(path: str, cwd=None) -> dict:
             else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
 
 
-def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_engine=None, mode=None) -> dict:
+def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_engine=None, mode=None,
+          agent=None, custom_agent=None, connect=False) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
     switched off, then indexing starts. Categories that were never scanned are switched off whole. `embed_model` picks
     the search model (guide()["embed_models"]).
@@ -256,15 +270,30 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     leaves them as they are. They need the EmbeddingGemma 2 search model: with kinds and no `embed_model`, that
     model is chosen. Their model parts download in the background. `text_engine`: what writes notes (engines()).
     `mode`: session (threads only: the agent sources, no index) or developer; by default developer when a repo is
-    chosen."""
+    chosen. `agent`: the harness, the coding agent the user works in (agents.AGENTS, or "custom" with
+    `custom_agent`: {name, start, resume}). The sessions Pensieve starts run in it, and a CLI text engine runs it.
+    `connect`: also add Pensieve's MCP server to that agent (integrations)."""
+    from pensieve import agents, engine, integrations
     if chosen is None and not recommended:
         raise ValueError("Send the source ids to index, or recommended: true")
     if mode not in (None, "session", "developer"):
         raise ValueError("mode must be session or developer")
+    if custom_agent is not None:
+        settings.update({"custom_agent": custom_agent})
+    if agent:
+        if not agents.get(agent):
+            raise ValueError(f"unknown agent {agent!r}; one of: {', '.join(agents.known())}"
+                             + ("" if agent != agents.CUSTOM else " (custom needs custom_agent with a start command)"))
+        settings.update({"default_agent": agent})
+    connected = None
+    if agent and connect and agents.get(agent).mcp:
+        try:  # an MCP server the user added by hand stays as it is: setup goes on
+            connected = integrations.set_mcp(agents.get(agent).mcp, True)
+        except ValueError as e:
+            connected = str(e)
     if text_engine:
-        from pensieve import engine
-        settings.update({"text_engine": text_engine, **({"cli_command": settings.get("cli_command") or
-                                                          engine.TEMPLATES[0]["command"]} if text_engine == "cli" else {})})
+        settings.update({"text_engine": text_engine})
+    engine.match_agent()
     unknown = set(kinds or ()) - set(content.KINDS)
     if unknown:
         raise ValueError(f"unknown content {', '.join(sorted(unknown))}; one of: {', '.join(content.KINDS)}")
@@ -284,11 +313,12 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
         reembed.switch_empty(c["store"], [c["store"], c["repos"], c["files"]])
     if _scanned:
         cats = scan(sorted(_scanned))
-    elif chosen is None or chosen:  # `pensieve setup <ids>` chooses without a scan first
+    elif (chosen is None or chosen) and not _added:  # `pensieve setup <ids>` chooses without a scan first
         cats = scan()
-    else:  # nothing chosen: no folder needs reading
+    else:  # nothing chosen, or only folders added by hand: no folder needs reading
         cats = []
     items = [i for c in cats for i in c["items"]]
+    items += [i for i in _added.values() if i["id"] not in {x["id"] for x in items}]
     known = {i["id"] for i in items}
     chosen = {i["id"] for i in items if i["checked"]} if chosen is None else set(chosen)
     unknown = chosen - known
@@ -307,10 +337,11 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     settings.update(changes)
     _cache.clear()
     _scanned.clear()
+    _added.clear()
     picked = [i for i in items if i["id"] in chosen and not i.get("rule")]
     files = sum(i["size"] or 0 for i in picked if i["unit"] == "files")
     secs = sum(i.get("seconds") or 0 for i in picked)
     return {"done": True, "indexing": [i["label"] for i in picked], "repo_files": files,
             "indexed_files": sum(i.get("indexed") or 0 for i in picked if i["unit"] == "files"),
             "minutes": -(-secs // 60), "documents": any(i["id"].startswith(("files/", "apps/")) for i in picked),
-            "energy": ENERGY_NOTE, "next": next_steps()}
+            "energy": ENERGY_NOTE, "next": next_steps(), **({"connected": connected} if connected else {})}

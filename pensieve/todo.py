@@ -74,6 +74,6 @@ def start(task: dict, repo: str | None = None, agent: str = "") -> dict:
     url = f" ({k['url']})" if k.get("url") else ""
     prompt = TODO_PROMPT.format(key=key, title=k.get("title") or "", url=url, branch=branch, base=base.rsplit("/", 1)[-1],
                                 repo=Path(root).name, text=text[:4000])
-    agent = agent if agent in agents.AGENTS else agents.choose(settings.get("default_agent"))
+    agent = agent if agents.get(agent) else agents.choose(settings.get("default_agent"))
     return {"command": f"cd {shlex.quote(str(path))} && {agents.start(agent, prompt)}", "path": str(path),
             "branch": branch, "repo": root, "key": key, "prompt": prompt}

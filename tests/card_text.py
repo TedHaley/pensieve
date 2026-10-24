@@ -228,6 +228,42 @@ def test_discard_steps():
     assert discard(card()) == []
 
 
+def test_worktree_removed_on_discard_and_ship():
+    """A linked worktree on the card's branch is removed from the repo's checkout: on discard before the branch is
+    deleted (git won't delete a checked-out branch), on ship after the merge. The repo's own checkout, a worktree
+    showing another branch now, and main never get the step; nor does the main branch get a delete step."""
+    from pensieve.cardtext import closeout, discard
+    wt = dict(branch="retry", path="/r-retry", linked="/r", upstream=True)
+    c = card(branches=[dict(repo="/r", branch="retry"), dict(repo="/r", branch="main")],
+             places=[wt, dict(branch="retry", path="/r", head="main"), dict(branch="main", path="/r2", linked="/r")])
+    assert [s["text"] for s in discard(c)] == [
+        "Remove the worktree /r-retry before the branch: git won't delete a branch a worktree has checked out: "
+        "cd /r && git worktree remove /r-retry", "Delete branch retry (local and remote)"]
+    shipped = closeout(dict(c, prs=[dict(url=PR + "4", state="merged", head="retry")]))
+    assert [s["text"] for s in shipped if s["stage"] == "branch"] == [
+        "Remove the worktree /r-retry after the merge, when it has no uncommitted work: cd /r && git worktree remove "
+        "/r-retry", "Delete branch retry after the merge"]
+
+
+def test_close_one_branch_of_several():
+    """A session that wrote to two branches closes one at a time: Discard on one deletes only that branch and closes
+    only its PR, and leaves the ticket (the whole thread's) for when one branch is left. A thread with one branch
+    keeps every step."""
+    from pensieve import cards
+    from pensieve.cardtext import discard, for_branch
+    c = card(branches=[dict(repo="/r", branch="a"), dict(repo="/r", branch="b")],
+             places=[dict(branch="a", changed=1), dict(branch="b")],
+             prs=[dict(url=PR + "4", state="open", head="a"), dict(url=PR + "5", state="open", head="b")],
+             tickets=[dict(key="ABC-1", status="In Progress")])
+    c["discard"] = discard(c)
+    assert [s["text"] for s in for_branch(c, c["discard"], "a")] == [
+        "Discard 1 uncommitted files on a", "Close #4 without merging", "Delete branch a (local)"]
+    assert [s["text"] for s in cards.resolve_steps([c], "discard", "b")] == ["Close #5 without merging", "Delete branch b (local)"]
+    one = card(branches=[dict(repo="/r", branch="a")], tickets=[dict(key="ABC-1", status="In Progress")])
+    assert [s["text"] for s in for_branch(one, discard(one), "a")] == ["Delete branch a (local)", "Mark ABC-1 as cancelled (won't do)"]
+    assert for_branch(c, c["discard"], "") == c["discard"]
+
+
 def test_branch_with_a_pull_request_needs_none():
     """A branch that has a pull request, open or merged, needs no new one; a branch with nothing on it needs none
     either."""
