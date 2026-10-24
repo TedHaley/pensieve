@@ -810,7 +810,7 @@ def cluster(branch: str) -> str:
         out.append(f"- {day(at)} {t['title']} [{t['id']} {t['state']}]: {me.get('did') or 'no changes'}{share}")
     can = any(t["state"] in ("open", "loose_ends", "forgotten") for t in ts)
     for intent, label in (("ship", "To ship this work and close it"), ("discard", "To discard this work and close it")):
-        steps = cards.resolve_steps(ts, intent)
+        steps = cards.resolve_steps(ts, intent, branch)  # this branch's steps: not the other branches a session wrote to
         out += ["", f"{label} (Pensieve only reads: these are steps, not changes it made):"]
         out += [f"- {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for s in steps] or ["- nothing: every step is done"]
     out.append(f"\nState: {'open: one of the two lists above closes it' if can else 'done: every thread is closed'}")
@@ -1049,17 +1049,20 @@ def setup_guide() -> dict:
     1. Tell them what Pensieve is, from `about`.
     2. Ask which mode they want, from `profiles`: "session" (Threads mode: recommended to start; no index, no
        model) or "developer" (also indexes the repos and files they choose, for search, the Map, People and Insights).
-    3. Ask whether they track work in Jira, Linear or Asana. The sign-in is in the browser: send them to
+    3. Pass `agent` to setup_start: the harness, the id from `agents` of the agent you are (claude, codex, qwen,
+       gemini or cursor). The sessions Pensieve starts, resumes and forks run in it. Ask only when you are none of
+       them; for another agent, pass agent="custom" and `custom_agent` with its name and start command.
+    4. Ask whether they track work in Jira, Linear or Asana. The sign-in is in the browser: send them to
        Settings → Sources → Cloud connectors in the app, now or later. Their tickets then become to-do threads, and
        a ticket's status closes its thread.
-    4. Threads mode: call setup_scan with profiles=["session"], then setup_start(recommended=true, mode="session").
+    5. Threads mode: call setup_scan with profiles=["session"], then setup_start(recommended=true, mode="session").
        That is all.
-    5. Developer mode: tell them which folders the scan reads (`reads` of the categories) and that macOS may ask them
+    6. Developer mode: tell them which folders the scan reads (`reads` of the categories) and that macOS may ask them
        to allow access. When they agree, call setup_scan with profiles=["developer"]. Show what it found, pre-checked
        items first, and ask what to index. Offer setup_add_source for folders or repos it missed.
-    6. Developer mode: ask which of images, video and audio to read by what they show or say (`content`: each
+    7. Developer mode: ask which of images, video and audio to read by what they show or say (`content`: each
        entry's note says what it costs). All three are off by default: then those files are found by name.
-    7. Developer mode: tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call
+    8. Developer mode: tell them indexing takes a while and uses a lot of energy, so plug in a laptop, then call
        setup_start with mode="developer"."""
     return onboarding.guide()
 
@@ -1082,16 +1085,20 @@ def setup_add_source(kind: str, path: str) -> dict:
 
 @tool()
 def setup_start(sources: list[str] | None = None, recommended: bool = False, content: list[str] | None = None,
-                text_engine: str | None = None, mode: str | None = None) -> dict:
+                text_engine: str | None = None, mode: str | None = None, agent: str | None = None,
+                custom_agent: dict[str, str] | None = None) -> dict:
     """Finish setup: index exactly these source ids from setup_scan (or, with recommended=true, the pre-checked
     ones); everything else is switched off. `mode`: "session" (threads mode: the agent sources only, read as they
     are, no index and no model) or "developer" (the repos and files are indexed too); by default developer when a
     repo is chosen. `content`: which of "images", "video" and "audio" to read by what they show or say (this selects
     the EmbeddingGemma 2 search model, and their model parts download in the background); the others are found by
-    name. `text_engine`: the id of the engine from setup_guide's `engines` that the user chose.
+    name. `text_engine`: the id of the engine from setup_guide's `engines` that the user chose. `agent`: the harness,
+    the coding agent the user works in, from setup_guide's `agents`, or "custom" with `custom_agent`: {"name",
+    "start": a command with {prompt} where the first prompt goes, "resume": optional, with {sid}}.
     In developer mode indexing starts at once; search works meanwhile. Tell the user `minutes` (the time left,
     counting only what isn't indexed yet), the `energy` note when minutes > 1, and `next`."""
-    res = onboarding.start(sources, recommended, kinds=content, text_engine=text_engine, mode=mode)
+    res = onboarding.start(sources, recommended, kinds=content, text_engine=text_engine, mode=mode, agent=agent,
+                           custom_agent=custom_agent)
     from pensieve import server
     server.watch.force_full()
     return res

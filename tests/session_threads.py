@@ -81,6 +81,48 @@ def run():
     results.append(check("no write when the session's lines are not in the diff",
                          st.uncommitted(dict(places=[place]), dict(path="/x/s5.jsonl", updated=200)), []))
 
+    # main: a sink of the checkout, open while the session's lines are uncommitted or unpushed, then landed or gone
+    lines = [f"line {i} that the session wrote on main" for i in range(4)]
+    transcripts.written = lambda path: tuple((f"{ROOT}/m.py", ln) for ln in lines) + ((f"{ROOT}/new.py", "a brand new file's first line"),)
+    work._git_root = lambda folder: ROOT
+    diff = lambda ls: "+++ b/m.py\n" + "".join(f"+{ln}\n" for ln in ls)
+
+    def main_status(git, untracked=None):
+        sink_status.local.clear()
+        st._file_lines = lambda root, rel: (untracked or {}).get(rel, set())
+        work._git = lambda root, *args, ttl=60: {("branch", "--show-current"): "main",
+                                                 ("rev-parse", "--abbrev-ref", "@{u}"): "origin/main", **git}.get(args, "")
+        ws = st.on_default_branch(dict(id="m", path="/x/m.jsonl"))
+        return ws, sink_status.local.get(("m", f"branch {ROOT}@main"))
+
+    no_diff = ("diff", "HEAD", "--unified=0", "--no-color")
+    ahead = ("diff", "@{u}..HEAD", "--unified=0", "--no-color")
+    results.append(check("lines uncommitted on main: an open sink keyed by the checkout",
+                         main_status({no_diff: diff(lines)}), ([("branch", f"{ROOT}@main")], "OPEN")))
+    results.append(check("fewer than MAIN_MATCH of its lines in a shared diff is not its work",
+                         main_status({no_diff: diff(lines[:2])})[1], "DELETED"))
+    results.append(check("lines the file already had (copied boilerplate) are not its work",
+                         main_status({no_diff: diff(lines), ("show", "HEAD:m.py"): "\n".join(lines)})[1], "DELETED"))
+    results.append(check("committed and not pushed: still open", main_status({ahead: diff(lines)})[1], "OPEN"))
+    results.append(check("in the upstream: landed", main_status({("show", "@{u}:m.py"): "\n".join(lines)})[1], "MERGED"))
+    results.append(check("in none of them: discarded", main_status({})[1], "DELETED"))
+    transcripts.written = lambda path: ((f"{ROOT}/new.py", "a brand new file's first line"),)
+    results.append(check("a new file it created, untracked, counts as uncommitted",
+                         main_status({("ls-files", "--others", "--exclude-standard"): "new.py"},
+                                     {"new.py": {"a brand new file's first line"}})[1], "OPEN"))
+    work._git = lambda root, *args, ttl=60: {("branch", "--show-current"): "feat"}.get(args, "")
+    results.append(check("a feature branch is not a main sink", st.on_default_branch(dict(path="/x/m.jsonl")), []))
+
+    # two sessions on one main: each thread's state comes from its own lines, not the other's
+    from pensieve import thread_model as tm
+    sink_status.local.clear()
+    label = f"branch {ROOT}@main"
+    sink_status.local.update({("a", label): "OPEN", ("b", label): "MERGED"})
+    sink = tm.Sink(tm.SinkKind.BRANCH, f"{ROOT}@main")
+    of = lambda sid: sink_status.status_of_task(dict(_sessions=[dict(id=sid)], places=[dict(branch="main", commits=3)]), [sink])
+    results.append(check("each session on main has its own status, and main's commits don't mark it merged",
+                         (of("a")[label], of("b")[label]), ("OPEN", "MERGED")))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 

@@ -63,6 +63,8 @@ def branch_status(repo: str, branch: str, env: dict | None = None) -> str:
 
 
 _other: list = []  # the gh env of the user's other GitHub account, found once (repos the active account cannot read)
+# (session id, label) -> status of the sinks this Mac answers for itself, per session (session_threads.on_default_branch)
+local: dict[tuple[str, str], str] = {}
 
 
 def _fallback_env() -> dict | None:
@@ -108,18 +110,23 @@ def pr_info(key: str) -> dict:
     return value
 
 
-def statuses_for(sinks: list[tm.Sink]) -> dict[str, str]:
+def statuses_for(sinks: list[tm.Sink], session: str = "") -> dict[str, str]:
     """The status of each sink, label -> status. A branch's state comes from GitHub, cached for BRANCH_TTL; while
     the build is offline (work._net, the first build after a start) the cached state serves whatever its age, and
-    a branch with none stays unknown until the next build. A ticket's status comes from the task's own data
-    (status_of_task) or the cache; nothing asks a model."""
+    a branch with none stays unknown until the next build. A main checkout's state is `session`'s own (local). A
+    ticket's status comes from the task's own data (status_of_task) or the cache; nothing asks a model."""
     from pensieve import work
+    mine = {label: v for (sid, label), v in local.items() if sid == session}
     cache = _load()
     now = time.time()
     out, dirty = {}, False
     for s in sinks:
         entry = cache.get(s.label)
-        if s.kind == tm.SinkKind.PR:
+        if s.label in mine:
+            out[s.label] = mine[s.label]
+        elif any(label == s.label for _, label in local):
+            continue  # another session's main: this one wrote nothing there, so it has no status
+        elif s.kind == tm.SinkKind.PR:
             if entry and now - entry["at"] < BRANCH_TTL:
                 out[s.label] = entry["value"]
         elif s.kind == tm.SinkKind.BRANCH:
@@ -187,11 +194,14 @@ def status_of_task(task: dict, sinks: list[tm.Sink]) -> dict:
     for k in task.get("tickets", []):
         if k.get("key") and k.get("status"):
             status[f"ticket {k['key']}"] = "Done" if k["status"].lower() in DONE_TICKET else k["status"]
-    status.update(statuses_for([s for s in sinks if s.kind == tm.SinkKind.BRANCH]))
+    session = (task.get("_sessions") or [{}])[0].get("id", "")
+    status.update(statuses_for([s for s in sinks if s.kind == tm.SinkKind.BRANCH], session))
     # a branch whose commits all have their patch in the default branch is merged, even when it was forked from another
     in_main = {p["branch"] for p in task.get("places", []) if p.get("commits") and not p.get("unmerged") and p.get("branch")}
+    ours = {label for _, label in local}
     for s in sinks:
-        if s.kind == tm.SinkKind.BRANCH and s.key.split("@", 1)[-1] in in_main and status.get(s.label) != "OPEN":
+        if s.kind == tm.SinkKind.BRANCH and s.key.split("@", 1)[-1] in in_main and status.get(s.label) != "OPEN" \
+                and s.label not in ours:
             status[s.label] = "MERGED"
     return status
 

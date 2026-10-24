@@ -62,9 +62,10 @@ def apply(threads: list[dict]) -> None:
     for t in threads:
         for b in t.get("branches", []):
             groups.setdefault((b.get("repo", ""), b["branch"]), []).append(t)
+    from pensieve.cardtext import DEFAULT_BRANCHES
     for (_, branch), ts in groups.items():
         ts = [t for t in ts if t.get("_sessions")]
-        if len(ts) < 2:
+        if len(ts) < 2 or branch in DEFAULT_BRANCHES:  # on main each session's own lines decide (on_default_branch)
             continue
         root = next((p["path"] for t in ts for p in t.get("places", [])
                      if p.get("branch") == branch and p.get("git") and p.get("path")), "")

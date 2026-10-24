@@ -12,6 +12,8 @@
     pensieve search <query> [--kind code|doc|session|...] [--limit 8] [--scope auto]
                        search as an agent does over MCP, scoped to the repo you run it in; prints the same lines
     pensieve open      open Pensieve in the web browser (http://pensieve.localhost:8765)
+    pensieve transcript <agent:session-id> [--chars 60000]
+                       an agent session's conversation as text, so another agent can take it over
 
 Options are turned into env vars before anything reads config."""
 import argparse
@@ -26,12 +28,14 @@ import webbrowser
 def main():
     ap = argparse.ArgumentParser(prog="pensieve", description="One place for all your information, for context engineering: files, git repos, AI agent sessions, tickets and messages.")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "mcp", "integrate", "repo", "setup", "search", "open", "thread"])
+                    choices=["serve", "mcp", "integrate", "repo", "setup", "search", "open", "thread", "transcript"])
     ap.add_argument("--json", action="store_true", help="thread only: the thread as JSON instead of an HTML page")
     ap.add_argument("--agent", action="store_true", help="thread only: the thread for an agent (compact JSON)")
     ap.add_argument("-o", "--out", help="thread only: the file to write (default: print it)")
     ap.add_argument("--kind", help="search only: code, doc, session, folder, repo or person")
     ap.add_argument("--limit", type=int, default=8, help="search only: how many results")
+    ap.add_argument("--chars", type=int, default=60000,
+                    help="transcript only: print at most this many characters, the latest turns (0 = all)")
     ap.add_argument("items", nargs="*", help="integrate: what to install (no items: show what's available); "
                                              "repo: status | index | skip | remove, then a folder (default: this one); "
                                              "setup: the source ids to index, or recommended (no items: list them)")
@@ -64,6 +68,8 @@ def main():
         return search(a.port, " ".join(a.items), a.kind, a.limit, a.scope)
     if a.command == "thread":
         return thread(a.port, " ".join(a.items), "json" if a.json else "agent" if a.agent else "html", a.out)
+    if a.command == "transcript":
+        return transcript(" ".join(a.items).strip(), a.chars)
     if a.command == "open":  # names under .localhost reach this Mac in Chrome, Firefox and curl
         url = f"http://pensieve.localhost:{a.port}/"
         print(url)
@@ -318,6 +324,36 @@ def thread(port, thread_id, fmt="html", out=None):
         print(out)
     else:
         print(r.text)
+
+
+def transcript(session_id, chars=60000):
+    """Print a session's conversation, read from its transcript on this Mac (no server needed): the latest turns
+    when it is longer than `chars`."""
+    from pathlib import Path
+    from pensieve import agents, config, parsers, transcripts
+    source, _, sid = session_id.partition(":")
+    if source not in parsers.PARSERS or not sid:
+        sys.exit("usage: pensieve transcript <agent:session-id>, e.g. claude:6f315b80-…   (agents: "
+                 + ", ".join(parsers.PARSERS) + ")")
+    f = transcripts.find(session_id)
+    path = f.path if f else next((p for _, name, root, pattern in config.session_sources() if name == source
+                                  for p in root.glob(pattern) if sid in p.name), None)
+    if not path or not Path(path).is_file():
+        sys.exit(f"No transcript of {session_id} on this Mac.")
+    s = parsers.parse(source, Path(path))
+    turns = [f"## {'Me' if role == 'user' else 'Agent'}\n\n{text.strip()}" for role, text in s.turns if text.strip()]
+    kept, size = [], 0
+    for t in reversed(turns):
+        if chars and size + len(t) > chars and kept:
+            break
+        kept.append(t)
+        size += len(t)
+    a = agents.get(source)
+    print(f"# {s.title or 'Untitled session'}\n\n{a.name if a else source} session {session_id}, in {s.project or '?'}, "
+          f"{s.started or '?'} to {s.updated or '?'}. {len(turns)} turns"
+          + (f"; the first {len(turns) - len(kept)} are left out (--chars 0 prints them all)." if len(kept) < len(turns) else ".")
+          + "\n")
+    print("\n\n".join(reversed(kept)))
 
 
 def stdio_bridge(port, scope="auto", all_tools=False):

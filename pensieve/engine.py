@@ -44,6 +44,17 @@ TEMPLATES = [
     dict(id="qwen", label="Qwen Code", command="qwen --approval-mode plan --output-format text {prompt}"),
     dict(id="ollama", label="Ollama", command="ollama run qwen3"),
 ]
+
+
+def match_agent():
+    """With the cli engine, run the user's default agent (settings default_agent): its template replaces another
+    template, but never a command the user wrote. With no command yet, the first template."""
+    if settings.get("text_engine") != "cli":
+        return
+    mine = next((t["command"] for t in TEMPLATES if t["id"] == settings.get("default_agent")), None)
+    cur = settings.get("cli_command")
+    if not cur or (mine and cur in {t["command"] for t in TEMPLATES}):
+        settings.update({"cli_command": mine or cur or TEMPLATES[0]["command"]})
 BUILTIN_MODEL = "mlx-community/Qwen3.5-9B-MLX-4bit"
 BUILTIN_PORT = 8766
 BUILTIN_URL = f"http://127.0.0.1:{BUILTIN_PORT}/v1"

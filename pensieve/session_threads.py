@@ -50,18 +50,82 @@ def uncommitted(t: dict, s: dict) -> list[tuple[str, str]]:
     return out
 
 
-def _added_lines(root: str) -> dict[str, set]:
-    """{file: the lines its uncommitted diff adds} of a checkout, from one `git diff HEAD` per build (work._git
-    caches it for a while), not one per file and session."""
+MAIN_MATCH = 3  # lines of a session that must be in a default branch's diff: there, many sessions share one diff
+
+
+def on_default_branch(s: dict) -> list[tuple[str, str]]:
+    """The default branch (main) of each checkout a session wrote lines to, as a branch sink keyed by the checkout
+    ("/code/app@main"): two clones on main have their own changes. Its status for this session (sink_status.local,
+    by session and sink: sessions on one main have their own lines) comes from where
+    the session's lines are now: still uncommitted, or committed and not pushed, is OPEN; in the upstream is MERGED
+    (landed); in none of them is DELETED (discarded). A session needs MAIN_MATCH of its lines, or all of them when it
+    wrote fewer, in one place."""
+    from collections import defaultdict
+    from pathlib import Path
+    from pensieve import transcripts, work
+    by_root = defaultdict(list)
+    for f, line in transcripts.written(s.get("path", "")):
+        root = work._git_root(str(Path(f).parent))
+        if root and f.startswith(root.rstrip("/") + "/"):
+            by_root[root].append((f[len(root.rstrip("/")) + 1:], line))
+    out = []
+    for root, mine in by_root.items():
+        branch = work._git(root, "branch", "--show-current", ttl=30)
+        if not branch or branch not in work.DEFAULT_BRANCHES:
+            continue  # a feature branch: uncommitted() and the transcript's git calls cover it
+        need = min(MAIN_MATCH, len(mine))
+        files = {rel for rel, _ in mine}
+        held = lambda lines: sum(line in lines.get(rel, ()) for rel, line in mine) >= need
+        # a diff's line counts only when the file didn't have it before: a copy of a line already there (boilerplate)
+        # is in every session's writes
+        new = lambda added, base: {rel: ls - before.get(rel, set()) for rel, ls in added.items()
+                                   for before in [_lines_at(root, base, files & {rel})]}
+        upstream = "@{u}" if work._git(root, "rev-parse", "--abbrev-ref", "@{u}", ttl=60) else "HEAD"
+        if held(new(_added_lines(root), "HEAD")):
+            status = "OPEN"
+        elif upstream != "HEAD" and held(new(_added_lines(root, f"{upstream}..HEAD"), upstream)):
+            status = "OPEN"  # committed, not pushed yet
+        else:
+            status = "MERGED" if held(_lines_at(root, upstream, files)) else "DELETED"
+        key = f"{root}@{branch}"
+        sink_status.local[(s.get("id", ""), f"branch {key}")] = status
+        out.append(("branch", key))
+    return out
+
+
+def _added_lines(root: str, between: str = "") -> dict[str, set]:
+    """{file: the lines added} of a checkout, from one `git diff` per build (work._git caches it for a while), not one
+    per file and session: the uncommitted diff with the untracked files whole, or with `between` ("@{u}..HEAD") the
+    diff of those commits."""
     from pensieve import work
     out: dict[str, set] = {}
     rel = ""
-    for ln in work._git(root, "diff", "HEAD", "--unified=0", "--no-color", ttl=30).splitlines():
+    for ln in work._git(root, "diff", between or "HEAD", "--unified=0", "--no-color", ttl=30).splitlines():
         if ln.startswith("+++ "):
             rel = ln[4:].removeprefix("b/").strip()
         elif ln.startswith("+") and rel:
             out.setdefault(rel, set()).add(ln[1:].strip())
+    if not between:  # a new file is not in the diff until it is added
+        for rel in work._git(root, "ls-files", "--others", "--exclude-standard", ttl=30).splitlines()[:200]:
+            out.setdefault(rel, set()).update(_file_lines(root, rel))
     return out
+
+
+def _file_lines(root: str, rel: str) -> set[str]:
+    from pathlib import Path
+    p = Path(root) / rel
+    try:
+        if p.stat().st_size > 1_000_000:
+            return set()
+        return {ln.strip() for ln in p.read_text(errors="ignore").splitlines()}
+    except OSError:
+        return set()
+
+
+def _lines_at(root: str, rev: str, files: set[str]) -> dict[str, set]:
+    """{file: its lines} at a commit, for the files named."""
+    from pensieve import work
+    return {rel: {ln.strip() for ln in work._git(root, "show", f"{rev}:{rel}", ttl=60).splitlines()} for rel in files}
 
 
 def _thread(t: dict, s: dict, ws: list, facts: dict | None = None) -> dict:
@@ -126,7 +190,7 @@ def split(tasks: list[dict], facts: dict | None = None) -> list[dict]:
             continue
         for s in t.get("_sessions", []):
             ws = writes(s.get("path", ""))
-            ws += [w for w in uncommitted(t, s) if w not in ws]
+            ws += [w for w in uncommitted(t, s) + on_default_branch(s) if w not in ws]
             out.append(_thread(t, s, ws, (facts or {}).get(s["id"])))
     return out
 

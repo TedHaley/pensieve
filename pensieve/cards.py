@@ -332,7 +332,7 @@ def _revive_copy(folder, slug: str, text: str):
 
 def _revive_start(cards: list[dict], agent: str, prompt: str) -> str:
     """The shell command: cd to the work's folder (the first card's checkout on this Mac, else the home folder) and
-    start the agent (`agent` from agents.AGENTS, else the user's default, else one that worked on the threads)."""
+    start the agent (`agent` from agents.known(), else the user's harness, else one that worked on the threads)."""
     import shlex
     from pathlib import Path
     from pensieve import agents, settings
@@ -340,7 +340,7 @@ def _revive_start(cards: list[dict], agent: str, prompt: str) -> str:
                   and Path(r.get("ref", {}).get("path", "")).is_dir()), str(Path.home()))
     worked = [r.get("ref", {}).get("session", "").split(":", 1)[0] for c in cards for r in c.get("resources", [])
               if r["kind"] == "session"]
-    agent = agent if agent in agents.AGENTS else agents.choose(settings.get("default_agent"), worked)
+    agent = agent if agents.get(agent) else agents.choose(settings.get("default_agent"), worked)
     return f"cd {shlex.quote(where)} && {agents.start(agent, prompt)}"
 
 
@@ -368,12 +368,14 @@ RESOLVE_PROMPTS = {
 }
 
 
-def resolve_steps(threads: list[dict], intent: str = "ship") -> list[dict]:
+def resolve_steps(threads: list[dict], intent: str = "ship", branch: str = "") -> list[dict]:
     """The steps left to close a cluster one way: `ship` takes each thread's closeout steps that are not done,
-    `discard` its discard steps; one of each text, in order."""
+    `discard` its discard steps; one of each text, in order. With `branch`, only the steps that act on that branch
+    (cardtext.for_branch): a thread that also wrote to other branches keeps them."""
+    from pensieve import cardtext
     out, seen = [], set()
     for t in threads:
-        for s in t.get("discard" if intent == "discard" else "closeout", []):
+        for s in cardtext.for_branch(t, t.get("discard" if intent == "discard" else "closeout", []), branch):
             key = s.get("text", "")
             if s.get("done") or key in seen:
                 continue
@@ -402,7 +404,7 @@ def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, a
 def revive_command(card: dict, folder, agent: str = "") -> str:
     """The shell command that starts a new agent session on a thread: the agent reads the live thread with Pensieve's
     `task` tool, or a copy in a file when it has no Pensieve tools, and starts in the work's folder. `agent`: the
-    agent to start (agents.AGENTS); by default the user's default agent, else one that worked on the thread (this Mac's checkout, or the home folder when it is
+    agent to start (agents.known()); by default the user's harness, else one that worked on the thread (this Mac's checkout, or the home folder when it is
     gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
     path = _revive_copy(folder, card["title"], render_agent(card))
     return _revive_start([card], agent, REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=f"its copy in {path}"))

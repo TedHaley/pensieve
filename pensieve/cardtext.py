@@ -18,7 +18,8 @@ TAG_BLOCK = re.compile(r"<(system-reminder|task-notification)[^>]*>.*?</\1>", re
 TRIVIAL = re.compile(r"^\W*(ok(ay)?|k|yes|yep|yeah|y|no|nope|sure|go|go ahead|continue|proceed|do it|do that|do the steps"
                      r"|thanks?( you)?|ty|great|perfect|nice|cool|lgtm|commit( and push)?|push( it)?|merge( it)?|run it"
                      r"|try again|again|retry|stop|wait|done|next|keep going|sounds good|looks good|ship it)\W*$", re.I)
-SHORT_REPLY = 40          # characters: an agent reply shorter than this says little ("Done.", "On it.")
+DEFAULT_BRANCHES = {"", "HEAD", "main", "master", "develop", "dev", "trunk"}
+SHORT_REPLY = 40         # characters: an agent reply shorter than this says little ("Done.", "On it.")
 MSG_HEAD, MSG_TAIL = 400, 200  # a long message keeps its start and its end
 BRANCH_PREFIX = re.compile(r"^(feature|feat|fix|bugfix|hotfix|chore|refactor|docs|test|wip|[a-z][\w.-]{1,20})/", re.I)
 CONVENTIONAL = re.compile(r"^\s*(\w+)(\([^)]*\))?!?:\s*")  # "fix(scope): " at the start of a PR title
@@ -54,6 +55,7 @@ class Pending:
     how: str
     ref: str = ""
     why: list = field(default_factory=list)
+    branch: str = ""  # the branch the step is about; "" for the whole thread (an answer, a ticket)
 
 
 def _cap(t: str) -> str:
@@ -184,30 +186,31 @@ def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
         out.append(Pending(f"Answer the agent: {reply.question}", "you"))
     for p in card.get("prs", []):
         n = "#" + p["url"].rstrip("/").rsplit("/", 1)[-1]
-        st, checks, review = p.get("state"), p.get("checks"), p.get("review")
+        st, checks, review, b = p.get("state"), p.get("checks"), p.get("review"), p.get("head") or ""
         if st not in ("open", "draft"):
             continue
         if checks == "failing":
-            out.append(Pending(f"Fix the failing checks on {n}", "agent", p["url"]))
+            out.append(Pending(f"Fix the failing checks on {n}", "agent", p["url"], branch=b))
         if review == "changes requested":
-            out.append(Pending(f"Address the review on {n}", "agent", p["url"]))
+            out.append(Pending(f"Address the review on {n}", "agent", p["url"], branch=b))
         if st == "draft":
-            out.append(Pending(f"Mark {n} ready for review", "you", p["url"]))
+            out.append(Pending(f"Mark {n} ready for review", "you", p["url"], branch=b))
         elif review == "approved" and checks != "failing":
-            out.append(Pending(f"Merge {n}", "you", p["url"]))
+            out.append(Pending(f"Merge {n}", "you", p["url"], branch=b))
         elif review != "changes requested":
-            out.append(Pending(f"Get {n} reviewed", "you", p["url"]))
+            out.append(Pending(f"Get {n} reviewed", "you", p["url"], branch=b))
     own = {b.get("branch") for b in card.get("branches", [])}
     with_pr = {p.get("head") for p in card.get("prs", []) if p.get("state") in ("open", "draft", "merged")}
     for pl in card.get("places", []):
         if pl.get("branch") not in own or pl.get("head"):
             continue
+        b = pl["branch"]
         if pl.get("changed"):
-            out.append(Pending(f"Commit {pl['changed']} changed files on {pl['branch']}", "agent", pl["branch"]))
+            out.append(Pending(f"Commit {pl['changed']} changed files on {b}", "agent", b, branch=b))
         if pl.get("ahead"):
-            out.append(Pending(f"Push {pl['ahead']} commits on {pl['branch']}", "agent", pl["branch"]))
-        if pl["branch"] not in with_pr and (pl.get("commits") or pl.get("ahead") or pl.get("changed")):
-            out.append(Pending(f"Open a pull request for {pl['branch']}", "agent", pl["branch"]))
+            out.append(Pending(f"Push {pl['ahead']} commits on {b}", "agent", b, branch=b))
+        if b not in with_pr and b not in DEFAULT_BRANCHES and (pl.get("commits") or pl.get("ahead") or pl.get("changed")):
+            out.append(Pending(f"Open a pull request for {b}", "agent", b, branch=b))
     merged = any(p.get("state") == "merged" for p in card.get("prs", []))
     seen = set()
     for k in card.get("tickets", []):  # one ticket can come from two sources (its tracker, a session that read it)
@@ -245,15 +248,17 @@ def closeout(card: dict, reply: Reply | None = None) -> list[dict]:
     `pending` gives the open steps and who acts; this adds the order and the done steps."""
     steps = []
     for x in pending(card, reply):
-        steps.append(dict(text=x.text, who=x.how, ref=x.ref, stage=_stage(x.text), done=False))
+        steps.append(dict(text=x.text, who=x.how, ref=x.ref, stage=_stage(x.text), done=False, branch=x.branch))
     merged = [p for p in card.get("prs", []) if p.get("state") == "merged"]
     for p in merged:
         steps.append(dict(text=f"Merged #{p['url'].rstrip('/').rsplit('/', 1)[-1]}", who="", ref=p["url"],
-                          stage="merge", done=True))
+                          stage="merge", done=True, branch=p.get("head") or ""))
     if merged:
-        own = {b.get("branch") for b in card.get("branches", []) if b.get("branch")}
+        own = {b.get("branch") for b in card.get("branches", []) if b.get("branch") and b["branch"] not in DEFAULT_BRANCHES}
+        steps += _remove_worktrees(card, own, "after the merge, when it has no uncommitted work")
         for b in sorted(own):
-            steps.append(dict(text=f"Delete branch {b} after the merge", who="you", ref=b, stage="branch", done=False))
+            steps.append(dict(text=f"Delete branch {b} after the merge", who="you", ref=b, stage="branch", done=False,
+                              branch=b))
     for k in card.get("tickets", []):
         if k.get("ref"):
             continue
@@ -270,26 +275,56 @@ def closeout(card: dict, reply: Reply | None = None) -> list[dict]:
     return out
 
 
+def for_branch(card: dict, steps: list[dict], branch: str) -> list[dict]:
+    """The steps of a card that act on `branch` (all of them when it is ""): that branch's own, and the steps for the
+    whole thread (an answer, a ticket) only when the card holds no other branch, so closing one branch of a session
+    that wrote to several never cancels the ticket or touches the others."""
+    if not branch:
+        return steps
+    others = {b.get("branch") for b in card.get("branches", [])} - {branch} - DEFAULT_BRANCHES
+    return [s for s in steps if s.get("branch") == branch or (not s.get("branch") and not others)]
+
+
+def _remove_worktrees(card: dict, branches: set, when: str) -> list[dict]:
+    """A step to remove each linked worktree that has one of `branches` checked out (never the repo's own checkout,
+    never main), with `git worktree remove`, which refuses a worktree with changes. It runs from the repo's checkout
+    (`linked`): the session that closes the work may have started in the worktree."""
+    import os
+    home = os.path.expanduser("~")
+    out = []
+    for pl in card.get("places", []):
+        b, path, repo = pl.get("branch"), pl.get("path", ""), pl.get("linked")
+        if repo and path and b in branches and b not in DEFAULT_BRANCHES and not pl.get("head"):
+            short, at = path.replace(home, "~", 1), repo.replace(home, "~", 1)
+            out.append(dict(text=f"Remove the worktree {short} {when}: cd {at} && git worktree remove {short}",
+                            who="agent", ref=path, stage="branch", done=False, branch=b))
+    return out
+
+
 def discard(card: dict) -> list[dict]:
     """The steps that close the thread without merging its work, in order: drop the uncommitted files, close each
     open pull request without a merge, delete each branch (and its remote copy when it was pushed), and mark each
     ticket that is not done as cancelled. Each step says who acts, as `pending` does."""
     out = []
-    own = {b.get("branch") for b in card.get("branches", []) if b.get("branch")}
+    # main is never deleted, and its uncommitted files belong to every session on it, so no step discards them
+    own = {b.get("branch") for b in card.get("branches", []) if b.get("branch") and b["branch"] not in DEFAULT_BRANCHES}
     for pl in card.get("places", []):
         b = pl.get("branch")
         if b not in own or pl.get("head"):
             continue
         if pl.get("changed"):
-            out.append(dict(text=f"Discard {pl['changed']} uncommitted files on {b}", who="agent", ref=b, stage="work", done=False))
+            out.append(dict(text=f"Discard {pl['changed']} uncommitted files on {b}", who="agent", ref=b, stage="work",
+                            done=False, branch=b))
     for p in card.get("prs", []):
         if p.get("state") in ("open", "draft"):
             n = "#" + p["url"].rstrip("/").rsplit("/", 1)[-1]
-            out.append(dict(text=f"Close {n} without merging", who="you", ref=p["url"], stage="merge", done=False))
+            out.append(dict(text=f"Close {n} without merging", who="you", ref=p["url"], stage="merge", done=False,
+                            branch=p.get("head") or ""))
     pushed = {pl.get("branch") for pl in card.get("places", []) if pl.get("upstream") or pl.get("remote_url")}
+    out += _remove_worktrees(card, own, "before the branch: git won't delete a branch a worktree has checked out")
     for b in sorted(own):
         where = "local and remote" if b in pushed else "local"
-        out.append(dict(text=f"Delete branch {b} ({where})", who="agent", ref=b, stage="branch", done=False))
+        out.append(dict(text=f"Delete branch {b} ({where})", who="agent", ref=b, stage="branch", done=False, branch=b))
     seen = set()
     for k in card.get("tickets", []):
         if k.get("ref") or k["key"] in seen or DONE_WORDS.search(k.get("status") or ""):

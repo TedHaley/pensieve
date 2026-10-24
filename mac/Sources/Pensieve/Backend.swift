@@ -73,6 +73,8 @@ final class Backend: ObservableObject {
     var editor: String { (settings["editor"] as? String ?? "").lowercased() }
     /// Check GitHub for a newer release once a day (the user still chooses whether to install).
     var autoUpdateCheck: Bool { settings["auto_update_check"] as? Bool ?? true }
+    /// Threads mode is the backend's "session" mode, its default: only agent sessions, as threads.
+    var threadsMode: Bool { settings["mode"] as? String ?? "session" != "developer" }
 
     /// "system" | "light" | "dark". The backend setting wins; the last value is remembered locally so the app
     /// starts in the right appearance before the backend is up (and works with a backend that lacks the key).

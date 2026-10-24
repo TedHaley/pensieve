@@ -42,11 +42,16 @@ final class HotKeys {
         for r in refs { UnregisterEventHotKey(r) }
         refs.removeAll()
         SpotlightShortcut.yield(Self.takesSpotlight(s))
+        tapMods = []
+        guard !s.isEmpty else {  // "" is off: no hotkey at all, not even the fallback, and no key watching
+            for m in monitors { NSEvent.removeMonitor(m) }
+            monitors.removeAll()
+            return
+        }
         installHandler()
         let fb = Self.parse(Self.fallback)
         register(fb.carbon, fb.key!)
         let p = Self.parse(s)
-        tapMods = []
         if let key = p.key {
             if !(key == fb.key && p.carbon == fb.carbon) { register(p.carbon, key) }
         } else if !p.flags.isEmpty {
