@@ -79,6 +79,16 @@ def run():
     results.append(check("a lower case key of an unknown ticket is not a key", work.branch_keys("abc-99-x", known), []))
     results.append(check("words with numbers are not keys", work.branch_keys("fix-2-bugs sha-256", known), []))
 
+    gql = dict(title="Fix", state="OPEN", isDraft=False, mergedAt=None, headRefName="fix-x", reviewDecision="APPROVED",
+               commits={"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]})
+    results.append(check("a GraphQL PR in the shape of the cache", work._pr_of(gql),
+                         dict(title="Fix", state="open", head="fix-x", merged_at=0, checks="failing", review="approved")))
+    results.append(check("a merged PR has no checks or review",
+                         sorted(work._pr_of({**gql, "state": "MERGED", "mergedAt": "2026-10-20T10:00:00Z"})),
+                         ["head", "merged_at", "state", "title"]))
+    work._net["off"] = True
+    results.append(check("no poll while offline", work.poll_open([dict(id="t", state="open", prs=[], places=[])]), []))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 

@@ -1517,6 +1517,89 @@ def _gh_pr(url: str) -> dict:
     return out
 
 
+POLL_STATES = {"open", "todo", "loose_ends"}  # threads whose PRs and branches can still change
+GH_SLUG = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/(?:pull/(\d+)|tree/(.+))")
+
+
+def _pr_of(p: dict, head: str = "") -> dict:
+    """A pull request from GitHub's GraphQL answer, in the shape _gh_pr keeps."""
+    out = dict(title=p["title"], state="draft" if p.get("isDraft") and p["state"] == "OPEN" else p["state"].lower(),
+               head=p.get("headRefName") or head, merged_at=_ts(p["mergedAt"]) if p.get("mergedAt") else 0)
+    if p["state"] == "OPEN":
+        roll = (((p.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}).get("statusCheckRollup") or {}
+        out.update({"checks": {"SUCCESS": "passing", "FAILURE": "failing", "ERROR": "failing"}.get(roll.get("state"),
+                    "pending")} if roll else {})
+        review = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes requested",
+                  "REVIEW_REQUIRED": "review required"}.get(p.get("reviewDecision") or "")
+        if review:
+            out["review"] = review
+    return out
+
+
+PR_FIELDS = "number url title state isDraft mergedAt headRefName reviewDecision " \
+            "commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+
+
+def poll_open(tasks) -> list[str]:
+    """Ask GitHub about the threads that can still change, in one GraphQL call per repo: the state, checks and review
+    of their open PRs, and the PRs of their branches (a PR just opened). The answers replace the cached ones; returns
+    the ids of the threads whose PRs changed."""
+    import shutil
+    if _net["off"] or not shutil.which("gh"):
+        return []
+    want: dict[tuple, dict] = {}  # (owner, name) -> {"prs": {number: url}, "heads": {branch: root}}
+    owners: dict[str, set] = defaultdict(set)  # PR url or (root, branch) -> thread ids
+    for t in tasks:
+        if t.get("state") not in POLL_STATES:
+            continue
+        for p in t.get("prs", []) + (t.get("contributed") or {}).get("prs", []):
+            m = GH_SLUG.match(p.get("url", ""))
+            if m and m.group(3) and p.get("state") in ("", "open", "draft"):
+                want.setdefault(m.group(1, 2), {"prs": {}, "heads": {}})["prs"][int(m.group(3))] = p["url"]
+                owners[p["url"]].add(t["id"])
+        for pl in t.get("places", []):
+            m = GH_SLUG.match(pl.get("remote_url") or "")
+            if m and m.group(4) and pl.get("branch") and pl.get("path") and pl["branch"] not in DEFAULT_BRANCHES:
+                want.setdefault(m.group(1, 2), {"prs": {}, "heads": {}})["heads"][pl["branch"]] = pl["path"]
+                owners[(pl["path"], pl["branch"])].add(t["id"])
+    changed: set[str] = set()
+    now = time.time()
+    for (owner, name), w in want.items():
+        parts = [f"p{n}: pullRequest(number: {n}) {{ {PR_FIELDS} }}" for n in w["prs"]]
+        heads = list(w["heads"])
+        parts += [f"h{i}: pullRequests(headRefName: {json.dumps(b)}, first: 3, "
+                  f"orderBy: {{field: CREATED_AT, direction: DESC}}) {{ nodes {{ {PR_FIELDS} }} }}" for i, b in enumerate(heads)]
+        if not parts:
+            continue
+        query = f"query {{ repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{ {' '.join(parts)} }} }}"
+        try:
+            r = subprocess.run(["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, timeout=20)
+            repo = (json.loads(r.stdout or "{}").get("data") or {}).get("repository") or {}
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            continue
+        for n, url in w["prs"].items():
+            p = repo.get(f"p{n}")
+            if not p:
+                continue
+            out = _pr_of(p)
+            if (_gh_cache.get(url) or (0, {}))[1] != out:
+                changed |= owners[url]
+            _gh_cache[url] = (now, out)
+        for i, b in enumerate(heads):
+            nodes = (repo.get(f"h{i}") or {}).get("nodes")
+            if nodes is None:
+                continue
+            k = (w["heads"][b], b)
+            out = [dict(url=p["url"], title=p["title"], source="GitHub", head=b,
+                        **{x: v for x, v in _pr_of(p, b).items() if x in ("state", "merged_at")}) for p in nodes]
+            if [x["url"] for x in (_gh_cache.get(k) or (0, []))[1]] != [x["url"] for x in out]:
+                changed |= owners[k]  # a PR opened (or gone) on the branch
+            _gh_cache[k] = (now, out)
+            for p in nodes:  # the branch's PRs are fresh too
+                _gh_cache[p["url"]] = (now, _pr_of(p, b))
+    return sorted(changed)
+
+
 def _pickup(task: dict, wts: dict):
     """What the card needs to pick the task back up: the folders where the work happens (worktree or checkout, its
     branch, uncommitted files, the branch on the remote), its pull requests, and how to resume the last session."""

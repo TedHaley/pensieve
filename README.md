@@ -431,7 +431,7 @@ Pensieve connects to other hosts only for these jobs:
 
 - **Models:** on first run, it downloads the models from Hugging Face.
 - **Updates:** the app and the Map ask GitHub for the latest release.
-- **Pull requests:** for a thread, the `gh` command gets the PRs of your branches from GitHub, with your own `gh` login.
+- **Pull requests:** for a thread, the `gh` command gets the PRs of your branches from GitHub, with your own `gh` login. For the threads that are not done (Open, To-do, Loose ends), Pensieve asks every minute, in one call per repo. It asks about merged or closed PRs once a day.
 - **Connections:** if you turn on a connection, Pensieve reads that MCP server with read-only tools.
 - **Your agent:** when your agent does Pensieve's pending work, the text of each job goes to that agent and its model provider.
 

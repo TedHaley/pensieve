@@ -12,7 +12,9 @@ set by hand. The builder thread takes the events of the last 200 ms together:
 4. It writes the rows of `cards` and `card_members` that changed, deletes the cards that went, and calls `listeners`
    with the ids. The server sends them to the page as a `card` event.
 
-A full build runs at the start and every FULL_SECONDS: it moves the window, and it asks gh for the PR states."""
+A full build runs at the start and every FULL_SECONDS: it moves the window, and it asks gh for the PR states.
+Between them, every POLL_SECONDS, the open threads' PRs and branches are asked about in one call per repo, and a
+thread whose PRs changed is built again."""
 import copy
 import hashlib
 import json
@@ -30,6 +32,7 @@ from pensieve.store import cards as store_cards
 
 DAYS = 30            # the window of the built cards; /api/work filters it for a shorter one
 FULL_SECONDS = 600   # a full build: the window moves, and gh gives the PR states (cached 10 minutes anyway)
+POLL_SECONDS = 60    # GitHub is asked about the open threads' PRs this often, one call per repo (work.poll_open)
 COALESCE = 0.2       # events this close together make one build
 
 SESSION, DOCUMENT, COMMIT, PR, STATE, REFRESH = "session", "document", "commit", "pr", "state", "refresh"
@@ -74,6 +77,19 @@ class Builder:
         current = self
         self._thread = threading.Thread(target=self._loop, daemon=True, name="card-builder")
         self._thread.start()
+        threading.Thread(target=self._poll, daemon=True, name="pr-poller").start()
+
+    def _poll(self):
+        """Every POLL_SECONDS, ask GitHub about the threads that can still change (work.poll_open), and rebuild the
+        ones whose PRs changed."""
+        while True:
+            time.sleep(POLL_SECONDS)
+            try:
+                changed = work.poll_open(list(self.tasks.values()))
+                if changed:
+                    self.emit(REFRESH, changed)
+            except Exception:
+                traceback.print_exc()
 
     def emit(self, kind: str, refs, wait: float = 0) -> bool:
         done = threading.Event() if wait else None

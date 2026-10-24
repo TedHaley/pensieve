@@ -19,7 +19,7 @@ from pensieve import config
 from pensieve import thread_model as tm
 
 CACHE = config.DATA_DIR / "sink_status.json"
-BRANCH_TTL = 15 * 60
+BRANCH_TTL = 5 * 60
 PR_URL = re.compile(r"https?://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
 
 
