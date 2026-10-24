@@ -1632,9 +1632,10 @@ def _pickup(task: dict, wts: dict):
     for c, used in cands:
         root = _git_root(c) if Path(c).is_dir() else ""
         path = root or (c if Path(c).is_dir() else "")
-        if not path or path in seen or path.startswith(_TEMP):
+        # (path, used): two sessions of the task in one checkout on two branches give two places, one per branch
+        if not path or (path, used) in seen or (not used and any(p == path for p, _ in seen)) or path.startswith(_TEMP):
             continue
-        seen.add(path)
+        seen.add((path, used))
         p = dict(path=path, git=bool(root))
         if root:
             head = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
