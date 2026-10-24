@@ -62,15 +62,25 @@ def branch_status(repo: str, branch: str, env: dict | None = None) -> str:
     return "EXISTS"
 
 
-_tedhaley: list = []  # the gh env with TedHaley's token, found once (repos the default account cannot read)
+_other: list = []  # the gh env of the user's other GitHub account, found once (repos the active account cannot read)
 
 
 def _fallback_env() -> dict | None:
-    """The environment with TedHaley's gh token: for a repo the active account cannot see. None when there is none."""
-    if not _tedhaley:
-        tok = subprocess.run(["gh", "auth", "token", "--user", "TedHaley"], capture_output=True, text=True)
-        _tedhaley.append({**os.environ, "GH_TOKEN": tok.stdout.strip()} if tok.returncode == 0 and tok.stdout.strip() else None)
-    return _tedhaley[0]
+    """The environment with the token of another account that gh is logged in to on github.com: for a repo that the
+    active account cannot see. None when gh has one account only."""
+    if not _other:
+        env = None
+        try:
+            r = subprocess.run(["gh", "auth", "status", "--json", "hosts"], capture_output=True, text=True, timeout=10)
+            accounts = json.loads(r.stdout or "{}").get("hosts", {}).get("github.com", [])
+            other = next((a["login"] for a in accounts if not a.get("active") and a.get("state") == "success"), "")
+            if other:
+                tok = subprocess.run(["gh", "auth", "token", "--user", other], capture_output=True, text=True, timeout=10)
+                env = {**os.environ, "GH_TOKEN": tok.stdout.strip()} if tok.returncode == 0 and tok.stdout.strip() else None
+        except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
+            env = None
+        _other.append(env)
+    return _other[0]
 
 
 def pr_info(key: str) -> dict:
