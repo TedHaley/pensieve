@@ -1600,12 +1600,34 @@ def poll_open(tasks) -> list[str]:
     return sorted(changed)
 
 
+_origins: dict[str, str] = {}
+
+
+def _origin(root: str) -> str:
+    """org/name of a repo's GitHub origin, once per repo."""
+    if root not in _origins:
+        from pensieve.extract import git_tools
+        _origins[root] = git_tools.origin_repo(root)
+    return _origins[root]
+
+
 def _pickup(task: dict, wts: dict):
     """What the card needs to pick the task back up: the folders where the work happens (worktree or checkout, its
     branch, uncommitted files, the branch on the remote), its pull requests, and how to resume the last session."""
     places, seen = [], set()
     feature = {x["branch"] for x in task["branches"]}  # the task's own feature branches (not long-lived ones)
-    cands = [(w, b) for w, (r, b) in wts.items() if any(b == x["branch"] and r == x["repo"] for x in task["branches"])]
+    # the task's branches, and the branches its sessions wrote to from another checkout (a push from main to a
+    # worktree's branch): each named by its repo's folder, or by its GitHub repo (org/name) when a push named it
+    named = [(x["repo"], x["branch"]) for x in task["branches"]]
+    named += [tuple(key.split("@", 1)) for s in task["_sessions"] for kind, key in transcripts.writes(s.get("path", ""))
+              if kind == "branch" and "@" in key]
+    cands = [(w, b) for w, (r, b) in wts.items() if any(b == nb and nr in (r, _origin(r)) for nr, nb in named)]
+    # a branch that no worktree has checked out: the checkout its session ran in, which shows another branch now
+    out_of_tree = {nb for nr, nb in named if nb not in DEFAULT_BRANCHES and nb not in {b for _, b in cands}}
+    for s in task["_sessions"]:
+        root = _git_root(s["project"]) if s["project"] and Path(s["project"]).is_dir() else ""
+        cands += [(root, nb) for nr, nb in named if nb in out_of_tree and root and nr in (root, _origin(root))
+                  and _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{nb}", ttl=60)]
     cands += [(s["project"], s["branch"]) for s in task["_sessions"] if s["project"]]
     for c, used in cands:
         root = _git_root(c) if Path(c).is_dir() else ""
