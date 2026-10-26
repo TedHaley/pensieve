@@ -208,7 +208,8 @@ def _item(d, people: list) -> dict:
     return dict(path=f"doc:{d.id}", doc=d.id, server=d.source_id, key=d.key if d.kind == "ticket" else "",
                 title=d.title, url=url, branch=d.branch or "", pr=bool(PR_URL.fullmatch(url)) if url else False,
                 status=d.status or "", assignee=", ".join(dict.fromkeys(assignees)),
-                updated=float(d.time or 0), text=d.text, private=d.private, owners=_owners(d, people))
+                updated=float(d.time or 0), text=d.text, private=d.private, owners=_owners(d, people),
+                chat=d.kind in ("message", "thread"))
 
 
 _my_ids_cache = (0.0, set())
@@ -583,6 +584,8 @@ def group(inp: Inputs) -> list[dict]:
                 u.join(f"c:{sha}", f"t:{key}")
     I = {}
     for it in items:
+        if it.get("chat"):  # a chat message joins the threads it names after the split (chat_joins), never a task
+            continue
         node = f"i:{it['path']}"
         I[node] = it
         for k in by_branch:  # a pull request joins the feature branch it was opened from
@@ -706,10 +709,13 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
             t["places"] = []
     _own_prs(out)
     from pensieve import session_threads
-    out = session_threads.split(out, inp.facts)  # one thread per writing session, each with only its own sinks
+    place_of = None if inp.until is not None else (lambda root, branch: _place(root, root, branch, inp.wts))
+    out = session_threads.split(out, inp.facts, place_of)  # one thread per session and branch it did work on
     from pensieve import claims
     claims.apply(out)  # a branch shared by several threads goes to the session with the most of its lines
     _adopt(out)  # the holder of a branch takes the activity of the other sessions that wrote to it
+    from pensieve import chat_joins
+    chat_joins.attach(out, [i for i in inp.items.values() if i.get("chat")])
     manual = task_states.latest(store)
     if inp.until is None:
         _integrated(out)
@@ -727,40 +733,46 @@ def finish(out: list[dict], inp: Inputs, store, pickup=None) -> list[dict]:
         t.pop("_named", None)
         t.pop("_siblings", None)
         t.pop("_writes", None)
+        t["cluster"] = t.pop("_branch", "")  # the branch whose cluster the card is in (session_threads.branch_name)
     out.sort(key=_order)
     return out
 
 
 def _sink_names(t: dict) -> set[str]:
     """The branches (by name), PRs and tickets a thread's session touched: what it wrote to, the branches it holds,
-    and the branch its session ran on. A default branch keeps its checkout: main in two repos is not shared work."""
-    def name(key: str) -> str:
-        short = key.split("@", 1)[-1]
-        return key if short in DEFAULT_BRANCHES else short
+    and the branch its session ran on when the thread is on no other branch. A default branch keeps its checkout: main
+    in two repos is not shared work."""
+    from pensieve.session_threads import branch_name as name
     names = {name(key) if kind == "branch" else key for kind, key in t.get("_writes", [])}
     names |= {name(f"{b.get('repo', '')}@{b['branch']}") for b in t.get("branches", [])}
     s = t["_sessions"][0] if t.get("_sessions") else {}
-    if s.get("branch") and s["branch"] not in DEFAULT_BRANCHES:
+    if s.get("branch") and s["branch"] not in DEFAULT_BRANCHES and t.get("_branch", "") in ("", s["branch"]):
         names.add(s["branch"])
     return names
+
+
+def _by_session(threads: list[dict]) -> dict[str, list[dict]]:
+    """{session id: its threads}: a session has one thread for each branch it did work on."""
+    out: dict[str, list[dict]] = {}
+    for t in threads:
+        if t.get("_sessions"):
+            out.setdefault(t["_sessions"][0]["id"], []).append(t)
+    return out
 
 
 def _adopt(threads: list[dict]) -> None:
     """A thread that holds a branch takes the other sessions that wrote to the branch as shared sessions: their
     activity keeps it fresh, a running one marks it active, and the card lists them. (claims.apply gave the branch
     to one thread; the others keep their own cards.)"""
-    from pensieve import session_threads
-    by_id = {t["id"]: t for t in threads}
+    by_sid = _by_session(threads)
     for t in threads:
         held = {b["branch"] for b in t.get("branches", [])}
         if not held or not t.get("_siblings"):
             continue
         for s in t["_siblings"]:
-            o = by_id.get(session_threads.thread_id(s["id"]))
-            if not o or not o.get("_sessions"):
-                continue
-            wrote = {key.split("@", 1)[-1] for kind, key in o.get("_writes", []) if kind == "branch"}
-            if not wrote & held:
+            o = next((o for o in by_sid.get(s["id"], [])
+                      if held & {key.split("@", 1)[-1] for kind, key in o.get("_writes", []) if kind == "branch"}), None)
+            if not o:
                 continue
             os_ = o["_sessions"][0]
             t["_shared"].append((dict(id=os_["id"], title=os_.get("title", ""), path=os_.get("path", "")), os_.get("updated") or 0))
@@ -790,8 +802,7 @@ def _kin(threads: list[dict]) -> None:
     """Each thread's `kin`: the sessions of the same work, oldest first: those that touched a branch, PR or ticket
     this thread's session touched. Each row says what that session did there, its thread's state and its claim on the
     branch. The thread itself is in the list, marked `me`, so the card can draw one piece of work in time order."""
-    from pensieve import session_threads
-    by_id = {t["id"]: t for t in threads}
+    by_sid = _by_session(threads)
     for t in threads:
         sibs = t.get("_siblings")
         if sibs is None:
@@ -801,8 +812,8 @@ def _kin(threads: list[dict]) -> None:
         rows = [dict(id=t["id"], session=me["id"], title=t["title"], updated=me.get("updated") or t["updated"],
                      state=t["state"], me=True, did=_what(t, mine), share=_share(t), active=bool(t.get("active")))]
         for s in sibs:
-            o = by_id.get(session_threads.thread_id(s["id"]))
-            if not o or not mine & _sink_names(o):
+            o = next((o for o in by_sid.get(s["id"], []) if mine & _sink_names(o)), None)
+            if not o:
                 continue
             os_ = o["_sessions"][0]
             rows.append(dict(id=o["id"], session=s["id"], title=o["title"], updated=os_.get("updated") or o["updated"],
@@ -820,7 +831,9 @@ def _what(o: dict, names: set[str]) -> str:
         name = key.split("@", 1)[-1] if kind == "branch" else key
         if name not in names:
             continue
-        if kind == "branch":
+        if kind == "branch" and o.get("review"):
+            parts.append(f"reviewed {name}, no changes")
+        elif kind == "branch":
             parts.append(f"{_did(ev.get((kind, key), []))} {name}")
         elif kind == "pr":
             merged = any(e == "gh pr merge" for e in ev.get((kind, key), []))
@@ -1084,12 +1097,12 @@ def _integrated(ts: list[dict]):
     - it has a feature branch and every commit of the task is in the default branch (a merge or a fast-forward);
     - its feature branch is squash-merged (stale._squashed).
     Sets task["integrated"] (why, and the PR that merged it) and adds that PR to the card, so the record names it."""
-    from pensieve import stale
+    from pensieve import session_threads, stale
     bases, webs, squash = {}, {}, defaultdict(list)
 
     def base(root):
         if root not in bases:
-            bases[root] = stale._default_branch(root) or ""
+            bases[root] = session_threads._base(root)
         return bases[root]
 
     def in_base(root, sha):
@@ -1640,36 +1653,9 @@ def _pickup(task: dict, wts: dict):
         if not path or (path, used) in seen or (not used and any(p == path for p, _ in seen)) or path.startswith(_TEMP):
             continue
         seen.add((path, used))
-        p = dict(path=path, git=bool(root))
+        p = _place(path, root, used, wts)
         if root:
-            head = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
-            p["branch"] = used or head  # the branch the task's sessions used here
-            if used and head and head != used:
-                p["head"] = head  # the checkout is on another branch now
-            # uncommitted files belong to the branch that is open: none for the task when another branch is open
-            p["changed"] = 0 if p.get("head") else \
-                len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
-            p["worktree"] = root in wts
-            if Path(root, ".git").is_file():  # a linked worktree: its own folder, removed from the repo's checkout
-                common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600)
-                p["linked"] = str(Path(common).parent) if common.endswith("/.git") else ""
-            if p["branch"] not in DEFAULT_BRANCHES:  # each commit of the branch: is its patch already in the default branch
-                from pensieve import stale
-                base = stale._default_branch(root)
-                cherry = _git(root, "cherry", base, p["branch"], ttl=300).splitlines() if base else []
-                p["commits"] = len(cherry)
-                p["unmerged"] = sum(line.startswith("+") for line in cherry)
-            # ahead and behind of the task's branch, not of the branch that is open in the checkout now
-            ref = p["branch"] if p.get("head") else "HEAD"
-            ab = _git(root, "rev-list", "--left-right", "--count", f"{ref}@{{upstream}}...{ref}").split()
-            if len(ab) == 2 and ab[0].isdigit():  # commits behind and ahead of the branch's upstream
-                p["behind"], p["ahead"], p["upstream"] = int(ab[0]), int(ab[1]), True
-                p["pushed"] = _git(root, "rev-parse", "--short", f"{ref}@{{upstream}}")  # moves on a push: history saves the card
-            p["repo"] = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600) or root).parent.name
             web = web_url(_git(root, "remote", "get-url", "origin", ttl=3600))
-            if web and p["branch"] not in DEFAULT_BRANCHES and _git(root, "rev-parse", "--verify", "--quiet",
-                                                                      f"refs/remotes/origin/{p['branch']}"):
-                p["remote_url"] = _branch_url(web, p["branch"])
             # the PRs of the branch where the work is: the task's own branch, or a long-lived one that its sessions used
             # (a merged PR there is often the end of the work)
             if web and "github.com" in web and (p["branch"] in feature or p["branch"] not in DEFAULT_BRANCHES):
@@ -1687,10 +1673,56 @@ def _pickup(task: dict, wts: dict):
         pr.update({k: v for k, v in _gh_pr(pr["url"]).items() if v})
     last = next((s for s in task["_sessions"] if s["project"]), None)
     if last:
-        from pensieve import agents
-        how = agents.continue_session(last["id"], last["title"])  # in the user's harness
-        task["resume"] = dict(command=f"cd {_quote(last['project'])} && {how['command']}", title=last["title"],
-                              session=last["id"], agent=how["agent"], agent_name=how["name"], handoff=how["handoff"])
+        task["resume"] = resume_of(last)
+
+
+def resume_of(s: dict) -> dict | None:
+    """How to resume a session in the user's harness: {command, title, session, agent, agent_name, handoff}, or None
+    when the session has no folder."""
+    if not s.get("project"):
+        return None
+    from pensieve import agents
+    how = agents.continue_session(s["id"], s.get("title", ""))
+    return dict(command=f"cd {_quote(s['project'])} && {how['command']}", title=s.get("title", ""), session=s["id"],
+                agent=how["agent"], agent_name=how["name"], handoff=how["handoff"])
+
+
+def _place(path: str, root: str, used: str, wts: dict) -> dict:
+    """A folder where work happens: its branch (`used`, the one the sessions used there, else the one open), its
+    uncommitted files, the branch on the remote and how far it is from the default branch. `root` is its git root,
+    "" when it is not in git."""
+    p = dict(path=path, git=bool(root))
+    if not root:
+        return p
+    head = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    p["branch"] = used or head  # the branch the task's sessions used here
+    if used and head and head != used:
+        p["head"] = head  # the checkout is on another branch now
+    # uncommitted files belong to the branch that is open: none for the task when another branch is open
+    p["changed"] = 0 if p.get("head") else \
+        len([x for x in _git(root, "status", "--porcelain", "--untracked-files=no").splitlines() if x])
+    p["worktree"] = root in wts
+    if Path(root, ".git").is_file():  # a linked worktree: its own folder, removed from the repo's checkout
+        common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600)
+        p["linked"] = str(Path(common).parent) if common.endswith("/.git") else ""
+    if p["branch"] not in DEFAULT_BRANCHES:  # each commit of the branch: is its patch already in the default branch
+        from pensieve import stale
+        base = stale._default_branch(root)
+        cherry = _git(root, "cherry", base, p["branch"], ttl=300).splitlines() if base else []
+        p["commits"] = len(cherry)
+        p["unmerged"] = sum(line.startswith("+") for line in cherry)
+    # ahead and behind of the task's branch, not of the branch that is open in the checkout now
+    ref = p["branch"] if p.get("head") else "HEAD"
+    ab = _git(root, "rev-list", "--left-right", "--count", f"{ref}@{{upstream}}...{ref}").split()
+    if len(ab) == 2 and ab[0].isdigit():  # commits behind and ahead of the branch's upstream
+        p["behind"], p["ahead"], p["upstream"] = int(ab[0]), int(ab[1]), True
+        p["pushed"] = _git(root, "rev-parse", "--short", f"{ref}@{{upstream}}")  # moves on a push: history saves the card
+    p["repo"] = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600) or root).parent.name
+    web = web_url(_git(root, "remote", "get-url", "origin", ttl=3600))
+    if web and p["branch"] not in DEFAULT_BRANCHES and _git(root, "rev-parse", "--verify", "--quiet",
+                                                              f"refs/remotes/origin/{p['branch']}"):
+        p["remote_url"] = _branch_url(web, p["branch"])
+    return p
 
 
 def _quote(path: str) -> str:

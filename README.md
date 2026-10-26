@@ -9,7 +9,7 @@
 
 One place for all your information, for context engineering: your files, repositories, agent sessions, tickets and messages, so that you and your agents get the right context for each goal. Your context is your own: Pensieve reads only what you can access, it only reads, and it keeps everything on your Mac.
 
-- **Find anything:** press **Control+Shift** anywhere on your Mac and search your documents, folders, code and past agent sessions by meaning or by exact words. Narrow a search to a time (`since:3d`, `until:2026-10-01`) or to one project's sessions (`project:my-app`).
+- **Search what you scoped:** in Developer mode, you and your agents search your repos, agent sessions and chosen folders by meaning or by exact words. Narrow a search to a time (`since:3d`, `until:2026-10-01`) or to one project's sessions (`project:my-app`).
 - **Superpowers for your agents:** agents connect over MCP and get the few most relevant files and passages instead of grepping your disk, which saves time and tokens. Each agent is scoped to what it's working on (by default, the repo it runs in).
 - **Bring in your other tools:** connections collect your tickets, threads and pages from MCP servers (Jira, Linear, Asana, Slack and others) with read-only tools, and keep each change over time.
 - **Pick work back up, and close it out:** the Threads tab has a thread for each agent session that wrote something, in six states: Open, To-do, Thoughts, Loose ends, Closed and Forgotten. Each thread has its PRs, tickets, branch, folder, the steps left to close it, and a button that resumes the session. Your agents get the same threads over MCP, and offer to close the one closest to done.
@@ -71,11 +71,9 @@ git clone https://github.com/TedHaley/pensieve && pensieve/mac/build.sh --instal
 
 In Developer mode, Pensieve downloads the search model on first run (see [Models](#models)), then indexes in the background. Search and the map fill in as it goes.
 
-## The search panel
+## Search
 
-Press **Control+Shift** (tap both, release) to open it, or **Control+Shift+Space**. The tap needs Accessibility permission (System Settings → Privacy & Security → Accessibility → Pensieve); the Space combo works without it.
-
-To open Pensieve with **⌘Space** instead of Spotlight, choose ⌘Space in the menu bar under **Search Shortcut**, or in Settings. Pensieve turns off the Spotlight shortcut while it runs. To give ⌘Space back to Spotlight, choose another shortcut. When Pensieve quits, Spotlight gets ⌘Space back too.
+In Developer mode, your agents search the index over MCP, and you search it in the app with **⌘K**. Search covers only the sources that you chose: your repos, agent sessions, folders and connections. Both use the same query syntax.
 
 Pensieve starts at login by default. To stop this, turn off **Launch at Login** in the menu bar.
 
@@ -98,15 +96,7 @@ Pensieve starts at login by default. To stop this, turn off **Launch at Login** 
 | `project:my-app` | agent sessions of that project only |
 | `kind:session since:yesterday` | with no words: the matching sessions, newest first |
 
-A plain search also puts a folder first when its path names every word (`person build`). Under an empty field, **Options** lists all of these.
-
-The panel also finds apps, System Settings panes, the individual settings in each pane, and quick toggles (Dark Mode, Wi‑Fi, Mute, Lock Screen, Sleep). These results come from the Mac app only, so they never show on the map. A strong name match shows first as the **Top Hit**, and **Tab** completes its name. On a toggle, **⌘Return** opens its pane in System Settings and does not change the setting. The panel ranks the apps and settings that you open frequently higher.
-
-Under **On This Mac**, the panel also finds documents and folders anywhere on the Mac by name. These matches come from the Spotlight index, so Pensieve does not index them and they do not show on the map. The list leaves out code: source files and files in a git repo are found through the code index, which also searches their content. A file that Pensieve already indexes shows only in its usual group.
-
-The panel calculates and converts units: `2^10`, `15% of 240`, `80 + 15%`, `sqrt(2)`, `3 ft in cm`, `72 f to c`, `2 cups in ml`. **Return** copies the result.
-
-**Return** opens · **⌘Return** reveals in Finder · **⌥Return** shows it on the map · **⌘C** copies the path · **⌘O** opens the Map · **Esc** closes.
+A plain search also puts a folder first when its path names every word (`person build`).
 
 Code results open at the matching line in your editor if you set `editor` to `vscode`, `cursor` or `zed`.
 
@@ -160,7 +150,7 @@ claude mcp add --transport http pensieve "http://127.0.0.1:8765/mcp?scope=paymen
 - **auto** (the default for `pensieve mcp`) uses the agent's working directory: the first named scope that includes that repo, otherwise just that repo with its worktrees and the agent sessions run in it. Outside any repo it means everything. In a repo that Pensieve does not index, search tells the agent to use grep. It does not return code from your other repos. HTTP connections can't see the agent's folder, so name a scope there (no `?scope` = everything).
 - **Named scopes** are lists of sources, e.g. `payments = repos/~/code/billing + repos/~/code/ledger + files/~/Documents/specs`. Create them in Settings → Scopes or with the `save_scope` tool. Everything stays in one index; a scope only filters, so nothing is embedded twice.
 - Every tool respects the scope: search, read, similar, people, repo, list_repos, threads. An item outside it is refused.
-- The search panel and the Map use `default_scope` (empty = everything).
+- Search in the app and the Map use `default_scope` (empty = everything).
 
 ### MCP server
 
@@ -268,7 +258,6 @@ Everything is grouped into **Sources** (Settings → Sources, or the `list_sourc
 | **AI agent sessions** | Claude Code (`~/.claude/projects`, with its memory files), Codex (`~/.codex/sessions`), Qwen Code (`~/.qwen/projects`) | on |
 | **Files & folders** | `~/Documents`, `~/Desktop`, `~/Downloads`, plus any folder you add. Content of text, Markdown, RTF, Word, PowerPoint, Excel, Pages, Keynote, Numbers, PDF, mail (`.eml`), subtitles, data files and code; images, video and audio by what they show or say (if you switch them on) or by name; other files by name; folders by name and what they contain. Each document's author comes from its metadata (PDF, Office, Spotlight) or its owner. | on |
 | **Git repositories** | Repos your agents worked in; repos found under your home folder (4 levels deep) and inside your folders; each repo on its own | on |
-| **Apps** | Obsidian vaults; Apple Notes (exported to Markdown in `~/.pensieve`, asks for permission) | Obsidian on, Notes off |
 | **Connections** | Tickets, messages and pages from MCP servers (Jira, Linear, Asana, Slack and others), and the MCP results in your agent sessions | each one off |
 
 **Connections** collect data from MCP servers with read-only tools. Pensieve keeps each item over time, with a list of its changes.
@@ -357,10 +346,9 @@ Change them in the Map window (Settings), from an agent connected with `--all-to
 | `repos` | extra repos, always indexed |
 | `exclude` | folder names never descended into (`node_modules`, `Library`, …) |
 | `exclude_files` | filename globs never indexed (secrets) |
-| `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the panel's scope |
+| `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the scope of search in the app |
 | `appearance` | `system` (or `light`, `dark`) |
 | `embed_model` | the search model for the index (manage in Settings → Models); empty: the index's own |
-| `hotkey` | `ctrl+shift` (or a combo like `cmd+shift+space`) |
 | `editor` | `default`, `vscode`, `cursor` or `zed` |
 
 ## Models

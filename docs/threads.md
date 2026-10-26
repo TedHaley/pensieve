@@ -1,6 +1,6 @@
 # Threads
 
-A thread follows the work of one agent session, so you can see where the work stands, pick it up again, or close it out. This page defines a thread and its parts, the rules that put evidence into a thread, and the states of its life.
+A thread follows the work of one agent session on one branch, so you can see where the work stands, pick it up again, or close it out. This page defines a thread and its parts, the rules that put evidence into a thread, and the states of its life.
 
 ## Terms
 
@@ -8,27 +8,31 @@ A thread follows the work of one agent session, so you can see where the work st
 |---|---|
 | **Session** | One agent transcript. Pensieve reads it from the agent's transcript folder. |
 | **Data source** | A place that a session writes to and that can be checked as done: a pull request (PR), a branch, a ticket. |
-| **Thread** | One session that wrote something (edits, commits, a branch, a PR), with the data sources it wrote to. |
+| **Thread** | One session's work on one branch (rule 2), with the data sources it wrote to there. A session that did no work on a branch but wrote a PR or a ticket is one thread. |
 | **Thought** | A session with no data source: no PR, branch or ticket that it wrote to. |
 | **To-do** | A ticket assigned to you that is not done, with no session, branch or PR on it yet. |
-| **Cluster** | The threads of one branch, newest session first. |
+| **Cluster** | The threads of one branch, newest session first. Its title is its PR's title, then its ticket's, then the holder's session title. |
 | **Holder** | The session of a cluster that holds the branch (rule 4). |
 
 ```
-session ─▶ thread (the data sources it wrote to) ─▶ cluster (the threads of one branch)
+session ─▶ thread (its work on one branch) ─▶ cluster (the threads of one branch)
 ```
 
-Each thread has an id that stays the same. Hand-set states and the `thread` MCP tool use it. The id button on a card copies it.
+Each thread has an id that stays the same: of its session and its branch, or of its session alone when it has no branch. Hand-set states and the `thread` MCP tool use it. The id button on a card copies it.
 
 ## Rules
 
-### 1. One session, one thread
+### 1. One session and one branch, one thread
 
-Each session that wrote something is one thread. A thread holds only what its own session wrote to. Several threads can hold the same data source.
+A session has one thread for each branch that it did work on. A session that did work on two branches has a thread in each branch's cluster. A thread holds only what its own session wrote to on its branch. Several threads can hold the same data source.
 
 ### 2. What a session writes to
 
-A session writes to a branch when it commits or pushes on it. It also writes to a branch when lines that it wrote are still in the uncommitted diff of a checkout of that branch. It writes to a PR when it opens or merges the PR with `gh`.
+A session did work on a branch when lines that it wrote with its edit tools are uncommitted in a checkout of that branch, or are in the branch's commits that the remote's default branch does not have yet. It needs 3 of its lines there, or all of them when it wrote fewer. A commit or a push on the branch is work on it too. A session writes to a PR when it opens or merges the PR with `gh`. A PR goes in the thread of its head branch.
+
+On a default branch (`main`), each checkout is its own branch. A session's thread there is open while its lines are uncommitted or not pushed. It closes when they reach the remote (landed) or leave the checkout (discarded). The main branch itself never closes: its cluster has only the threads that still have work there.
+
+A session that wrote nothing but ran on a feature branch (a review) has a thread there. Its card has the tag "review" in place of a share of the branch's lines.
 
 Git commands that only appear in quoted text or heredocs (test inputs, commit messages, PR bodies) are not writes.
 
@@ -53,7 +57,7 @@ A card that lost its branch links to the thread that holds it.
 
 ### 5. What is never evidence
 
-- A default or long-lived branch (`main`, a release branch, a branch with sessions over more than a few days).
+- A long-lived branch other than the default branch (a release branch, a branch with sessions over more than a few days).
 - A file that many threads edit.
 - The repo or the folder alone.
 - A ticket that a session mentions in passing.
@@ -96,9 +100,9 @@ The modal's button (Start shipping or Start discarding) starts an agent session 
 
 ## Starting a thread again
 
-To continue the session of a thread, use Resume session. Pensieve reads the session's folder from its transcript.
+To continue the session of a thread, use Resume session. Pensieve reads the session's folder from its transcript. A cluster header has **Resume**: it resumes the holder's session.
 
-To start a new agent session from a thread, use Fork session. Pensieve writes the thread to a file and opens the agent in the work's folder. The prompt tells the agent to read the thread, to get the live state of its branch, PRs and tickets, and to report before it changes anything. A cluster header has **Fork from all N**: it starts a session that reads all the threads of the branch.
+To start a new agent session from a thread, use Fork session. Pensieve writes the thread to a file and opens the agent in the work's folder. The prompt tells the agent to read the thread, to get the live state of its branch, PRs and tickets, and to report before it changes anything. It also names every session that changed the branch, so the agent can read their transcripts with `pensieve transcript <id>`. A cluster header has **Fork from all N**: it starts a session that reads all the threads of the branch.
 
 A to-do (a ticket of yours with no session, branch or PR) has **Start session in worktree**. It makes `<repo>/.claude/worktrees/<branch>`, on a branch named from the ticket's key and title, from the repo's default branch. The agent starts there with the ticket's title, URL and description, and reads the ticket's page before it plans. The first to-do of a ticket project asks which repo to use. Pensieve keeps the answer in the `ticket_repos` setting. The `start_todo` MCP tool does the same for an agent.
 
@@ -106,9 +110,13 @@ A to-do (a ticket of yours with no session, branch or PR) has **Start session in
 
 Threads read the transcript folders of the agents, git and gh, and the tickets that connections collected when there are any (`pensieve/transcripts.py`). They read no index and no model. A transcript is read once, and only its new lines after that; the facts persist on disk, so a restart reads nothing twice.
 
+A new turn in a session shows on its card at once: the card's time moves, and the card is running. A new session gets a thought card at once. The next build replaces these cards with whole ones, also while a full build runs (`cardbuild.Builder.hot`).
+
+A Slack message that a connection collected shows on each thread whose ticket key, PR link or branch name it holds (`pensieve/chat_joins.py`). A message never joins two threads into one. A direct message or a private channel shows only on this Mac.
+
 ## Examples
 
-- **One session, three PRs.** A change merges into the wrong branch, a revert undoes it, and a new PR carries the same change. The session wrote to all three PRs, so they are one thread. The thread closes when all three PRs are merged or closed.
+- **One session, two repos.** A session works on a feature branch in one repo, then changes the header of another repo on `main` without a commit. It has two threads: one in the feature branch's cluster, and one in that checkout's `main` cluster. The `main` thread closes when its changes are pushed or discarded.
 - **A shared branch.** Two sessions work on a long-lived branch: one changes the logo, one measures search. The branch is not evidence (rule 5), so they are two threads, and not a cluster.
 - **A feature branch with two sessions.** One session writes most of a feature, and a later session fixes a test on the same branch. They are a cluster. The first session holds the branch, because most of the surviving lines are its lines (rule 4).
 - **A question.** A session explains how a module works and changes nothing. It is a thought. After 2 quiet days it is forgotten.

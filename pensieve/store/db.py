@@ -28,8 +28,7 @@ BUSY_MS = 10000
 
 
 class Db:
-    def __init__(self, path: Path, schema: str, version: int, migrations: dict[int, list[str]] | None = None,
-                 functions: dict | None = None):
+    def __init__(self, path: Path, schema: str, version: int, functions: dict | None = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.functions = functions or {}
@@ -41,7 +40,7 @@ class Db:
         self._start_lock = threading.Lock()
         self._closed = False
         self.after_commit: list = []  # fn(list of job results) after each batch's commit, on the writer thread
-        self._init(schema, version, migrations or {})
+        self._init(schema, version)
 
     def _connect(self, readonly: bool) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False, timeout=BUSY_MS / 1000)
@@ -56,19 +55,19 @@ class Db:
             self._conns.append(c)
         return c
 
-    def _init(self, schema: str, version: int, migrations: dict[int, list[str]]):
+    def _init(self, schema: str, version: int):
         # Another process can still hold the file for a moment (a backend that is closing while a new one starts),
         # and setting the journal mode does not wait for the busy timeout: retry within it instead of failing.
         deadline = time.monotonic() + BUSY_MS / 1000
         while True:
             try:
-                return self._init_once(schema, version, migrations)
+                return self._init_once(schema, version)
             except sqlite3.OperationalError as e:
                 if "locked" not in str(e) or time.monotonic() > deadline:
                     raise
                 time.sleep(0.2)
 
-    def _init_once(self, schema: str, version: int, migrations: dict[int, list[str]]):
+    def _init_once(self, schema: str, version: int):
         c = sqlite3.connect(self.path, isolation_level=None, timeout=BUSY_MS / 1000)
         try:
             c.execute(f"PRAGMA busy_timeout = {BUSY_MS}")
@@ -82,13 +81,9 @@ class Db:
                 have = row[0] if row else None
                 if have is None:
                     c.execute("INSERT INTO schema_version VALUES (?)", (version,))
-                elif have > version:
-                    raise RuntimeError(f"{self.path.name} has schema version {have}, newer than this app's {version}")
-                else:
-                    for v in range(have + 1, version + 1):
-                        for stmt in migrations.get(v, []):
-                            c.execute(stmt)
-                    c.execute("UPDATE schema_version SET version = ?", (version,))
+                elif have != version:  # reset.settle_schema deletes such a file before anything opens it
+                    raise RuntimeError(f"{self.path.name} has schema version {have}, not this app's {version}: "
+                                       "restart Pensieve to build it again")
                 c.execute("COMMIT")
             except BaseException:
                 c.execute("ROLLBACK")

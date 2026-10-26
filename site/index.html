@@ -58,7 +58,7 @@
     "MCP server that points coding agents to the most relevant passages, scoped to the repo they work in",
     "Who knows what: code ownership and domain knowledge from git blame",
     "Knowledge gaps: code mostly written by people no longer active in the repo",
-    "Local semantic and exact search over files, repos and agent sessions, on Control+Shift (Developer mode)",
+    "Local semantic and exact search over the repos, agent sessions and folders that you choose (Developer mode)",
     "Runs entirely on your Mac; Threads mode needs no index and no model"
    ],
    "url": "https://pensieve.tools/",
@@ -190,18 +190,26 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
 .note p{color:var(--ink-2)}
 .ap{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#fff;font:700 15px/1 var(--sans);flex:none}
 .ap svg{width:17px;height:17px}
-.tcard{position:relative;z-index:3;margin-top:clamp(18px,3.5vh,36px);width:min(560px,100%);background:var(--card);border:1px solid var(--card-edge);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 20px 14px;text-align:left;opacity:0;transform-origin:50% 0}
-.tcard .hd{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
+.tcard{position:relative;z-index:3;margin-top:clamp(18px,3.5vh,36px);width:min(580px,100%);background:var(--card);border:1px solid var(--card-edge);border-left:4px solid var(--s-open);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 20px 0;text-align:left;opacity:0;transform-origin:50% 0;overflow:hidden}
+.tcard .hd{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px}
 .tcard .ttl{font-weight:600;font-size:17px;letter-spacing:-.01em}
-.tcard .where{color:var(--ink-3);font-size:13px}
+.tcard .where{color:var(--ink-3);font-size:12.5px;margin-top:4px;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.tcard .where code{color:var(--ink-2);font-size:12px}
+.tcard .br{display:inline-flex;align-items:center;gap:3px}
+.tcard .br svg{width:12px;height:12px}
+.tcard .unc{font-size:11px;font-weight:500;padding:1px 7px;border-radius:999px;color:#c77700;background:color-mix(in srgb,#ff9f0a 15%,transparent)}
+.tcard .hr{display:flex;align-items:center;gap:10px;flex:none}
+.tcard .ago{color:var(--ink-3);font-size:12.5px}
+.tcard .bar{display:flex;flex-wrap:wrap;gap:6px;margin:10px -20px 0;padding:10px 20px 12px;border-top:1px solid var(--line)}
+.tcard .bt{font-size:12px;font-weight:500;padding:5px 10px;border-radius:8px;background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink-2);white-space:nowrap}
+.tcard .bt.pri{background:var(--ink);color:var(--card)}
+.tcard .bt i{font-style:normal;margin-left:4px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--ink) 9%,transparent)}
 .tcard ol{list-style:none;position:relative}
 .tcard .tl{position:absolute;left:14px;top:18px;bottom:18px;width:2px;border-radius:2px;background:var(--c-context);transform-origin:top}
 .tcard li{position:relative;display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:12px;align-items:center;padding:5px 0;font-size:13.5px;line-height:1.3}
 .tcard li>span:nth-child(2){min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tcard li small{display:block;color:var(--ink-3);font-size:12px}
 .tcard .lk{font-size:11.5px;color:var(--c-context);font-weight:500}
-.tcard .nx{margin-top:8px;padding-top:10px;border-top:1px solid var(--line);font-size:13.5px;color:var(--ink-2)}
-.tcard .nx b{color:var(--ink);font-weight:600}
 @media (max-width:640px){.note{width:236px;margin-left:-118px;padding:9px 11px}.tcard li:nth-child(n+7){display:none}.tcard .lk{display:none}}
 .pile.still{height:auto}
 .pile.still .stick{position:relative;height:auto;min-height:0;padding:120px var(--gut)}
@@ -225,6 +233,9 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
 .feat h2 em{font-style:normal;color:var(--c)}
 .feat .lede{margin-top:26px;max-width:540px;font-size:clamp(17px,1.5vw,21px);line-height:1.45;color:var(--ink-2)}
 .feat .lede b{color:var(--ink);font-weight:500}
+sup.dev{font-size:.45em;vertical-align:super;margin-left:.1em;color:var(--c);font-style:normal}
+.devnote{margin-top:12px;max-width:540px;font-size:13.5px;color:var(--ink-3)}
+.band .devnote{color:var(--night-ink-2);opacity:.8}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:clamp(32px,5vw,80px);align-items:center}
 .grid2>*,.term-pair>*,.steps>*{min-width:0}
 .window .chrome .url{text-overflow:ellipsis}
@@ -247,13 +258,33 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
 .ccard .where{margin-top:6px;color:var(--ink-3);font-size:13.5px}
 .state{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 12px;border-radius:999px;font-size:13px;font-weight:600;background:color-mix(in srgb,var(--sc) 14%,transparent);color:var(--sc);white-space:nowrap}
 .state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--sc)}
-.ccard .core{margin-top:20px;display:grid;gap:12px}
-.ccard .core div{display:grid;grid-template-columns:76px 1fr;gap:12px}
-.ccard .core dt{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding-top:2px}
-.ccard .core dd{line-height:1.45}
-.ccard .next{margin-top:18px;padding:14px 16px;border-radius:14px;background:color-mix(in srgb,var(--c-context) 9%,transparent);display:flex;gap:12px;align-items:center;justify-content:space-between}
-.ccard .next span{font-weight:500}
-.ccard .next small{display:block;font-weight:400;color:var(--ink-2);font-size:13px}
+.ccard.cl{padding:14px;font-size:13.5px;display:grid;gap:10px}
+.cl-h{padding:4px 6px 2px}
+.cl-t{font-size:clamp(18px,1.8vw,21px);font-weight:600;letter-spacing:-.02em}
+.ccard .where{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px}
+.ccard .where code,.cc code{color:var(--ink-2);font-size:12px}
+.ccard .br{display:inline-flex;align-items:center;gap:3px}
+.ccard .br svg{width:12px;height:12px}
+.ccard .unc{font-size:11px;font-weight:500;padding:1px 7px;border-radius:999px;color:#c77700;background:color-mix(in srgb,#ff9f0a 15%,transparent)}
+.ccard .bar{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.ccard .bt{font-size:12px;font-weight:500;padding:5px 10px;border-radius:8px;background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink-2);white-space:nowrap}
+.ccard .bt.pri{background:var(--ink);color:var(--card)}
+.ccard .bt i{font-style:normal;margin-left:4px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--ink) 9%,transparent)}
+.cc{border:1px solid var(--line);border-left:4px solid var(--sc);border-radius:12px;padding:12px 14px}
+.cc-hd{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.cc-t{font-weight:600;font-size:15px;margin-bottom:5px}
+.cc .hr{display:flex;align-items:center;gap:8px;flex:none}
+.cc .ago{color:var(--ink-3);font-size:12px}
+.cc .state{height:24px;font-size:12px;padding:0 10px}
+.pill{display:inline-block;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:999px;background:color-mix(in srgb,var(--ink) 8%,transparent);color:var(--ink-2);white-space:nowrap}
+.pill.ok{color:#30a14e;background:color-mix(in srgb,#34c759 14%,transparent)}
+.cc .sec{margin-top:10px;padding-top:9px;border-top:1px solid var(--line)}
+.cc h5{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin-bottom:5px}
+.cc .sec p{display:flex;align-items:center;gap:7px;padding:2px 0;line-height:1.4;color:var(--ink-2)}
+.cc .sec p b{color:var(--ink);font-weight:600}
+.cc .sec p:has(> b:first-child){align-items:flex-start}
+.cc .sec p > b:first-child{flex:none;width:44px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);padding-top:1px}
+.cc .why{margin-left:auto;font-size:11.5px;color:var(--c-context);white-space:nowrap}
 .resume{flex:none;height:34px;padding:0 14px;border-radius:999px;background:var(--ink);color:var(--paper);font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
 .ccard .links{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
 .tag{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:10px;border:1px solid var(--line);font-size:13px;color:var(--ink-2);white-space:nowrap}
@@ -263,7 +294,7 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
 .states-row .state{transition:transform .3s}
 .states-row .state:hover{transform:translateY(-2px)}
 @media (max-width:900px){.ccard{margin:0}}
-@media (max-width:480px){.ccard .core div{grid-template-columns:1fr;gap:2px}.ccard .next{flex-direction:column;align-items:flex-start}}
+@media (max-width:480px){.cc-hd{flex-direction:column}.cc .why{display:none}}
 
 /* agents band */
 .band{background:var(--night);color:var(--night-ink)}
@@ -357,11 +388,53 @@ code,kbd,.mono{font-family:var(--mono);font-size:.88em}
 .risk .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;font-size:13px;color:var(--ink-2)}
 .risk .legend span::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--lc);margin-right:6px}
 .risk .tip{margin-top:14px;font-size:14px;color:var(--ink-2)}
+/* sections 03 and 04: the heading and its text on one row, the examples below them */
+.sec-hd{display:grid;grid-template-columns:1.35fr 1fr;gap:clamp(24px,5vw,72px);align-items:end}
+.sec-hd .lede{margin-top:0}
+.close-stage{margin-top:clamp(40px,6vh,64px);display:grid;grid-template-columns:1.15fr 1fr;gap:20px;align-items:start}
+.lanes,.ship,.share{background:var(--card);border:1px solid var(--card-edge);border-radius:var(--r);box-shadow:var(--shadow);padding:16px;font-size:13.5px}
+.lanes-h{display:flex;align-items:center;justify-content:space-between;margin:0 2px 10px;font-size:12.5px;color:var(--ink-3)}
+.lanes-h .state{height:24px;font-size:12px;padding:0 10px}
+.lane{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid var(--line);border-left:4px solid var(--s-loose-ends);border-radius:12px;margin-top:8px}
+.ln-t{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:13px;font-weight:600}
+.ln-t svg,.close-stage .br svg{width:13px;height:13px;flex:none}
+.ln-s{margin-top:3px;font-size:12px;color:var(--ink-3)}
+.ln-b{display:flex;gap:6px;flex:none}
+.close-stage .bt{font-size:12px;font-weight:500;padding:5px 10px;border-radius:8px;background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink-2);white-space:nowrap}
+.close-stage .bt.on{outline:2px solid var(--c);outline-offset:1px}
+.close-stage .bt.pri{background:var(--ink);color:var(--card)}
+.close-stage .bt i{font-style:normal;margin-left:4px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--ink) 9%,transparent)}
+.close-stage .unc{font-size:11px;font-weight:500;padding:1px 7px;border-radius:999px;color:#c77700;background:color-mix(in srgb,#ff9f0a 15%,transparent)}
+.ship{padding:18px 20px}
+.sh-h{display:flex;align-items:center;gap:8px;font-size:15px}
+.sh-h .br{display:inline-flex;align-items:center;gap:4px}
+.sh-h code{font-size:12.5px;color:var(--ink-2)}
+.sh-h .x{margin-left:auto;color:var(--ink-3)}
+.sh-cap{margin-top:10px;font-size:12.5px;color:var(--ink-3)}
+.ship ul{margin:10px 0 0 18px;display:grid;gap:7px;color:var(--ink-2);line-height:1.35}
+.sh-f{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.trio{margin-top:clamp(40px,6vh,64px);display:grid;grid-template-columns:repeat(3,1fr);gap:20px;align-items:start}
+.trio .risk{margin-top:0}
+.share{padding:clamp(20px,2.4vw,28px)}
+.sh-file{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:12px;background:var(--paper-2)}
+.sh-file svg{width:22px;height:22px;flex:none;color:var(--c)}
+.sh-file b{display:block;font-family:var(--mono);font-size:12.5px}
+.sh-file small{color:var(--ink-3);font-size:12px}
+.sh-t{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;font-weight:600;font-size:15.5px}
+.sh-t .state{height:24px;font-size:12px;padding:0 10px}
+.share dl{margin-top:12px;display:grid;gap:7px}
+.share dl div{display:grid;grid-template-columns:78px 1fr;gap:10px}
+.share dt{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding-top:2px}
+.share dd{color:var(--ink-2);line-height:1.35}
+.share .tip{margin-top:14px;font-size:14px;color:var(--ink-2)}
+@media (max-width:1000px){.trio{grid-template-columns:1fr 1fr}.trio>.share{grid-column:1/-1}}
+@media (max-width:900px){.sec-hd,.close-stage,.trio{grid-template-columns:1fr}.trio>.share{grid-column:auto}}
+@media (max-width:480px){.lane{flex-direction:column;align-items:flex-start}}
 
 /* also: small tiles */
 .also{padding:clamp(70px,11vh,130px) 0;border-top:1px solid var(--line)}
 .also h2{font-size:clamp(32px,4vw,56px);letter-spacing:-.045em;line-height:1;font-weight:600}
-.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:40px}
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:40px}
 .tile{background:var(--card);border:1px solid var(--card-edge);border-radius:var(--r);padding:26px}
 .tile .g{height:64px;display:flex;align-items:center;gap:6px;margin-bottom:14px}
 .tile kbd{display:inline-grid;place-items:center;min-width:44px;height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);border-bottom-width:3px;font-family:var(--sans);font-size:15px;font-weight:600;color:var(--ink)}
@@ -456,10 +529,10 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
 
 <nav class="dock" aria-label="Sections">
   <a class="home" href="#top" aria-label="Top"><svg aria-hidden="true"><use href="#mark"/></svg></a>
-  <a href="#context" style="--c:var(--c-context)"><i></i><span>Context</span></a>
-  <a href="#agents" style="--c:var(--c-agents)"><i></i><span>Agents</span></a>
-  <a href="#ship" style="--c:var(--c-share)"><i></i><span>Ship</span></a>
-  <a href="#owners" style="--c:var(--c-owners)"><i></i><span>Owners</span></a>
+  <a href="#context" style="--c:var(--c-context)"><i></i><span>Organize</span></a>
+  <a href="#agents" style="--c:var(--c-agents)"><i></i><span>Recall</span></a>
+  <a href="#ship" style="--c:var(--c-share)"><i></i><span>Deploy</span></a>
+  <a href="#owners" style="--c:var(--c-owners)"><i></i><span>Share</span></a>
   <a class="get" href="#get">Install</a>
 </nav>
 
@@ -500,30 +573,35 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
     <div class="notes" aria-hidden="true"></div>
     <article class="tcard" aria-label="Example thread">
       <div class="hd">
-        <div><div class="ttl">Retry declined card payments</div><div class="where">acme-app · fix-card-retries</div></div>
-        <span class="state" style="--sc:var(--s-open)">Open</span>
+        <div>
+          <div class="ttl">Retry declined card payments</div>
+          <div class="where">Working in <code>acme-app</code> <span class="br"><svg><use href="#g-branch"/></svg><code>fix-card-retries</code></span> <span class="unc">1 uncommitted file</span></div>
+        </div>
+        <div class="hr"><span class="ago">20 min ago</span><span class="state" style="--sc:var(--s-open)">Open</span></div>
       </div>
       <ol>
         <i class="tl"></i>
-        <li><span class="ap" style="background:#4a154b"><svg><use href="#g-hash"/></svg></span><span><b>#payments</b> Renewals failing for EU cards again?<small>Slack · 3 replies</small></span><span class="lk">linked</span></li>
-        <li><span class="ap" style="background:#2684ff"><svg><use href="#g-ticket"/></svg></span><span><b>PAY-142</b> Retry soft declines<small>Jira · In progress</small></span><span class="lk">linked</span></li>
-        <li><span class="ap" style="background:#191919">N</span><span><b>Payments retry spec</b><small>Notion · edited Tuesday</small></span><span class="lk">linked</span></li>
-        <li><span class="ap" style="background:#0f9d58"><svg><use href="#g-grid"/></svg></span><span><b>Decline codes by issuer</b><small>Google Sheets</small></span><span class="lk">linked</span></li>
-        <li><span class="ap" style="background:#24292f"><svg><use href="#g-pr"/></svg></span><span><b>PR #412</b> Retry declined cards<small>GitHub · checks pass</small></span><span class="lk">linked</span></li>
-        <li><span class="ap" style="background:#d97757"><svg><use href="#g-term"/></svg></span><span><b>Add backoff to retry.py</b><small>Claude Code session · 20 min ago</small></span><span class="lk">linked</span></li>
-        <li><span class="ap" style="background:#ea4335"><svg><use href="#g-mail"/></svg></span><span><b>Soft decline rate up 12%</b><small>Gmail · from Stripe</small></span><span class="lk">linked</span></li>
+        <li><span class="ap" style="background:#d97757"><svg><use href="#g-term"/></svg></span><span><b>Add backoff to retry.py</b><small>Claude Code session · 20 min ago</small></span><span class="lk">holds the branch</span></li>
+        <li><span class="ap" style="background:#24292f"><svg><use href="#g-pr"/></svg></span><span><b>PR #412</b> Retry declined cards<small>GitHub · checks pass</small></span><span class="lk">opened from the branch</span></li>
+        <li><span class="ap" style="background:#2684ff"><svg><use href="#g-ticket"/></svg></span><span><b>PAY-142</b> Retry soft declines<small>Jira · In progress</small></span><span class="lk">in the branch name</span></li>
+        <li><span class="ap" style="background:#4a154b"><svg><use href="#g-hash"/></svg></span><span><b>#payments</b> Renewals failing for EU cards again?<small>Slack · 3 replies</small></span><span class="lk">names PAY-142</span></li>
+        <li><span class="ap" style="background:#191919">N</span><span><b>Payments retry spec</b><small>Notion · edited Tuesday</small></span><span class="lk">read by the agent</span></li>
+        <li><span class="ap" style="background:#0f9d58"><svg><use href="#g-grid"/></svg></span><span><b>Decline codes by issuer</b><small>Google Sheets</small></span><span class="lk">read by the agent</span></li>
+        <li><span class="ap" style="background:#ea4335"><svg><use href="#g-mail"/></svg></span><span><b>Soft decline rate up 12%</b><small>Gmail · from Stripe</small></span><span class="lk">read by the agent</span></li>
       </ol>
-      <div class="nx"><b>Next:</b> get a review on #412, then close PAY-142.</div>
+      <div class="bar">
+        <span class="bt pri">▶ Resume session</span><span class="bt">✦ Fork session</span><span class="bt">Ship <i>2</i></span><span class="bt">Discard <i>3</i></span>
+      </div>
     </article>
   </div>
 </section>
 
 <!-- WORD STACK -->
 <section class="words" aria-label="What Pensieve does">
-  <a class="rv" href="#context" style="--c:var(--c-context)"><span class="ico"><svg><use href="#i-card"/></svg></span>Remember</a>
-  <a class="rv d1" href="#agents" style="--c:var(--c-agents)"><span class="ico"><svg><use href="#i-bolt"/></svg></span>Accelerate</a>
-  <a class="rv d2" href="#ship" style="--c:var(--c-share)"><span class="ico"><svg><use href="#i-send"/></svg></span>Ship</a>
-  <a class="rv d3" href="#owners" style="--c:var(--c-owners)"><span class="ico"><svg><use href="#i-people"/></svg></span>Ask</a>
+  <a class="rv" href="#context" style="--c:var(--c-context)"><span class="ico"><svg><use href="#i-card"/></svg></span>Organize</a>
+  <a class="rv d1" href="#agents" style="--c:var(--c-agents)"><span class="ico"><svg><use href="#i-bolt"/></svg></span>Recall</a>
+  <a class="rv d2" href="#ship" style="--c:var(--c-share)"><span class="ico"><svg><use href="#i-send"/></svg></span>Deploy</a>
+  <a class="rv d3" href="#owners" style="--c:var(--c-owners)"><span class="ico"><svg><use href="#i-people"/></svg></span>Share</a>
 </section>
 
 <!-- 01 CONTEXT -->
@@ -544,34 +622,42 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
         </div>
       </div>
       <div class="stage" data-scroll data-scroll-end=".55">
-        <article class="ccard" aria-label="Example thread">
-          <div class="hd">
-            <div>
-              <div class="ttl">Retry declined card payments</div>
-              <div class="where">acme-app · fix-card-retries · 20 min ago</div>
+        <article class="ccard cl" aria-label="Example: the threads of one branch">
+          <div class="cl-h">
+            <div class="cl-t">Retry declined cards</div>
+            <div class="where"><code>acme-app</code> <span class="br"><svg><use href="#g-branch"/></svg><code>fix-card-retries</code></span> <span class="unc">1 uncommitted file</span></div>
+            <div class="bar"><span class="bt pri">▶ Resume</span><span class="bt">Ship <i>2</i></span><span class="bt">Discard <i>3</i></span><span class="bt">✦ Fork from all 2</span></div>
+          </div>
+          <div class="cc" style="--sc:var(--s-open)">
+            <div class="cc-hd">
+              <div><div class="cc-t">Add backoff to retry.py</div><span class="pill ok">holds the branch · 82% of the branch's lines</span></div>
+              <div class="hr"><span class="ago">20 min ago</span><span class="state" style="--sc:var(--s-open)">Open</span></div>
             </div>
-            <span class="state" style="--sc:var(--s-open)">Open</span>
+            <div class="sec"><h5>Conversation snippet</h5>
+              <p><b>You</b>Retries stop after the first soft decline. Add backoff.</p>
+              <p><b>Agent</b>Backoff is in <code>payments/retry.py</code>, and the tests pass. PR #412 is open.</p>
+            </div>
+            <div class="sec"><h5>Data sources in session</h5>
+              <p><span class="pill">PR</span><b>#412</b> Retry declined cards<span class="pill ok">checks pass</span></p>
+              <p><span class="pill">ticket</span><b>PAY-142</b> Retry soft declines<span class="pill">In progress</span></p>
+            </div>
+            <div class="sec"><h5>Slack</h5>
+              <p><span class="pill">Slack</span>#payments: Is #412 ready for review?<span class="why">links PR #412</span></p>
+            </div>
+            <div class="bar"><span class="bt pri">▶ Resume session</span><span class="bt">✦ Fork session</span></div>
           </div>
-          <dl class="core">
-            <div><dt>Snippet</dt><dd>Backoff is in <code>payments/retry.py</code>, and the tests pass. PR #412 is open.</dd></div>
-            <div><dt>Branch</dt><dd>Holds the branch · 82% of the branch's lines</dd></div>
-          </dl>
-          <div class="next">
-            <span>Left: review and merge #412<small>then mark PAY-142 done</small></span>
-            <span class="resume">▶ Resume session</span>
-          </div>
-          <div class="links">
-            <span class="tag"><span class="ok"></span><b>#412</b> checks pass</span>
-            <span class="tag"><b>PAY-142</b> in progress</span>
-            <span class="tag"><b>2</b> related sessions</span>
-            <span class="tag"><b>3</b> files</span>
+          <div class="cc" style="--sc:var(--s-open)">
+            <div class="cc-hd">
+              <div><div class="cc-t">Check the retry tests</div><span class="pill">review</span></div>
+              <div class="hr"><span class="ago">2 h ago</span><span class="state" style="--sc:var(--s-open)">Open</span></div>
+            </div>
           </div>
         </article>
       </div>
     </div>
     <div class="points">
       <div class="rv"><h3>Sorts itself</h3><p>Each thread's state comes from its PRs, branches and tickets. Quiet work becomes a loose end, so you see what to close.</p></div>
-      <div class="rv d1"><h3>Reads your tracker</h3><p>Sign in to Jira, Linear or Asana. Your tickets become to-dos, and a ticket that is done closes its thread. Read-only.</p></div>
+      <div class="rv d1"><h3>Reads your tracker and Slack</h3><p>Sign in to Jira, Linear or Asana. Your tickets become to-dos, and a ticket that is done closes its thread. Connect Slack, and a message that names a thread's ticket, PR or branch shows on that thread. Read-only.</p></div>
       <div class="rv d2"><h3>Groups by branch</h3><p>The sessions of one branch sit together. The one that wrote most of the branch holds it. Fork a new session from all of them.</p></div>
     </div>
   </div>
@@ -581,8 +667,9 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
 <section class="feat band" id="agents" style="--c:var(--c-agents)">
   <div class="wrap">
     <div class="num rv"><b>02</b>Native to your agent</div>
-    <h2 class="rv">Your agent starts <em>on the right code.</em></h2>
+    <h2 class="rv">Your agent starts <em>on the right code.</em><sup class="dev" title="Developer mode">*</sup></h2>
     <p class="lede rv d1">Connected over MCP, your coding agent asks Pensieve one question and gets the few passages that matter, with file and line. <b>Less grepping, fewer tokens, better answers.</b></p>
+    <p class="devnote rv d1">* In Developer mode, which adds a local index and search model. In Threads mode, your agent reads your threads over MCP.</p>
     <div class="stage term-pair" id="terms">
       <div class="term rv">
         <div class="lbl">Without Pensieve <span>grep and read</span></div>
@@ -633,28 +720,40 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
 <!-- 03 SHIP -->
 <section class="feat" id="ship" style="--c:var(--c-share)">
   <div class="wrap">
-    <div class="grid2">
+    <div class="sec-hd">
       <div>
         <div class="num rv"><b>03</b>Ship or discard</div>
-        <h2 class="rv">Close the work, <em>not just the tab.</em></h2>
-        <p class="lede rv d1">Ship and Discard turn a thread into <b>the steps left to close it</b>. Ship commits, pushes, opens the PR, merges it and marks the ticket done. Discard drops the changes, closes the PR, deletes the branch and cancels the ticket. Your agent does the steps in Terminal, and it asks before each step that leaves your Mac.</p>
+        <h2 class="rv">Ship more,<br><em>forget less.</em></h2>
       </div>
-      <div class="stage rv d1">
-        <div class="window" aria-label="Example Ship modal">
-          <div class="chrome"><i></i><i></i><i></i><div class="url">Pensieve · Threads</div></div>
-          <div class="body">
-            <div class="sc-hd">
-              <div><div class="sc-ttl">Ship the work on fix-card-retries</div><div class="sc-by">acme-app · 2 sessions · 1 file uncommitted</div></div>
-              <span class="state" style="--sc:var(--s-open)">Open</span>
-            </div>
-            <div class="res">
-              <div><span class="ic">1</span><p>Commit and push<small>1 uncommitted file</small></p><span></span></div>
-              <div><span class="ic">2</span><p>Review and merge PR #412<small>checks pass</small></p><span></span></div>
-              <div><span class="ic">3</span><p>Mark PAY-142 done<small>after the merge</small></p><span></span></div>
-            </div>
-            <div class="next" style="margin-top:18px;display:flex;justify-content:flex-end"><span class="resume">▶ Start shipping</span></div>
-          </div>
+      <p class="lede rv d1">With many agents making many changes, work piles up on branches that never merge. Pensieve keeps every branch with work on it in view until it is <b>shipped or discarded</b>. Ship and Discard list the steps left, and your agent does them in Terminal. It asks before each step that leaves your Mac.</p>
+    </div>
+    <div class="close-stage rv d1">
+      <div class="lanes" aria-label="Example: loose ends">
+        <div class="lanes-h"><span class="state" style="--sc:var(--s-loose-ends)">Loose ends</span><span>3 branches</span></div>
+        <div class="lane">
+          <div><div class="ln-t"><svg><use href="#g-branch"/></svg>fix-card-retries</div><div class="ln-s">acme-app · 2 sessions · #412 checks pass · 3 days quiet</div></div>
+          <div class="ln-b"><span class="bt on">Ship <i>5</i></span><span class="bt">Discard <i>4</i></span></div>
         </div>
+        <div class="lane">
+          <div><div class="ln-t"><svg><use href="#g-branch"/></svg>spike-queue-v2</div><div class="ln-s">acme-app · 1 session · <span class="unc">9 uncommitted files</span> · 6 days quiet</div></div>
+          <div class="ln-b"><span class="bt">Ship <i>2</i></span><span class="bt">Discard <i>3</i></span></div>
+        </div>
+        <div class="lane">
+          <div><div class="ln-t"><svg><use href="#g-branch"/></svg>pay-139-refund-timeout</div><div class="ln-s">billing-api · 1 session · PAY-139 In progress · 4 days quiet</div></div>
+          <div class="ln-b"><span class="bt">Ship <i>3</i></span><span class="bt">Discard <i>2</i></span></div>
+        </div>
+      </div>
+      <div class="ship" role="img" aria-label="Example Ship modal">
+        <div class="sh-h"><b>Ship the work on</b><span class="br"><svg><use href="#g-branch"/></svg><code>fix-card-retries</code></span><span class="x">✕</span></div>
+        <p class="sh-cap">The steps that take this work to merged and done, for 2 threads.</p>
+        <ul>
+          <li>Commit 3 changed files on fix-card-retries</li>
+          <li>Get #412 reviewed</li>
+          <li>Merge #412</li>
+          <li>Close PAY-142: its pull request merged</li>
+          <li>Delete branch fix-card-retries after the merge</li>
+        </ul>
+        <div class="sh-f"><span class="bt">Cancel</span><span class="bt pri">✦ Start shipping</span></div>
       </div>
     </div>
     <div class="points">
@@ -668,25 +767,42 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
 <!-- 04 OWNERS -->
 <section class="feat" id="owners" style="--c:var(--c-owners);padding-top:0">
   <div class="wrap">
-    <div class="grid2">
-      <div class="stage rv" style="margin-top:0">
+    <div class="sec-hd">
+      <div>
+        <div class="num rv"><b>04</b>Share and ask</div>
+        <h2 class="rv">Share more,<br><em>silo less.</em></h2>
+      </div>
+      <div>
+        <p class="lede rv d1"><b>Hand a thread to a coworker</b>, and they pick up where you left off. Ask about a topic, not a file, and Pensieve names the people who know it best.<sup class="dev">*</sup> It also shows where knowledge sits with one person, or with someone who has moved on, so your team can spread it around.<sup class="dev">*</sup></p>
+        <p class="devnote rv d1">* In Developer mode: People and Insights read the index of your repos.</p>
+      </div>
+    </div>
+    <div class="trio">
+      <div class="share rv" aria-label="Example: a shared thread">
+        <div class="sh-file"><svg><use href="#g-doc"/></svg><span><b>fix-card-retries.html</b><small>Saved to Downloads · 1 file</small></span></div>
+        <div class="sh-t">Retry declined cards <span class="state" style="--sc:var(--s-loose-ends)">Loose ends</span></div>
+        <dl>
+          <div><dt>Kept</dt><dd>PR #412 · PAY-142 · the branch · #payments thread</dd></div>
+          <div><dt>Summed up</dt><dd>2 sessions · 3 uncommitted files</dd></div>
+          <div><dt>Left out</dt><dd>Direct messages · your local files</dd></div>
+        </dl>
+        <p class="tip">Their agent reads the thread's JSON in the page, then picks up the work.</p>
+      </div>
+      <div class="rv d1">
         <div class="who" aria-label="Example: who knows about billing retries">
           <div class="q">Who knows about <b>“billing retries”</b></div>
           <div class="person"><span class="av" style="background:#3d7bff">MR</span><p>Maya Rivera<small>wrote most of payments/retry</small></p><b>62%</b><span class="t"><i style="--w:62%"></i></span></div>
           <div class="person"><span class="av" style="background:#a35cff">JO</span><p>Jonah Okafor<small>active this week</small></p><b>24%</b><span class="t"><i style="--w:24%"></i></span></div>
           <div class="person"><span class="av" style="background:#8d8b84">You</span><p>You<small>2 commits nearby</small></p><b>9%</b><span class="t"><i style="--w:9%"></i></span></div>
         </div>
+      </div>
+      <div class="rv d2">
         <div class="risk" aria-label="Example knowledge gap">
           <div class="hd"><b>billing/tax</b><span>Who wrote it</span></div>
           <div class="seg"><i style="flex:78;background:var(--ink-3);opacity:.55"></i><i style="flex:14;background:var(--c-owners)"></i><i style="flex:8;background:var(--line)"></i></div>
           <div class="legend"><span style="--lc:var(--ink-3)">Daniel Kim · moved on · 78%</span><span style="--lc:var(--c-owners)">Priya Nair · 14%</span><span style="--lc:var(--line)">Others · 8%</span></div>
           <p class="tip">Priya knows it best today. Ask her, and write down what Daniel knew.</p>
         </div>
-      </div>
-      <div>
-        <div class="num rv"><b>04</b>Domain insights</div>
-        <h2 class="rv">Share more,<br><em>silo less.</em></h2>
-        <p class="lede rv d1">Ask about a topic, not a file, and Pensieve names the people who know it best, from git blame. It also shows <b>where knowledge sits with one person</b>, or with someone who has moved on, so your team can spread it around.</p>
       </div>
     </div>
   </div>
@@ -697,9 +813,8 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
   <div class="wrap">
     <h2 class="rv">And it stays out of your way.</h2>
     <div class="tiles">
-      <div class="tile rv"><div class="g"><kbd>⌃</kbd><kbd>⇧</kbd></div><h3>Search from anywhere</h3><p>In Developer mode: files, code and past agent sessions, by meaning or by exact words. Tap Control+Shift.</p></div>
-      <div class="tile rv d1"><div class="g"><span class="pulse"></span></div><h3>Always current</h3><p>Edit a file and search it seconds later. Uncommitted changes and every worktree count.</p></div>
-      <div class="tile rv d2"><div class="g"><svg width="40" height="40" style="color:var(--ink)"><use href="#mark"/></svg></div><h3>Stays on your Mac</h3><p>No account, no cloud. Threads mode needs no index and no model. Developer mode adds a local search model and a local index.</p></div>
+      <div class="tile rv"><div class="g"><span class="pulse"></span></div><h3>Always current</h3><p>A new message in a session shows on its thread at once. Uncommitted changes and every worktree count. In Developer mode, search an edited file seconds later.</p></div>
+      <div class="tile rv d1"><div class="g"><svg width="40" height="40" style="color:var(--ink)"><use href="#mark"/></svg></div><h3>Stays on your Mac</h3><p>No account, no cloud. Threads mode needs no index and no model. Developer mode adds a local search model and a local index.</p></div>
     </div>
   </div>
 </section>
@@ -730,7 +845,7 @@ footer nav{display:flex;gap:18px;flex-wrap:wrap}
 <section class="faq">
   <div class="wrap">
     <h2>Questions.</h2>
-    <details><summary>What does Pensieve index?</summary><p>Threads mode, the default, indexes nothing: it reads your agent sessions, git, GitHub and your issue tracker (Jira, Linear or Asana). Developer mode also indexes the files, folders and git repos that you choose, with uncommitted changes and worktrees. With MCP connections, it also collects information such as posts from Slack. You choose each source. Pensieve doesn't expose private messages.</p></details>
+    <details><summary>What does Pensieve index?</summary><p>Threads mode, the default, indexes nothing: it reads your agent sessions, git, GitHub, your issue tracker (Jira, Linear or Asana) and, if you connect it, Slack. Developer mode also indexes the files, folders and git repos that you choose, with uncommitted changes and worktrees. With MCP connections, it also collects items such as Notion pages. You choose each source. Direct messages and private channels stay on your Mac: a thread that you share leaves them out.</p></details>
     <details><summary>Threads mode or Developer mode?</summary><p>Start with Threads mode. It needs no index and no model. Developer mode adds search for your agents, the Map, People and Insights, and it runs the search model on the GPU. You can switch in Settings.</p></details>
     <details><summary>Does anything leave my Mac?</summary><p>Your files, code and sessions don't. Indexing and search run on your Mac. Pensieve downloads its models and checks GitHub for updates. Pensieve is a tool that your own agent drives. If you use a cloud agent with Pensieve, what that agent reads goes to its provider.</p></details>
     <details><summary>Do I need an AI model?</summary><p>No. Threads, search, agent context, ownership and knowledge gaps need no text model. Developer mode runs a local search model. Session summaries and insights come from the agent that you connect over MCP, or from an engine that you choose in Settings → Models: the built-in Qwen 3.5 9B on your Mac, a command-line agent, or a model server that you run, such as LM Studio.</p></details>

@@ -2,14 +2,13 @@
 item. Switching a source off removes what it had indexed on the next sweep."""
 from pathlib import Path
 
-from pensieve import apps, config, connections, connectors, settings
+from pensieve import config, connections, connectors, settings
 
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "qwen": "Qwen Code"}
 CATEGORIES = [
     ("agents", "AI agent sessions", "Your conversations with coding agents, linked to the code they touched."),
     ("files", "Files & folders", "Documents in these folders: text, Markdown, code, PDF, Word, PowerPoint. Git repos inside them are indexed as repos."),
     ("repos", "Git repositories", "Code with git blame and history, including uncommitted changes and linked worktrees."),
-    ("apps", "Apps", "Content that lives inside apps on this Mac."),
     ("connections", "Connections", "Tickets, messages and pages from your MCP servers (Jira, Slack, Linear and others), "
      "collected with read-only tools and kept over time, with each change. A connection is on once Pensieve holds data from it, unless you switch it off."),
 ]
@@ -64,6 +63,8 @@ def connection_items() -> list[dict]:
 
 
 def _via(r: dict) -> str:
+    if r["origin"] == "api":
+        return f"with your Slack app{' as ' + r['account'] if r.get('account') else ''}"
     return {"cli": "through the gh command line", "own": "added here"}.get(
         r["origin"]) or f"from the {' and '.join(r.get('agents') or [])} config"
 
@@ -105,6 +106,7 @@ def connector_rows() -> list[dict]:
             detail = "Your Drive for desktop folder is in Files & folders" if state == "on" else \
                 "Drive for desktop is on this Mac: add its folder"
         rows.append(dict(id=pid, label=p["label"], state=state, detail=detail, sid=best["id"] if best else None,
+                         token=any(r["id"] == connections.SLACK for r in mine),
                          items=sum(r["items"] for r in mine), signin=signin, folders=folders,
                          signed_in=bool(signin) and mcp_oauth.signed_in(signin),
                          add=[{k: v for k, v in a.items() if k not in ("command", "args")} for a in p["add"]]))
@@ -200,20 +202,12 @@ def catalog(store, repos, files) -> list[dict]:
             repo_items.append(dict(id=d, label=Path(r).name, detail=_home(r), available=Path(r).is_dir(), enabled=False, count=0,
                                    unit="files", parent="repos/discover"))
 
-    app_items = []
-    for k, a in apps.APPS.items():
-        st = apps.state(k)
-        roots = [str(p) for p in a["roots"]()] if a["available"]() else []
-        app_items.append(dict(id=f"apps/{k}", label=a["label"], detail=st.get("error") or a["detail"], error=bool(st.get("error")),
-                              available=a["available"](), enabled=on(f"apps/{k}"),
-                              count=sum(n for r, n in per_root.items() if any(r == x or r.startswith(x + "/") for x in roots)), unit="items"))
-
-    items = {"agents": agents, "files": folders, "repos": repo_items, "apps": app_items, "connections": connection_items()}
+    items = {"agents": agents, "files": folders, "repos": repo_items, "connections": connection_items()}
     for it in (i for group in items.values() for i in group if i.get("kind") not in ("rule", "worktree")):
         it["map"] = settings.on_map(it["id"])
     return [dict(id=c, label=label, description=desc, enabled=on(c), map=settings.on_map(c), items=items[c],
                  count=sum(i.get("count", 0) for i in items[c] if i.get("kind") not in ("rule", "worktree")),
-                 addable=c != "apps",
+                 addable=True,
                  **({"note": connections_note(), "connectors": connector_rows()} if c == "connections" else {}))
             for c, label, desc in CATEGORIES]
 

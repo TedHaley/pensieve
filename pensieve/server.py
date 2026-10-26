@@ -1605,8 +1605,16 @@ async def add_connector(pid: str, req: ConnectorReq):
     if a["kind"] == "gh":
         await asyncio.to_thread(connections.discover_gh)
         return {"sources": sources.catalog(store, repos, files)}
-    if a["kind"] in ("header", "env") and not req.secret.strip():
+    if a["kind"] in ("header", "env", "slack_token") and not req.secret.strip():
         raise HTTPException(400, "Paste the token first.")
+    if a["kind"] == "slack_token":
+        try:
+            await asyncio.to_thread(connections.connect_slack, req.secret)
+        except (ValueError, RuntimeError) as e:
+            raise HTTPException(400, f"Slack did not accept the token: {e}")
+        await asyncio.to_thread(connections.sync_sources)
+        asyncio.create_task(_collect(connections.SLACK))
+        return {"sid": connections.SLACK, "sources": sources.catalog(store, repos, files)}
     name = p["label"]
     if a["kind"] == "oauth":
         x = {"name": name, "url": a["url"], "headers": {}, "oauth": True, **({"scope": a["scope"]} if a.get("scope") else {})}
@@ -1630,6 +1638,13 @@ async def add_connector(pid: str, req: ConnectorReq):
     else:
         await asyncio.to_thread(connections.discover_own)
     return {**out, "sid": sid, "sources": sources.catalog(store, repos, files)}
+
+
+@app.post("/api/connectors/slack/disconnect")
+async def disconnect_slack():
+    """Delete the Slack token from the Keychain. The messages collected so far stay."""
+    await asyncio.to_thread(connections.disconnect_slack)
+    return {"sources": sources.catalog(store, repos, files)}
 
 
 @app.post("/api/connectors/signin/{sid}")

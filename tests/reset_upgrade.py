@@ -27,7 +27,14 @@ def data(version: str):
     (DATA / "threads" / "facts" / "a.json").write_text("{}")
     (DATA / "v2" / "index.db").write_text("x")
     (DATA / "sink_status.json").write_text("{}")
-    sqlite3.connect(DATA / "v2" / "store.db").execute("CREATE TABLE IF NOT EXISTS threads (id)").connection.commit()
+    from pensieve.store import schema
+    con = sqlite3.connect(DATA / "v2" / "store.db")
+    con.execute("CREATE TABLE IF NOT EXISTS threads (id)")
+    con.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+    con.execute("DELETE FROM schema_version")
+    con.execute("INSERT INTO schema_version VALUES (?)", (schema.STORE_VERSION,))
+    con.commit()
+    con.close()
     (DATA / "settings.json").write_text(json.dumps({"setup_done": True, "mode": "developer", "repos": ["~/code/app"]}))
     reset.VERSION.write_text(version)
 
@@ -53,6 +60,23 @@ def run():
     results.append(check("an upgrade after 0.16 keeps the setup done",
                          json.loads((DATA / "settings.json").read_text())["setup_done"], True))
     results.append(check("and still resets the index", (DATA / "v2" / "index.db").exists(), False))
+
+    from pensieve.store import schema
+    data("0.16.1")
+    con = sqlite3.connect(DATA / "v2" / "store.db")
+    con.execute("UPDATE schema_version SET version = ?", (schema.STORE_VERSION - 1,))
+    con.commit()
+    con.close()
+    (DATA / "v2" / "connections.json").write_text("{}")
+    results.append(check("a store of another schema version is deleted with all of v2/, not migrated",
+                         (reset.settle_schema(), (DATA / "v2").exists(), (DATA / "threads" / "facts").exists()),
+                         ("store", False, False)))
+    results.append(check("and the settings stay", json.loads((DATA / "settings.json").read_text())["mode"], "developer"))
+    from pensieve import store as v2
+    db = v2.store_db()
+    results.append(check("the store is built again at this version",
+                         db.conn.execute("SELECT version FROM schema_version").fetchone()[0], schema.STORE_VERSION))
+    results.append(check("a store of this version stays", reset.settle_schema(), None))
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)

@@ -316,6 +316,20 @@ def test_turns_from_chunks():
                                          ("user", "ok"), ("assistant", "Added a limit of three.")]
 
 
+def test_fork_names_the_sessions_that_changed_the_branch():
+    """A fork's prompt names every session that changed the branch, so the agent can read their transcripts. A
+    session that only ran on the branch (a review) is not one of them."""
+    from pensieve.cards import _sessions_line, changed_by
+    kin = [dict(session="a", title="wrote it", did="committed and pushed feat", me=False),
+           dict(session="b", title="this one", did="uncommitted edits on feat", me=True),
+           dict(session="c", title="read it", did="worked on feat, no changes", me=False)]
+    assert [s["id"] for s in changed_by(dict(kin=kin))] == ["b", "a"]
+    assert [s["id"] for s in changed_by(dict(sessions=[dict(id="solo")]))] == ["solo"]
+    line = _sessions_line([dict(sessions=[dict(id="b"), dict(id="a")]), dict(sessions=[dict(id="a")])])
+    assert "b, a." in line and "pensieve transcript" in line
+    assert _sessions_line([dict(sessions=[])]) == ""
+
+
 
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]

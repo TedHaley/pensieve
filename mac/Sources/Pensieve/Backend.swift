@@ -69,8 +69,6 @@ final class Backend: ObservableObject {
         base = URL(string: s)!
     }
 
-    var hotkey: String { (settings["hotkey"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "ctrl+shift" }
-    var editor: String { (settings["editor"] as? String ?? "").lowercased() }
     /// Check GitHub for a newer release once a day (the user still chooses whether to install).
     var autoUpdateCheck: Bool { settings["auto_update_check"] as? Bool ?? true }
     /// Threads mode is the backend's "session" mode, its default: only agent sessions, as threads.
@@ -404,16 +402,5 @@ final class Backend: ObservableObject {
                 }
             }
         }
-    }
-
-    // MARK: search
-
-    func find(_ q: String, limit: Int = 20) async throws -> FindResponse {
-        let u = url("api/find", [URLQueryItem(name: "q", value: q), URLQueryItem(name: "limit", value: String(limit))])
-        let (d, r) = try await URLSession.shared.data(from: u)
-        guard let code = (r as? HTTPURLResponse)?.statusCode, code == 200 else {
-            throw URLError(.badServerResponse)
-        }
-        return try JSONDecoder().decode(FindResponse.self, from: d)
     }
 }

@@ -12,7 +12,7 @@ Strong focus on your context. This is how we stay focused on individuals. Contex
 - **How this differs:** "company brain" products build one shared picture of the company for everyone. Pensieve
   builds one picture for each person, from that person's point of view.
 - **Tabs, in this order:**
-  1. **Threads:** one thread for each agent session that wrote something (D5), in the states Open, To-do, Thoughts,
+  1. **Threads:** one thread for each agent session and branch that it did work on (D5), in the states Open, To-do, Thoughts,
      Loose ends, Closed and Forgotten. It is about you. Agents offer to close the thread closest to done.
   2. **Projects:** clusters of content and the project that each one belongs to (D8). It is about your team.
   3. **People:** the people you work closest with, as a graph (D9, D10).
@@ -69,6 +69,7 @@ and cost. Optional features need a measured benefit and no loss of accuracy. We 
 | D8 | The Projects tab: content in clusters, by project | Product | idea |
 | D9 | The People tab: the people you work closest with, as a graph | Product | investigating |
 | D10 | One identity for each person across Slack and GitHub | Product | investigating |
+| D11 | Slack messages on threads and people | Product | testing |
 | E1 | Connections as one list | Connections | idea |
 | E2 | Remote disks | Connections | idea |
 | E3 | Database metadata | Connections | idea |
@@ -556,6 +557,12 @@ benchmark run. The instructions keep grep for the cases where grep is better.
   branch's surviving lines holds the branch. Ship and Discard replace Wrap up. A to-do starts a session in a worktree
   (`start_todo`). Removed: model-written notes, done checks, goal cards, thread history, Share this thread, search
   by meaning, related documents, and the Coworkers and related work panel. Details: [`docs/threads.md`](docs/threads.md).
+- 2026-10-25: a thread is one session's work on one branch. A session did work on a branch when its lines are
+  uncommitted there, or are in commits that the remote's default branch does not have yet. A session that did work
+  on two branches has a thread in each branch's cluster. Its id is of the session and the branch. A session that
+  only ran on a feature branch has a thread there with 0% of the lines. A cluster's title is its PR's title, then its
+  ticket's, then the title of the session that holds the branch. Its Resume resumes that session. A fork's prompt
+  names every session that changed the branch.
 
 - **States** (`pensieve/task_states.py`): latent, conscious, subconscious, etched and forgotten. Each one has a
   meaning and an automatic rule. Forgotten: not done, quiet for 21 days (14 for latent work), no open PR and no
@@ -753,6 +760,36 @@ benchmark run. The instructions keep grep for the cases where grep is better.
 - **Measure:** on a sample of people that you know, wrong joins and missed joins.
 - **Status:** investigating
 - **Notes:**
+
+### D11. Slack messages on threads and people
+
+- **Why:** much of the talk about a piece of work happens in Slack. A card shows only the Slack messages that its
+  own session read or sent through MCP. The People tab does not show what you and a person said to each other.
+- **Have:** connections collect Slack messages as Markdown files (E4). The index embeds these files like other
+  files, so a new embedding step is not necessary. The person on each message has an identity key (`slack:<id>`,
+  D10).
+- **Try:**
+  1. Join a message to a thread by exact references first: a branch name, a PR link or a ticket key in the
+     message's text.
+  2. Then join by meaning: the message's embedding near the session's summary, with a high threshold. Show a join
+     by meaning as a suggestion, because it can be wrong.
+  3. On a person's card in the People tab, list the messages between you and that person, and the threads that
+     these messages join to.
+- **Rule:** only messages that the connection could read with your access. A direct message stays private: it is
+  not in a thread that you share (E4).
+- **Measure:** on a sample of threads, the messages that you would join by hand. Count wrong joins and missed joins
+  for each of the two join types.
+- **Status:** testing
+- **Notes:**
+  - 2026-10-26: built the Slack connection and step 1 and 3.
+    - Connection: a Slack app that you make from a manifest, with read scopes only. Pensieve keeps its user token in
+      the Keychain and reads with the Web API (`connectors.collect_slack`). It reads the messages you sent, the
+      messages sent to you and the messages that mention you, and the whole thread of each recent channel message.
+    - Step 1: `chat_joins.py`. A message joins each thread whose ticket key, PR link or specific branch name it
+      holds. A message no longer merges tickets into one task.
+    - Step 3: the Slack threads on a person's card link to the threads that they join.
+    - Step 2 (join by meaning) is not built: threads mode reads no index.
+    - Not yet measured on real messages: the 91 messages from agent sessions on the test Mac name no thread.
 
 ## E. Connections
 

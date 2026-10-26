@@ -60,8 +60,8 @@ starts again at the mode step.</p>
 <h2 id="parts">The main parts</h2>
 
 <h3 id="threads">Threads</h3>
-<p>Pensieve makes one thread for each agent session that wrote something: edits, commits, a branch or a PR. A thread
-joins the session with its branch, PRs and tickets. It gives the steps left to close the work, and the command that
+<p>Pensieve makes one thread for each agent session and each branch that the session did work on. A thread joins
+the session with its branch, PRs and tickets, and with the Slack messages that name them. It gives the steps left to close the work, and the command that
 resumes the session. The threads of one branch sit together in a cluster. A ticket that is assigned to you, with no
 work on it yet, is a to-do. Each thread has one of six states:
 <span class="state" style="--sc:var(--s-open)">Open</span>,
@@ -81,8 +81,9 @@ in a scope. By default, the scope is the repo that the agent started in.
 <h3 id="search">Search</h3>
 <p>Search is part of Developer mode. It finds items by meaning and by exact words. It blends a vector search with
 a full-text search. Then it
-gives more weight to exact text and to names that a file defines. A search takes about 0.1 to 0.2 seconds. On a Mac,
-press <kbd>Control</kbd>+<kbd>Shift</kbd> to open the search panel.</p>
+gives more weight to exact text and to names that a file defines. A search takes about 0.1 to 0.2 seconds. Your
+agents search over MCP, and you search in the app with <kbd>⌘</kbd>+<kbd>K</kbd>. Search covers only the sources that
+you chose.</p>
 {table(["Query", "Finds"], [
     ["<code>pricing model</code>", "Items about that subject, by meaning"],
     ["<code>\"rate limit\"</code>", "Items that contain those exact words (case-insensitive)"],
@@ -119,7 +120,6 @@ can change your choice in Settings → Sources.</p>
   <li><strong>AI agent sessions:</strong> Claude Code, Codex and Qwen Code transcripts.</li>
   <li><strong>Files and folders:</strong> documents in <code>~/Documents</code>, <code>~/Desktop</code>, <code>~/Downloads</code> and the folders that you add.</li>
   <li><strong>Git repositories:</strong> committed, staged, modified and untracked files, and linked worktrees.</li>
-  <li><strong>Apps:</strong> Obsidian vaults and, with your permission, Apple Notes.</li>
   <li><strong>Connections:</strong> items from MCP servers. Each one is off by default.</li>
 </ul>
 <p>Pensieve never indexes files that look like secrets, such as <code>.env</code> files, keys and credentials.</p>
@@ -143,9 +143,9 @@ page("install", "Install",
      f"""
 <h2 id="requirements">Requirements</h2>
 {table(["Computer", "What you get"], [
-    ["Mac with Apple Silicon, macOS 14 or later", "The app (search panel, menu bar, Threads tab, Map) and the <code>pensieve</code> backend. This is the main platform."],
+    ["Mac with Apple Silicon, macOS 14 or later", "The app (menu bar, Threads tab, Map) and the <code>pensieve</code> backend. This is the main platform."],
     ["Intel Mac", "The backend and the Map in your browser. If the Xcode command-line tools are installed, the script also builds the app from source. The release download is for Apple Silicon only."],
-    ["Linux", "The backend, the MCP server and the Map in your browser. The search panel app is macOS only."],
+    ["Linux", "The backend, the MCP server and the Map in your browser. The menu bar app is macOS only."],
 ])}
 <p>On Apple Silicon, the search model runs on MLX. On other computers, it runs on sentence-transformers and
 PyTorch (CUDA or CPU). This makes the install about 650 MB larger.</p>

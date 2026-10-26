@@ -920,12 +920,6 @@ def show_visualizer(view: str | None = None) -> dict:
 
 
 @tool()
-def show_search(query: str = "") -> dict:
-    """Pop up the Pensieve search panel on the user's screen, prefilled with a query."""
-    return actions.show_search(query)
-
-
-@tool()
 def status() -> dict:
     """Index size (files, repos, code chunks, sessions) and whether indexing is running."""
     db = _c()["store"].db
@@ -976,14 +970,14 @@ def get_settings() -> dict:
 
 @tool()
 def update_settings(changes: dict[str, Any]) -> dict:
-    """Change settings, e.g. {"hotkey": "cmd+shift+space"}, {"editor": "cursor"}, {"max_repo_files": 20000},
+    """Change settings, e.g. {"editor": "cursor"}, {"max_repo_files": 20000},
     {"exclude_files": [...]}. To switch what gets indexed on or off, use set_source. Takes effect within seconds."""
     return {"settings": settings.public(settings.update(changes))}
 
 
 @tool()
 def list_sources() -> list[dict]:
-    """What Pensieve indexes, by category (agents, files, repos, apps, connections), with on/off state and item counts.
+    """What Pensieve indexes, by category (agents, files, repos, connections), with on/off state and item counts.
     Use the ids with set_source."""
     return [dict(id=c["id"], label=c["label"], enabled=c["enabled"], map=c["map"], count=c["count"],
                  items=[{k: i.get(k) for k in ("id", "label", "detail", "enabled", "map", "available", "count")}
@@ -993,8 +987,8 @@ def list_sources() -> list[dict]:
 
 @tool()
 def set_source(id: str, enabled: bool | None = None, map: bool | None = None) -> dict:
-    """Switch a whole category ('agents', 'files', 'repos', 'apps') or one item ('agents/codex', 'files/~/Downloads',
-    'repos/discover', 'repos/<repo root>', 'apps/apple_notes') on or off (`enabled`; off removes what it indexed),
+    """Switch a whole category ('agents', 'files', 'repos') or one item ('agents/codex', 'files/~/Downloads',
+    'repos/discover', 'repos/<repo root>') on or off (`enabled`; off removes what it indexed),
     or only on or off the map (`map`; it stays searchable)."""
     if enabled is not None:
         sources.set_source(id, enabled, _c()["repos"])
@@ -1070,7 +1064,7 @@ def setup_guide() -> dict:
 @tool()
 def setup_scan(profiles: list[str] | None = None, categories: list[str] | None = None) -> list[dict]:
     """Look for what can be indexed, in the categories of the chosen profiles (ids from setup_guide), or in the
-    named categories ('agents', 'files', 'repos', 'apps'). This reads the user's folders, so macOS may ask them for
+    named categories ('agents', 'files', 'repos'). This reads the user's folders, so macOS may ask them for
     access. Returns each category's items: id (for setup_start), label, size, and `checked` = recommended."""
     cats = categories or (onboarding.categories_for(profiles) if profiles else None)
     return onboarding.scan(cats, fresh=True)

@@ -203,6 +203,19 @@ def status_of_task(task: dict, sinks: list[tm.Sink]) -> dict:
         if s.kind == tm.SinkKind.BRANCH and s.key.split("@", 1)[-1] in in_main and status.get(s.label) != "OPEN" \
                 and s.label not in ours:
             status[s.label] = "MERGED"
+    # GitHub says DELETED both for a branch never pushed and for one deleted after its merge. A branch with no PR,
+    # whose upstream in git config is none or the default branch it was cut from, was never pushed: its work in the
+    # checkout keeps it open.
+    from pensieve import work
+    heads = {p.get("head") for p in task.get("prs", []) + (task.get("contributed") or {}).get("prs", [])}
+    upstream = lambda p: work._git(p.get("path", ""), "config", f"branch.{p['branch']}.merge", ttl=60)
+    local_work = {p["branch"] for p in task.get("places", []) if p.get("branch") and not p.get("head")
+                  and p["branch"] not in heads and (p.get("changed") or p.get("unmerged"))
+                  and upstream(p).removeprefix("refs/heads/") in ("", *work.DEFAULT_BRANCHES)}
+    for s in sinks:
+        if s.kind == tm.SinkKind.BRANCH and s.key.split("@", 1)[-1] in local_work \
+                and status.get(s.label) in ("DELETED", "UNKNOWN", None) and s.label not in ours:
+            status[s.label] = "OPEN"
     return status
 
 
