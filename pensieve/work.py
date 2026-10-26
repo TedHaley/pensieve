@@ -1706,8 +1706,8 @@ def _place(path: str, root: str, used: str, wts: dict) -> dict:
         common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", ttl=3600)
         p["linked"] = str(Path(common).parent) if common.endswith("/.git") else ""
     if p["branch"] not in DEFAULT_BRANCHES:  # each commit of the branch: is its patch already in the default branch
-        from pensieve import stale
-        base = stale._default_branch(root)
+        from pensieve import session_threads
+        base = session_threads._base(root)  # cached: stale._default_branch runs git each time
         cherry = _git(root, "cherry", base, p["branch"], ttl=300).splitlines() if base else []
         p["commits"] = len(cherry)
         p["unmerged"] = sum(line.startswith("+") for line in cherry)

@@ -458,8 +458,10 @@ class Repos:
         swept = [r for base in (settings.paths("folders") + settings.paths("sweep_roots") if settings.enabled("repos/discover") else [])
                  for r in find_repos(base, s["sweep_depth"], ex)]
         self.skipped = []
-        for r in dict.fromkeys(swept):  # found by the sweep: skip giant repos unless named explicitly or used by sessions
-            n = git(r, "ls-files").count("\n")
+        swept = list(dict.fromkeys(swept))
+        with ThreadPoolExecutor(8) as pool:  # one git call per repo, side by side
+            sizes = list(pool.map(lambda r: git(r, "ls-files").count("\n"), swept))
+        for r, n in zip(swept, sizes):  # found by the sweep: skip giant repos unless named explicitly or used by sessions
             if n > s["max_repo_files"]:
                 self.skipped.append(dict(root=r, files=n))
             else:

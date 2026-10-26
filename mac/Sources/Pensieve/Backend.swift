@@ -236,14 +236,20 @@ final class Backend: ObservableObject {
         }.value
         guard !pids.isEmpty else { return false }
         state = .installing("Updating Pensieve…")
+        // Wait for the processes to exit, not for the HTTP check to fail: a busy backend can take more than isUp's
+        // 2 s to answer, and a new backend started while it runs deletes the index under it.
+        let alive = { pids.contains { kill($0, 0) == 0 } }
         pids.forEach { kill($0, SIGTERM) }
         for _ in 0..<50 {
             try? await Task.sleep(for: .milliseconds(200))
-            if !(await isUp()) { return true }
+            if !alive() { return true }
         }
         pids.forEach { kill($0, SIGKILL) }
-        try? await Task.sleep(for: .milliseconds(500))
-        return !(await isUp())
+        for _ in 0..<25 {
+            try? await Task.sleep(for: .milliseconds(200))
+            if !alive() { return true }
+        }
+        return false
     }
 
     // MARK: bundled installer (the DMG build puts uv and the backend wheel in Contents/Resources/backend)

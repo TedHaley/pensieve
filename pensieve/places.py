@@ -87,7 +87,11 @@ def transcript_rows() -> list[tuple]:
                     cwd = ""
             else:
                 proj = f.relative_to(root).parts[0]
-                cwd = folders.setdefault(proj, _decode(proj))
+                if proj not in folders:  # decoding tries many folders on disk: once per project, and never for a
+                    # folder under SKIP (a temp folder), which compute() leaves out anyway
+                    skip = proj.startswith(tuple(s.rstrip("/").replace("/", "-") + "-" for s in SKIP))
+                    folders[proj] = "" if skip else _decode(proj)
+                cwd = folders[proj]
             when = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).isoformat()
             rows.append((str(f), cwd, when, None, None))
     return rows

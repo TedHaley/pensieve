@@ -2259,6 +2259,13 @@ async def test_engine(req: EngineTestReq):
     return await asyncio.to_thread(engine.test, s)
 
 
+@app.post("/api/engine/restart")
+async def restart_engine():
+    """Stop the built-in model and start it again; it loads in the background. Returns the engine's status."""
+    from pensieve import engine
+    return await asyncio.to_thread(engine.restart)
+
+
 @app.get("/api/engine/models")
 async def engine_models(url: str, key: str = ""):
     """The models that an OpenAI-compatible server lists; a saved key is used only for the saved URL."""

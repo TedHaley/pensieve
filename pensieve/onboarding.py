@@ -5,6 +5,7 @@ Pensieve can ask the user the same questions in its conversation.
 Nothing reads the user's folders before `scan`: the categories it is given are the only ones it looks in, so macOS
 asks for folder access when the user has chosen to look, not when the app starts."""
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pensieve import actions, config, content, settings, sources
@@ -80,8 +81,16 @@ def guide() -> dict:
 
 
 def engines() -> list[dict]:
-    """The text engines that setup offers: none. The agent connected over MCP writes the text (settings.ENGINES)."""
-    return []
+    """The text engines that setup offers, with why one cannot run on this Mac."""
+    from pensieve import engine
+    claude = None if config.find_exe("claude") else "Claude Code is not installed."
+    return [dict(id="cli", label="Claude Code (Haiku)", command=engine.TEMPLATES[0]["command"], unavailable=claude,
+                 about="Your Claude Code writes them with its smallest model, one job at a time. It uses your Claude plan."),
+            dict(id="builtin", label="Built-in Qwen 3.5 9B", unavailable=engine.builtin_unsupported(),
+                 about="Runs on this Mac, and nothing leaves it. Pensieve starts it when there is work and stops it "
+                       "after 10 minutes without work. It downloads about 5 GB once, or uses LM Studio's copy."),
+            dict(id="server", label="Model server", unavailable=None,
+                 about="A server that you run, such as LM Studio or Ollama, or a hosted API. Set it in Settings → Models.")]
 
 
 CONTENT_NOTES = {  # what switching a kind on costs; speeds measured on an M4 Max
@@ -120,29 +129,41 @@ def scan(categories=None, fresh=False) -> list[dict]:
         return hit[1]
     s = settings.load()
     on = settings.enabled
-    items = {}
-    if "agents" in cats:
-        temp = ("-private-", "-tmp-", "-var-folders-") if s["skip_temp_sessions"] else ()
-        items["agents"] = []
-        for sid, name, root, pattern in config.session_sources():
-            # a project folder is named after the session's working folder; parsing thousands of transcripts to read
-            # their cwd would make this list slow, and sessions in temp folders are skipped at indexing anyway
-            n = sum(1 for p in root.glob(pattern) if "subagents" not in p.parts
-                    and not p.relative_to(root).parts[0].startswith(temp)) if root.is_dir() else 0
-            done = _indexed_sessions(root)
-            items["agents"].append(dict(id=sid, label=sources.AGENTS.get(name, name), detail=_tilde(root), size=n,
-                                        unit="sessions", available=n > 0, checked=n > 0 and on(sid), indexed=min(done, n),
-                                        seconds=_seconds(max(0, n - done) * SESSION_CHUNKS)))
-    if "files" in cats:
-        items["files"] = [dict(id=f"files/{f}", label=Path(f).name or f, detail=_tilde(Path(f).expanduser()), size=None,
-                               unit="", available=Path(f).expanduser().is_dir(),
-                               checked=Path(f).expanduser().is_dir() and on(f"files/{f}")) for f in s["folders"]]
-    if "repos" in cats:
-        items["repos"] = _repos(s, on)
+    found = {}
+    # the categories read different folders: read them side by side (the reads and git run outside the GIL)
+    with ThreadPoolExecutor(3) as pool:
+        if "agents" in cats:
+            found["agents"] = pool.submit(_agents, s, on)
+        if "files" in cats:
+            found["files"] = pool.submit(lambda: [dict(
+                id=f"files/{f}", label=Path(f).name or f, detail=_tilde(Path(f).expanduser()), size=None, unit="",
+                available=Path(f).expanduser().is_dir(), checked=Path(f).expanduser().is_dir() and on(f"files/{f}"))
+                for f in s["folders"]])
+        if "repos" in cats:
+            found["repos"] = pool.submit(_repos, s, on)
+        items = {c: f.result() for c, f in found.items()}
     data =[dict(id=c, label=label, description=desc, reads=reads(c), items=items[c])
             for c, label, desc in sources.CATEGORIES if c in cats]
     _cache[cats] = (time.time(), data)
     return data
+
+
+def _agents(s, on) -> list[dict]:
+    temp = ("-private-", "-tmp-", "-var-folders-") if s["skip_temp_sessions"] else ()
+    out = []
+    for sid, name, root, pattern in config.session_sources():
+        # a project folder is named after the session's working folder; parsing thousands of transcripts to read
+        # their cwd would make this list slow, and sessions in temp folders are skipped at indexing anyway
+        n = sum(1 for p in root.glob(pattern) if "subagents" not in p.parts
+                and not p.relative_to(root).parts[0].startswith(temp)) if root.is_dir() else 0
+        done = _indexed_sessions(root)
+        out.append(dict(id=sid, label=sources.AGENTS.get(name, name), detail=_tilde(root), size=n,
+                        unit="sessions", available=n > 0, checked=n > 0 and on(sid), indexed=min(done, n),
+                        seconds=_seconds(max(0, n - done) * SESSION_CHUNKS)))
+    return out
+
+
+SCAN_WORKERS = 8  # threads that run git and read the files of the found repos in _repos
 
 
 def _repos(s, on):
@@ -150,10 +171,13 @@ def _repos(s, on):
     from pensieve import places
     repos = actions.ctx["repos"]
     repos._extra = None
-    found = repos._extra_roots()
+    with ThreadPoolExecutor(2) as pool:  # the folder sweep and the transcripts, side by side
+        rows = pool.submit(places.transcript_rows)
+        found = repos._extra_roots()
+        rows = rows.result()
     big = {sk["root"]: sk["files"] for sk in getattr(repos, "skipped", [])}
     # the repos the user's agents work in, from their transcripts: offered first, and checked even when big
-    used = {o["root"]: o["sessions"] for o in places.compute(places.transcript_rows(), lambda r, k: {"state": "unknown"})
+    used = {o["root"]: o["sessions"] for o in places.compute(rows, lambda r, k: {"state": "unknown"})
             if o["kind"] == "repo"}
     found = list(dict.fromkeys([*sorted(used, key=used.get, reverse=True), *found]))
     out = [dict(id="repos/discover", label="Find new repos automatically",
@@ -162,11 +186,14 @@ def _repos(s, on):
                        f"to choose, not indexed on their own", size=None, unit="", available=True,
                 checked=on("repos/discover"), rule=True)]
     clones = {}  # one row per remote: Pensieve indexes a single clone of each (Repos.discover)
-    for r in sorted(set(found) | set(big), key=lambda r: (len(Path(r).name), Path(r).name.lower())):
-        clones.setdefault(norm_remote(git(r, "config", "--get", "remote.origin.url")) or r, []).append(r)
-    agent_n = lambda c: max(used.get(x, 0) for x in c)
-    for r, *others in sorted(clones.values(), key=lambda c: (-agent_n(c), Path(c[0]).name.lower())):
-        est = repos.estimate_chunks(r)
+    roots = sorted(set(found) | set(big), key=lambda r: (len(Path(r).name), Path(r).name.lower()))
+    with ThreadPoolExecutor(SCAN_WORKERS) as pool:
+        for r, remote in zip(roots, pool.map(lambda r: git(r, "config", "--get", "remote.origin.url"), roots)):
+            clones.setdefault(norm_remote(remote) or r, []).append(r)
+        agent_n = lambda c: max(used.get(x, 0) for x in c)
+        groups = sorted(clones.values(), key=lambda c: (-agent_n(c), Path(c[0]).name.lower()))
+        ests = list(pool.map(lambda c: repos.estimate_chunks(c[0]), groups))
+    for (r, *others), est in zip(groups, ests):
         also = f" · also {len(others)} other clone{'s' if len(others) > 1 else ''}" if others else ""
         n = agent_n([r, *others])
         work = f" · your agents worked here in {n} session{'s' if n > 1 else ''}" if n else ""

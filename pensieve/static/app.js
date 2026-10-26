@@ -2412,7 +2412,7 @@ function renderSetup() {
       <h3 class="setup-h">Embedding model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Embedding model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
         <div class="ai-opt-h"><b>${esc(m.label)}</b><span class="priv local">Local</span></div><p>${esc(m.about)}</p></button>`).join('')}</div>
-      <h3 class="setup-h">Summaries and insights</h3><p class="sub">The agent you connect to Pensieve over MCP writes session summaries, topic names and insights. Pensieve runs no text model of its own.</p>
+      <h3 class="setup-h">Summaries and insights</h3><p class="sub">What writes session summaries, topic names and insights in the background. You can change it later in Settings → Models.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Text engine">${(g.engines || []).map(x => `<button class="ai-opt ${st.engine === x.id ? 'on' : ''}" data-setup-engine="${esc(x.id)}" role="radio" aria-checked="${st.engine === x.id}" ${x.unavailable ? 'disabled' : ''}>
         <div class="ai-opt-h"><b>${esc(x.label)}</b>${x.id === 'builtin' ? '<span class="priv local">Local</span>' : ''}</div><p>${esc(x.unavailable || x.about)}</p></button>`).join('')}</div>
       ${btns('start', 'Next')}`;
@@ -2687,10 +2687,19 @@ function bindSettingsNav(side) {
 }
 async function loadSettings(force = false) {
   if (S.set && !force) return;
-  const [r, st] = await Promise.all([api('/api/settings'), api('/api/status').catch(() => S.status), loadSources(), loadScopes()]);
-  Object.assign(S.status, st);
+  // The page waits only for the settings. The sources, scopes and counts can come later from a busy server: their
+  // boxes show a placeholder until they arrive.
+  const rest = Promise.all([api('/api/status').catch(() => null), loadSources(), loadScopes()]);
+  const r = await api('/api/settings');
   S.set = {orig: r.settings, draft: structuredClone(r.settings), defaults: r.defaults, desc: r.descriptions, err: null, errKey: null};
   applyMode(r.settings.mode);
+  rest.then(([st]) => {
+    if (st) Object.assign(S.status, st);
+    if (S.view !== 'settings') return;
+    renderSources(); renderScopes();
+    const typing = $('#settings')?.contains(document.activeElement) && document.activeElement.matches('input,textarea,select');
+    if (S.setTab === 'general' && !typing) renderSettings();  // its counts come from the status
+  });
 }
 function applyMode(mode) {
   document.body.dataset.mode = mode === 'developer' ? 'developer' : 'session';
@@ -3003,7 +3012,7 @@ async function renderSettings() {
       <p class="sc-p">The agent that runs the sessions Pensieve starts in Terminal: Resume, Fork and Start. A session another agent wrote is taken over: your harness reads its transcript first, with <code>pensieve transcript</code>.</p>
       <div id="agentpick"><div class="spinner" style="margin:8px 0"></div></div></div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
-  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. Your agent, a command-line agent or a model server writes the summaries. MCP servers bring in tickets and messages.') + `
+  else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. The built-in model, a command-line agent or a model server writes the summaries. MCP servers bring in tickets and messages.') + `
     <div class="set-card mdl dev-only" id="set-Embedding-model">
       <div class="mdl-h"><span class="mdl-n">1</span><div class="mdl-t"><h3>Embedding model</h3><p>Finds your files, code and sessions by meaning. Always on.</p></div><span class="priv local">Local</span></div>
       <div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div>
@@ -3297,10 +3306,13 @@ window.addEventListener('hashchange', route);
 // Settings → Models: what writes thread notes, summaries and insights (engine.py): a command-line agent or a model
 // server that you run. ENG.test is the last Test result, ENG.models the server's model list.
 const ENG = {data: null, test: null, models: null, busy: false};
-const ENGINES = [['', 'Your agent'], ['builtin', 'Built-in Qwen'], ['cli', 'Command line'], ['server', 'Model server']];
+const ENGINES = [['builtin', 'Built-in Qwen'], ['cli', 'Command line'], ['server', 'Model server']];
 async function loadEngine() {
   try { ENG.data = await api('/api/engine'); } catch { ENG.data = ENG.data || {}; }
   if (S.view === 'settings' && S.setTab === 'ai') renderSettings();
+  // a built-in model that loads: look again until it runs or fails
+  clearTimeout(loadEngine.t);
+  if (ENG.data?.builtin?.status === 'starting' && S.view === 'settings' && S.setTab === 'ai') loadEngine.t = setTimeout(loadEngine, 3000);
 }
 function engineCardHtml() {
   const D = S.set?.draft; if (!D) return '';
@@ -3309,9 +3321,9 @@ function engineCardHtml() {
   const tmpl = (e.templates || []).map(x => `<option value="${esc(x.command)}" ${x.command === D.cli_command ? 'selected' : ''}>${esc(x.label)}${x.installed ? '' : ' (not installed)'}</option>`).join('');
   const models = ENG.models?.models?.length ? `<datalist id="engmodels">${ENG.models.models.map(m => `<option value="${esc(m)}">`).join('')}</datalist>` : '';
   const b = e.builtin || {};
-  const how = !eng ? `<div class="set-row"><div><div class="k">The agent you connect</div><div class="d">The agent you connect to Pensieve over MCP writes them in its own sessions, when it has a moment. No model runs in the background.</div></div><div></div></div>`
-    : eng === 'builtin' ? `<div class="set-row"><div><div class="k">Qwen 3.5 9B on this Mac</div><div class="d">${b.unsupported ? `<span class="err">${esc(b.unsupported)}</span>` : `Nothing leaves this Mac. Pensieve starts the model when there is work, at background priority, and stops it after 10 minutes without work. It uses about 6 GB of memory while it runs. ${b.local_copy ? 'It uses the copy that LM Studio downloaded.' : 'It downloads about 5 GB the first time.'}`}</div></div>
-        <div class="muted" style="font-size:12px">${b.detail ? esc(b.detail) : b.running ? 'Running' : 'Stopped'}</div></div>`
+  const restart = !b.unsupported && b.status !== 'starting' && b.status !== 'downloading' && (!b.running || b.status === 'error' || e.error);
+  const how = eng === 'builtin' ? `<div class="set-row"><div><div class="k">Qwen 3.5 9B on this Mac</div><div class="d">${b.unsupported ? `<span class="err">${esc(b.unsupported)}</span>` : `Nothing leaves this Mac. Pensieve starts the model when there is work, at background priority, and stops it after 10 minutes without work. It uses about 6 GB of memory while it runs. ${b.local_copy ? 'It uses the copy that LM Studio downloaded.' : 'It downloads about 5 GB the first time.'}`}</div></div>
+        <div style="text-align:right"><div class="muted" style="font-size:12px">${b.detail ? esc(b.detail) : b.running ? 'Running' : 'Stopped'}</div>${restart ? `<button class="btn" style="margin-top:6px" data-engrestart>${b.running ? 'Restart' : 'Start'}</button>` : ''}</div></div>`
     : eng === 'cli' ? `<div class="set-row field"><div><div class="k">Command</div><div class="d">Runs once per job in an empty folder, at background priority. The prompt goes on stdin, or in place of {prompt}.</div></div>
         <div><select class="set-in" data-engtmpl><option value="">Pick a template…</option>${tmpl}</select>
         <input class="set-in" style="margin-top:6px" data-sk="cli_command" value="${esc(D.cli_command)}" placeholder="claude -p --model haiku …"></div></div>`
@@ -3331,6 +3343,11 @@ function bindEngine(root) {
   $$('[data-engpick]', root).forEach(b => b.onclick = () => { D.text_engine = b.dataset.engpick; ENG.test = null; saveSettings().then(loadEngine); });
   const tm = $('[data-engtmpl]', root); if (tm) tm.onchange = () => { if (tm.value) { D.cli_command = tm.value; saveSettings(); } };
   const key = $('[data-engkey]', root); if (key) key.onchange = () => { D.llm_key = key.value; saveSettings(); };
+  const rs = $('[data-engrestart]', root); if (rs) rs.onclick = async () => {
+    rs.disabled = true;
+    try { ENG.data = await api('/api/engine/restart', {method: 'POST'}); ENG.test = null; } catch (err) { toast('Could not restart the model: ' + err.message); }
+    loadEngine();
+  };
   if (D.text_engine === 'server' && D.llm_url && !ENG.models) api(`/api/engine/models?url=${enc(D.llm_url)}`).then(r => { ENG.models = r; renderSettings(); }).catch(() => {});
   const tb = $('[data-engtest]', root); if (tb) tb.onclick = async () => {
     ENG.busy = true; renderSettings();

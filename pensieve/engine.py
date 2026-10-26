@@ -61,7 +61,8 @@ BUILTIN_URL = f"http://127.0.0.1:{BUILTIN_PORT}/v1"
 IDLE_SECONDS = 10 * 60  # the built-in server holds about 6 GB of memory: stop it after this long without a job
 MIN_RAM_GB = 16
 state = dict(at=0.0, error=None, answered=0, busy=False)  # for the Settings page
-builtin = dict(status="off", detail="", last_used=time.time(), download=None)  # a server found at start gets the full idle time
+# a server found at start gets the full idle time; `pid` stays None until this process starts a server itself
+builtin = dict(status="off", detail="", last_used=time.time(), download=None, pid=None)
 _lock = threading.Lock()
 
 
@@ -241,7 +242,7 @@ def ensure_builtin() -> str:
             if os.path.exists("/usr/sbin/taskpolicy"):
                 argv = ["/usr/sbin/taskpolicy", "-b"] + argv
             with open(config.DATA_DIR / "builtin-llm.log", "a") as log:
-                subprocess.Popen(argv, stdout=log, stderr=log, start_new_session=True)
+                builtin["pid"] = subprocess.Popen(argv, stdout=log, stderr=log, start_new_session=True).pid
         for _ in range(600):  # loading at background priority can take a few minutes on a busy Mac
             if _builtin_up():
                 builtin.update(status="ready", detail="")
@@ -264,10 +265,32 @@ def stop_builtin():
 
 
 def sweep():
-    """Stop the built-in server when it is not the engine, or after IDLE_SECONDS without a job."""
-    if (settings.get("text_engine") != "builtin" or time.time() - builtin["last_used"] > IDLE_SECONDS) \
-            and not _lock.locked() and builtin_pids():
+    """Stop the built-in server after IDLE_SECONDS without a job, or when it is no longer the engine. A process whose
+    engine is not the built-in one stops only the server that it started: other Pensieve processes on this Mac (with
+    their own data folders) find the same server on BUILTIN_PORT, and one of them can use it."""
+    pids = builtin_pids()
+    if _lock.locked() or not pids:
+        return
+    if settings.get("text_engine") == "builtin":
+        if time.time() - builtin["last_used"] > IDLE_SECONDS:
+            stop_builtin()
+    elif builtin["pid"] in pids:
         stop_builtin()
+
+
+def restart() -> dict:
+    """Stop the built-in server and start it again, in the background (Settings → Models → Restart): for a server
+    that stopped or does not answer. Returns the engine's status at once."""
+    def run():
+        try:
+            ensure_builtin()
+        except Exception as e:
+            builtin.update(status="error", detail=str(e)[:300])
+    stop_builtin()
+    state["error"] = None
+    builtin.update(status="starting", detail="Loading Qwen 3.5 9B")
+    threading.Thread(target=run, daemon=True, name="builtin-restart").start()
+    return status()
 
 
 def answer(job: dict, s: dict | None = None, folder: str = "engine") -> str:
@@ -332,8 +355,11 @@ def run_once() -> int:
 
 def status() -> dict:
     s = settings.load()
+    running = bool(builtin_pids())
+    # "ready" is from the last job: a server that stopped since then is stopped, whoever stopped it
+    stopped = builtin["status"] == "ready" and not running
     return dict(engine=s["text_engine"], waiting=sum(agent_jobs.counts().values()), busy=state["busy"],
                 last_answer=state["at"] or None, answered=state["answered"], error=state["error"],
-                builtin=dict(status=builtin["status"], detail=builtin["detail"], unsupported=builtin_unsupported(),
-                             running=bool(builtin_pids()), local_copy=bool(_local_copy())),
+                builtin=dict(status="off" if stopped else builtin["status"], detail="" if stopped else builtin["detail"],
+                             unsupported=builtin_unsupported(), running=running, local_copy=bool(_local_copy())),
                 templates=[dict(t, installed=bool(config.find_exe(shlex.split(t["command"])[0]))) for t in TEMPLATES])

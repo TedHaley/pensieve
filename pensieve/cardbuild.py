@@ -1,7 +1,9 @@
 """The incremental card builder (docs/design/storage.md, "Cards within 2 seconds").
 
 A write that can change a card sends an event: a session indexed, a document stored, commits loaded, a card's state
-set by hand. The builder thread takes the events of the last 200 ms together:
+set by hand. The builder thread takes the events of the last 200 ms together. Background events (sessions, documents,
+commits) also wait until GAP_SECONDS after the last build, so a busy session cannot keep the builder running; hot()
+shows its new turns meanwhile. Then:
 
 1. It loads again only what the events name: those sessions (their rows, text facts and edited files), those
    documents, or the commits and worktrees.
@@ -34,6 +36,8 @@ DAYS = 30            # the window of the built cards; /api/work filters it for a
 FULL_SECONDS = 600   # a full build: the window moves, and gh gives the PR states (cached 10 minutes anyway)
 POLL_SECONDS = 60    # GitHub is asked about the open threads' PRs this often, one call per repo (work.poll_open)
 COALESCE = 0.2       # events this close together make one build
+GAP_SECONDS = 15     # background events (sessions, documents, commits) wait this long after the last build ends
+URGENT = {"state", "refresh", "pr"}  # events of a user action: built at once, with no gap
 
 SESSION, DOCUMENT, COMMIT, PR, STATE, REFRESH = "session", "document", "commit", "pr", "state", "refresh"
 
@@ -78,6 +82,7 @@ class Builder:
         self.last_full = 0.0
         self.again = False                   # rebuild(): a full build from the caches on the next turn
         self.builds: list[dict] = []         # the last builds: {at, kind, ms, changed}
+        self.last_end, self.last_seconds = 0.0, 0.0  # when the last build ended (monotonic), and how long it took
         self._thread = None
         self.lock = threading.Lock()         # between a build's writes and hot()
         self.hot_at: dict[str, float] = {}   # card id -> when hot() last wrote it
@@ -185,6 +190,18 @@ class Builder:
                     events.append(self.q.get(timeout=max(0.0, end - time.monotonic())))
                 except queue.Empty:
                     break
+            # A session that writes all the time sends an event every few seconds. Without a gap, the builder runs
+            # with no pause and holds the GIL, and the server answers requests slowly. hot() shows the new turns.
+            if events and not self._urgent(events):
+                end = self.last_end + max(GAP_SECONDS, 2 * self.last_seconds)
+                while time.monotonic() < end:
+                    try:
+                        events.append(self.q.get(timeout=max(0.0, end - time.monotonic())))
+                    except queue.Empty:
+                        break
+                    if self._urgent(events[-1:]):
+                        break
+            t0 = time.monotonic()
             try:
                 if time.time() - self.last_full > FULL_SECONDS:
                     self.full(net=True)
@@ -196,9 +213,17 @@ class Builder:
             except Exception:
                 traceback.print_exc()
             finally:
+                if events or time.monotonic() - t0 > 1:
+                    self.last_end = time.monotonic()
+                    self.last_seconds = self.last_end - t0
                 for _, _, done in events:
                     if done:
                         done.set()
+
+    @staticmethod
+    def _urgent(events) -> bool:
+        """A caller waits for the build, or a user action sent an event: no gap."""
+        return any(done or kind in URGENT for kind, _, done in events)
 
     def full(self, net: bool = True):
         t0 = time.perf_counter()
