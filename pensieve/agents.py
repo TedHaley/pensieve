@@ -101,6 +101,16 @@ def start(agent_id: str, prompt: str) -> str:
     return _cmd(a, a.start, prompt=prompt)
 
 
+RESUME_WITH_PROMPT = {"claude"}  # agents whose resume takes a next prompt: `claude --resume <id> "<prompt>"`
+
+
+def resume_with(agent_id: str, sid: str, prompt: str) -> str | None:
+    """The command that resumes session `sid` and sends it `prompt` as its next message, or None for an agent whose
+    resume can't take one."""
+    a = get(agent_id)
+    return _cmd(a, a.resume + ("{prompt}",), sid=sid, prompt=prompt) if a and agent_id in RESUME_WITH_PROMPT else None
+
+
 def open_session(agent_id: str) -> str:
     """The command that starts the agent's interactive session with no first prompt: its start arguments without
     {prompt}, and without the option that takes it (qwen -i {prompt} is qwen)."""

@@ -234,7 +234,9 @@ these states: Open, To-do, Loose ends and Forgotten.</p>
 ])}
 <p>Click <strong>Start shipping</strong> or <strong>Start discarding</strong> in the modal. An agent session starts
 in Terminal and does the steps. The agent asks you before each step that leaves your Mac. Pensieve itself only
-reads: it sees the result in git, GitHub or the tracker.</p>
+reads: it sees the result in git, GitHub or the tracker. The button resumes the session that holds the branch, with
+the steps as its next message, so the request is in the conversation of the work that it closes. If that session
+can't take a message on resume, a new session does the steps. Thoughts and closed threads have no Ship or Discard.</p>
 
 <h2 id="search">Search threads</h2>
 <p>The search box on the Threads tab finds threads by the words on the page. Put words in quotes

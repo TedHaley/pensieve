@@ -121,6 +121,15 @@ def run():
     seen = st.split([dict(two, places=[], _sessions=[dict(two["_sessions"][0], branch="feat-a")])])
     results.append(check("a session that only ran on a feature branch is a review of it, and one that wrote is not",
                          ([(t["_branch"], t["review"]) for t in seen], a["review"]), ([("feat-a", True)], False)))
+    st.headless = lambda path: path == "/x/s9.jsonl"
+    quiet = dict(two["_sessions"][0], edited=set())
+    results.append(check("a headless session that changed nothing has no thread; one that edited files, or a typed "
+                         "session, has one",
+                         (st.split([dict(two, places=[], _sessions=[quiet])]),
+                          len(st.split([dict(two, places=[])])),
+                          len(st.split([dict(two, places=[], _sessions=[dict(quiet, path="/x/s10.jsonl")])]))),
+                         ([], 1, 1)))
+    st.headless = lambda path: False
     st.writes = lambda path: writes.get(path, [])
 
     # main: a sink of the checkout, open while the session's lines are uncommitted or unpushed, then landed or gone
@@ -165,7 +174,16 @@ def run():
     results.append(check("each session on main has its own status, and main's commits don't mark it merged",
                          (of("a")[label], of("b")[label]), ("OPEN", "MERGED")))
     feat = tm.Sink(tm.SinkKind.BRANCH, "org/app@feat")
-    sink_status.statuses_for = lambda sinks, session="": {"branch org/app@feat": "DELETED"}
+    import time
+    cache = {"branch org/app@feat": dict(value="DELETED", at=time.time(), pushed="")}
+    asked = []
+    sink_status._load, sink_status._save = lambda: cache, lambda c: None
+    sink_status.branch_status = lambda repo, branch, env=None: asked.append(branch) or "EXISTS"
+    work._net["off"] = False
+    after = lambda sha: sink_status.statuses_for([feat], "c", {"branch org/app@feat": sha})["branch org/app@feat"]
+    results.append(check("a cached state from before a push is asked again, and one from the same push is kept",
+                         (after(""), after("abc123"), after("abc123"), asked), ("DELETED", "EXISTS", "EXISTS", ["feat"])))
+    sink_status.statuses_for = lambda sinks, session="", pushed=None: {"branch org/app@feat": "DELETED"}
     gone = lambda **p: sink_status.status_of_task(dict(_sessions=[dict(id="c")], places=[dict(branch="feat", **p)]),
                                                   [feat])["branch org/app@feat"]
     work._git = lambda root, *args, ttl=60: {"/pushed": "refs/heads/feat", "/cut": "refs/heads/main"}.get(root, "") \
@@ -174,6 +192,27 @@ def run():
                          (gone(changed=2), gone(commits=1, unmerged=1), gone(changed=2, path="/cut"),
                           gone(changed=2, head="main"), gone(changed=2, path="/pushed")),
                          ("OPEN", "OPEN", "OPEN", "DELETED", "DELETED")))
+
+    from pensieve import cardtext
+    added_lines, base = st._added_lines, st._base
+    st._base = lambda root: "refs/remotes/origin/main"
+    diffs = {"": {"a.css": {"x {}", "y {}"}, "b.js": {"go()"}},
+             "refs/remotes/origin/main...refs/heads/feat": {"a.css": {"x {}", "y {}", "z {}"}, "b.js": {"go()"}},
+             "refs/remotes/origin/main...refs/heads/half": {"a.css": {"x {}"}}}
+    st._added_lines = lambda root, between="": diffs.get(between, {})
+    work._git = lambda root, *args, ttl=60: "half 1111111\nmain 2222222\nfeat abc1234" if args[0] == "for-each-ref" else ""
+    results.append(check("uncommitted work on main is moved to the branch that holds every line of it, not one with some",
+                         (st._moved_to("/code/app", {"a.css", "b.js"}), st._moved_to("/code/app", {"c.py"})),
+                         (dict(branch="feat", commit="abc1234", files=["a.css", "b.js"]), None)))
+    mv = dict(branch="feat", commit="abc1234", files=["a.css", "b.js"])
+    main_card = dict(moved=mv, places=[dict(branch="main", changed=2, git=True)], branches=[dict(branch="main")],
+                     prs=[], tickets=[])
+    results.append(check("a moved thread's Discard drops the copy on main, and its Ship points to the branch",
+                         ([s["text"] for s in cardtext.discard(main_card)],
+                          [p.text for p in cardtext.pending(main_card)][:1]),
+                         (["Discard the uncommitted changes in a.css, b.js on main: every line is also on feat (abc1234)"],
+                          ["Ship feat: this work is on it (abc1234), so it needs no commit on main"])))
+    st._added_lines, st._base = added_lines, base
 
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)

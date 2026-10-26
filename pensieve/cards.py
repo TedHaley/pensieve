@@ -422,10 +422,21 @@ def resolve_prompt(cards: list[dict], branch: str, steps: list[dict], intent: st
     return _resolve_head(cards, branch, steps, "their copies below", intent) + "\n\n" + _cluster_text(cards)
 
 
-def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "", intent: str = "ship") -> str:
-    """The shell command that starts a new agent session to merge or discard a cluster: the steps lead its prompt."""
+def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "", intent: str = "ship",
+                    resume: dict | None = None) -> str:
+    """The shell command that asks to merge or discard a cluster, with the steps leading the prompt. `resume` (the
+    resume of the session that holds the branch, work.resume_of): that session gets the prompt as its next message,
+    so the request is in the transcript of the work it closes. A new session runs it instead when that session can't
+    take a prompt on resume (another harness, or an agent without the option) or `agent` names another agent."""
+    import shlex
+    from pensieve import agents
     path = _revive_copy(folder, f"{intent}-{branch or 'branch'}", _cluster_text(cards))
-    return _revive_start(cards, agent, _resolve_head(cards, branch, steps, f"their copies in {path}", intent))
+    prompt = _resolve_head(cards, branch, steps, f"their copies in {path}", intent)
+    if resume and resume.get("folder") and not resume.get("handoff") and agent in ("", resume.get("agent")):
+        cmd = agents.resume_with(resume["agent"], resume["session"].partition(":")[2], prompt)
+        if cmd:
+            return f"cd {shlex.quote(resume['folder'])} && {cmd}"
+    return _revive_start(cards, agent, prompt)
 
 
 def revive_command(card: dict, folder, agent: str = "") -> str:

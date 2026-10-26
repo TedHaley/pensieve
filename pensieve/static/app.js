@@ -4358,7 +4358,8 @@ function wkWorking(t) {
     ? `<a class="wk-branch" href="${esc(p.remote_url)}" target="_blank" rel="noopener">${WK_IC.branch}${esc(p.branch)}</a>`
     : `<span class="wk-branch">${WK_IC.branch}${esc(p.branch)}</span>`) : '';
   const changed = p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : '';
-  return `<div class="wk-working"><span class="muted">Working in</span><span class="wk-where-repo" title="${esc(p.path)}">${esc(repo)}</span>${branch}${changed}</div>`;
+  const moved = t.moved ? `<span class="wk-st ok" title="Every line of these uncommitted changes is on ${esc(t.moved.branch)} (${esc(t.moved.commit)}): Discard drops the copy here">also on ${esc(t.moved.branch)}</span>` : '';
+  return `<div class="wk-working"><span class="muted">Working in</span><span class="wk-where-repo" title="${esc(p.path)}">${esc(repo)}</span>${branch}${changed}${moved}</div>`;
 }
 // `cluster`: the branch of the cluster the card sits in, whose header says where the work is
 function wkCard(t, d, cluster = '') {
@@ -4445,7 +4446,9 @@ function wkResolve(c, intent) {
   WK_RESOLVE.set(key, c);
   return `<button class="wk-btn wk-resolve" data-wk-resolve="${esc(key)}" data-intent="${intent}" aria-haspopup="dialog" title="${RESOLVE[intent].title}">${RESOLVE[intent].label}<span class="wk-n">${wkResolveSteps(c.tasks, intent, c.branch).length}</span></button>`;
 }
-const wkResolveBtns = c => wkResolve(c, 'ship') + wkResolve(c, 'discard');
+// A thought wrote nothing to ship or discard, and closed work is done: neither has the buttons
+const WK_NO_RESOLVE = new Set(['thoughts', 'closed']);
+const wkResolveBtns = c => WK_NO_RESOLVE.has(c.state) ? '' : wkResolve(c, 'ship') + wkResolve(c, 'discard');
 function openResolve(key, intent) {
   const c = WK_RESOLVE.get(key);
   if (!c) return;
@@ -4461,7 +4464,7 @@ function openResolve(key, intent) {
       <ul class="wk-wrap-steps">${steps.length ? steps.map(s => `<li>${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</li>`).join('')
         : '<li class="muted">Nothing left: every step is done</li>'}</ul></div>
     <div class="wk-resolve-foot"><button class="wk-btn" data-close>Cancel</button>${WRAP_STATES.has(c.state)
-      ? `<button class="wk-btn primary${intent === 'discard' ? ' danger' : ''}" data-go title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads these threads and does these steps, asking you before each of yours">${WK_IC.spark}${r.start}</button>`
+      ? `<button class="wk-btn primary${intent === 'discard' ? ' danger' : ''}" data-go title="Open Terminal and resume the session that holds this work with these steps, so the request is in its conversation. It asks you before each of yours. An agent that can't resume with a request starts a new session instead">${WK_IC.spark}${r.start}</button>`
       : `<span class="muted">${esc(wkModel(c.state).label)}: nothing left</span>`}</div></div>`;
   document.body.append(m);
   const close = () => { m.remove(); document.removeEventListener('keydown', esc_); };
@@ -4473,7 +4476,7 @@ function openResolve(key, intent) {
   if (go) go.onclick = async () => {
     go.disabled = true;
     const body = {ids: c.tasks.map(t => t.id), branch: c.branch, days: S.work.days, intent};
-    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}); close(); toast(`Starting a session to ${r.verb} ${c.branch || 'this thread'} in Terminal`); }
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}); close(); toast(`Asking the session that holds ${c.branch || 'this thread'} to ${r.verb} it, in Terminal`); }
     catch (err) { go.disabled = false; toast('Could not start it: ' + err.message); }
   };
 }

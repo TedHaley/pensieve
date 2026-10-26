@@ -26,6 +26,11 @@ def evidence(path: str) -> dict[tuple[str, str], list[str]]:
     return transcripts.evidence(path)
 
 
+def headless(path: str) -> bool:
+    from pensieve import transcripts
+    return transcripts.headless(path)
+
+
 def on_branch(t: dict, s: dict) -> list[tuple[str, str]]:
     """The feature branches a session did work on: lines it wrote with an edit tool are uncommitted in a checkout of
     the task on that branch, or are in the branch's commits that the remote's default branch does not have yet (by
@@ -120,6 +125,9 @@ def on_default_branch(s: dict) -> list[tuple[str, str]]:
         upstream = "@{u}" if work._git(root, "rev-parse", "--abbrev-ref", "@{u}", ttl=60) else "HEAD"
         if held(new(_added_lines(root), "HEAD")):
             status = "OPEN"
+            moved = _moved_to(root, files)
+            if moved:
+                MOVED[(s.get("id", ""), f"{root}@{branch}")] = moved
         elif upstream != "HEAD" and held(new(_added_lines(root, f"{upstream}..HEAD"), upstream)):
             status = "OPEN"  # committed, not pushed yet
         else:
@@ -128,6 +136,32 @@ def on_default_branch(s: dict) -> list[tuple[str, str]]:
         sink_status.local[(s.get("id", ""), f"branch {key}")] = status
         out.append(("branch", key))
     return out
+
+
+MOVED: dict[tuple[str, str], dict] = {}  # (session id, "<checkout>@main") -> _moved_to's answer, from on_default_branch
+MOVED_BRANCHES = 20  # the checkout's most recently changed local branches that _moved_to looks in
+
+
+def _moved_to(root: str, files: set[str]) -> dict | None:
+    """The local branch that already holds the uncommitted work of `files` on a default branch: every line added in
+    them, by any session, is in that branch's commits that the remote's default branch lacks. Then the copy on main
+    can go without losing anything. {branch, commit, files}, or None."""
+    from pensieve import work
+    base = _base(root)
+    unc = _added_lines(root)
+    want = {rel: unc[rel] for rel in files if unc.get(rel)}
+    if not (base and want):
+        return None
+    heads = work._git(root, "for-each-ref", "--sort=-committerdate", f"--count={MOVED_BRANCHES}",
+                      "--format=%(refname:short) %(objectname:short)", "refs/heads", ttl=30)
+    for line in heads.splitlines():
+        b, _, commit = line.partition(" ")
+        if not b or b in work.DEFAULT_BRANCHES:
+            continue
+        added = _added_lines(root, f"{base}...refs/heads/{b}")
+        if all(lines <= added.get(rel, set()) for rel, lines in want.items()):
+            return dict(branch=b, commit=commit, files=sorted(want))
+    return None
 
 
 def _added_lines(root: str, between: str = "") -> dict[str, set]:
@@ -241,7 +275,7 @@ def _thread(t: dict, s: dict, ws: list, facts: dict | None = None, name: str = "
             "sessions": [x for x in t.get("sessions", []) if x["id"] == sid], "_sessions": [s],
             "_siblings": [dict(id=x["id"], title=x.get("title", ""), updated=x.get("updated") or 0)
                           for x in t.get("sessions", []) if x["id"] != sid],
-            "_writes": list(ws), "_branch": name,
+            "_writes": list(ws), "_branch": name, "moved": MOVED.get((sid, name)) if on_main else None,
             "prs": prs, "branch_prs": [], "branches": branches, "tickets": tickets,
             "keys": [k["key"] for k in tickets], "ticket_refs": [], "_shared": [], "shared_sessions": [],
             "places": places,
@@ -267,8 +301,10 @@ def split(tasks: list[dict], facts: dict | None = None, place_of=None) -> list[d
     A session that wrote nothing but ran on a feature branch is on that branch (ran_on), as a review (`review`). Any
     other session with no
     write has no sinks: its thread is a thought. A task with no session (a ticket of the user's that nothing picked
-    up yet) is one thread of its own, a to-do. `facts`: {session id: text facts}. `place_of`: see _thread."""
+    up yet) is one thread of its own, a to-do. `facts`: {session id: text facts}. `place_of`: see _thread. A thread
+    on main whose uncommitted work is on another branch too has `moved` (_moved_to)."""
     out = []
+    MOVED.clear()
     for t in tasks:
         if not t.get("_sessions"):
             out.append(todo_thread(t))
@@ -276,6 +312,8 @@ def split(tasks: list[dict], facts: dict | None = None, place_of=None) -> list[d
         for s in t.get("_sessions", []):
             ws = writes(s.get("path", ""))
             ws += [w for w in on_branch(t, s) + on_default_branch(s) if w not in ws]
+            if not ws and not s.get("edited") and headless(s.get("path", "")):
+                continue  # a `claude -p` run or an SDK app that changed nothing: no thread, not even a thought
             review = not ws and bool(ran_on(s))
             if review:
                 ws = ran_on(s)

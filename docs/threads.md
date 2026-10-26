@@ -96,7 +96,7 @@ A thread is the smallest unit that you hand off or report in a standup. These it
 - **Ship:** commit, push, open a PR, review and merge, mark the ticket done after the merge.
 - **Discard:** drop uncommitted files, close the PR without merging, delete the branch (local and remote), mark the ticket cancelled.
 
-The modal's button (Start shipping or Start discarding) starts an agent session in Terminal. The agent does the steps and asks before each step that leaves the Mac.
+The modal's button (Start shipping or Start discarding) resumes the session that holds the branch in Terminal, with the steps as its next message. So the request to ship or discard is in the conversation of the work that it closes. The agent does the steps and asks before each step that leaves the Mac. If that session can't take a message on resume (another harness, or an agent without that option), a new session does the steps. Thoughts and closed threads have no Ship or Discard.
 
 ## Starting a thread again
 

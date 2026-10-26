@@ -1677,14 +1677,14 @@ def _pickup(task: dict, wts: dict):
 
 
 def resume_of(s: dict) -> dict | None:
-    """How to resume a session in the user's harness: {command, title, session, agent, agent_name, handoff}, or None
-    when the session has no folder."""
+    """How to resume a session in the user's harness: {command, folder, title, session, agent, agent_name, handoff},
+    or None when the session has no folder."""
     if not s.get("project"):
         return None
     from pensieve import agents
     how = agents.continue_session(s["id"], s.get("title", ""))
-    return dict(command=f"cd {_quote(s['project'])} && {how['command']}", title=s.get("title", ""), session=s["id"],
-                agent=how["agent"], agent_name=how["name"], handoff=how["handoff"])
+    return dict(command=f"cd {_quote(s['project'])} && {how['command']}", folder=s["project"], title=s.get("title", ""),
+                session=s["id"], agent=how["agent"], agent_name=how["name"], handoff=how["handoff"])
 
 
 def _place(path: str, root: str, used: str, wts: dict) -> dict:

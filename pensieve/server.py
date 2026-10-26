@@ -2028,9 +2028,15 @@ def revive_thread(req: ReviveReq):
         if intent in ("ship", "discard"):
             ts = [t for t in work.tasks(store, req.days) if t["id"] in set(req.ids)]
             steps = cards.resolve_steps(sorted(ts, key=lambda t: req.ids.index(t["id"])), intent, req.branch)
+            # a thread on main has no branch of its own: its prompt names main and the checkout ("main in app")
+            on_main = next((t["cluster"].rsplit("@", 1) for t in ts if "@" in t.get("cluster", "")), None)
+            name = req.branch or (f"{on_main[1]} in {Path(on_main[0]).name}" if on_main else "")
             if not req.run:
-                return {"ok": True, "prompt": cards.resolve_prompt(got, req.branch, steps, intent), "steps": steps}
-            cmd = cards.resolve_command(got, req.branch, steps, config.V2_DIR / "revive", req.agent, intent)
+                return {"ok": True, "prompt": cards.resolve_prompt(got, name, steps, intent), "steps": steps}
+            holder = next((t for t in ts if (t.get("claims") or {}).get(req.branch, {}).get("lost") is False), None)
+            holder = holder or next((t for t in sorted(ts, key=lambda t: req.ids.index(t["id"])) if t.get("resume")), None)
+            cmd = cards.resolve_command(got, name, steps, config.V2_DIR / "revive", req.agent, intent,
+                                        resume=(holder or {}).get("resume"))
             _terminal(cmd)
             return {"ok": True, "command": cmd, "steps": steps}
         if not req.run:

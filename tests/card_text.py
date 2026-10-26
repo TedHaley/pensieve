@@ -330,6 +330,18 @@ def test_fork_names_the_sessions_that_changed_the_branch():
     assert _sessions_line([dict(sessions=[])]) == ""
 
 
+def test_ship_and_discard_go_to_the_session_that_holds_the_branch():
+    import tempfile
+    from pensieve import cards
+    folder, card = tempfile.mkdtemp(), [dict(id="th_1", title="t", resources=[])]
+    held = dict(folder="/code/app", session="claude:abc-1", agent="claude", handoff=False)
+    cmd = cards.resolve_command(card, "feat", [], folder, "", "ship", resume=held)
+    assert cmd.startswith("cd /code/app && claude --resume abc-1 '[pensieve ship] Ship the work on branch feat"), cmd
+    handoff = cards.resolve_command(card, "feat", [], folder, "", "ship", resume=dict(held, handoff=True))
+    other = cards.resolve_command(card, "feat", [], folder, "", "ship", resume=dict(held, agent="codex"))
+    assert "--resume" not in handoff and "--resume" not in other, (handoff, other)
+
+
 
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
