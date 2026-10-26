@@ -323,6 +323,14 @@ def chunk_session(turns):
 _TEMP = re.compile(r"^(/private)?/(tmp|var/folders)/")
 
 
+def glob_match(rel: str, pattern: str) -> bool:
+    """Path.full_match, which Python 3.12 does not have: the whole relative path matches the glob. * and ? stay inside
+    one folder, and ** matches any number of folders (also none)."""
+    rx = "".join("(?:[^/]+/)*" if part == "**" else re.escape(part).replace(r"\*", "[^/]*").replace(r"\?", "[^/]") + "/"
+                 for part in pattern.split("/"))
+    return re.fullmatch(rx.removesuffix("/"), rel) is not None
+
+
 def in_temp(path: str) -> bool:
     """A system temp folder, when skip_temp_sessions is on: sessions that ran there are throwaway (scripts, tests),
     not the user's work. The text engine's own folders are skipped whatever the setting."""
@@ -473,7 +481,7 @@ class Store:
             self.waiting.discard(p)
             path = Path(p)
             hit = next(((n, r) for n, r, pat in roots if p.startswith(str(r) + "/")
-                        and path.relative_to(r).full_match(pat)), None)
+                        and glob_match(str(path.relative_to(r)), pat)), None)
             if not hit or "subagents" in path.parts or not path.is_file():
                 continue
             st = path.stat()

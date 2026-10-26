@@ -45,7 +45,7 @@ DEFAULTS = {
     "embed_model": "",         # the embedding model to index with (config.EMBED_MODELS); "" = the index's own
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "search_gate_holdout": 5,  # the search gate (gate.py) leaves 1 session in this many unblocked, as a control; 0 = none
-    # What writes the notes, summaries and insights (engine.py): cli | server. "" = not chosen: load() picks one
+    # What writes the notes, summaries and insights (engine.py): builtin | cli | server. "" = not chosen: load() picks one
     "mode": "session",  # session: threads only; developer: also indexing, Map, People and Insights
     "ticket_repos": {},  # ticket project prefix (ABC) -> the repo its work starts in (a to-do's worktree)
     "text_engine": "",
@@ -124,13 +124,17 @@ def _overrides():
     return o
 
 
-ENGINES = ("", "builtin", "cli", "server")  # "" is the connected agent, which writes the text over MCP
+ENGINES = ("builtin", "cli", "server")
 
 
 def _default_engine(s: dict) -> dict:
-    """The text engine for someone who hasn't chosen one: none. The agent the user connects over MCP writes the text
-    (its queue, agent_jobs); no background model runs. Settings → Models can still pick one."""
-    return dict(text_engine="")
+    """The text engine for someone who has not chosen one: Claude Code with Haiku when Claude Code is installed, else
+    the built-in model when this Mac can run it, else a model server at llm_url (LM Studio's address by default).
+    Setup asks, and Settings → Models changes it."""
+    from pensieve import engine
+    if config.find_exe("claude"):
+        return dict(text_engine="cli", cli_command=s["cli_command"] or engine.TEMPLATES[0]["command"])
+    return dict(text_engine="server" if engine.builtin_unsupported() else "builtin")
 
 
 def load() -> dict:
@@ -146,7 +150,7 @@ def load() -> dict:
             _data = {**DEFAULTS, **{k: v for k, v in saved.items() if k in DEFAULTS}}
             if saved and "setup_done" not in saved:  # set up by a version from before the setup step
                 _data["setup_done"] = True
-            if _data["text_engine"] not in ENGINES:  # not chosen, or "agent" before 0.14.1
+            if _data["text_engine"] not in ENGINES:  # not chosen, "agent" before 0.14.1, or "" (the agent) before 0.18.1
                 _data.update(_default_engine(_data))
             off = _data["disabled"]  # the two repo-discovery rules became one
             if "repos/sessions" in off or "repos/sweep" in off:

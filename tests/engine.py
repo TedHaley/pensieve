@@ -70,11 +70,15 @@ def test_engine_sessions_are_never_indexed():
 
 
 def test_default_engine():
-    """Someone who never chose an engine gets none: the connected agent writes the text over MCP, and no background
-    model runs. The background worker answers nothing while the engine is empty."""
+    """Someone who never chose an engine (or chose "agent" or "" before) gets Claude Code with Haiku when it is
+    installed, else the built-in model when the Mac can run it, else a model server. Never no engine at all."""
     s = {**settings.DEFAULTS, "text_engine": "agent"}
-    assert settings._default_engine(s) == {"text_engine": ""}
-    assert engine.run_once() == 0
+    d = settings._default_engine(s)
+    if config.find_exe("claude"):
+        assert d["text_engine"] == "cli" and d["cli_command"].startswith("claude -p --model haiku")
+    else:
+        assert d == {"text_engine": "server" if engine.builtin_unsupported() else "builtin"}
+    assert "" not in settings.ENGINES
     real_find, real_unsupported = config.find_exe, engine.builtin_unsupported
     try:
         for claude in (True, False):
@@ -84,6 +88,33 @@ def test_default_engine():
                 assert settings._default_engine(s)["text_engine"] in settings.ENGINES
     finally:
         config.find_exe, engine.builtin_unsupported = real_find, real_unsupported
+
+
+def test_sweep_stops_only_its_own_server():
+    """A process whose engine is not the built-in one leaves alone a built-in server that another Pensieve process
+    started, and stops the one that it started itself. With the built-in engine, an idle server stops."""
+    real_pids, real_stop = engine.builtin_pids, engine.stop_builtin
+    stopped = []
+    engine.builtin_pids = lambda: [4242]
+    engine.stop_builtin = lambda: stopped.append(1)
+    try:
+        settings.update({"text_engine": "server"})
+        engine.builtin["pid"] = None
+        engine.sweep()
+        assert not stopped  # another process's server
+        engine.builtin["pid"] = 4242
+        engine.sweep()
+        assert stopped == [1]  # its own server
+        settings.update({"text_engine": "builtin"})
+        engine.builtin["pid"], engine.builtin["last_used"] = None, time.time()
+        engine.sweep()
+        assert stopped == [1]  # in use
+        engine.builtin["last_used"] = time.time() - engine.IDLE_SECONDS - 1
+        engine.sweep()
+        assert stopped == [1, 1]  # idle
+    finally:
+        engine.builtin_pids, engine.stop_builtin = real_pids, real_stop
+        engine.builtin["pid"] = None
 
 
 FAKE_AGENT = """import json, sys
@@ -143,6 +174,7 @@ def test_one_builtin_server():
         world["started"] += 1
         world["pids"].append(1000 + world["started"])
         th.Timer(0.3, lambda: world.update(up=True)).start()
+        return type("Proc", (), {"pid": world["pids"][-1]})()
     try:
         engine._builtin_up = lambda: world["up"]
         engine.builtin_pids = lambda: list(world["pids"])

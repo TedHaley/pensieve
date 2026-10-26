@@ -75,6 +75,11 @@ def main():
         print(url)
         return webbrowser.open(url) and None
 
+    if _port_taken(a.port):
+        # Another server runs on the port, and it has the database open. settle_version would delete the index
+        # under it, and that server would go on writing to the deleted files.
+        print(f"Port {a.port} is in use: another Pensieve server runs there. Stop it first.", file=sys.stderr, flush=True)
+        return 1
     from pensieve import reset
     reset.settle_version()  # a new version resets the index and drops the thread history, keeping the settings
     done = reset.apply_pending()  # before anything opens the database
@@ -266,6 +271,19 @@ def _start_server(base, port):
         if _up(base):
             return
         time.sleep(0.5)
+
+
+def _port_taken(port: int) -> bool:
+    """A socket listens on 127.0.0.1:port. This does not depend on how fast that server answers: a busy server
+    can take more than _up's 2 seconds."""
+    import socket
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as uvicorn binds: a port in TIME_WAIT is free
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return True
+    return False
 
 
 def _up(base):

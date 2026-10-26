@@ -73,6 +73,7 @@ def ran_on(s: dict) -> list[tuple[str, str]]:
     return [("branch", b)] if b and b not in work.DEFAULT_BRANCHES and b != "HEAD" else []
 
 
+SINK_WORKERS = 8  # threads that run the sessions' git calls in split()
 MAIN_MATCH = 3  # lines of a session that must be in a default branch's diff: there, many sessions share one diff
 
 
@@ -303,15 +304,24 @@ def split(tasks: list[dict], facts: dict | None = None, place_of=None) -> list[d
     write has no sinks: its thread is a thought. A task with no session (a ticket of the user's that nothing picked
     up yet) is one thread of its own, a to-do. `facts`: {session id: text facts}. `place_of`: see _thread. A thread
     on main whose uncommitted work is on another branch too has `moved` (_moved_to)."""
+    from concurrent.futures import ThreadPoolExecutor
     out = []
     MOVED.clear()
+
+    def sinks(ts):
+        t, s = ts
+        ws = writes(s.get("path", ""))
+        return ws + [w for w in on_branch(t, s) + on_default_branch(s) if w not in ws]
+    # each session's sinks come from git calls: run them side by side (git runs outside the GIL)
+    pairs = [(t, s) for t in tasks for s in t.get("_sessions", [])]
+    with ThreadPoolExecutor(SINK_WORKERS) as pool:
+        found = dict(zip(((id(t), s["id"]) for t, s in pairs), pool.map(sinks, pairs)))
     for t in tasks:
         if not t.get("_sessions"):
             out.append(todo_thread(t))
             continue
         for s in t.get("_sessions", []):
-            ws = writes(s.get("path", ""))
-            ws += [w for w in on_branch(t, s) + on_default_branch(s) if w not in ws]
+            ws = found[(id(t), s["id"])]
             if not ws and not s.get("edited") and headless(s.get("path", "")):
                 continue  # a `claude -p` run or an SDK app that changed nothing: no thread, not even a thought
             review = not ws and bool(ran_on(s))
