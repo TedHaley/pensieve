@@ -4328,6 +4328,16 @@ function wkStateSel(t, d) {
       ${d.states.filter(m => m.state !== 'thoughts' || t.state === 'thoughts').map(m => `<option value="${m.state}" ${t.state === m.state ? 'selected' : ''}>${m.label}</option>`).join('')}
       ${t.state_by !== 'auto' ? '<option value="auto">Back to automatic</option>' : ''}</select>`;
 }
+// The line under a card's time: the state that quiet time moves it to, and when (task_states.next_state). Counted
+// from the thread's last activity (t.updated), which the state rule uses. Nothing once due: the next build moves it.
+function wkNext(t) {
+  if (!t.next) return '';
+  const s = t.updated + t.next.after - Date.now() / 1000;
+  if (s <= 0) return '';
+  const m = wkModel(t.next.state), days = Math.round(t.next.after / 86400);
+  const left = s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 * 1.5 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+  return `<span class="wk-due" style="--c:${m.color}" title="${esc(`${m.label} after ${plural(days, 'day')} with no activity, on ${new Date((t.updated + t.next.after) * 1000).toLocaleString()}`)}">${esc(m.label)} in ${left}</span>`;
+}
 // One thread of the Threads tab: a compact row, or the whole thread
 // A thread as a card, as on the cards page: its title, state, open and closed chains, when it was last active, and its
 // thread id. Compact shows the head only, and a click opens it in full. Expanded adds the chains, the actions, and details.
@@ -4367,7 +4377,7 @@ function wkCard(t, d, cluster = '') {
   const when = cluster ? wkOwnTime(t) : t.updated;  // in a cluster, the session's own time: the cards go by it
   const head = `<header class="wk-head">
       <div class="wk-hcol"><h4 class="wk-title" title="${esc(t.title)}">${esc(wkTitle(t))}</h4>${cluster ? wkShare(t, cluster) : wkWorking(t)}</div>
-      <time title="${esc(new Date(when * 1000).toLocaleString())}">${fmtWhen(when)}</time>${wkStateSel(t, d)}</header>`;
+      <div class="wk-when"><time title="${esc(new Date(when * 1000).toLocaleString())}">${fmtWhen(when)}</time>${wkNext(t)}</div>${wkStateSel(t, d)}</header>`;
   return `<article class="wk-task${open ? '' : ' wk-compact'}" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
       <div class="wk-main">${head}
         ${open ? `<div class="wk-detail">${wkAbout(t)}${wkKin(t)}${wkSections(t)}</div>` : ''}

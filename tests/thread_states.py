@@ -74,6 +74,21 @@ def run():
     results.append(check("new activity after a state set by hand: automatic again",
                          newer["state"], "open"))
 
+    def next_of(t, manual=None):
+        ts.apply(t, manual)
+        return t["next"]
+    results.append(check("open moves to loose ends after 3 days quiet",
+                         next_of(task(0, prs=open_pr)), dict(state="loose_ends", after=3 * DAY)))
+    results.append(check("a thought is forgotten after 2 days quiet",
+                         next_of(task(0)), dict(state="forgotten", after=2 * DAY)))
+    results.append(check("loose ends are never forgotten by time", next_of(task(10, prs=open_pr)), None))
+    results.append(check("a to-do has no timer",
+                         next_of(task(0, tickets=[dict(key="ABC-1", status="In Progress")])), None))
+    results.append(check("a closed thread has no timer",
+                         next_of(task(1, prs=[dict(url=PR_URL, state="merged", head="feat")])), None))
+    results.append(check("a state set by hand has no timer",
+                         next_of(task(0, prs=open_pr, updated=NOW - 5), manual), None))
+
     results.append(check("six states in order", [s.value for s in ts.ORDER],
                          ["open", "todo", "thoughts", "loose_ends", "closed", "forgotten"]))
     results.append(check("closing folds into loose ends", ts.RENAMED["closing"], "loose_ends"))

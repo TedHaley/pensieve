@@ -163,6 +163,7 @@ class Builder:
         resume = work.resume_of(s)
         t.update(id=session_threads.thread_id(f.id), title=title, kind="work", state="thoughts", state_by="auto",
                  state_why="a new session: the next build reads what it wrote to", updated=at, active=True,
+                 next=task_states.next_state(task_states.State.THOUGHTS),
                  sessions=[s], anchor=dict(kind="session", ref=f.id, title=title), **({"resume": resume} if resume else {}))
         return t
 

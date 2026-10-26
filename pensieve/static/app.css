@@ -883,6 +883,8 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-main header{display:flex;align-items:baseline;gap:14px}
 .wk-main h4{margin:0;flex:1;font-size:15.5px;font-weight:600;line-height:1.35;letter-spacing:-.005em}
 .wk-main time{font-size:12px;color:var(--text-3);white-space:nowrap}
+.wk-when{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.wk-due{font-size:11px;color:color-mix(in srgb,var(--c) 80%,var(--text-3));white-space:nowrap}
 .wk-sub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-top:5px;font-size:12.5px;color:var(--text-3)}
 .wk-sub a{color:var(--accent);text-decoration:none}.wk-sub a:hover{text-decoration:underline}
 .wk-branch{display:inline-flex;align-items:center;gap:5px;font:12px var(--mono);color:var(--text-2)}

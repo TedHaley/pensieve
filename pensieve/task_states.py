@@ -129,9 +129,22 @@ def apply(task: dict, manual: StateChange | None):
     task["chains"] = chains.build(task, status)
     if manual and manual.state != "auto" and manual.at >= task.get("updated", 0):
         state = RENAMED.get(manual.state, manual.state)
-        task.update(state=State(state).value, state_by=manual.by, state_why=manual.reason or f"set by {manual.by}")
+        task.update(state=State(state).value, state_by=manual.by, state_why=manual.reason or f"set by {manual.by}",
+                    next=None)
     else:
-        task.update(state=auto.value, state_by="auto", state_why=why)
+        task.update(state=auto.value, state_by="auto", state_why=why, next=next_state(auto))
+
+
+def next_state(state: State) -> dict | None:
+    """The state that a thread's quiet time moves it to, and after how many seconds of quiet (counted from its
+    `updated`), or None when time alone never changes it: open goes to loose ends, a thought is forgotten. Loose ends
+    are never forgotten by time: work with a data source that is not done stays in view."""
+    from pensieve import thread_model as tm
+    after = {State.OPEN: (State.LOOSE_ENDS, tm.RECENT_DAYS), State.THOUGHTS: (State.FORGOTTEN, tm.THOUGHT_DAYS)}
+    if state not in after:
+        return None
+    to, days = after[state]
+    return dict(state=to.value, after=days * 86400)
 
 
 def models() -> list[dict]:
