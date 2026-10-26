@@ -122,7 +122,8 @@ def categories_for(profiles) -> list[str]:
 
 def scan(categories=None, fresh=False) -> list[dict]:
     """What can be indexed in these categories (all by default), with sizes. Only these categories' folders are read."""
-    cats = tuple(c for c, _, _ in sources.CATEGORIES if categories is None or c in set(categories))
+    cats = tuple(c for c, _, _ in sources.CATEGORIES  # a connection has its own switch, not a setup item
+                 if c != "connections" and (categories is None or c in set(categories)))
     _scanned.update(cats)
     hit = _cache.get(cats)
     if not fresh and hit and time.time() - hit[0] < 600:
