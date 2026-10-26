@@ -780,8 +780,7 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-cluster-h .wk-cl-btns{margin-left:auto;display:inline-flex;align-items:center;gap:8px}
 .wk-resolve .wk-n{margin-left:6px;font-size:11px;padding:0 6px;border-radius:999px;background:var(--card);color:var(--text-3)}
 .wk-resolve-dlg{width:min(560px,calc(100vw - 32px))}
-.wk-also{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:10px 0 0 -20px;padding:2px 12px;font-size:12.5px}
-.wk-also .linkbtn{display:inline-flex;align-items:center;gap:6px}
+.wk-cluster-t{margin-left:-20px;padding:6px 12px 2px;font:600 15px var(--sans);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wk-pick{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
 .wk-pick .wk-btn.on{box-shadow:inset 0 0 0 1.5px var(--accent);color:var(--text)}
 .wk-resolve-dlg .sh-head h3{display:flex;align-items:center;gap:6px;white-space:normal}
@@ -1684,3 +1683,14 @@ body[data-mode="session"] .src-map,body[data-mode="session"] .src-agents .src-n{
 .setup-connect code{overflow-wrap:anywhere}
 #appseg.theme-seg{height:32px;box-shadow:inset 0 0 0 1px var(--line);background:var(--card-2)}
 #appseg.theme-seg button{width:28px;height:26px}
+/* A scrolled page takes the header band and the tabs hide behind the logo (tuckTabs in app.js) */
+.top-l{position:relative;z-index:2}
+#tabs{position:relative;z-index:1;transform-origin:left center;transition:transform .38s var(--ease),opacity .28s var(--ease)}
+.brand{border-radius:999px;transition:background .2s var(--ease),box-shadow .2s var(--ease)}
+body.tabs-tucked{--top-h:12px}
+body.tabs-tucked .brand{cursor:pointer;background:var(--glass-strong);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);box-shadow:var(--shadow-sm),inset 0 0 0 .5px var(--glass-edge)}
+body.tabs-tucked #tabs{transform:translateX(var(--tuck-x,0)) scale(.2);opacity:0;pointer-events:none}
+body.tabs-tucked.tabs-peek #tabs{transform:none;opacity:1;pointer-events:auto}
+#work,#people,#projects,#settings{transition:top .3s var(--ease)}
+#insights{transition:left .24s var(--ease),top .3s var(--ease)}
+#drawer{transition:transform .24s var(--ease),top .3s var(--ease)}

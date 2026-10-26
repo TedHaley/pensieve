@@ -48,7 +48,7 @@ DOC_RANK = {"made": 0, "read": 1, "named": 2}  # a document the session made com
 OWN_MARK = "[pensieve text job]"  # the first line of every prompt Pensieve's text engine sends (engine.MARK)
 # The first words of the sessions that Pensieve starts to close work (cards.RESOLVE_PROMPTS): a close-out, not a thread
 CLOSE_MARKS = ("[pensieve ship]", "[pensieve discard]")
-VERSION = 5  # of the cache files: a new version reads every transcript again
+VERSION = 6  # of the cache files: a new version reads every transcript again
 
 
 @dataclass
@@ -289,6 +289,8 @@ def _read(f: Facts, path: Path):
             s.title = d.get("aiTitle") or d.get("title") or s.title
         if t not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
             continue
+        if d.get("entrypoint") and "entry" not in st:
+            st["entry"] = d["entrypoint"]  # "cli" for an interactive session, "sdk-cli" for `claude -p` and the SDK
         cwd, when = d.get("cwd") or "", d.get("timestamp") or ""
         s.project = s.project or cwd
         b = d.get("gitBranch") or ""
@@ -515,6 +517,12 @@ def evidence(path: str) -> dict[tuple[str, str], list[str]]:
     for k, key, ev in (f.writes if f else []):
         out.setdefault((k, key), []).append(ev)
     return out
+
+
+def headless(path: str) -> bool:
+    """Whether a transcript is of a session that nobody typed into: `claude -p`, or an app on the Agent SDK."""
+    f = facts(path) if path else None
+    return bool(f) and f.state.get("entry") == "sdk-cli"
 
 
 def written(path: str) -> tuple:

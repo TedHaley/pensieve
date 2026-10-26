@@ -521,7 +521,7 @@ def _json_messages(x, depth=0):
         u, ts = x.get("user"), x.get("ts")
         if isinstance(u, str) and _UID.fullmatch(u) and isinstance(ts, str):
             ch = x.get("channel")
-            cid = ch.get("id") if isinstance(ch, dict) else ch if isinstance(ch, str) else x.get("channel_id") or ""
+            cid = x.get("channel_id") or (ch.get("id") if isinstance(ch, dict) else ch if isinstance(ch, str) else "")
             try:
                 t = float(ts)
             except ValueError:
@@ -574,6 +574,9 @@ def _collect_slack(raw: _Raw) -> dict:
             t["people"].add(uid)
             t["last"] = max(t["last"], ts)
             t["dm"] = t["dm"] or (private and cid.startswith("D"))
+            label = item.get("channel") if isinstance(item.get("channel"), str) else ""
+            t["channel"] = t["channel"] or ("Direct message" if t["dm"] else label)
+            t["url"] = t["url"] or item.get("permalink") or ""
             if cid and not t["dm"]:
                 channels[cid]["people"][uid] += 1
                 channels[cid]["last"] = max(channels[cid]["last"], ts)
@@ -1383,10 +1386,23 @@ def profile(pid: str) -> dict | None:
         refs = g.get("me_edges", {}).get(pid, {})
         pr["relation"] = {**pr["relation"], "tasks": _uniq(refs.get("task", []), "id")[:6],
                           "prs": _uniq(refs.get("pr", []), "url")[:6],
-                          "threads": _uniq(refs.get("thread", []) + refs.get("dm", []), "url")[:6],
+                          "threads": _chat_joins(_uniq(refs.get("thread", []) + refs.get("dm", []), "url")[:6]),
                           "channels": _uniq(refs.get("channel", []), "t")[:6],
                           "code": _uniq(refs.get("code", []), "t")[:6]}
     return pr
+
+
+def _chat_joins(refs: list[dict]) -> list[dict]:
+    """The Slack refs, each with `joins`: the Pensieve threads whose card lists that message (chat_joins), from the
+    card builder's last build."""
+    from pensieve import cardbuild
+    b = cardbuild.current
+    by_url = defaultdict(list)
+    for t in (b.tasks.values() if b else ()):
+        for c in t.get("chat", []):
+            if c.get("url"):
+                by_url[c["url"]].append(dict(id=t["id"], title=t["title"]))
+    return [{**r, "joins": by_url.get(r.get("url"), [])[:3]} for r in refs]
 
 
 REL_PEERS = 8

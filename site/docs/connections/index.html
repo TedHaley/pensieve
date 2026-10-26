@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pensieve connections: collect Jira, Linear and Asana tickets over MCP, read-only</title>
-<meta name="description" content="Pensieve connections sign in to Jira, Linear and Asana, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.">
+<title>Pensieve connections: collect Jira, Linear and Asana tickets and Slack messages, read-only</title>
+<meta name="description" content="Pensieve connections sign in to Jira, Linear and Asana, read Slack with your own read-only app, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.">
 <link rel="canonical" href="https://pensieve.tools/docs/connections/">
 <meta name="robots" content="index,follow">
 <meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Pensieve">
-<meta property="og:title" content="Pensieve connections: collect Jira, Linear and Asana tickets over MCP, read-only">
-<meta property="og:description" content="Pensieve connections sign in to Jira, Linear and Asana, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.">
+<meta property="og:title" content="Pensieve connections: collect Jira, Linear and Asana tickets and Slack messages, read-only">
+<meta property="og:description" content="Pensieve connections sign in to Jira, Linear and Asana, read Slack with your own read-only app, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.">
 <meta property="og:url" content="https://pensieve.tools/docs/connections/">
 <meta property="og:image" content="https://pensieve.tools/og.png?v=2">
 <meta name="twitter:card" content="summary_large_image">
@@ -21,7 +21,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/docs/docs.css">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Connections","description":"Pensieve connections sign in to Jira, Linear and Asana, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.","url":"https://pensieve.tools/docs/connections/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Connections","description":"Pensieve connections sign in to Jira, Linear and Asana, read Slack with your own read-only app, and collect tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.","url":"https://pensieve.tools/docs/connections/","isPartOf":{"@type":"WebSite","name":"Pensieve","url":"https://pensieve.tools/"},"about":{"@type":"SoftwareApplication","name":"Pensieve","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}}</script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -61,6 +61,26 @@ closes its thread.</p>
 <p>Pensieve does not connect to the connectors inside Claude. To get your tickets, sign in to the tracker's own MCP
 server.</p>
 
+<h2 id="slack">Slack</h2>
+<p>Slack's own MCP server has no open sign-up for apps. So you make a small Slack app that can only read, and you give
+Pensieve its token:</p>
+<ol>
+  <li>In Settings → Sources → Cloud connectors → Slack, click <strong>Add</strong>, then <strong>Create the app</strong>. Slack opens with the app's read-only scopes filled in.</li>
+  <li>Pick your workspace, then click <strong>Create</strong>.</li>
+  <li>Under <strong>OAuth &amp; Permissions</strong>, click <strong>Install to workspace</strong>.</li>
+  <li>Copy the <strong>User OAuth Token</strong> (<code>xoxp-…</code>), paste it into Pensieve, and click <strong>Connect</strong>.</li>
+</ol>
+<p>Some workspaces need an admin to approve the app. Pensieve keeps the token in the macOS Keychain, not in a file.
+<strong>Remove token</strong> deletes it from the Keychain.</p>
+<p>Each collection reads the messages that you sent, the messages sent to you, and the messages that mention you. It
+also reads the whole thread of each recent message in a channel, but never of a direct message. Pensieve calls only
+Slack's read methods: <code>auth.test</code>, <code>search.messages</code>, <code>conversations.replies</code> and
+<code>users.info</code>.</p>
+<p>A message shows on each <a href="/docs/threads/">thread</a> whose ticket key, PR link or branch name it holds. A
+branch name counts when it has at least 6 characters and a dash, a slash, an underscore or a digit. A message never
+joins two threads into one. In Developer mode, a person's card in People lists the Slack threads that you share, and
+the threads of your work that each one names.</p>
+
 <h2 id="kinds">Where the servers come from</h2>
 <p>Pensieve finds your MCP servers by itself. It never starts an agent of its own:</p>
 <ul>
@@ -82,7 +102,8 @@ server.</p>
 <h2 id="private">Private messages</h2>
 <p>Pensieve marks an item as private when it comes from a direct message, a group message or a private channel. It
 also marks every item from a tool that can read those, such as a tool with “private” or “dm” in its name. Private
-items are context for your own threads and agents.</p>
+items are context for your own threads and agents. They stay on your Mac: a thread that you share leaves them
+out.</p>
 
 <h2 id="schedule">When Pensieve collects</h2>
 <p>A sign-in that ends connected starts a collection at once. After that, Pensieve collects every 6 hours. While a

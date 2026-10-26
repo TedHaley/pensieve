@@ -27,6 +27,7 @@ class SourceKind(StrEnum):
     AGENT_SESSIONS = "agent_sessions"
     GH_CLI = "gh_cli"
     APPS = "apps"
+    API = "api"  # a service's own API, which Pensieve reads with the user's token (connections.SLACK)
 
 
 class SourceOrigin(StrEnum):

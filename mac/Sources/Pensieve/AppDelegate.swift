@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var badge: NSView?
     private var watchers: Set<AnyCancellable> = []
     private let visualizer = VisualizerController()
-    private lazy var panel = PanelController(visualizer: visualizer)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -18,26 +17,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildStatusItem()
 
         let backend = Backend.shared
-        // A debug instance (tests) leaves global hotkeys to the installed app and takes commands privately.
-        let hotkeys = !Debug.enabled
         if Debug.enabled { Debug.listen { [weak self] in self?.handle($0) } }
-        HotKeys.shared.action = { [weak self] in self?.panel.toggle() }
-        // Threads mode has no search, so no search hotkey: it comes on when the backend says Developer mode
-        let hotkey = { Backend.shared.threadsMode ? "" : Backend.shared.hotkey }
-        if hotkeys { HotKeys.shared.configure(hotkey()) }
+        else { SpotlightShortcut.restore() }
         applyAppearance()
         backend.onSettingsChange = { [weak self] in
-            if hotkeys { HotKeys.shared.configure(hotkey()) }
             self?.applyAppearance()
             self?.askForSourcesIfNeeded()
         }
-        if hotkeys && HotKeys.shared.needsAccessibility && !Prefs.store.bool(forKey: "askedAccessibility") {
-            Prefs.store.set(true, forKey: "askedAccessibility")
-            HotKeys.requestAccessibility(prompt: true)
-        }
         backend.start()
         defaultLaunchAtLogin()
-        Launcher.shared.refreshIfStale()
         Updater.shared.start()
         Updater.shared.$available.receive(on: RunLoop.main)
             .sink { [weak self] r in self?.badge?.isHidden = r == nil }.store(in: &watchers)
@@ -45,7 +33,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .sink { [weak self] jobs in self?.showSyncing(jobs) }.store(in: &watchers)
         backend.$busy.receive(on: RunLoop.main)
             .sink { [weak self] busy in self?.showBusy(busy) }.store(in: &watchers)
-        if ProcessInfo.processInfo.environment["PENSIEVE_SHOW_PANEL"] != nil { panel.show() }
     }
 
     /// Set by the menu bar's Quit and by the updater: quit for real, and stop the backend with the app.
@@ -57,7 +44,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let reason = NSAppleEventManager.shared().currentAppleEvent?.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))
         if Self.quitting || reason != nil { return .terminateNow }
         visualizer.close()
-        panel.hide()
         NSApp.setActivationPolicy(.accessory)
         return .terminateCancel
     }
@@ -68,7 +54,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if !Debug.enabled { SpotlightShortcut.restore() }  // ⌘Space would do nothing while Pensieve isn't running
         Backend.shared.stop()
     }
 
@@ -89,9 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return menu
     }
 
-    /// Opening the app again (Finder, Spotlight, `open -a Pensieve`) shows the search panel.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        panel.show()
+        visualizer.show()
         return false
     }
 
@@ -99,14 +83,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         urls.forEach(handle)
     }
 
-    /// pensieve://search?q=…  pensieve://visualize[?id=…]  pensieve://settings
+    /// pensieve://visualize[?id=…]  pensieve://settings
     func handle(_ url: URL) {
         guard url.scheme?.lowercased() == "pensieve" else { return }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let q = { (name: String) in items.first { $0.name == name }?.value }
         switch url.host?.lowercased() ?? "" {
-        case "search":
-            panel.show(query: q("q"))
         case "visualize", "visualizer", "open":
             visualizer.show(fragment: VisualizerController.fragment([("open", q("id")), ("q", q("q"))]))
         case "settings":
@@ -117,16 +99,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if q("target") == "statusitem" {
                 if let img = statusItem.button?.image, let p = q("path") { Debug.writeEnlarged(img, to: p) }
             } else {
-                Debug.snapshot(url, panel: q("target") == "buttons" ? panel.buttons : panel.panel, web: visualizer.webView)
+                Debug.snapshot(url, web: visualizer.webView)
             }
-        case "hover" where Debug.enabled:  // the pointer over the search bar (`on=0`: off it), for snapshots
-            panel.model.overBar = q("on") != "0"
-        case "options" where Debug.enabled:  // the bar's chevron
-            panel.model.optionsOpen.toggle()
         case "js" where Debug.enabled:  // e.g. scroll the visualizer before a snapshot
             visualizer.webView?.evaluateJavaScript(q("code") ?? "")
-        case "key" where Debug.enabled:
-            Debug.key(url, panel: panel.panel)
         case "state" where Debug.enabled:
             if let m = q("installing") { Backend.shared.debugSetState(.installing(m)) }
             if let m = q("failed") { Backend.shared.debugSetState(.failed(m)) }
@@ -147,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "appearance" where Debug.enabled:
             if let a = q("set") { setAppearance(a) }
         default:
-            panel.show()
+            visualizer.show()
         }
     }
 
@@ -214,10 +190,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let spec = HotKeys.shared.spec
-        let tap = HotKeys.parse(spec).key == nil
-        let keys = tap ? "tap \(HotKeys.display(spec)) or \(HotKeys.display(HotKeys.fallback))"
-                       : HotKeys.display(spec)
         let up = Updater.shared
         switch up.phase {
         case .downloading, .installing:
@@ -250,42 +222,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let threads = Backend.shared.threadsMode  // Threads mode keeps the menu to the app, settings and updates
-        if !threads {
-            let search = item(tap ? "Search Pensieve    \(keys)" : "Search Pensieve", #selector(showSearch))
-            if !tap, let k = HotKeys.parse(spec).key {  // a combo shows right-aligned like any menu shortcut
-                search.keyEquivalent = k == UInt32(kVK_Space) ? " " : HotKeys.parse(spec).keyName.lowercased()
-                search.keyEquivalentModifierMask = HotKeys.parse(spec).flags
-            }
-            menu.addItem(search)
-        }
         menu.addItem(item("Open App", #selector(openVisualizer)))
         menu.addItem(item("Open in Browser", #selector(openInBrowser)))
         menu.addItem(.separator())
 
         menu.addItem(item("Settings…", #selector(openSettings), key: ","))
         menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
-        if !threads {
-            let short = NSMenuItem(title: "Search Shortcut", action: nil, keyEquivalent: "")
-            let shorts = NSMenu(title: "Search Shortcut")
-            var known = false
-            for (value, title) in HotKeys.presets {
-                let i = item(title, #selector(pickShortcut(_:)))
-                i.representedObject = value
-                i.state = spec == value ? .on : .off
-                known = known || spec == value
-                shorts.addItem(i)
-            }
-            if !known {  // a combo typed into Settings
-                let i = NSMenuItem(title: HotKeys.display(spec), action: nil, keyEquivalent: "")
-                i.state = .on
-                shorts.addItem(i)
-            }
-            short.submenu = shorts
-            menu.addItem(short)
-            if HotKeys.shared.needsAccessibility {
-                menu.addItem(item("Allow the \(HotKeys.display(spec)) Shortcut…", #selector(openAccessibility)))
-            }
-        }
         let look = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
         let looks = NSMenu(title: "Appearance")
         for (title, value) in [("System", "system"), ("Light", "light"), ("Dark", "dark")] {
@@ -329,7 +271,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return i
     }
 
-    @objc private func showSearch() { panel.show() }
     @objc private func openVisualizer() { visualizer.show() }
     @objc private func openInBrowser() { NSWorkspace.shared.open(Backend.shared.url("/")) }
     @objc private func openSettings() { visualizer.show(fragment: "settings") }
@@ -370,13 +311,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Applies at once (so ⌘Space works even with the backend down), then saves it like any other setting.
-    @objc private func pickShortcut(_ sender: NSMenuItem) {
-        guard let v = sender.representedObject as? String else { return }
-        if !Debug.enabled { HotKeys.shared.configure(v) }
-        Task { await Backend.shared.updateSettings(["hotkey": v]) }
-    }
-
     @objc private func pickAppearance(_ sender: NSMenuItem) {
         if let v = sender.representedObject as? String { setAppearance(v) }
     }
@@ -408,13 +342,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "light": return NSAppearance(named: .aqua)
         case "dark": return NSAppearance(named: .darkAqua)
         default: return nil  // follow the system
-        }
-    }
-
-    @objc private func openAccessibility() {
-        HotKeys.requestAccessibility(prompt: true)
-        if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(u)
         }
     }
 

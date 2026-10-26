@@ -110,11 +110,13 @@ def pr_info(key: str) -> dict:
     return value
 
 
-def statuses_for(sinks: list[tm.Sink], session: str = "") -> dict[str, str]:
+def statuses_for(sinks: list[tm.Sink], session: str = "", pushed: dict | None = None) -> dict[str, str]:
     """The status of each sink, label -> status. A branch's state comes from GitHub, cached for BRANCH_TTL; while
     the build is offline (work._net, the first build after a start) the cached state serves whatever its age, and
-    a branch with none stays unknown until the next build. A main checkout's state is `session`'s own (local). A
-    ticket's status comes from the task's own data (status_of_task) or the cache; nothing asks a model."""
+    a branch with none stays unknown until the next build. `pushed`: label -> the commit that the branch's checkout
+    last pushed; a cached state from before another push is stale (a branch pushed the first time was not found
+    just before). A main checkout's state is `session`'s own (local). A ticket's status comes from the task's own
+    data (status_of_task) or the cache; nothing asks a model."""
     from pensieve import work
     mine = {label: v for (sid, label), v in local.items() if sid == session}
     cache = _load()
@@ -130,6 +132,9 @@ def statuses_for(sinks: list[tm.Sink], session: str = "") -> dict[str, str]:
             if entry and now - entry["at"] < BRANCH_TTL:
                 out[s.label] = entry["value"]
         elif s.kind == tm.SinkKind.BRANCH:
+            seen = (pushed or {}).get(s.label)
+            if entry and seen is not None and entry.get("pushed") != seen:
+                entry = None
             if entry and (now - entry["at"] < BRANCH_TTL or work._net["off"]):
                 out[s.label] = entry["value"]
             elif not work._net["off"]:
@@ -137,7 +142,7 @@ def statuses_for(sinks: list[tm.Sink], session: str = "") -> dict[str, str]:
                 value = branch_status(github_repo(repo), branch)
                 if value == "UNKNOWN" and _fallback_env():  # the active account cannot read this repo
                     value = branch_status(github_repo(repo), branch, env=_fallback_env())
-                cache[s.label] = dict(value=value, at=now)
+                cache[s.label] = dict(value=value, at=now, **({"pushed": seen} if seen is not None else {}))
                 out[s.label] = value
                 dirty = True
         elif s.kind == tm.SinkKind.TICKET:
@@ -195,7 +200,11 @@ def status_of_task(task: dict, sinks: list[tm.Sink]) -> dict:
         if k.get("key") and k.get("status"):
             status[f"ticket {k['key']}"] = "Done" if k["status"].lower() in DONE_TICKET else k["status"]
     session = (task.get("_sessions") or [{}])[0].get("id", "")
-    status.update(statuses_for([s for s in sinks if s.kind == tm.SinkKind.BRANCH], session))
+    branches = [s for s in sinks if s.kind == tm.SinkKind.BRANCH]
+    # the commit each branch's checkout last pushed: "" before its first push
+    pushed = {s.label: p.get("pushed") or "" for s in branches for p in task.get("places", [])
+              if p.get("git") and p.get("branch") == s.key.split("@", 1)[-1] and not p.get("head")}
+    status.update(statuses_for(branches, session, pushed))
     # a branch whose commits all have their patch in the default branch is merged, even when it was forked from another
     in_main = {p["branch"] for p in task.get("places", []) if p.get("commits") and not p.get("unmerged") and p.get("branch")}
     ours = {label for _, label in local}
@@ -203,6 +212,19 @@ def status_of_task(task: dict, sinks: list[tm.Sink]) -> dict:
         if s.kind == tm.SinkKind.BRANCH and s.key.split("@", 1)[-1] in in_main and status.get(s.label) != "OPEN" \
                 and s.label not in ours:
             status[s.label] = "MERGED"
+    # GitHub says DELETED both for a branch never pushed and for one deleted after its merge. A branch with no PR,
+    # whose upstream in git config is none or the default branch it was cut from, was never pushed: its work in the
+    # checkout keeps it open.
+    from pensieve import work
+    heads = {p.get("head") for p in task.get("prs", []) + (task.get("contributed") or {}).get("prs", [])}
+    upstream = lambda p: work._git(p.get("path", ""), "config", f"branch.{p['branch']}.merge", ttl=60)
+    local_work = {p["branch"] for p in task.get("places", []) if p.get("branch") and not p.get("head")
+                  and p["branch"] not in heads and (p.get("changed") or p.get("unmerged"))
+                  and upstream(p).removeprefix("refs/heads/") in ("", *work.DEFAULT_BRANCHES)}
+    for s in sinks:
+        if s.kind == tm.SinkKind.BRANCH and s.key.split("@", 1)[-1] in local_work \
+                and status.get(s.label) in ("DELETED", "UNKNOWN", None) and s.label not in ours:
+            status[s.label] = "OPEN"
     return status
 
 

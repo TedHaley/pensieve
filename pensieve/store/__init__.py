@@ -49,14 +49,12 @@ def _get(name: str, make) -> Db:
 
 def store_db() -> Db:
     """store.db of this process."""
-    return _get("store", lambda: Db(store_path(), schema.script(schema.STORE), schema.STORE_VERSION,
-                                    schema.STORE_MIGRATIONS))
+    return _get("store", lambda: Db(store_path(), schema.script(schema.STORE), schema.STORE_VERSION))
 
 
 def index_db() -> Db:
     """index.db of this process."""
-    return _get("index", lambda: Db(index_path(), schema.script(schema.INDEX), schema.INDEX_VERSION,
-                                    schema.INDEX_MIGRATIONS))
+    return _get("index", lambda: Db(index_path(), schema.script(schema.INDEX), schema.INDEX_VERSION))
 
 
 def close_all():

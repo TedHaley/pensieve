@@ -78,10 +78,45 @@ def _older(a: str, b: str) -> bool:
     return num(a) < num(b)
 
 
+def _schema_version(path) -> int | None:
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT version FROM schema_version").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    return row[0] if row else None
+
+
+def settle_schema() -> str | None:
+    """Before anything opens the database: a database of another schema version is not migrated. Its store.db
+    holds the schema of another version: everything in v2/ (store, index, vectors, connection state) and what the
+    threads derived goes, and Pensieve builds it again from the sources. An index.db of another version: the index
+    goes. The settings, sign-ins and Keychain tokens stay. Returns 'store', 'index' or None."""
+    from pensieve.store import schema
+    v2 = config.DATA_DIR / "v2"
+    if (v2 / "store.db").exists() and _schema_version(v2 / "store.db") != schema.STORE_VERSION:
+        shutil.rmtree(v2, ignore_errors=True)
+        shutil.rmtree(config.DATA_DIR / EXPORTS, ignore_errors=True)
+        for d in DERIVED:
+            p = config.DATA_DIR / d
+            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+        return "store"
+    if (v2 / "index.db").exists() and _schema_version(v2 / "index.db") != schema.INDEX_VERSION:
+        for f in INDEX:
+            (config.DATA_DIR / f).unlink(missing_ok=True)
+        return "index"
+    return None
+
+
 def settle_version() -> str | None:
     """Before anything opens the database: when this build's version is not the data's, delete the index, the
     thread history and what the threads derived from transcripts, keep the settings, and stamp the new version. Data
     from before SETUP_SINCE also runs the setup again. Returns the old version ('new' for none) or None."""
+    settle_schema()
     now = current_version()
     had = VERSION.read_text().strip() if VERSION.exists() else None
     if had == now:

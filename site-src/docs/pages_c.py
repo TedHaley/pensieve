@@ -53,7 +53,6 @@ WORK = [
 ]
 
 ALL = [
-    ("show_search", "<code>query</code>", "Opens the search panel with the query."),
     ("show_visualizer", "<code>view</code>", "Opens the Map window."),
     ("status", "none", "The size of the index and whether indexing runs now."),
     ("list_scopes", "none", "The named scopes and the current scope."),
@@ -130,35 +129,42 @@ logs each call on your computer, in <code>usage.db</code>. Settings → Usage sh
 """)
 
 page("threads", "Threads",
-     "Threads: one record per agent session for you and your AI agents | Pensieve",
+     "Threads: one record per agent session and branch for you and your AI agents | Pensieve",
      "Pensieve threads join each agent session with its branch, PRs and tickets. Six states, clusters by branch, "
      "to-dos from your issue tracker, and Ship and Discard to close the work.",
      "Threads",
      "This page tells you how Pensieve makes threads, how it sets the state, and how you close the work.",
      f"""
 <h2 id="what-a-thread-holds">What a thread is</h2>
-<p>Pensieve makes one thread for each agent session that wrote something: edits, commits, a branch or a PR. It reads
-the sessions from your agents' transcript folders, a little at a time, and keeps the facts on disk. Threads need no
-index and no model, so they work in Threads mode and in Developer mode.</p>
+<p>Pensieve makes one thread for each agent session and each branch that the session did work on. Work on a branch
+is lines that the session wrote and that are uncommitted there, or that are in commits that the remote's default
+branch does not have yet. A commit, a push or a PR is work too. A session that did work on two branches has two
+threads. On <code>main</code>, a session's thread is open while its lines are uncommitted or not pushed.</p>
+<p>A session that wrote nothing but ran on a feature branch is a review. Its card is on that branch, with the tag
+“review”.</p>
+<p>Pensieve reads the sessions from your agents' transcript folders, a little at a time, and keeps the facts on disk.
+A new message in a session shows on its card at once. Threads need no index and no model, so they work in Threads
+mode and in Developer mode.</p>
 <p>A ticket that is assigned to you is also a thread: a to-do. It stays a to-do until a session, a branch or a PR
 picks it up (see <a href="#todo">To-do threads</a>).</p>
 <p>Pensieve leaves out sessions in temporary folders and under <code>~/Library</code>. Apps and scripts start those.</p>
 
 <h3 id="card">The thread card</h3>
-<p>Each card shows the title, the state and the time of the last activity. It has these buttons:</p>
+<p>Each card shows the title, the state, the time of the last activity, and where the work is: the repo, the branch
+and the uncommitted files. Click the card to open it, and click it again to close it. It has these buttons:</p>
 {table(["Button", "What it does"], [
     ["Resume session", "Opens Terminal in the session's folder and resumes the session in the agent that wrote it. The copy button copies the command. It also works in Threads mode."],
     ["Fork session", "Opens Terminal and starts a new agent session that reads the thread first. The copy button copies a prompt with the thread in it, for any agent. To change the agent, go to Settings → Agents."],
-    ["Details", "Shows the details of the thread (see below)."],
     ["Ship, Discard", 'Open a modal with the steps left (see <a href="#ship-discard">Ship and Discard</a>). A card in a cluster does not show them, because the cluster header has them.'],
     ["Thread id", "Copies the thread id, for the <code>thread</code> MCP tool."],
     ["Preview (eye)", "Shows the thread as a page."],
 ])}
-<p>Details has these parts:</p>
+<p>An open card has these parts:</p>
 <ul>
   <li><strong>Conversation snippet:</strong> the last words of the session. For a to-do, the ticket description.</li>
   <li><strong>Related sessions:</strong> one list, newest first. It has the sessions on the same branch, PR or ticket, and the sessions that edited the same files (“≈ similar context”).</li>
   <li><strong>Data sources in session:</strong> the PRs, tickets and branches.</li>
+  <li><strong>Slack:</strong> the Slack messages that name the thread's ticket key, PR link or branch name, up to 10, newest first. Each one says which of them it names. A direct message has the tag “direct” (see <a href="/docs/connections/#slack">Slack</a>).</li>
   <li><strong>Files:</strong> up to 20, collapsed by default. First what the session made for people: a Notion page
   it wrote, a Slack message it sent, a published Artifact. Then what it used as context: a Slack thread, an email or
   a page that the agent read, a link in the conversation, a local document that it read. Code files that it edited are
@@ -186,9 +192,12 @@ branch. Its card says “holds the branch · N% of the branch's lines”, and it
 color. The other cards show their share.</p>
 <p>A session that does not hold the branch gets its state from its own data sources. If it has none, it gets the
 state of the branch that it wrote to. Such a session is never a thought.</p>
-<p>The cluster header shows the repo, the branch and the uncommitted files. It has these buttons: Ship, Discard,
-Fork from all N, a copy button for the prompt, and a preview. Fork from all N starts a new agent session that reads
-all the threads of the branch first.</p>
+<p>The cluster's title is its PR's title. If it has no PR, the title is its ticket's title. If it has neither, the
+title is the title of the session that holds the branch. Each card in the cluster keeps its own title.</p>
+<p>The cluster header shows the repo, the branch and the uncommitted files. It has these buttons: Resume, Ship,
+Discard, Fork from all N, a copy button for the prompt, and a preview. Resume resumes the session that holds the
+branch. Fork from all N starts a new agent session that reads all the threads of the branch first. Its prompt names
+each session that changed the branch, so that the agent can read their transcripts.</p>
 
 <h2 id="states">The six states</h2>
 <p>Pensieve sets each state from the thread's data sources: its PRs, branches and tickets. Material work is edits,
@@ -207,8 +216,7 @@ and Pensieve sees the evidence.</p>
 
 <h2 id="todo">To-do threads</h2>
 <p>When you connect your issue tracker (see <a href="/docs/connections/#trackers">Connections</a>), the tickets that
-are assigned to you become to-do threads. A to-do card has these buttons: Start session in worktree, Details and
-Discard.</p>
+are assigned to you become to-do threads. A to-do card has these buttons: Start session in worktree and Discard.</p>
 <p><strong>Start session in worktree</strong> does these steps:</p>
 <ol>
   <li>It makes a worktree in <code>&lt;repo&gt;/.claude/worktrees/&lt;branch&gt;</code>, from the default branch. The branch name comes from the ticket key and title.</li>
@@ -226,7 +234,9 @@ these states: Open, To-do, Loose ends and Forgotten.</p>
 ])}
 <p>Click <strong>Start shipping</strong> or <strong>Start discarding</strong> in the modal. An agent session starts
 in Terminal and does the steps. The agent asks you before each step that leaves your Mac. Pensieve itself only
-reads: it sees the result in git, GitHub or the tracker.</p>
+reads: it sees the result in git, GitHub or the tracker. The button resumes the session that holds the branch, with
+the steps as its next message, so the request is in the conversation of the work that it closes. If that session
+can't take a message on resume, a new session does the steps. Thoughts and closed threads have no Ship or Discard.</p>
 
 <h2 id="search">Search threads</h2>
 <p>The search box on the Threads tab finds threads by the words on the page. Put words in quotes
@@ -251,9 +261,10 @@ ABC-12” gets the thread before the agent starts.</p>
 """)
 
 page("connections", "Connections",
-     "Pensieve connections: collect Jira, Linear and Asana tickets over MCP, read-only",
-     "Pensieve connections sign in to Jira, Linear and Asana, and collect tickets, messages and pages from MCP "
-     "servers with read-only tools. Your tickets become to-do threads, and a ticket that is done closes its thread.",
+     "Pensieve connections: collect Jira, Linear and Asana tickets and Slack messages, read-only",
+     "Pensieve connections sign in to Jira, Linear and Asana, read Slack with your own read-only app, and collect "
+     "tickets, messages and pages from MCP servers with read-only tools. Your tickets become to-do threads, and a "
+     "ticket that is done closes its thread.",
      "Connections",
      "This page tells you how Pensieve collects tickets, messages and pages from your MCP servers, and how it keeps the collection read-only.",
      f"""
@@ -281,6 +292,26 @@ closes its thread.</p>
 <p>Pensieve does not connect to the connectors inside Claude. To get your tickets, sign in to the tracker's own MCP
 server.</p>
 
+<h2 id="slack">Slack</h2>
+<p>Slack's own MCP server has no open sign-up for apps. So you make a small Slack app that can only read, and you give
+Pensieve its token:</p>
+<ol>
+  <li>In Settings → Sources → Cloud connectors → Slack, click <strong>Add</strong>, then <strong>Create the app</strong>. Slack opens with the app's read-only scopes filled in.</li>
+  <li>Pick your workspace, then click <strong>Create</strong>.</li>
+  <li>Under <strong>OAuth &amp; Permissions</strong>, click <strong>Install to workspace</strong>.</li>
+  <li>Copy the <strong>User OAuth Token</strong> (<code>xoxp-…</code>), paste it into Pensieve, and click <strong>Connect</strong>.</li>
+</ol>
+<p>Some workspaces need an admin to approve the app. Pensieve keeps the token in the macOS Keychain, not in a file.
+<strong>Remove token</strong> deletes it from the Keychain.</p>
+<p>Each collection reads the messages that you sent, the messages sent to you, and the messages that mention you. It
+also reads the whole thread of each recent message in a channel, but never of a direct message. Pensieve calls only
+Slack's read methods: <code>auth.test</code>, <code>search.messages</code>, <code>conversations.replies</code> and
+<code>users.info</code>.</p>
+<p>A message shows on each <a href="/docs/threads/">thread</a> whose ticket key, PR link or branch name it holds. A
+branch name counts when it has at least 6 characters and a dash, a slash, an underscore or a digit. A message never
+joins two threads into one. In Developer mode, a person's card in People lists the Slack threads that you share, and
+the threads of your work that each one names.</p>
+
 <h2 id="kinds">Where the servers come from</h2>
 <p>Pensieve finds your MCP servers by itself. It never starts an agent of its own:</p>
 <ul>
@@ -302,7 +333,8 @@ server.</p>
 <h2 id="private">Private messages</h2>
 <p>Pensieve marks an item as private when it comes from a direct message, a group message or a private channel. It
 also marks every item from a tool that can read those, such as a tool with “private” or “dm” in its name. Private
-items are context for your own threads and agents.</p>
+items are context for your own threads and agents. They stay on your Mac: a thread that you share leaves them
+out.</p>
 
 <h2 id="schedule">When Pensieve collects</h2>
 <p>A sign-in that ends connected starts a collection at once. After that, Pensieve collects every 6 hours. While a

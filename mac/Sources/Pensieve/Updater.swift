@@ -1,7 +1,7 @@
 import AppKit
 
 /// Updates the user chooses to install. Checks GitHub's latest release ~5 s after launch and then daily (unless
-/// the `auto_update_check` setting is off); a newer version shows up in the menu and the search panel, and stays
+/// the `auto_update_check` setting is off); a newer version shows up in the menu bar's menu, and stays
 /// there across relaunches until it is installed. Nothing is downloaded or installed until the user asks.
 /// Installing downloads Pensieve.dmg, checks the app inside (version and signature), swaps it in place of this
 /// app's bundle, and relaunches.
@@ -24,7 +24,7 @@ final class Updater: ObservableObject {
 
     @Published private(set) var available: Release?
     @Published private(set) var phase: Phase = .idle
-    /// "Later": hidden from the panel until the next launch (still in the menu).
+    /// "Later": dismissed until the next launch (still in the menu).
     @Published private(set) var dismissed = false
 
     private static let skipKey = "skippedUpdateVersion"
@@ -40,7 +40,7 @@ final class Updater: ObservableObject {
             ?? URL(string: "https://api.github.com/repos/TedHaley/pensieve/releases/latest")!
     }
 
-    /// What the panel's hint line should say about updates, if anything.
+    /// What the menu's status line should say about updates, if anything.
     var panelText: String? {
         switch phase {
         case .downloading(let p): return p >= 0 ? "Downloading update… \(Int(p * 100))%" : "Downloading update…"

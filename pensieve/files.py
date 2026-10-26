@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, config, connections, content, media, settings, vectors
+from pensieve import config, connections, content, media, settings, vectors
 from pensieve.indexer import LAYOUT_VERSION, embed, embed_images, embed_media
 from pensieve.layout import cluster, fit3d, nearest, place_new
 
@@ -329,7 +329,6 @@ class Files:
             return 0
         self._last = time.time()
         s = settings.load()
-        apps.refresh(settings.enabled)
         roots = self.roots()
         exclude, max_bytes = set(s["exclude"]), s["max_file_mb"] * 1_000_000
         known = {r[0]: (r[1], r[2]) for r in self.db.execute("SELECT path, mtime, size FROM files")}
@@ -399,12 +398,11 @@ class Files:
 
     @staticmethod
     def roots():
-        """Folders to index: the enabled folders plus enabled apps' content and connections; nested roots fold into
-        their parent."""
+        """Folders to index: the enabled folders plus the connections' folders; nested roots fold into their
+        parent."""
         cand = [p.resolve() for f, p in zip(settings.get("folders"), settings.paths("folders"))
                 if settings.enabled(f"files/{f}") and p.is_dir()]
-        cand += [p.resolve() for p in apps.roots(settings.enabled)]
-        cand += [p.resolve() for p in connections.roots(settings.enabled)]
+        cand +=[p.resolve() for p in connections.roots(settings.enabled)]
         return [p for p in dict.fromkeys(cand) if not any(p != q and p.is_relative_to(q) for q in cand)]
 
     def sync_paths(self, paths, log=lambda m: print(m, flush=True), settle=config.SETTLE_SECONDS, layout=True):
@@ -560,15 +558,10 @@ class Files:
 
     def map_filter(self):
         """(path, root) -> whether the file is a map point: its type has content and is switched onto the map, and
-        its folder (or app) is not in `off_map`. Folders and name-only files are searchable but never points."""
+        its folder is not in `off_map`. Folders and name-only files are searchable but never points."""
         shown = {t: settings.file_type(t)["map"] and settings.file_type(t)["index"] == "content" and readable(t)
                  for t in TYPES}
         folders = {str(p.resolve()): f"files/{f}" for f, p in zip(settings.get("folders"), settings.paths("folders"))}
-        for k, a in apps.APPS.items():
-            try:
-                folders.update({str(Path(r).resolve()): f"apps/{k}" for r in (a["roots"]() if a["available"]() else [])})
-            except Exception:
-                pass
         src = {}
 
         def ok(path, root):

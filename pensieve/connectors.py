@@ -16,7 +16,8 @@ import json
 import re
 import shutil
 import subprocess
-from datetime import datetime, timezone
+import urllib.parse
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -155,6 +156,8 @@ def slack_parse(tool: str, args: dict, data) -> list[dict] | None:
     thread (with all its messages) read with a thread tool. None when the result is not in this form."""
     if not isinstance(data, dict):
         return None
+    if tool.startswith("slack_api") and isinstance(data.get("items"), list):  # collect_slack's items, read already
+        return data["items"]
     text = next((data[k] for k in ("results", "messages", "thread", "result") if isinstance(data.get(k), str)), None)
     if text is None:
         return None
@@ -210,6 +213,131 @@ def slack_follow(d: dict, names: set) -> tuple | None:
     if ts and d.get("channel_id") and "slack_read_thread" in names and not d.get("messages") and not d.get("is_private"):
         return "slack_read_thread", {"channel_id": d["channel_id"], "message_ts": ts, "response_format": "concise"}
     return None
+
+
+# The Slack connection that Pensieve makes itself (connections.SLACK): the Web API with a user token of a Slack app
+# that the user makes in their workspace from SLACK_MANIFEST. The token can only read: the app asks for no write scope,
+# and slack_api calls only the methods in SLACK_READS.
+SLACK_SCOPES = ["search:read", "channels:history", "groups:history", "im:history", "mpim:history", "channels:read",
+                "groups:read", "im:read", "mpim:read", "users:read", "users:read.email"]
+SLACK_MANIFEST = {"display_information": {"name": "Pensieve", "description": "Read-only: your Slack messages in "
+                                                                             "Pensieve on your Mac"},
+                  "oauth_config": {"scopes": {"user": SLACK_SCOPES}},
+                  "settings": {"org_deploy_enabled": False, "socket_mode_enabled": False, "token_rotation_enabled": False}}
+SLACK_NEW_APP = "https://api.slack.com/apps?new_app=1&manifest_json="
+SLACK_READS = {"auth.test", "search.messages", "conversations.replies", "users.info"}
+
+
+def slack_api(token: str, method: str, **params) -> dict:
+    """One call of the Slack Web API. A rate limit waits for as long as Slack asks, up to 30 seconds."""
+    import time
+    import urllib.error
+    import urllib.request
+    if method not in SLACK_READS:
+        raise ValueError(f"{method} is not a read method")
+    url = f"https://slack.com/api/{method}?{urllib.parse.urlencode(params)}"
+    for _ in range(3):
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                out = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                time.sleep(min(30, int(e.headers.get("Retry-After") or 5)))
+                continue
+            raise RuntimeError(f"Slack answered {e.code} to {method}") from e
+        if not out.get("ok"):
+            raise RuntimeError(f"Slack refused {method}: {out.get('error', 'unknown error')}")
+        return out
+    raise RuntimeError(f"Slack kept rate-limiting {method}")
+
+
+def slack_ready(token: str) -> tuple[bool, str, dict]:
+    """Whether the token reads Slack as a user: (ok, why not, {user_id, user, team, url})."""
+    if not token.startswith("xoxp-"):
+        return False, "Use the User OAuth Token, which starts with xoxp-", {}
+    try:
+        r = slack_api(token, "auth.test")
+    except (RuntimeError, OSError) as e:
+        return False, str(e)[:200], {}
+    return True, "", {k: r.get(k, "") for k in ("user_id", "user", "team", "url")}
+
+
+def _slack_channel(ch: dict) -> tuple[str, dict]:
+    """A search match's channel: its label, and the fields that mark a direct message or a private channel."""
+    if ch.get("is_im") or ch.get("is_mpim"):
+        return "Direct message", {"channel_type": "im" if ch.get("is_im") else "mpim", "is_private": True}
+    if ch.get("is_private") or ch.get("is_group"):
+        return f"#{ch.get('name', '')}", {"channel_type": "private", "is_private": True}
+    return f"#{ch.get('name', '')}", {}
+
+
+def collect_slack(token: str, since: str, pages: int = 3, threads: int = 20) -> tuple[list[tuple], list[dict], str]:
+    """The user's Slack messages since `since`: those they sent, those sent to them, and those that mention them,
+    with the whole thread of the most recent ones in channels (never in a direct message). Returns the results as
+    (tool, args, JSON text) for connections.store, the Slack users seen, and the user's own Slack id."""
+    me = slack_api(token, "auth.test")["user_id"]
+    day = (datetime.fromisoformat(since.replace("Z", "+00:00")) - timedelta(days=1)).strftime("%Y-%m-%d")
+    users: dict[str, dict] = {}
+
+    def user(uid: str) -> dict:
+        if uid and uid not in users and len(users) < 300:
+            try:
+                u = slack_api(token, "users.info", user=uid)["user"]
+            except RuntimeError:
+                u = {"id": uid}
+            p = u.get("profile") or {}
+            users[uid] = dict(id=uid, name=u.get("real_name") or p.get("real_name") or u.get("name") or "",
+                              title=p.get("title") or "", email=(p.get("email") or "").lower(),
+                              avatar=p.get("image_192") or p.get("image_72") or "", bot=bool(u.get("is_bot")),
+                              display=p.get("display_name") or "")
+        return users.get(uid) or {"id": uid}
+
+    def text(s: str) -> str:  # <@U123> as @Name, so that the text reads and searches by name
+        return re.sub(r"<@(U[A-Z0-9]+)(?:\|[^>]*)?>", lambda m: "@" + (user(m.group(1)).get("name") or m.group(1)),
+                      s or "")[:20000]
+
+    def frm(uid: str, name: str = "") -> str:
+        return f"{user(uid).get('name') or name or uid} (ID: {uid})" if uid else name
+
+    found: dict[str, dict] = {}
+    for query in (f"from:<@{me}> after:{day}", f"to:<@{me}> after:{day}", f"<@{me}> after:{day}"):
+        for page in range(1, pages + 1):
+            r = slack_api(token, "search.messages", query=query, count=100, page=page, sort="timestamp",
+                          sort_dir="desc")
+            ms = r.get("messages") or {}
+            for m in ms.get("matches") or []:
+                ch = m.get("channel") or {}
+                cid, ts = ch.get("id", ""), m.get("ts", "")
+                if not (cid and ts):
+                    continue
+                label, private = _slack_channel(ch)
+                thread = re.search(r"thread_ts=([\d.]+)", m.get("permalink", ""))
+                found[f"{cid}-{ts}"] = {"id": f"{cid}-{ts}", "ts": ts, "channel": label, "channel_id": cid,
+                                        "from": frm(m.get("user", ""), m.get("username", "")), "user": m.get("user", ""),
+                                        "time": _iso(ts), "permalink": m.get("permalink", ""),
+                                        "thread_ts": thread.group(1) if thread else "", "text": text(m.get("text")),
+                                        **private}
+            if page >= (ms.get("paging") or {}).get("pages", 1):
+                break
+    results = [("slack_api_search", {"since": day}, json.dumps({"items": list(found.values())}))]
+    tops = sorted({(m["channel_id"], m["thread_ts"] or m["ts"], m["channel"], m["permalink"]) for m in found.values()
+                   if not m.get("is_private")}, key=lambda x: -float(x[1]))
+    for cid, ts, label, link in tops[:threads]:
+        try:
+            msgs = slack_api(token, "conversations.replies", channel=cid, ts=ts, limit=200).get("messages") or []
+        except RuntimeError:
+            continue
+        if len(msgs) < 2:
+            continue  # a message on its own is already an item
+        rows = [{"from": frm(m.get("user", "")), "user": m.get("user", ""), "time": _iso(m.get("ts")),
+                 "ts": m.get("ts", ""), "text": text(m.get("text")), "channel_id": cid} for m in msgs]
+        results.append(("slack_api_thread", {"channel_id": cid, "message_ts": ts}, json.dumps({"items": [{
+            "id": f"{cid}-{ts}", "ts": ts, "channel": label, "channel_id": cid, "title": _one_line(rows[0]["text"]),
+            "from": rows[0]["from"], "user": rows[0]["user"], "time": rows[0]["time"], "text": rows[0]["text"],
+            "permalink": link.split("?")[0] if rows[0]["ts"] == ts else "", "reply_count": len(rows) - 1,
+            "messages": rows}]})))
+    return results, [u for u in users.values() if u.get("name") or u.get("email")], me
 
 
 _GH_URL = re.compile(r"https://(?P<host>[^/]+)/(?:repos/)?(?P<repo>[^/]+/[^/]+)/(?:issues|pull|pulls)/(?P<n>\d+)")
@@ -468,12 +596,13 @@ PROFILES = {
         hint="Use slack_search_public with filters like 'from:me after:{day}' and sort 'timestamp', then "
              "slack_read_thread for each thread that one of the messages is in. Do not read direct messages.",
         parse=slack_parse, norm=slack_norm, follow=slack_follow,
-        add=[dict(kind="env", label="Slack token", command="npx", args=["-y", "@modelcontextprotocol/server-slack"],
-                  env="SLACK_BOT_TOKEN", env_more="SLACK_TEAM_ID", placeholder="xoxp-…",
-                  help="Slack's own MCP server (mcp.slack.com) has no open sign-up for apps, so Pensieve can't sign "
-                       "in to it yet. Use the Slack connector of Claude Code, or a token of a Slack app that you "
-                       "create, with channels:history, channels:read and users:read.",
-                  docs="https://api.slack.com/apps")]),
+        add=[dict(kind="slack_token", label="Your own Slack app", placeholder="xoxp-…",
+                  help="Slack's own MCP server (mcp.slack.com) has no open sign-up for apps, so you make a small "
+                       "Slack app that can only read. 1. Open Create the app: Slack fills in its read-only scopes. "
+                       "2. Pick your workspace, then Create. 3. Under OAuth & Permissions, select Install to "
+                       "workspace. 4. Copy the User OAuth Token (xoxp-…) and paste it here. Pensieve keeps it in "
+                       "the macOS Keychain. Some workspaces need an admin to approve the app.",
+                  docs=SLACK_NEW_APP + urllib.parse.quote(json.dumps(SLACK_MANIFEST)), docs_label="Create the app")]),
     "drive": dict(
         label="Google Drive", match=r"google.?drive|gdrive",
         reads={"search", "google_drive_search", "google_drive_fetch", "read_file", "get_file", "list_files",

@@ -205,7 +205,11 @@ def pending(card: dict, reply: Reply | None = None) -> list[Pending]:
         if pl.get("branch") not in own or pl.get("head"):
             continue
         b = pl["branch"]
-        if pl.get("changed"):
+        mv = card.get("moved") if b in DEFAULT_BRANCHES else None
+        if pl.get("changed") and mv:
+            out.append(Pending(f"Ship {mv['branch']}: this work is on it ({mv['commit']}), so it needs no commit on {b}",
+                               "agent", mv["branch"], branch=b))
+        elif pl.get("changed"):
             out.append(Pending(f"Commit {pl['changed']} changed files on {b}", "agent", b, branch=b))
         if pl.get("ahead"):
             out.append(Pending(f"Push {pl['ahead']} commits on {b}", "agent", b, branch=b))
@@ -306,7 +310,15 @@ def discard(card: dict) -> list[dict]:
     open pull request without a merge, delete each branch (and its remote copy when it was pushed), and mark each
     ticket that is not done as cancelled. Each step says who acts, as `pending` does."""
     out = []
-    # main is never deleted, and its uncommitted files belong to every session on it, so no step discards them
+    # main is never deleted, and its uncommitted files belong to every session on it: a step discards them only when
+    # every line in them is on another branch too (`moved`, session_threads._moved_to)
+    mv = card.get("moved")
+    for pl in card.get("places", []) if mv else []:
+        if pl.get("branch") in DEFAULT_BRANCHES and pl.get("changed") and not pl.get("head"):
+            out.append(dict(text=f"Discard the uncommitted changes in {', '.join(mv['files'])} on {pl['branch']}: every "
+                                 f"line is also on {mv['branch']} ({mv['commit']})",
+                            who="agent", ref=pl["branch"], stage="work", done=False, branch=pl["branch"]))
+            break
     own = {b.get("branch") for b in card.get("branches", []) if b.get("branch") and b["branch"] not in DEFAULT_BRANCHES}
     for pl in card.get("places", []):
         b = pl.get("branch")

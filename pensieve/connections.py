@@ -34,6 +34,7 @@ STATE = config.V2_DIR / "connections.json"  # status of each connection (v1: con
 _V1_STATE = config.DATA_DIR / "connections" / "state.json"
 SESSIONS = "agent_sessions"  # the source of MCP results found in agent transcripts
 GH = "github_cli"  # GitHub issues and pull requests that involve the user, read with the gh command line
+SLACK = "slack_api"  # the user's Slack messages, read with the Web API and a token in the Keychain (connect_slack)
 _lock = threading.Lock()
 
 READ = {"get", "list", "search", "read", "fetch", "lookup", "find", "query", "describe", "view", "show", "retrieve",
@@ -166,6 +167,11 @@ def servers() -> list[dict]:
     if gh:
         out.append(dict(id=GH, name="GitHub (gh)", origin="cli", status=gh["status"], error=gh.get("error"),
                         tools=[dict(name=t, read=True) for t in ("gh search issues", "gh api comments", "gh api reviews")]))
+    sl = st.get("slack")
+    if sl:
+        out.append(dict(id=SLACK, name="Slack", origin="api", status=sl["status"], error=sl.get("error"),
+                        account=sl.get("account", ""),
+                        tools=[dict(name=t, read=True) for t in sorted(connectors.SLACK_READS)]))
     runs = st.get("runs", {})
     for r in out:
         r.update(runs.get(r["id"], {}))
@@ -289,6 +295,40 @@ def discover_gh() -> list[dict]:
     return servers()
 
 
+def connect_slack(token: str) -> dict:
+    """Check a Slack user token, then keep it in the Keychain and switch the connection on. Raises ValueError with
+    the reason when Slack does not accept the token."""
+    from pensieve import keychain
+    ok, why, info = connectors.slack_ready(token.strip())
+    if not ok:
+        raise ValueError(why)
+    keychain.put("slack", token.strip())
+    account = " in ".join(x for x in (info.get("user"), info.get("team")) if x)
+    _update(lambda st: st.__setitem__("slack", dict(status="connected", error=None, at=time.time(), account=account,
+                                                    user_id=info.get("user_id", ""))))
+    settings.set_enabled(f"connections/{SLACK}", True)
+    return info
+
+
+def disconnect_slack():
+    """Forget the Slack token. The messages that Pensieve collected stay until their source is removed."""
+    from pensieve import keychain
+    keychain.delete("slack")
+    _update(lambda st: st.pop("slack", None))
+
+
+def discover_slack() -> list[dict]:
+    """Check the Slack token in the Keychain again: a token that the user revoked in Slack needs a new one."""
+    from pensieve import keychain
+    if "slack" not in _load():
+        return servers()
+    token = keychain.get("slack")
+    ok, why, _ = connectors.slack_ready(token) if token else (False, "No token in the Keychain", {})
+    _update(lambda st: st["slack"].update(status="connected" if ok else "needs-auth", error=why or None,
+                                          at=time.time()))
+    return servers()
+
+
 def _server_cfg(c: dict) -> dict | None:
     """One server entry of an agent's config, in the form `_open` takes. Agents name the fields differently."""
     url = c.get("url") or c.get("serverUrl") or c.get("httpUrl")
@@ -351,7 +391,7 @@ def _err(e: BaseException) -> str:
 
 def discover() -> list[dict]:
     errors = []
-    for fn in (discover_agents, discover_own, discover_gh):
+    for fn in (discover_agents, discover_own, discover_gh, discover_slack):
         try:
             fn()
         except Exception as e:
@@ -508,6 +548,11 @@ def collect(sid: str, calls: int = 8) -> dict:
     try:
         if r["origin"] == "cli":
             results = connectors.collect_gh(_since(sid))
+        elif r["origin"] == "api":
+            from pensieve import keychain
+            from pensieve.store import people as people_db
+            results, users, me = connectors.collect_slack(keychain.get("slack"), _since(sid))
+            people_db.put_slack_users(v2.store_db(), users, me=me)
         elif r["origin"] == "agent":
             cfg = agent_configs()[sid]["cfg"]
             results = asyncio.run(asyncio.wait_for(_collect_own_async(cfg, r, calls), 900))
@@ -577,7 +622,7 @@ async def _lookup_own(cfg: dict, ids: list[str]) -> list[tuple]:
     return out
 
 
-_PREFER = {"own": 0, "cli": 1, "agent": 2}
+_PREFER = {"own": 0, "api": 0, "cli": 1, "agent": 2}
 
 
 def covered(found: list[dict] | None = None) -> dict[str, str]:
@@ -708,6 +753,8 @@ def _source(sid: str, label: str):
         kind, origin = SourceKind.AGENT_SESSIONS, SourceOrigin.BUILTIN
     elif sid == GH:
         kind, origin = SourceKind.GH_CLI, SourceOrigin.CLI
+    elif sid == SLACK:
+        kind, origin = SourceKind.API, SourceOrigin.OWN
     else:
         st = _load()
         kind, origin = next((v for k, v in _ORIGIN_KINDS.items() if sid in st.get(k, {})),

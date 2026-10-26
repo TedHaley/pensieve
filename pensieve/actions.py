@@ -162,11 +162,6 @@ def visualize(id: str | None = None, view: str | None = None):
     return dict(ok=True, where="browser")
 
 
-def show_search(query: str = ""):
-    ok = _open_url("pensieve://search?" + urllib.parse.urlencode({"q": query}))
-    return dict(ok=ok, note=None if ok else "The Pensieve Mac app isn't installed or running.")
-
-
 def open_item(id: str, action="open"):
     if action not in ("open", "reveal", "visualize", "editor", "terminal"):
         raise ValueError("action must be open, reveal, visualize, editor or terminal")
@@ -192,12 +187,6 @@ def open_item(id: str, action="open"):
     if action == "reveal":
         subprocess.run(["open", "-R", r["path"]], check=False)
         return dict(ok=True, path=r["path"])
-    from pensieve import apps
-    nid = apps.note_id(r["path"])
-    if nid:  # an exported Apple Note: show the real note
-        subprocess.run(["osascript", "-e", f'tell application "Notes" to show note id "{nid}"', "-e",
-                        'tell application "Notes" to activate'], check=False)
-        return dict(ok=True, app="Notes")
     editor = settings.get("editor")
     if r["line"] and editor in ("vscode", "cursor", "zed"):
         if _open_url(f"{editor}://file{urllib.parse.quote(r['path'])}:{r['line']}"):

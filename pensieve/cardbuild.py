@@ -79,6 +79,8 @@ class Builder:
         self.again = False                   # rebuild(): a full build from the caches on the next turn
         self.builds: list[dict] = []         # the last builds: {at, kind, ms, changed}
         self._thread = None
+        self.lock = threading.Lock()         # between a build's writes and hot()
+        self.hot_at: dict[str, float] = {}   # card id -> when hot() last wrote it
 
     def start(self):
         global current
@@ -102,7 +104,67 @@ class Builder:
     def emit(self, kind: str, refs, wait: float = 0) -> bool:
         done = threading.Event() if wait else None
         self.q.put((kind, list(refs), done))
+        if kind == SESSION and refs:
+            threading.Thread(target=self._hot_safe, args=(list(refs),), daemon=True, name="card-hot").start()
         return done.wait(wait) if done else True
+
+    def _hot_safe(self, sids):
+        try:
+            self.hot(sids)
+        except Exception:
+            traceback.print_exc()
+
+    def hot(self, sids: list[str]) -> list[str]:
+        """Show a session's new turn at once, without waiting for the build that a full build can hold up for
+        minutes: its card's time moves and it is running; a session with no card yet gets a thought card. The next
+        build that read the turn replaces these cards with whole ones. Returns the ids of the cards written."""
+        if not self.tasks:
+            return []
+        from pensieve import transcripts
+        written = []
+        with self.lock:
+            for sid in sids:
+                f = transcripts.find(sid)
+                if not f or not f.n_turns or f.state.get("own") or work._in_temp(f.project):
+                    continue
+                at = f.updated_ts()
+                mine = [t for t in self.tasks.values() if any(s["id"] == sid for s in t.get("sessions", []))]
+                # a session on several branches: its newest card is the branch it works on now
+                t = max(mine, key=lambda x: x["updated"]) if mine else self._thought(f, at)
+                if not t:
+                    continue
+                s = next(s for s in t["sessions"] if s["id"] == sid)
+                if mine and at <= (s.get("updated") or 0) and t.get("active"):
+                    continue
+                s["updated"] = max(s.get("updated") or 0, at)
+                t["updated"], t["active"] = max(t["updated"], at), True
+                self.tasks[t["id"]] = t
+                written.append(t["id"])
+            if not written:
+                return []
+            now = int(time.time())
+            views = {i: json.dumps(self.tasks[i], sort_keys=True, default=_plain) for i in written}
+            store_cards.save(v2.store_db(), [(self._card(self.tasks[i], views[i], now), _members(self.tasks[i]))
+                                             for i in written], delete=[])
+            for i in written:
+                self.views[i], self.hot_at[i] = views[i], time.time()
+        self._tell(written, [])
+        return written
+
+    def _thought(self, f, at: float) -> dict | None:
+        """A card for a session that has none yet, in the shape of the other cards: a thought until the next build
+        says what it wrote to."""
+        from pensieve import session_threads
+        like = next(iter(self.tasks.values()))
+        t = {k: [] if isinstance(v, list) else 0 if isinstance(v, (int, float)) and not isinstance(v, bool)
+             else False if isinstance(v, bool) else "" for k, v in like.items() if not isinstance(v, dict)}
+        title = f.title or "New session"
+        s = dict(id=f.id, title=title, updated=at, branch="", repo="", project=f.project, summary="", artifacts=[])
+        resume = work.resume_of(s)
+        t.update(id=session_threads.thread_id(f.id), title=title, kind="work", state="thoughts", state_by="auto",
+                 state_why="a new session: the next build reads what it wrote to", updated=at, active=True,
+                 sessions=[s], anchor=dict(kind="session", ref=f.id, title=title), **({"resume": resume} if resume else {}))
+        return t
 
     def _loop(self):
         try:
@@ -175,7 +237,7 @@ class Builder:
     def _build(self, force: set | None, net: bool) -> list[str]:
         """Group, pick up and finish every card; write the ones whose view changed. `force`: the cards whose folders
         and PRs are read again even when their members did not change (None: every card)."""
-        inp = self.inp
+        inp, started = self.inp, time.time()
         picked = {}
 
         def pick(t):
@@ -197,16 +259,22 @@ class Builder:
             work._net["off"] = was
         self.picked = picked
         views = {t["id"]: json.dumps(t, sort_keys=True, default=_plain) for t in final}
-        changed = [i for i, v in views.items() if self.views.get(i) != v]
-        removed = [i for i in self.views if i not in views]
         by_id = {t["id"]: t for t in final}
-        if changed or removed:
-            now = int(time.time())
-            rows = [(self._card(by_id[i], views[i], now), _members(by_id[i])) for i in changed]
-            store_cards.save(v2.store_db(), rows, delete=removed)
-            for card, _ in rows:
-                self.sigs[card.id] = card.signature
-        self.views, self.tasks = views, by_id
+        with self.lock:
+            # a card that hot() wrote while this build ran shows a turn that this build did not read: it stays
+            # until the build of that turn's event
+            for i in [i for i, at in self.hot_at.items() if at >= started and i in self.views]:
+                views[i], by_id[i] = self.views[i], self.tasks[i]
+            self.hot_at = {i: at for i, at in self.hot_at.items() if at >= started}
+            changed = [i for i, v in views.items() if self.views.get(i) != v]
+            removed = [i for i in self.views if i not in views]
+            if changed or removed:
+                now = int(time.time())
+                rows = [(self._card(by_id[i], views[i], now), _members(by_id[i])) for i in changed]
+                store_cards.save(v2.store_db(), rows, delete=removed)
+                for card, _ in rows:
+                    self.sigs[card.id] = card.signature
+            self.views, self.tasks = views, by_id
         if changed or removed:
             self._tell(changed, removed)
         return changed + removed

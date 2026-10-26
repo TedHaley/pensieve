@@ -1,17 +1,18 @@
 """The SQL schema of store.db and index.db (docs/design/storage.md).
 
 Each file's schema is a dict of parts, one per aggregate, so that each phase adds its own tables. Every statement is
-`IF NOT EXISTS`: a new table needs no migration. A change to a table that exists (a new column) is a step in
-MIGRATIONS, and VERSION goes up by one; `schema_version` holds the version of the file."""
+`IF NOT EXISTS`: a new table needs no new version. A change to a table that exists (a new column, a new CHECK) makes
+VERSION go up by one. Pensieve does not migrate a file: at start, a file of another version is deleted and built again
+from the sources (reset.settle_schema). `schema_version` holds the version of the file."""
 
-STORE_VERSION = 5
+STORE_VERSION = 6
 INDEX_VERSION = 1
 
 STORE = {
     "sources": """
 CREATE TABLE IF NOT EXISTS sources (
   id            TEXT PRIMARY KEY,
-  kind          TEXT NOT NULL CHECK (kind IN ('mcp', 'agent_sessions', 'gh_cli', 'apps')),
+  kind          TEXT NOT NULL CHECK (kind IN ('mcp', 'agent_sessions', 'gh_cli', 'apps', 'api')),
   connector     TEXT,
   name          TEXT NOT NULL,
   origin        TEXT NOT NULL CHECK (origin IN ('engine', 'agent', 'own', 'cli', 'builtin')),
@@ -459,65 +460,6 @@ CREATE TABLE IF NOT EXISTS avatars (
 ) STRICT;
 """,
 }
-
-_V4_STATE = ("CASE state WHEN 'latent' THEN 'todo' WHEN 'conscious' THEN 'open' WHEN 'subconscious' THEN 'loose_ends' "
-             "WHEN 'etched' THEN 'complete' ELSE state END")
-
-
-def _v4_table(name: str, suffix: str = "_v4") -> str:
-    """The CREATE TABLE of `name` from STORE, as a new table `<name><suffix>`."""
-    import re
-    m = re.search(rf"CREATE TABLE IF NOT EXISTS {name} \(.*?\) STRICT", "\n".join(STORE.values()), re.S)
-    return m.group(0).replace(f"CREATE TABLE IF NOT EXISTS {name} (", f"CREATE TABLE {name}{suffix} (", 1)
-
-
-# version -> the statements that take a file from version - 1 to version.
-STORE_MIGRATIONS: dict[int, list[str]] = {
-    # 2: the 'manager' override. SQLite can't change a CHECK in place, so the rows move to a new table.
-    2: ["""CREATE TABLE person_overrides_v2 (
-  id      INTEGER PRIMARY KEY,
-  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me', 'manager')),
-  a       TEXT NOT NULL,
-  b       TEXT,
-  at      INTEGER NOT NULL
-) STRICT""",
-        "INSERT INTO person_overrides_v2 SELECT id, action, a, b, at FROM person_overrides",
-        "DROP TABLE person_overrides",
-        "ALTER TABLE person_overrides_v2 RENAME TO person_overrides"],
-    # 3: no reporting lines, so no 'manager' override: its rows go, and the CHECK is as in version 1
-    3: ["""CREATE TABLE person_overrides_v3 (
-  id      INTEGER PRIMARY KEY,
-  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me')),
-  a       TEXT NOT NULL,
-  b       TEXT,
-  at      INTEGER NOT NULL
-) STRICT""",
-        "INSERT INTO person_overrides_v3 SELECT id, action, a, b, at FROM person_overrides WHERE action != 'manager'",
-        "DROP TABLE person_overrides",
-        "ALTER TABLE person_overrides_v3 RENAME TO person_overrides"],
-    # 4: the states get new names (task_states.RENAMED). The rows, and the state in the saved JSON, move to tables
-    # with the new CHECK. The migration connection has foreign keys off, so the drops cascade nowhere.
-    4: [s for t, cols, extra in (
-        ("cards", "id, kind, goal_of, title, {state}, first_at, updated_at, built_at, signature, "
-                  "json_set(view, '$.state', {state})", "CREATE INDEX cards_updated ON cards (updated_at)"),
-        ("card_states", "id, card_id, {state}, by, reason, at",
-         "CREATE INDEX card_states_card ON card_states (card_id, at)"),
-        ("thread_snapshots", "id, thread_id, at, snapshot, {state}, structure, pushed, goal_vec, "
-                             "json_set(card, '$.state.value', {state})",
-         "CREATE INDEX thread_snapshots_thread ON thread_snapshots (thread_id, at)"))
-        for s in (_v4_table(t), f"INSERT INTO {t}_v4 SELECT {cols.format(state=_V4_STATE)} FROM {t}",
-                  f"DROP TABLE {t}", f"ALTER TABLE {t}_v4 RENAME TO {t}", extra)],
-    # 5: a session with no data source is a thought, so cards and their snapshots may hold the state 'thoughts'.
-    5: [s for t, cols, extra in (
-        ("cards", "id, kind, goal_of, title, state, first_at, updated_at, built_at, signature, view",
-         "CREATE INDEX cards_updated ON cards (updated_at)"),
-        ("thread_snapshots", "id, thread_id, at, snapshot, state, structure, pushed, goal_vec, card",
-         "CREATE INDEX thread_snapshots_thread ON thread_snapshots (thread_id, at)"))
-        for s in (_v4_table(t, "_v5"), f"INSERT INTO {t}_v5 SELECT {cols} FROM {t}",
-                  f"DROP TABLE {t}", f"ALTER TABLE {t}_v5 RENAME TO {t}", extra)],
-}
-INDEX_MIGRATIONS: dict[int, list[str]] = {}
-
 
 def script(parts: dict) -> str:
     return "\n".join(parts.values()) + "\nCREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL) STRICT;\n"

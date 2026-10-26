@@ -7,7 +7,7 @@ asks for folder access when the user has chosen to look, not when the app starts
 import time
 from pathlib import Path
 
-from pensieve import actions, apps, config, content, settings, sources
+from pensieve import actions, config, content, settings, sources
 
 ABOUT = [
     "Pensieve tracks your work across agent sessions, branches, PRs and tickets.",
@@ -37,13 +37,11 @@ KEY_NAMES = {"ctrl": "Control", "control": "Control", "shift": "Shift", "cmd": "
 
 
 def next_steps() -> str:
-    if settings.get("mode") != "developer":  # Threads mode has no search, so no search hotkey
+    if settings.get("mode") != "developer":
         return (f"Open Pensieve from its menu bar icon, or go to http://localhost:{config.PORT}, to see your "
                 f"threads.")
-    keys ="+".join(KEY_NAMES.get(k, k.upper()) for k in settings.get("hotkey").lower().split("+"))
-    return (f"{'Tap' if keys in ('Control+Shift', 'Shift+Control') else 'Press'} {keys} anywhere to search with "
-            f"Pensieve. To explore what it indexed, choose Open Map in the Pensieve menu bar icon, or go to "
-            f"http://localhost:{config.PORT}.")
+    return (f"Your agents search the index over MCP. To explore what it indexed, choose Open App in the Pensieve "
+            f"menu bar icon, or go to http://localhost:{config.PORT}.")
 _cache = {}  # categories -> (time, candidates): repo discovery walks the disk
 _scanned = set()  # categories the user has let Pensieve look in; `start` never reads any other
 _added: dict[str, dict] = {}  # source id -> its row: folders added by hand when the user skipped the scan
@@ -63,7 +61,7 @@ def reads(category: str) -> str:
     if category == "repos":
         return (f"Folders under {', '.join(s['sweep_roots'])}, {s['sweep_depth']} levels deep, to find git repos. "
                 "This includes Desktop and Documents.")
-    return "The list of Obsidian vaults. Apple Notes is read only if you choose it, and macOS asks first."
+    return ""
 
 
 def guide() -> dict:
@@ -141,11 +139,7 @@ def scan(categories=None, fresh=False) -> list[dict]:
                                checked=Path(f).expanduser().is_dir() and on(f"files/{f}")) for f in s["folders"]]
     if "repos" in cats:
         items["repos"] = _repos(s, on)
-    if "apps" in cats:
-        items["apps"] = [dict(id=f"apps/{k}", label=a["label"], detail=a["detail"], size=None, unit="",
-                              available=a["available"](), checked=a["available"]() and on(f"apps/{k}"))
-                         for k, a in apps.APPS.items()]
-    data = [dict(id=c, label=label, description=desc, reads=reads(c), items=items[c])
+    data =[dict(id=c, label=label, description=desc, reads=reads(c), items=items[c])
             for c, label, desc in sources.CATEGORIES if c in cats]
     _cache[cats] = (time.time(), data)
     return data
@@ -343,5 +337,5 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     secs = sum(i.get("seconds") or 0 for i in picked)
     return {"done": True, "indexing": [i["label"] for i in picked], "repo_files": files,
             "indexed_files": sum(i.get("indexed") or 0 for i in picked if i["unit"] == "files"),
-            "minutes": -(-secs // 60), "documents": any(i["id"].startswith(("files/", "apps/")) for i in picked),
+            "minutes": -(-secs // 60), "documents": any(i["id"].startswith("files/") for i in picked),
             "energy": ENERGY_NOTE, "next": next_steps(), **({"connected": connected} if connected else {})}

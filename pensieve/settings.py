@@ -21,9 +21,9 @@ DEFAULTS = {
                 ".cache", "Applications", "Pictures", "Music", "Movies"],
     "exclude_files": ["*emergency kit*", "*recovery*code*", "*.pem", "*.key", "*.p12", "*.pfx", "*.kdbx", "*.keychain*",
                       ".env*", "*credential*", "*secret*", "*password*", "id_rsa*", "id_ed25519*", "*.ovpn"],
-    # Sources switched off, by id (see sources.py): a whole category ("agents", "files", "repos", "apps") or one item
-    # ("agents/codex", "files/~/Downloads", "repos/sweep", "repos/<repo root>", "apps/apple_notes").
-    "disabled": ["apps/apple_notes"],
+    # Sources switched off, by id (see sources.py): a whole category ("agents", "files", "repos") or one item
+    # ("agents/codex", "files/~/Downloads", "repos/discover", "repos/<repo root>").
+    "disabled": [],
     "max_file_mb": 20,
     # Per file type in Files & folders (see files.TYPES): index = content | name | off, map = shown on the map.
     # "other" can't be set to content. The images setting covers images in git repos too.
@@ -39,8 +39,7 @@ DEFAULTS = {
     "session_folders": [],     # more agent transcript folders, as "agent:path", e.g. "claude:~/work/.claude/projects"
     # Named slices of the index for agents: {"payments": {"sources": ["repos/<root>", "files/~/specs"], "description": ""}}
     "scopes": {},
-    "default_scope": "",       # scope for the search panel and visualizer search ("" = everything)
-    "hotkey": "ctrl+shift",    # read by the Mac app; tap Control+Shift. Or e.g. "cmd+shift+space"
+    "default_scope": "",       # scope for search in the app and the Map ("" = everything)
     "editor": "default",       # how code results open: default | vscode | cursor | zed
     "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
     "embed_model": "",         # the embedding model to index with (config.EMBED_MODELS); "" = the index's own
@@ -88,9 +87,7 @@ DESCRIPTIONS = {
     "ticket_repos": "Which repo a ticket project's work starts in, by its key prefix (ABC): a to-do's worktree is made there. Set the first time you start one.",
     "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
-    "default_scope": "Scope used by the search panel and Map search; empty means everything.",
-    "hotkey": "Shortcut for the search panel. ⌘Space turns off the Spotlight shortcut while Pensieve runs. "
-              "Choose another shortcut to give ⌘Space back to Spotlight.",
+    "default_scope": "Scope used by search in the app and on the Map; empty means everything.",
     "editor": "Where code results open: default, vscode, cursor or zed.",
     "mode": "Session: only your agent sessions, as threads. Developer: also your repos and files, indexed, and the Map, People and Insights.",
     "appearance": "System, light or dark. System follows macOS.",
@@ -193,8 +190,8 @@ def update(changes: dict) -> dict:
                     raise ValueError(f"invalid scope name {n!r} (reserved or contains '/')")
                 if not isinstance(sc, dict) or not isinstance(sc.get("sources"), list) or not sc["sources"]:
                     raise ValueError(f"scope {n!r} needs a non-empty sources list")
-                if any(not isinstance(x, str) or x.split("/", 1)[0] not in ("agents", "files", "repos", "apps", "connections") for x in sc["sources"]):
-                    raise ValueError(f"scope {n!r}: sources are ids like repos/<root>, files/<folder>, agents/claude, apps/obsidian")
+                if any(not isinstance(x, str) or x.split("/", 1)[0] not in ("agents", "files", "repos", "connections") for x in sc["sources"]):
+                    raise ValueError(f"scope {n!r}: sources are ids like repos/<root>, files/<folder>, agents/claude, connections/<server>")
         elif k == "custom_agent":
             if not isinstance(v, dict) or set(v) - set(d) or not all(isinstance(x, str) for x in v.values()):
                 raise ValueError("custom_agent is {name, start, resume}, each a string")

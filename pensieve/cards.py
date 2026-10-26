@@ -64,9 +64,21 @@ def build(t: dict, hist: list[dict]) -> dict:
         timeline=[_clean(dict(at=_iso(e["ts"]), source=e["source"], title=e["title"], private=e.get("private") or None))
                   for e in t["events"][:20]],
         history=[dict(at=_iso(h["at"]), state=h["state"], by=h["by"], reason=h["reason"]) for h in hist[-10:]],
-        local=_clean(dict(resume=(t.get("resume") or {}).get("command", ""))))
+        local=_clean(dict(resume=(t.get("resume") or {}).get("command", ""))),
+        sessions=changed_by(t))
     card["handoff"] = handoff(card)
     return _clean(card)
+
+
+def changed_by(t: dict) -> list[dict]:
+    """The sessions that changed the thread's branch, its own first: [{id, title, did}]. A session that only ran there
+    (a review) is not one of them."""
+    kin = t.get("kin") or []
+    if not kin:  # the only session of its work
+        return [dict(id=s["id"], title=s.get("title", ""), did="") for s in t.get("sessions", [])[:1]]
+    rows = sorted(kin, key=lambda k: not k.get("me"))
+    return [dict(id=k["session"], title=k.get("title", ""), did=k.get("did", "")) for k in rows
+            if not k.get("did", "").endswith("no changes")]
 
 
 def handoff(card: dict) -> dict:
@@ -297,9 +309,23 @@ CLUSTER_PROMPT = ("Pick up the work on branch {branch}: {n} sessions wrote to it
 REVIVE_KEEP_DAYS = 7  # copies for agents without Pensieve's tools are deleted after this
 
 
+SESSIONS_LINE = ("The sessions that changed this branch, for their full context: {ids}. Read one's transcript with "
+                 "`pensieve transcript <id>`.")
+
+
+def _sessions_line(cards: list[dict]) -> str:
+    """SESSIONS_LINE with every session that changed the cards' branch, each once, or "" when there is none."""
+    ids = list(dict.fromkeys(s["id"] for c in cards for s in c.get("sessions") or []))
+    return " " + SESSIONS_LINE.format(ids=", ".join(ids)) if ids else ""
+
+
+def _revive_head(card: dict, copy: str) -> str:
+    return REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=copy) + _sessions_line([card])
+
+
 def revive_prompt(card: dict) -> str:
     """REVIVE_PROMPT with the card in it, not in a file: for any agent, also one that can't read this Mac's files."""
-    return REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy="its copy below") + "\n\n" + render_agent(card)
+    return _revive_head(card, "its copy below") + "\n\n" + render_agent(card)
 
 
 def _cluster_text(cards: list[dict]) -> str:
@@ -307,7 +333,8 @@ def _cluster_text(cards: list[dict]) -> str:
 
 
 def _cluster_head(cards: list[dict], branch: str, copy: str) -> str:
-    return CLUSTER_PROMPT.format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards), copy=copy)
+    return CLUSTER_PROMPT.format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards),
+                                 copy=copy) + _sessions_line(cards)
 
 
 def revive_cluster_prompt(cards: list[dict], branch: str) -> str:
@@ -388,17 +415,28 @@ def _resolve_head(cards: list[dict], branch: str, steps: list[dict], copy: str, 
     who = {"agent": "you, the agent", "you": "me, the user", "parent": "the tracker or GitHub"}
     lines = [f"{i + 1}. {s['text']} ({who.get(s['who'], s['who'] or 'anyone')})" for i, s in enumerate(steps)] or ["(nothing left: check that the work is done)"]
     return RESOLVE_PROMPTS[intent].format(branch=branch or "(unnamed)", n=len(cards), ids=", ".join(c["id"] for c in cards),
-                                          copy=copy, steps="\n".join(lines))
+                                          copy=copy, steps="\n".join(lines)) + _sessions_line(cards)
 
 
 def resolve_prompt(cards: list[dict], branch: str, steps: list[dict], intent: str = "ship") -> str:
     return _resolve_head(cards, branch, steps, "their copies below", intent) + "\n\n" + _cluster_text(cards)
 
 
-def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "", intent: str = "ship") -> str:
-    """The shell command that starts a new agent session to merge or discard a cluster: the steps lead its prompt."""
+def resolve_command(cards: list[dict], branch: str, steps: list[dict], folder, agent: str = "", intent: str = "ship",
+                    resume: dict | None = None) -> str:
+    """The shell command that asks to merge or discard a cluster, with the steps leading the prompt. `resume` (the
+    resume of the session that holds the branch, work.resume_of): that session gets the prompt as its next message,
+    so the request is in the transcript of the work it closes. A new session runs it instead when that session can't
+    take a prompt on resume (another harness, or an agent without the option) or `agent` names another agent."""
+    import shlex
+    from pensieve import agents
     path = _revive_copy(folder, f"{intent}-{branch or 'branch'}", _cluster_text(cards))
-    return _revive_start(cards, agent, _resolve_head(cards, branch, steps, f"their copies in {path}", intent))
+    prompt = _resolve_head(cards, branch, steps, f"their copies in {path}", intent)
+    if resume and resume.get("folder") and not resume.get("handoff") and agent in ("", resume.get("agent")):
+        cmd = agents.resume_with(resume["agent"], resume["session"].partition(":")[2], prompt)
+        if cmd:
+            return f"cd {shlex.quote(resume['folder'])} && {cmd}"
+    return _revive_start(cards, agent, prompt)
 
 
 def revive_command(card: dict, folder, agent: str = "") -> str:
@@ -407,7 +445,7 @@ def revive_command(card: dict, folder, agent: str = "") -> str:
     agent to start (agents.known()); by default the user's harness, else one that worked on the thread (this Mac's checkout, or the home folder when it is
     gone; the card's handoff.start gets the work then). The agent is the one of the card's last session."""
     path = _revive_copy(folder, card["title"], render_agent(card))
-    return _revive_start([card], agent, REVIVE_PROMPT.format(title=card["title"], id=card["id"], copy=f"its copy in {path}"))
+    return _revive_start([card], agent, _revive_head(card, f"its copy in {path}"))
 
 
 def save(card: dict, folder) -> str:

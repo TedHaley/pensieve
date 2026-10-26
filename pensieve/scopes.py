@@ -1,7 +1,7 @@
-"""Scopes: named slices of the index that an agent (or the search panel) works within.
+"""Scopes: named slices of the index that an agent (or search in the app) works within.
 
-A scope lists source ids, the same ids as Sources: a category ("agents", "files", "repos", "apps", "connections") or
-an item ("repos/<repo root>", "files/~/Documents/specs", "agents/claude", "apps/obsidian", "connections/<server>").
+A scope lists source ids, the same ids as Sources: a category ("agents", "files", "repos", "connections") or an item
+("repos/<repo root>", "files/~/Documents/specs", "agents/claude", "connections/<server>").
 Everything stays in one index;
 a scope just filters every query. Agent sessions come along with the repos they ran in.
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pensieve import apps, settings
+from pensieve import settings
 
 ALL = None  # no scope: everything
 current = contextvars.ContextVar("pensieve_scope", default=None)  # set per MCP request
@@ -49,13 +49,8 @@ def _build(name, sources, description=""):
                 s.folders = None
             elif s.folders is not None:
                 s.folders.append(str(Path(item).expanduser().resolve()))
-        elif cat == "apps":
-            if s.folders is not None:
-                ids = [k for k in apps.APPS] if not item else [item]
-                for k in ids:
-                    a = apps.APPS.get(k)
-                    if a and a["available"]():
-                        s.folders += [str(p.resolve()) for p in a["roots"]()]
+        elif cat == "apps":  # a source that Pensieve no longer has, in a scope saved before
+            continue
         elif cat == "connections":
             if not item:
                 s.docs = None

@@ -40,38 +40,6 @@ def test_overrides():
     assert people.overrides(s)["split"] == ["name:sam lee", "gh:b"], "an import adds no duplicate"
 
 
-def test_manager_overrides_go_in_the_migration():
-    """A store.db of version 2 keeps its other overrides; its 'manager' rows go, and the CHECK refuses them."""
-    store.close_all()
-    for p in store.root().glob("*.db*"):
-        p.unlink()
-    import sqlite3
-    from pensieve.store import schema
-    path = store.root() / "store.db"
-    c = sqlite3.connect(path)
-    c.executescript("""CREATE TABLE schema_version (version INTEGER NOT NULL) STRICT;
-INSERT INTO schema_version VALUES (2);
-CREATE TABLE person_overrides (
-  id      INTEGER PRIMARY KEY,
-  action  TEXT NOT NULL CHECK (action IN ('merge', 'split', 'me', 'manager')),
-  a       TEXT NOT NULL,
-  b       TEXT,
-  at      INTEGER NOT NULL
-) STRICT;
-INSERT INTO person_overrides VALUES (1, 'me', 'email:me@example.com', NULL, 100);
-INSERT INTO person_overrides VALUES (2, 'manager', 'gh:boss', 'email:me@example.com', 100);""")
-    c.commit()
-    c.close()
-    s = store.store_db()
-    assert s.one("SELECT version FROM schema_version")[0] == schema.STORE_VERSION
-    assert people.overrides(s) == {"merge": [], "split": [], "me": ["email:me@example.com"]}
-    try:
-        s.write(lambda c: c.execute("INSERT INTO person_overrides VALUES (3, 'manager', 'a', 'b', 1)"))
-        assert False, "the CHECK takes a manager row"
-    except sqlite3.IntegrityError:
-        pass
-
-
 def test_persons():
     s, i = fresh()
     people.put_identities(s, [M.Identity("email:a@example.com", M.IdentityKind.EMAIL, "A", None, None, "git", 10, 10)])
