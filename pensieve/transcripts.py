@@ -48,7 +48,7 @@ DOC_RANK = {"made": 0, "read": 1, "named": 2}  # a document the session made com
 OWN_MARK = "[pensieve text job]"  # the first line of every prompt Pensieve's text engine sends (engine.MARK)
 # The first words of the sessions that Pensieve starts to close work (cards.RESOLVE_PROMPTS): a close-out, not a thread
 CLOSE_MARKS = ("[pensieve ship]", "[pensieve discard]")
-VERSION = 6  # of the cache files: a new version reads every transcript again
+VERSION = 7  # of the cache files: a new version reads every transcript again
 
 
 @dataclass
@@ -72,6 +72,8 @@ class Facts:
     ticket_urls: list = field(default_factory=list)
     prs: dict = field(default_factory=dict)        # PR url -> times named
     links: list = field(default_factory=list)      # published Artifact links
+    # Artifacts the Artifact tool published: url -> [title, description, first publish, last publish, created here]
+    artifacts: dict = field(default_factory=dict)
     docs: list = field(default_factory=list)       # [url, service, made | read | named, title] web documents
     tail: list = field(default_factory=list)       # the last TAIL_TURNS turns, [role, text]
     n_turns: int = 0
@@ -309,6 +311,8 @@ def _read(f: Facts, path: Path):
                         pending[blk.get("id", "")] = [args.get("command", ""), cwd, b]
                     elif name in EDIT_TOOLS:
                         _written(f, args)
+                    elif name == "Artifact" and args.get("action", "publish") == "publish" and not args.get("asset"):
+                        st.setdefault("artifact_pub", {})[blk.get("id", "")] = args.get("description") or ""
                     elif name.startswith("mcp__"):  # a page or message tool: the documents it makes or reads
                         short = name.rsplit("__", 1)[-1]
                         if WRITE_TOOL.search(short):
@@ -316,6 +320,10 @@ def _read(f: Facts, path: Path):
                             st.setdefault("mcp_made", {})[blk.get("id", "")] = name
                         elif READ_ONE.search(short) and not SKIP_TOOL.search(short):
                             st.setdefault("mcp_read", {})[blk.get("id", "")] = [name, args]
+                elif blk.get("type") == "tool_result" and blk.get("tool_use_id") in st.get("artifact_pub", {}):
+                    desc = st["artifact_pub"].pop(blk["tool_use_id"])
+                    if not blk.get("is_error"):
+                        _published(f, d.get("toolUseResult"), desc, when)
                 elif blk.get("type") == "tool_result" and blk.get("tool_use_id") in st.get("mcp_made", {}):
                     st["mcp_made"].pop(blk["tool_use_id"])
                     _web_docs(f, _result_text(blk), "made")
@@ -382,6 +390,23 @@ def _text_facts(f: Facts, text: str):
         if u not in f.links:
             f.links.append(u)
     _web_docs(f, text, "named")
+
+
+def _published(f: Facts, res, desc: str, when: str):
+    """Keep what one Artifact publish returned: its title, the description sent with it, the first and the last
+    publish in this session, and whether this session created it. Claude Code keeps the result on the line
+    (toolUseResult): url, title, and updated, which is false for a new Artifact."""
+    if not isinstance(res, dict) or not ARTIFACT_URL.fullmatch(res.get("url") or ""):
+        return
+    u, ts = res["url"], _ts(when)
+    a = f.artifacts.get(u) or ["", "", ts, ts, False]
+    a[0] = res.get("title") or a[0]
+    a[1] = desc or a[1]
+    a[2], a[3] = min(a[2], ts), max(a[3], ts)
+    a[4] = a[4] or res.get("updated") is False
+    f.artifacts[u] = a
+    if u not in f.links:
+        f.links.append(u)
 
 
 def _web_docs(f: Facts, text: str, how: str, first: bool = False):
@@ -539,11 +564,13 @@ def branches(path: str) -> dict[tuple[str, str], float]:
 
 def text_facts(f: Facts) -> dict:
     """The text facts in the shape work.group reads: keys as counted (prefix, number) pairs, ticket links, PR
-    links counted, Artifact links, web documents (made first), the last words, the ending, and the last turns."""
+    links counted, Artifact links and what their publishes returned, web documents (made first), the last words, the
+    ending, and the last turns."""
     turns = [tuple(t) for t in f.tail]
     texts = [f"{'User' if r == 'user' else 'Assistant'}: {t}" for r, t in turns]
     return dict(keys=Counter({tuple(k.split("-", 1)): n for k, n in f.keys.items()}),
                 ticket_urls=[tuple(x) for x in f.ticket_urls], prs=Counter(f.prs), links=list(f.links),
+                artifacts={u: list(a) for u, a in f.artifacts.items()},
                 docs=sorted(((*d[:3], d[3] if len(d) > 3 else "") for d in f.docs), key=lambda d: DOC_RANK[d[2]]),
                 read_docs=[p for p in f.read if Path(p).suffix.lower() in DOC_EXT],
                 last=_tail(texts[-1]) if texts else "", ending=_tail("\n".join(texts[-2:]), 2400) if texts else "",

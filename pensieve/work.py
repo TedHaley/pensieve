@@ -661,7 +661,8 @@ def group(inp: Inputs) -> list[dict]:
             sessions=[dict(id=s["id"], title=s["title"], updated=s["updated"], branch=s["branch"], repo=s["repo"],
                            project=s["project"], summary=(s["summary"] or "")[:600],
                            artifacts=_artifacts(s, facts[s["id"]]["links"], facts[s["id"]].get("docs", ()),
-                                                facts[s["id"]].get("read_docs", ()))) for s in ss],
+                                                facts[s["id"]].get("read_docs", ()),
+                                                published=facts[s["id"]].get("artifacts", {}))) for s in ss],
             commits=cs[:30], files=[p for p, _ in files.most_common(15)],
             people=sorted({c["author"] for c in cs} | {t["assignee"] for t in tickets if t["assignee"]})))
     # A ticket that a thread in another repo works on belongs there: sessions here that only name it (a pasted log,
@@ -992,17 +993,25 @@ def _title(t: dict):
 ARTIFACT_URL = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 
 
-def _artifacts(s: dict, links: list[str], docs=(), read_docs=(), limit: int = 20) -> list[dict]:
+def _artifacts(s: dict, links: list[str], docs=(), read_docs=(), limit: int = 20, published=None) -> list[dict]:
     """The documents of a session's Files list: what it made for people (a Notion page it wrote, a Slack message it
     sent, a published Artifact), then what it used as context (a Slack thread, an email or a page it read, a link
     in the conversation, a local document it read), `limit` in all. The code files it edited are not on it: the
-    branch and its PRs hold them. `docs`: (url, service, how, title)."""
+    branch and its PRs hold them. `docs`: (url, service, how, title). `published`: url -> [title, description,
+    first publish, last publish, created here] for the Artifacts this session published (transcripts._published);
+    an Artifact only named in the text has no title or time."""
+    published = published or {}
+
+    def artifact(u):
+        title, desc, first, last, created = published.get(u) or ("", "", 0, 0, False)
+        return dict(kind="link", url=u, name=title or "Artifact", service="Claude", how="made", description=desc,
+                    created=first if created else 0, updated=last)
     def link(u, svc, how, title):
         if svc == "Slack" and u.startswith(transcripts.SLACK_HOST + "/"):
             u = _slack_host() + u[len(transcripts.SLACK_HOST):]
         return dict(kind="link", url=u, name=title or _doc_name(u, svc), service=svc, how=how)
     out = [link(*d) for d in docs if d[2] == "made"]
-    out += [dict(kind="link", url=u, name="Artifact", service="Claude", how="made") for u in links]
+    out += [artifact(u) for u in links]
     out += [link(*d) for d in docs if d[2] != "made"]
     files = [p for p in read_docs if Path(p).is_file() and not _agent_own(p)]
     out += [dict(kind="file", path=p, name=Path(p).name, how="read") for p in files]
@@ -1310,7 +1319,9 @@ def detail(t: dict, hist: list[dict]) -> str:
         out += ["", "## Where the last session stopped", _clean_words(t["last_words"])]
     made = [(s["title"], a) for s in t["sessions"][:5] for a in s.get("artifacts", [])]
     if made:
-        out += ["", "## What its sessions made"] + [f"- {a.get('path') or a.get('url')} (session: {title})" for title, a in made[:20]]
+        out += ["", "## What its sessions made"] + [
+            f"- {a.get('path') or a.get('url')}" + (f" “{a['name']}”" if a.get("updated") else "") + f" (session: {title})"
+            for title, a in made[:20]]
     elif t["files"]:
         out += ["", "## Files edited"] + [f"- {f}" for f in t["files"][:10]]
     out += ["", "## Timeline (newest first)"] + [

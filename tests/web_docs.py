@@ -16,6 +16,8 @@ NOTION = "https://www.notion.so/acme/Launch-plan-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6
 SLACK = "https://acme.slack.com/archives/C0123ABC/p1729000000123456"
 DOC = "https://docs.google.com/document/d/abcDEF123"
 SHEET = "https://docs.google.com/spreadsheets/d/xyz789"
+ART = "https://claude.ai/artifact/Plan123abc"
+ART2 = "https://claude.ai/artifact/Other456def"
 
 
 def check(name, got, want):
@@ -51,6 +53,18 @@ def run():
         rec("assistant", [{"type": "tool_use", "id": "t5", "name": "mcp__claude_ai_Slack__slack_search_public",
                            "input": {"query": f"see {SLACK}2"}}], 11),
         rec("user", [{"type": "tool_result", "tool_use_id": "t5", "content": "many results"}], 12),
+        rec("assistant", [{"type": "tool_use", "id": "t6", "name": "Artifact",
+                           "input": {"file_path": "/tmp/x/plan.html", "description": "The rollout plan", "icon": "map"}}], 13),
+        {**rec("user", [{"type": "tool_result", "tool_use_id": "t6", "content": f"Published at {ART}"}], 14),
+         "toolUseResult": {"url": ART, "title": "Rollout Plan", "updated": False, "seq": 1}},
+        rec("assistant", [{"type": "tool_use", "id": "t7", "name": "Artifact",
+                           "input": {"file_path": "/tmp/x/plan.html"}}], 15),
+        {**rec("user", [{"type": "tool_result", "tool_use_id": "t7", "content": f"Published at {ART}"}], 16),
+         "toolUseResult": {"url": ART, "title": "Rollout Plan v2", "updated": True, "seq": 2}},
+        rec("assistant", [{"type": "tool_use", "id": "t8", "name": "Artifact",
+                           "input": {"action": "read", "url": ART2}}], 17),
+        {**rec("user", [{"type": "tool_result", "tool_use_id": "t8", "content": "raw HTML"}], 18),
+         "toolUseResult": {"read": {}, "artifactRead": {"slug": "x"}}},
     ]
     p = DATA / "s1.jsonl"
     p.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
@@ -90,6 +104,19 @@ def run():
     results.append(check("a Notion page is named by its title", arts[0]["name"], "Launch plan"))
     results.append(check("a Slack link is a message", next(a["name"] for a in arts if a["url"] == SLACK), "Slack message"))
     results.append(check("a sheet says what it is", next(a["name"] for a in arts if a["url"] == SHEET), "Google Sheet"))
+    first, last = transcripts._ts("2026-10-20T10:00:14Z"), transcripts._ts("2026-10-20T10:00:16Z")
+    results.append(check("a publish keeps the latest title, the description, both times, and that it was created here",
+                         f.artifacts.get(ART), ["Rollout Plan v2", "The rollout plan", first, last, True]))
+    results.append(check("a published Artifact is a link even when no text names it", ART in f.links, True))
+    results.append(check("reading an Artifact adds nothing", (ART2 in f.artifacts, ART2 in f.links), (False, False)))
+    arts = work._artifacts({}, tf["links"] + ["https://claude.ai/artifact/abc"], published=tf["artifacts"])
+    pub = next(a for a in arts if a["url"] == ART)
+    results.append(check("the Files list names a published Artifact by its title, with when it was created",
+                         (pub["name"], pub["created"], pub["updated"], pub["description"]),
+                         ("Rollout Plan v2", first, last, "The rollout plan")))
+    named = next(a for a in arts if a["url"] == "https://claude.ai/artifact/abc")
+    results.append(check("an Artifact only named in the text has no title or time",
+                         (named["name"], named["created"], named["updated"]), ("Artifact", 0, 0)))
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 
