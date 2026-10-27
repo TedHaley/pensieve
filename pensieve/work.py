@@ -1459,6 +1459,13 @@ _git_cache = {}
 _gh_cache = {}
 
 
+def forget_git(roots) -> None:
+    """Drop the cached git answers of these checkouts: the next build reads their branch and changes again."""
+    roots = set(roots)
+    for k in [k for k in list(_git_cache) if k[0] in roots]:  # other threads add to it meanwhile
+        _git_cache.pop(k, None)
+
+
 def web_url(remote: str) -> str:
     """https://host/org/repo for a git remote (ssh or https), or ""."""
     m = re.match(r"(?:git@|ssh://git@|https://(?:[^@/]+@)?)([^:/]+)[:/](.+?)(?:\.git)?/?$", remote or "")
@@ -1628,15 +1635,10 @@ def poll_open(tasks) -> list[str]:
     return sorted(changed)
 
 
-_origins: dict[str, str] = {}
-
-
 def _origin(root: str) -> str:
-    """org/name of a repo's GitHub origin, once per repo."""
-    if root not in _origins:
-        from pensieve.extract import git_tools
-        _origins[root] = git_tools.origin_repo(root)
-    return _origins[root]
+    """org/name of a repo's GitHub origin (sink_status.github_repo: a repo with none is asked again later)."""
+    from pensieve import sink_status
+    return sink_status.github_repo(root)
 
 
 def _pickup(task: dict, wts: dict):

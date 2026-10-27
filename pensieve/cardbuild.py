@@ -244,6 +244,9 @@ class Builder:
         inp.window()  # the end of the window is now
         if kinds.get(SESSION):
             inp.load_sessions(self.store, kinds[SESSION])
+            # the checkouts these sessions just worked in: their branch and changes are read again, not from the cache
+            from pensieve import transcripts
+            work.forget_git(work._git_root(f.project) for f in map(transcripts.find, kinds[SESSION]) if f and f.project)
         if kinds.get(DOCUMENT):
             inp.load_items(kinds[DOCUMENT])
         if COMMIT in kinds:
@@ -265,10 +268,14 @@ class Builder:
         and PRs are read again even when their members did not change (None: every card)."""
         inp, started = self.inp, time.time()
         picked = {}
+        # `force` names threads, and a pickup is of a task before session_threads.split gives it thread ids: a task is
+        # forced when one of its sessions is in a forced thread of the last build
+        forced = {s["id"] for i in force or () for s in self.tasks.get(i, {}).get("sessions", [])}
 
         def pick(t):
             fp, old = fps[t["id"]], self.picked.get(t["id"])
-            if force is not None and old and old[0] == fp and t["id"] not in force:
+            if force is not None and old and old[0] == fp and t["id"] not in force \
+                    and not any(s["id"] in forced for s in t.get("_sessions", [])):
                 t["places"], t["prs"] = copy.deepcopy(old[1]), copy.deepcopy(old[2])
                 if old[3]:
                     t["resume"] = dict(old[3])

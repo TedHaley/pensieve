@@ -4324,6 +4324,17 @@ function wkSections(t) {
     + (t.chat_more ? `<div class="wk-row muted">and ${plural(t.chat_more, 'more message')}</div>` : '');
   return sec('Data sources in session', folders + prs + tickets + seen) + sec('Slack', chat) + files + activity;
 }
+// Refresh: the server reads the transcripts that changed and builds the page's threads at once, then the page loads them
+async function wkRefresh(b) {
+  if (b.classList.contains('busy')) return;
+  b.classList.add('busy');
+  try {
+    await api('/api/threads/refresh', {method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ids: wkPageTasks().map(t => t.id)})});
+  } catch (e) { toast(`Refresh failed: ${e.message}`); }
+  b.classList.remove('busy');
+  await loadWork(true);
+}
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
   try { S.work.data = await api(`/api/threads?days=${S.work.days}`); } catch (e) { S.work.err = e.message; }
@@ -4364,12 +4375,13 @@ function wkNext(t) {
 const wkClaimOf = (t, branch) => t.claims?.[branch] || (t.claim?.branch === branch ? t.claim : null);
 function wkHolds(t, branch) {
   const c = wkClaimOf(t, branch);
-  return c ? !c.lost : (t.branches || []).some(b => b.branch === branch);
+  // with no claim, a review (its session only ran on the branch) leaves the branch to the session that wrote to it
+  return c ? !c.lost : !t.review && (t.branches || []).some(b => b.branch === branch);
 }
 function wkShare(t, branch) {
   const c = wkClaimOf(t, branch);
-  if (!c) return wkHolds(t, branch) ? `<div class="wk-working">${wkSt('holds the branch', 'ok')}</div>` : '';
   if (t.review) return `<div class="wk-working"><span class="wk-st" title="This session ran on the branch and wrote no lines to it">review</span></div>`;
+  if (!c) return wkHolds(t, branch) ? `<div class="wk-working">${wkSt('holds the branch', 'ok')}</div>` : '';
   const pct = `${Math.round((c.share || 0) * 100)}% of the branch’s lines`;
   return `<div class="wk-working">${c.lost ? wkSt(pct) : wkSt(`holds the branch · ${pct}`, 'ok')}</div>`;
 }
@@ -4719,7 +4731,7 @@ function renderWork() {
   });
   $$('.wk-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
   $$('[data-wk-days]', el).forEach(s => s.onchange = () => { S.work.days = +s.value; S.work.page = 0; store.set('workDays', S.work.days); loadWork(true); });
-  $$('[data-wk-refresh]', el).forEach(b => b.onclick = () => loadWork(true));
+  $$('[data-wk-refresh]', el).forEach(b => b.onclick = () => wkRefresh(b));
   $$('[data-wk-view]', el).forEach(b => b.onclick = () => {  // a click, also on the view already on, drops the cards opened or closed by hand
     if (b.dataset.wkView !== S.work.view) S.work.page = 0;  // the other view has another page size
     S.work.view = b.dataset.wkView; store.set('workView', S.work.view);

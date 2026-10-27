@@ -864,6 +864,7 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-rel-m{display:flex;align-items:center;gap:8px;margin-top:2px;font-size:12px;color:var(--text-3);flex-wrap:wrap}
 .wk-refresh{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 9px}
 .wk-refresh svg{flex:none}
+.wk-refresh.busy{opacity:.7;cursor:progress}.wk-refresh.busy svg{animation:spin 0.9s linear infinite}
 .wk-state{appearance:none;-webkit-appearance:none;border:0;border-radius:999px;padding:3px 10px;font:600 11px var(--sans);cursor:pointer;field-sizing:content;
   color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);flex:none}
 .wk-state:hover{background:color-mix(in srgb,var(--c) 25%,transparent)}
