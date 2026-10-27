@@ -106,7 +106,8 @@ def collect(t: dict) -> list[Resource]:
         for a in s.get("artifacts", []):
             if a.get("url") and a["url"] not in seen:
                 seen.add(a["url"])
-                out.append(Resource("artifact", f"Artifact from “{s['title']}”", {"url": a["url"], "session": s["id"]},
+                name = a["name"] if a.get("updated") else f"Artifact from “{s['title']}”"  # a title from its publish
+                out.append(Resource("artifact", name, {"url": a["url"], "session": s["id"]},
                                     relevance=0.5))
             elif a.get("path") and a["path"] not in seen and "/.claude/worktrees/" not in a["path"]:
                 seen.add(a["path"])  # a file in another worktree belongs to another branch's work

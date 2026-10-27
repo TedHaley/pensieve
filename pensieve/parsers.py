@@ -42,9 +42,11 @@ def _lines(path: Path, s: Session | None = None):
             if s is not None:
                 s.offset += len(raw)
             try:
-                yield json.loads(raw.decode("utf-8", "replace"))
+                d = json.loads(raw.decode("utf-8", "replace"))
             except json.JSONDecodeError:
                 continue
+            if isinstance(d, dict):  # a fragment of a line (an offset in a rewritten file) can parse as a list
+                yield d
 
 
 def _add(s: Session, role: str, text: str, ts: str):

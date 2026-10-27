@@ -3440,7 +3440,8 @@ $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'da
 // A page scrolled down takes the header band: the tabs slide behind the logo and the sheets move up (CSS
 // body.tabs-tucked). The logo shows them again until the next scroll. A page must have room to scroll after it
 // grows, or tucking would bring it back to the top and untuck it in a loop. Settings never tucks: its page list does
-// not scroll, so the logo would cover it.
+// not scroll, so the logo would cover it. People never tucks either: only its profile panel scrolls, and closing the
+// panel takes away the scroll that would untuck the tabs.
 const TUCK_AT = 48, UNTUCK_AT = 4, TUCK_ROOM = 120;
 function tuckTabs(on) {
   const body = document.body, brand = $('#top .brand');
@@ -3455,7 +3456,7 @@ function tuckTabs(on) {
 }
 document.addEventListener('scroll', e => {
   const el = e.target;
-  if (!(el instanceof Element) || !el.closest('.sheet') || el.closest('#settings')) return;
+  if (!(el instanceof Element) || !el.closest('.sheet') || el.closest('#settings, #people')) return;
   const tucked = document.body.classList.contains('tabs-tucked');
   if (!tucked && el.scrollTop > TUCK_AT && el.scrollHeight - el.clientHeight > TUCK_ROOM) tuckTabs(true);
   else if (tucked && el.scrollTop <= UNTUCK_AT) tuckTabs(false);
@@ -4312,7 +4313,7 @@ function wkSections(t) {
   const showF = S.work.open.has(t.id + ':fl');
   const files = !made.length ? '' : `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:fl" aria-expanded="${showF}">${showF ? '▾' : '▸'} Files <span class="muted">${made.length}</span></button></h5>${!showF ? '' :
     made.slice(0, 20).map(a => a.kind === 'link'
-      ? `<div class="wk-row">${wkSt(a.service || 'page')}<a class="ttl" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.url)}">${esc(a.service ? a.name : a.url.replace(/^https:\/\//, ''))}</a><span class="wk-path">${{made: a.service === 'Claude' ? 'published' : 'made in this session', read: 'read by the agent', named: 'named in the conversation'}[a.how] || ''}</span></div>`
+      ? `<div class="wk-row">${wkSt(a.service || 'page')}<a class="ttl" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.description || a.url)}">${esc(a.service ? a.name : a.url.replace(/^https:\/\//, ''))}</a><span class="wk-path">${a.created ? `created ${wkDate(a.created)}` : a.updated ? `updated ${wkDate(a.updated)}` : {made: a.service === 'Claude' ? 'published' : 'made in this session', read: 'read by the agent', named: 'named in the conversation'}[a.how] || ''}</span></div>`
       : `<div class="wk-row">${wkSt('file')}<button class="ttl linkbtn subtle" data-wk-openfile="${esc(a.path)}" title="${esc(a.path)}">${esc(a.name)}</button><span class="wk-path" title="${esc(a.path)}">${esc(homeTilde(a.path.slice(0, -a.name.length - 1)))}</span></div>`).join('')}</section>`;
   const recent = t.events.slice(0, WK_RECENT);  // the events are newest first
   const activity = recent.length ? `<section class="wk-sec"><h5><button class="wk-more" data-wk-open="${esc(t.id)}:ah" aria-expanded="${!hideA}">${hideA ? '▸' : '▾'} Activity <span class="muted">${recent.length}</span></button></h5>${hideA ? '' : `<ol class="wk-tl">${recent.map(wkEvent).join('')}</ol>`}</section>` : '';
@@ -4323,6 +4324,17 @@ function wkSections(t) {
       <span class="wk-path">${esc(i.why)}</span><span class="when">${i.updated ? wkDate(i.updated) : ''}</span></div>`).join('')
     + (t.chat_more ? `<div class="wk-row muted">and ${plural(t.chat_more, 'more message')}</div>` : '');
   return sec('Data sources in session', folders + prs + tickets + seen) + sec('Slack', chat) + files + activity;
+}
+// Refresh: the server reads the transcripts that changed and builds the page's threads at once, then the page loads them
+async function wkRefresh(b) {
+  if (b.classList.contains('busy')) return;
+  b.classList.add('busy');
+  try {
+    await api('/api/threads/refresh', {method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ids: wkPageTasks().map(t => t.id)})});
+  } catch (e) { toast(`Refresh failed: ${e.message}`); }
+  b.classList.remove('busy');
+  await loadWork(true);
 }
 async function loadWork(first = false) {
   if (!S.agents) loadAgents().then(() => S.view === 'work' && renderWork());
@@ -4364,12 +4376,13 @@ function wkNext(t) {
 const wkClaimOf = (t, branch) => t.claims?.[branch] || (t.claim?.branch === branch ? t.claim : null);
 function wkHolds(t, branch) {
   const c = wkClaimOf(t, branch);
-  return c ? !c.lost : (t.branches || []).some(b => b.branch === branch);
+  // with no claim, a review (its session only ran on the branch) leaves the branch to the session that wrote to it
+  return c ? !c.lost : !t.review && (t.branches || []).some(b => b.branch === branch);
 }
 function wkShare(t, branch) {
   const c = wkClaimOf(t, branch);
-  if (!c) return wkHolds(t, branch) ? `<div class="wk-working">${wkSt('holds the branch', 'ok')}</div>` : '';
   if (t.review) return `<div class="wk-working"><span class="wk-st" title="This session ran on the branch and wrote no lines to it">review</span></div>`;
+  if (!c) return wkHolds(t, branch) ? `<div class="wk-working">${wkSt('holds the branch', 'ok')}</div>` : '';
   const pct = `${Math.round((c.share || 0) * 100)}% of the branch’s lines`;
   return `<div class="wk-working">${c.lost ? wkSt(pct) : wkSt(`holds the branch · ${pct}`, 'ok')}</div>`;
 }
@@ -4719,7 +4732,7 @@ function renderWork() {
   });
   $$('.wk-menu', el).forEach(m => m.onclick = e => e.stopPropagation());
   $$('[data-wk-days]', el).forEach(s => s.onchange = () => { S.work.days = +s.value; S.work.page = 0; store.set('workDays', S.work.days); loadWork(true); });
-  $$('[data-wk-refresh]', el).forEach(b => b.onclick = () => loadWork(true));
+  $$('[data-wk-refresh]', el).forEach(b => b.onclick = () => wkRefresh(b));
   $$('[data-wk-view]', el).forEach(b => b.onclick = () => {  // a click, also on the view already on, drops the cards opened or closed by hand
     if (b.dataset.wkView !== S.work.view) S.work.page = 0;  // the other view has another page size
     S.work.view = b.dataset.wkView; store.set('workView', S.work.view);

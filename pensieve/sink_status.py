@@ -171,21 +171,22 @@ def sinks_of_task(task: dict) -> list[tm.Sink]:
 
 PR_STATUS = {"merged": "MERGED", "closed": "CLOSED", "open": "OPEN", "draft": "OPEN"}
 DONE_TICKET = {"done", "closed", "resolved"}
-_repos: dict[str, str] = {}
+_repos: dict[str, tuple[str, float]] = {}  # folder -> (owner/name or "", when git was asked)
+NO_ORIGIN_TTL = 60
 
 
 def github_repo(path: str) -> str:
     """owner/name of a repo: the name itself, or the GitHub origin of a local folder. '' when there is none."""
     if re.fullmatch(r"[\w.-]+/[\w.-]+", path or ""):
         return path
-    if path not in _repos:
-        slug = ""
+    slug, at = _repos.get(path, ("", 0.0))
+    if not slug and time.time() - at > NO_ORIGIN_TTL:  # an origin added later is found
         if path and os.path.isdir(path):
             r = subprocess.run(["git", "-C", path, "remote", "get-url", "origin"], capture_output=True, text=True)
             m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$", r.stdout.strip()) if r.returncode == 0 else None
             slug = m.group(1) if m else ""
-        _repos[path] = slug
-    return _repos[path]
+        _repos[path] = (slug, time.time())
+    return slug
 
 
 def status_of_task(task: dict, sinks: list[tm.Sink]) -> dict:

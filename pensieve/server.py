@@ -1691,6 +1691,30 @@ def get_threads(days: int = 30, ids: str = ""):
     return dict(threads=ts, states=task_states.models())
 
 
+class RefreshReq(BaseModel):
+    ids: list[str] = []  # the threads on the page: their folders and PRs are read again
+    wait: float = 30.0  # seconds to wait for the build; the `thread` event brings a later one
+
+
+@app.post("/api/threads/refresh")
+def refresh_threads(req: RefreshReq):
+    """The Threads tab's Refresh: read every transcript that changed now (the session watcher can be between two
+    polls), show their new turns at once (cardbuild.hot, through the session event), and build the page's threads
+    with no gap (a refresh event is urgent). Returns when that build has written its cards, or after `wait`."""
+    from pensieve import cardbuild, transcripts
+    t0 = time.monotonic()
+    # the page's checkouts as they are now, not up to a minute old
+    shown = [(cardbuild.current.tasks if cardbuild.current else {}).get(i) or {} for i in req.ids[:100]]
+    work.forget_git(p["path"] for t in shown for p in t.get("places", []) if p.get("path"))
+    changed, _ = transcripts.sync()
+    have = transcripts.all_facts()
+    sids = [have[p].id for p in changed if p in have]
+    if sids:
+        cardbuild.emit(cardbuild.SESSION, sids)
+    built = cardbuild.emit(cardbuild.REFRESH, req.ids[:100], wait=max(0.0, min(req.wait, 120.0)))
+    return dict(sessions=len(sids), built=built, ms=round((time.monotonic() - t0) * 1000))
+
+
 @app.get("/api/thread")
 def get_thread(id: str = "", format: str = "html", days: int = 30, ids: str = "", branch: str = ""):
     """One thread (pensieve-thread/2): the id of a thread on the Threads tab. `format`: html (the page for people,
