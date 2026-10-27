@@ -4234,6 +4234,9 @@ function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header 
 }
 const wkCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 const wkTitle = t => t.title || t.anchor?.title || '';
+// In a cluster, a card's title is its own session's: the cluster's header has the PR or ticket title, which all its
+// cards share
+const wkCardTitle = (t, cluster) => (cluster && t.sessions?.[0]?.title) || wkTitle(t);
 const WK_WHO = {agent: ['agent', 'An agent can do this in a session'], you: ['you', 'Only you can do this'],
   parent: ['tracker', 'A step in the system the item lives in: Pensieve only reads']};
 const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
@@ -4406,7 +4409,7 @@ function wkCard(t, d, cluster = '') {
   const open = S.work.view === 'expanded' ? !S.work.collapsed.has(t.id) : S.work.details.has(t.id);
   const when = cluster ? wkOwnTime(t) : t.updated;  // in a cluster, the session's own time: the cards go by it
   const head = `<header class="wk-head">
-      <div class="wk-hcol"><h4 class="wk-title" title="${esc(t.title)}">${esc(wkTitle(t))}</h4>${cluster ? wkShare(t, cluster) : wkWorking(t)}</div>
+      <div class="wk-hcol"><h4 class="wk-title" title="${esc(wkCardTitle(t, cluster))}">${esc(wkCardTitle(t, cluster))}</h4>${cluster ? wkShare(t, cluster) : wkWorking(t)}</div>
       <div class="wk-when"><time title="${esc(new Date(when * 1000).toLocaleString())}">${fmtWhen(when)}</time>${wkNext(t)}</div>${wkStateSel(t, d)}</header>`;
   return `<article class="wk-task${open ? '' : ' wk-compact'}" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
       <div class="wk-main">${head}
