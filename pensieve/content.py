@@ -38,10 +38,6 @@ def part_here(part) -> bool:
     return bool(folder and part_file(folder, part))
 
 
-def gemma() -> bool:
-    return config.EMBED_MODEL == config.GEMMA
-
-
 def switched_on(kind) -> bool:
     return settings.file_type(kind)["index"] == "content"
 
@@ -52,10 +48,10 @@ def decoder() -> str | None:
 
 
 def ready(kind) -> bool:
-    """Whether files of `kind` are read by content now: switched on, the model is EmbeddingGemma 2, its parts are
-    downloaded and, for video and sound, a decoder is here."""
+    """Whether files of `kind` are read by content now: switched on, its model parts are downloaded and, for video
+    and sound, a decoder is here."""
     k = KINDS[kind]
-    return (switched_on(kind) and gemma() and all(part_here(p) for p in k["parts"])
+    return (switched_on(kind) and all(part_here(p) for p in k["parts"])
             and (not k["decoder"] or decoder() is not None))
 
 
@@ -67,10 +63,8 @@ def status() -> list[dict]:
         missing = [p for p in k["parts"] if not part_here(p)]
         jobs = {p: _jobs[p] for p in k["parts"] if p in _jobs}
         o = dict(id=kind, label=k["label"], description=k["description"], on=switched_on(kind), ready=ready(kind),
-                 size_mb=sum(PART_MB[p] for p in k["parts"]), installed=not missing, needs_model=config.GEMMA)
-        if not gemma():
-            o["needs"] = "model"
-        elif k["decoder"] and decoder() is None:
+                 size_mb=sum(PART_MB[p] for p in k["parts"]), installed=not missing)
+        if k["decoder"] and decoder() is None:
             o["needs"] = "decoder"
         err = next((j["error"] for j in jobs.values() if j.get("error")), None)
         if err:
@@ -121,8 +115,6 @@ def switch(kind, on: bool):
     """Switch a kind on (and install what it needs) or off (its files are found by name again)."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}; one of: {', '.join(KINDS)}")
-    if on and not gemma():
-        raise ValueError(f"{KINDS[kind]['label']} need the {config.GEMMA} search model")
     with _lock:  # a failed download is tried again
         for p in KINDS[kind]["parts"]:
             if _jobs.get(p, {}).get("error"):
@@ -145,7 +137,6 @@ def remove(part):
 
 def resume():
     """At start: install what switched-on kinds still need (a download that was cut off, or a new Mac)."""
-    if gemma():
-        for kind in KINDS:
-            if switched_on(kind):
-                install(kind)
+    for kind in KINDS:
+        if switched_on(kind):
+            install(kind)

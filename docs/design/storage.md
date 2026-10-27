@@ -47,7 +47,6 @@ query (vectors, a word and a JSON filter) is SQLite for the filter and turbovec 
     avatars/             pictures (derived, a cache)
     projects/            the Projects build (JSON files, until the project tables are wired)
     connections.json     the status of each connection (discovered tools, sign-in state)
-    embed_model          the embedding model of the vectors in index.db
 ```
 
 `settings.json` stays a file, because the Mac app and the configuration code read it before a database opens.

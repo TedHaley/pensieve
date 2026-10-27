@@ -348,23 +348,17 @@ Change them in the Map window (Settings), from an agent connected with `--all-to
 | `exclude_files` | filename globs never indexed (secrets) |
 | `scopes`, `default_scope` | named index slices for agents (manage in Scopes); the scope of search in the app |
 | `appearance` | `system` (or `light`, `dark`) |
-| `embed_model` | the search model for the index (manage in Settings → Models); empty: the index's own |
 | `editor` | `default`, `vscode`, `cursor` or `zed` |
 
 ## Models
 
-Threads mode runs no model. Developer mode runs one model: the search model. You choose it at setup, and change it in Settings → Models.
+Threads mode runs no model. Developer mode runs one model: the search model.
 
 ### Search model
 
-The search model turns text into vectors, so that search finds things by meaning. It always runs on your Mac.
+The search model turns text into vectors, so that search finds things by meaning. It always runs on your Mac. Pensieve uses one search model: **EmbeddingGemma 2** (`google/embeddinggemma-2`). Its 270M-parameter text part runs on MLX. Pensieve downloads only this text part: 550 MB the first time.
 
-| Model | Notes |
-|---|---|
-| **EmbeddingGemma 2** (`google/embeddinggemma-2`) | The default for a new index. Its 270M-parameter text part runs on MLX. About twice as fast to index as Qwen3 and 25% smaller, with the same search quality in our tests (`bench/STRATEGIES.md`). Pensieve downloads only its text part: 550 MB the first time. |
-| **Qwen3 Embedding 0.6B** (`Qwen/Qwen3-Embedding-0.6B`) | The model of every index made before 0.6.9. A 1.2 GB download the first time. |
-
-A new version of Pensieve deletes the index and what the threads read from transcripts and `gh`, and builds them again on start. Your settings, connections and the states you set by hand stay. An upgrade from a version before 0.16 also runs the setup again, so that you choose a mode and connect your issue tracker. The rebuilt index uses the model in your settings. If you choose another model, Pensieve warns you first. Then it embeds the text it already holds with the new model, in the background. It does not read your files or run git blame again, and search keeps working with the old model. When the new vectors are ready, the backend restarts and uses them.
+A new version of Pensieve deletes the index and what the threads read from transcripts and `gh`, and builds them again on start. Your settings, connections and the states you set by hand stay. An upgrade from a version before 0.16 also runs the setup again, so that you choose a mode and connect your issue tracker.
 
 ### Summaries and insights
 

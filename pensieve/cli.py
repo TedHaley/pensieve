@@ -82,13 +82,14 @@ def main():
         return 1
     from pensieve import reset
     reset.settle_version()  # a new version resets the index and drops the thread history, keeping the settings
+    other_model = reset.settle_embeddings()  # an index of another embedding model goes
     done = reset.apply_pending()  # before anything opens the database
-    from pensieve import reembed
-    reembed.finish()  # a switch to another embedding model whose vectors are ready
     import uvicorn
     from pensieve import config
     if done:
         print(f"Pensieve was reset ({'index and settings' if done == 'all' else 'index'}); indexing from scratch.", flush=True)
+    elif other_model:
+        print("The index held vectors of another embedding model; indexing from scratch with EmbeddingGemma 2.", flush=True)
     url = f"http://localhost:{a.port}"
     print(f"Pensieve → {url}  (MCP: {url}/mcp)\n  data: {config.DATA_DIR}", flush=True)
     if not a.no_open and not os.environ.get("PENSIEVE_RESTARTED"):

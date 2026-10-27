@@ -2318,7 +2318,6 @@ async function openSetup(mode = '') {  // with a mode: start at the mode step wi
   el.innerHTML = '<div class="setup-card"><div class="spinner" style="margin:24px auto"></div></div>';
   try { setupState.guide = await api('/api/setup?scan=0'); }
   catch (e) { el.innerHTML = `<div class="setup-card"><p class="err">Could not load setup: ${esc(e.message)}</p></div>`; return; }
-  setupState.embed = setupState.guide.embed_model;
   setupState.engine = setupState.guide.text_engine;
   setupState.agent = setupState.guide.agent;
   setupState.custom = {name: '', start: '', resume: '', ...(setupState.guide.custom_agent || {})};
@@ -2408,11 +2407,8 @@ function renderSetup() {
       ${(g.content || []).length ? `<div class="setup-cat"><h3>What Pensieve reads</h3><p>Text is always read. Images, video and audio are found by name unless you switch them on. You can change this later in Settings → Models.</p>${g.content.map(reads).join('')}</div>` : ''}
       ${btns('ai', 'Next', picked.length > 0)}`;
   } else if (step === 'ai') {
-    body = `<h1>Choose your search model</h1>
-      <h3 class="setup-h">Embedding model</h3><p class="sub">Finds your files, code and sessions by meaning. It runs on this Mac. You can switch later in Settings → Models.</p>
-      <div class="ai-opts" role="radiogroup" aria-label="Embedding model">${(g.embed_models || []).map(m => `<button class="ai-opt ${st.embed === m.id ? 'on' : ''}" data-setup-embed="${esc(m.id)}" role="radio" aria-checked="${st.embed === m.id}">
-        <div class="ai-opt-h"><b>${esc(m.label)}</b><span class="priv local">Local</span></div><p>${esc(m.about)}</p></button>`).join('')}</div>
-      <h3 class="setup-h">Summaries and insights</h3><p class="sub">What writes session summaries, topic names and insights in the background. You can change it later in Settings → Models.</p>
+    body = `<h1>Choose what writes summaries</h1>
+      <p class="sub">What writes session summaries, topic names and insights in the background. You can change it later in Settings → Models.</p>
       <div class="ai-opts" role="radiogroup" aria-label="Text engine">${(g.engines || []).map(x => `<button class="ai-opt ${st.engine === x.id ? 'on' : ''}" data-setup-engine="${esc(x.id)}" role="radio" aria-checked="${st.engine === x.id}" ${x.unavailable ? 'disabled' : ''}>
         <div class="ai-opt-h"><b>${esc(x.label)}</b>${x.id === 'builtin' ? '<span class="priv local">Local</span>' : ''}</div><p>${esc(x.unavailable || x.about)}</p></button>`).join('')}</div>
       ${btns('start', 'Next')}`;
@@ -2428,12 +2424,6 @@ function renderSetup() {
   $$('[data-setup-cx]', el).forEach(b => b.onclick = () => setupSignIn(b.dataset.setupCx));
   $$('[data-setup-prof]', el).forEach(b => b.onclick = () => { st.profiles = new Set([b.dataset.setupProf]); st.cands = null; st.chosen.clear(); renderSetup(); });
   $$('[data-setup-id]', el).forEach(c => c.onchange = () => { st.chosen[c.checked ? 'add' : 'delete'](c.dataset.setupId); renderSetup(); });
-  $$('[data-setup-embed]', el).forEach(b => b.onclick = () => {
-    st.embed = b.dataset.setupEmbed;
-    const needs = (g.content || []).find(c => c.needs_model)?.needs_model;
-    if (st.kinds.size && needs && st.embed !== needs) { st.kinds.clear(); toast('Images, video and audio are found by name: reading them needs EmbeddingGemma 2'); }
-    renderSetup();
-  });
   $$('[data-setup-engine]', el).forEach(b => b.onclick = () => { st.engine = b.dataset.setupEngine; renderSetup(); });
   $$('[data-setup-agent]', el).forEach(b => b.onclick = () => { st.agent = b.dataset.setupAgent; renderSetup(); });
   $('[data-setup-skip]', el)?.addEventListener('click', async () => {  // only the agent folders are read: they need no permission
@@ -2456,7 +2446,6 @@ function renderSetup() {
     const k = (g.content || []).find(x => x.id === c.dataset.setupContent);
     if (!k || k.id === 'text') return;
     st.kinds[c.checked ? 'add' : 'delete'](k.id);
-    if (c.checked && k.needs_model) st.embed = k.needs_model;  // these need this search model
     renderSetup();
   });
   $$('[data-setup-add]', el).forEach(b => b.onclick = () => {
@@ -2481,7 +2470,7 @@ function renderSetup() {
     const custom = st.agent === 'custom';
     const agent = custom || (g.agents || []).some(x => x.id === st.agent && x.installed) ? st.agent : null;  // none installed: automatic
     const harness = {agent, connect: !custom && st.connect, ...(custom ? {custom_agent: st.custom} : {})};
-    const body = quick ? {sources: [...st.chosen], mode, ...harness} : {sources: [...st.chosen], embed_model: st.embed, content: [...st.kinds], text_engine: st.engine, mode, ...harness};
+    const body = quick ? {sources: [...st.chosen], mode, ...harness} : {sources: [...st.chosen], content: [...st.kinds], text_engine: st.engine, mode, ...harness};
     const r = await fetch('/api/setup', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     st.busy = false;
@@ -2542,8 +2531,8 @@ function syncingHtml() {
   const jobs = S.status?.syncing || [];
   if (S.status?.setup_done === false) return `<div class="sync-strip warn">${ENERGY_IC}<div><b>Nothing is indexed yet</b><span>Choose the sources to start.</span></div><button class="btn primary" data-open-setup>Choose sources</button></div>`;
   if (!jobs.length) return '';
-  const what = j => j.kind === 'migrate' ? `Moving your data to the new storage: ${esc(j.name)}` : j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : j.kind === 'model' ? `Switching to ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
-  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} ${j.kind === 'model' ? 'pieces of text' : j.kind === 'migrate' ? 'steps' : 'files'}${j.seconds_left >= 60 && j.done >= 50 ? ` · about ${Math.round(j.seconds_left / 60).toLocaleString()} min left` : ''}`
+  const what = j => j.kind === 'migrate' ? `Moving your data to the new storage: ${esc(j.name)}` : j.kind === 'repo' ? `Code in ${esc(j.name)}` : j.kind === 'files' ? `Documents in ${esc(j.name)}` : `${esc(AGENT_NAME[j.name] || j.name)} sessions`;
+  const prog = j => j.total ? `<span class="bar"><i style="width:${Math.round(100 * j.done / j.total)}%"></i></span>${j.done.toLocaleString()} of ${j.total.toLocaleString()} ${j.kind === 'migrate' ? 'steps' : 'files'}${j.seconds_left >= 60 && j.done >= 50 ? ` · about ${Math.round(j.seconds_left / 60).toLocaleString()} min left` : ''}`
     : `${j.done.toLocaleString()} ${j.kind === 'sessions' ? 'sessions' : 'files'} so far`;
   return `<div class="sync-strip">${ENERGY_IC}<div><b>Syncing now</b>${jobs.map(j => `<span class="job">${what(j)} · ${prog(j)}</span>`).join('')}
     <span class="muted">Indexing uses a lot of energy: plug in your Mac if you can. Search works meanwhile.</span></div></div>`;
@@ -2797,35 +2786,6 @@ async function bindGeneral() {
   };
   renderReset();
 }
-const dur = s => s < 90 ? 'about a minute' : s < 5400 ? `about ${Math.round(s / 60)} minutes` : `about ${(s / 3600).toFixed(1)} hours`;
-async function renderModels() {
-  const box = $('#modelbox'); if (!box) return;
-  let d;
-  try { d = await api('/api/embed_models'); } catch { box.innerHTML = '<p class="sc-p">Could not load the models.</p>'; return; }
-  const p = d.progress, switching = d.wanted !== d.current;
-  const cur = d.models.find(m => m.id === d.current), want = d.models.find(m => m.id === d.wanted) || cur;
-  const prog = switching ? (p ? `Switching to ${want.label}: ${Math.round(100 * p.done / Math.max(p.total, 1))}%${p.seconds_left ? `, ${dur(p.seconds_left)} left` : ''}. Search keeps using ${cur?.label} until then. Choose it again to stop.` : `Switching to ${want.label}…`) : '';
-  box.innerHTML = `<div class="set-row" style="border-top:0"><div><div class="k">Model</div><div class="d">${esc(want?.about || '')}</div>${prog ? `<div class="d ct-state">${esc(prog)}</div>` : ''}</div>
-    <div><select class="set-in" data-model-sel aria-label="Embedding model">${d.models.map(m => `<option value="${esc(m.id)}" ${m.id === d.wanted ? 'selected' : ''}>${esc(m.label)}${m.id === d.current ? ' · in use' : ''}</option>`).join('')}</select></div></div>
-    <div id="modelconfirm"></div>`;
-  const choose = async id => {
-    const r = await fetch('/api/settings', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({embed_model: id})});
-    toast(!r.ok ? 'Could not change the model' : id === d.current ? 'Switch stopped' : 'Re-indexing with the new model in the background');
-    setTimeout(() => { renderModels(); renderContent(); }, 600);
-  };
-  $$('[data-model-sel]', box).forEach(b => b.onchange = () => {
-    const id = b.value; if (id === d.wanted) return;
-    if (id === d.current) return choose(id);  // back to the model in use: stops a switch, nothing to re-index
-    const m = d.models.find(x => x.id === id), c = $('#modelconfirm', box);
-    c.innerHTML = `<div class="set-card danger" style="margin-top:10px"><div class="set-row" style="border-top:0"><div>
-      <div class="k">Re-index with ${esc(m.label)}?</div>
-      <div class="d">Pensieve embeds all ${d.chunks.toLocaleString()} pieces of text it has indexed again with the new model: ${dur(m.switch_seconds)} on this Mac. It uses a lot of energy while it runs, so plug in if you can. Your files are not read again, and search keeps working with the current model until the new one is ready; then Pensieve restarts.</div></div>
-      <div style="display:flex;gap:8px;align-self:center"><button class="btn" data-mc="no">Cancel</button><button class="btn primary" data-mc="yes">Re-index</button></div></div></div>`;
-    $('[data-mc=no]', c).onclick = () => { c.innerHTML = ''; b.value = d.wanted; };
-    $('[data-mc=yes]', c).onclick = () => choose(id);
-  });
-  if (switching) setTimeout(() => { if ($('#modelbox') === box && !$('#modelconfirm', box)?.innerHTML) renderModels(); }, 5000);
-}
 // Where your agents work (/api/places): the repos and folders of their sessions, busiest first. The ones Pensieve
 // doesn't index are offered with an Index button; the indexed ones are summed up in one line.
 async function renderPlaces(fresh = false) {
@@ -2854,10 +2814,8 @@ async function renderContent() {
   const box = $('#contentbox'); if (!box) return;
   let d;
   try { d = await api('/api/content'); } catch { box.innerHTML = '<p class="sc-p">Could not load this.</p>'; return; }
-  const gemma = d.model === d.needs_model;
   const state = k => {
     if (k.locked) return 'Always on.';
-    if (k.needs === 'model') return 'Needs the EmbeddingGemma 2 embedding model.';
     if (k.needs === 'decoder') return 'Needs the Pensieve app’s video and sound decoder, or PyAV (pip install av).';
     if (k.error) return `The download failed: ${k.error}. Switch it off and on to try again.`;
     if (k.installing) { const p = k.installing; return `Downloading ${fmtBytes(p.done)} of ${fmtBytes(p.total)}. Until it is done, these files are found by name.`; }
@@ -2866,10 +2824,9 @@ async function renderContent() {
     return `Off: found by name. Switching on downloads ${fmtBytes(k.size_mb * 1e6)}${k.installed ? ' (already here)' : ''}.`;
   };
   const short = k => k.locked ? '' : k.error ? 'failed' : k.installing ? `${Math.round(100 * k.installing.done / Math.max(k.installing.total, 1))}%`
-    : k.on ? (k.ready ? '' : 'starting') : !gemma || k.needs ? '' : fmtBytes(k.size_mb * 1e6);
+    : k.on ? (k.ready ? '' : 'starting') : k.needs ? '' : fmtBytes(k.size_mb * 1e6);
   box.innerHTML = `<div class="ct-chips">${d.kinds.map(k => `<label class="ct-chip ${k.on ? 'on' : ''} ${k.error ? 'err' : ''}" title="${esc(k.description + ' ' + state(k))}">
-      <input type="checkbox" data-content="${esc(k.id)}" ${k.on ? 'checked' : ''} ${k.locked || (!gemma && !k.on) ? 'disabled' : ''}>${esc(k.label)}${short(k) ? `<small>${esc(short(k))}</small>` : ''}</label>`).join('')}</div>
-    ${!gemma ? '<div class="d" style="margin-top:6px">Images, video and audio need the EmbeddingGemma 2 model.</div>' : ''}
+      <input type="checkbox" data-content="${esc(k.id)}" ${k.on ? 'checked' : ''} ${k.locked ? 'disabled' : ''}>${esc(k.label)}${short(k) ? `<small>${esc(short(k))}</small>` : ''}</label>`).join('')}</div>
     ${d.kinds.filter(k => k.error || k.needs === 'decoder').map(k => `<div class="d ct-state err">${esc(k.label)}: ${esc(state(k))}</div>`).join('')}`;
   $$('[data-content]', box).forEach(c => c.onchange = async () => {
     const r = await fetch('/api/content', {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({kind: c.dataset.content, on: c.checked})});
@@ -3014,8 +2971,7 @@ async function renderSettings() {
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
   else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. The built-in model, a command-line agent or a model server writes the summaries. MCP servers bring in tickets and messages.') + `
     <div class="set-card mdl dev-only" id="set-Embedding-model">
-      <div class="mdl-h"><span class="mdl-n">1</span><div class="mdl-t"><h3>Embedding model</h3><p>Finds your files, code and sessions by meaning. Always on.</p></div><span class="priv local">Local</span></div>
-      <div id="modelbox"><div class="spinner" style="margin:8px 0"></div></div>
+      <div class="mdl-h"><span class="mdl-n">1</span><div class="mdl-t"><h3>Embedding model</h3><p>EmbeddingGemma 2 finds your files, code and sessions by meaning. Always on.</p></div><span class="priv local">Local</span></div>
       <div class="set-row"><div><div class="k">Reads</div><div class="d">Text always. Images, video and audio are found by name until you switch them on.</div></div><div id="contentbox"></div></div>
     </div>` + engineCardHtml() + mcpCardHtml();
   else if (tab === 'mode') {
@@ -3051,7 +3007,7 @@ async function renderSettings() {
   $('#setmain').scrollTop = y;
   $$('[data-settab]', el).forEach(b => b.onclick = () => setTab(b.dataset.settab));
   $$('#setmain [data-app]', el).forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
-  if (tab === 'ai') { bindAISettings($('#setmain')); bindEngine($('#setmain')); renderModels(); renderContent(); }
+  if (tab === 'ai') { bindAISettings($('#setmain')); bindEngine($('#setmain')); renderContent(); }
   if (tab === 'agents') { loadIntegrations(); renderAgentPick(); }
   if (tab === 'sources') renderPlaces();
   if (tab === 'general') { bindGeneral(); $('#set-Setup [data-open-setup]')?.addEventListener('click', openSetup); $('#set-Setup [data-restart]')?.addEventListener('click', restartServer); }

@@ -786,11 +786,10 @@ class Repos:
                 fn(root)
         return n
 
-    def embed_rate(self, model=None) -> float:
-        """Chunks this Mac embeds per second during an index with `model` (the index's by default): the last big
-        index with it measured it, else the model's rate on an M4 Max (config.EMBED_MODELS)."""
-        model = model or config.EMBED_MODEL
-        default = config.EMBED_MODELS.get(model, config.EMBED_MODELS[config.QWEN])["rate"]
+    def embed_rate(self) -> float:
+        """Chunks this Mac embeds per second during an index: the last big index measured it, else the model's rate
+        on an M4 Max (config.EMBED_RATE)."""
+        model, default = config.EMBED_MODEL, config.EMBED_RATE
         try:
             return float(self.store.meta(f"embed_rate:{model}") or default)
         except ValueError:
