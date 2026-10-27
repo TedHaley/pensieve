@@ -1,12 +1,14 @@
 """Tests of branch claims (pensieve/claims.py): the session with most surviving lines holds the branch; the others lose it.
-Transcripts and git are stubbed.
+Transcripts are stubbed. Git is stubbed, except in one temporary checkout.
 Run: python tests/claims.py"""
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pensieve import claims  # noqa: E402
+from pensieve import claims, work  # noqa: E402
 
 ROOT = "/code/app"
 A_LINE = "a line that session a wrote in full"
@@ -43,6 +45,29 @@ def run():
                          [k for k, r in res.items() if r["holds"]], ["a"]))
     res = claims.shares(s3, ROOT, "feat", lines_of=lambda s: lines3[s["id"]], text_of=lambda rel: "")
     results.append(check("no surviving line: nobody holds the branch", any(r["holds"] for r in res.values()), False))
+
+    # a real checkout: two sessions wrote to a branch and nobody committed yet
+    repo = Path(tempfile.mkdtemp())
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                                    check=True, capture_output=True)
+    (repo / "x.py").write_text("base\n")
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-qm", "init")
+    git("switch", "-qc", "feat")
+    (repo / "x.py").write_text(f"base\n{A_LINE}\n{B_LINE}\n{GONE}\n")
+    unc = {"a": [(f"{repo}/x.py", A_LINE)], "b": [(f"{repo}/x.py", B_LINE), (f"{repo}/x.py", GONE)]}
+    res = claims.shares(sessions, str(repo), "feat", lines_of=lambda s: unc[s["id"]])
+    results.append(check("uncommitted lines on the open branch count: b holds it, a does not",
+                         (res["a"]["surviving"], res["b"]["surviving"], res["b"]["holds"], res["a"]["holds"]),
+                         (1, 2, True, False)))
+    git("stash", "-q")
+    git("switch", "-q", "main")
+    git("stash", "pop", "-q")
+    work.forget_git([str(repo)])  # as a session event does: the branch that is open now
+    res = claims.shares(sessions, str(repo), "feat", lines_of=lambda s: unc[s["id"]])
+    results.append(check("a branch that is not open reads its commits only: the lines on main are not its",
+                         any(r["surviving"] for r in res.values()), False))
 
     threads = [dict(_sessions=[dict(id="a", path="", updated=1)], branches=[dict(repo="r", branch="feat")],
                     places=[dict(branch="feat", git=True, path=ROOT)]),
