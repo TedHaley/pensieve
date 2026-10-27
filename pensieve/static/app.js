@@ -3440,7 +3440,8 @@ $$('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view === 'da
 // A page scrolled down takes the header band: the tabs slide behind the logo and the sheets move up (CSS
 // body.tabs-tucked). The logo shows them again until the next scroll. A page must have room to scroll after it
 // grows, or tucking would bring it back to the top and untuck it in a loop. Settings never tucks: its page list does
-// not scroll, so the logo would cover it.
+// not scroll, so the logo would cover it. People never tucks either: only its profile panel scrolls, and closing the
+// panel takes away the scroll that would untuck the tabs.
 const TUCK_AT = 48, UNTUCK_AT = 4, TUCK_ROOM = 120;
 function tuckTabs(on) {
   const body = document.body, brand = $('#top .brand');
@@ -3455,7 +3456,7 @@ function tuckTabs(on) {
 }
 document.addEventListener('scroll', e => {
   const el = e.target;
-  if (!(el instanceof Element) || !el.closest('.sheet') || el.closest('#settings')) return;
+  if (!(el instanceof Element) || !el.closest('.sheet') || el.closest('#settings, #people')) return;
   const tucked = document.body.classList.contains('tabs-tucked');
   if (!tucked && el.scrollTop > TUCK_AT && el.scrollHeight - el.clientHeight > TUCK_ROOM) tuckTabs(true);
   else if (tucked && el.scrollTop <= UNTUCK_AT) tuckTabs(false);
