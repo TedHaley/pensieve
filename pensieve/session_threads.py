@@ -67,10 +67,15 @@ def on_branch(t: dict, s: dict) -> list[tuple[str, str]]:
 
 def ran_on(s: dict) -> list[tuple[str, str]]:
     """The feature branch a session ran on without writing anything: a review, or a read of the work. It is on that
-    branch's cluster with no share of its lines (claims.apply), so the branch's state is its state."""
-    from pensieve import work
-    b = s.get("branch") or ""
-    return [("branch", b)] if b and b not in work.DEFAULT_BRANCHES and b != "HEAD" else []
+    branch's cluster with no share of its lines (claims.apply), so the branch's state is its state. The session must
+    have worked in a checkout where it recorded the branch (transcripts.worked_in): a session that only started
+    there, such as a question about the weather, is a thought."""
+    from pensieve import transcripts, work
+    b, path = s.get("branch") or "", s.get("path", "")
+    if not b or b in work.DEFAULT_BRANCHES or b == "HEAD":
+        return []
+    roots = {work._git_root(cwd) or cwd for cwd, name in transcripts.branches(path) if name == b}
+    return [("branch", b)] if any(transcripts.worked_in(path, r) for r in roots) else []
 
 
 SINK_WORKERS = 8  # threads that run the sessions' git calls in split()

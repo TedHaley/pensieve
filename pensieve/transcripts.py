@@ -48,7 +48,7 @@ DOC_RANK = {"made": 0, "read": 1, "named": 2}  # a document the session made com
 OWN_MARK = "[pensieve text job]"  # the first line of every prompt Pensieve's text engine sends (engine.MARK)
 # The first words of the sessions that Pensieve starts to close work (cards.RESOLVE_PROMPTS): a close-out, not a thread
 CLOSE_MARKS = ("[pensieve ship]", "[pensieve discard]")
-VERSION = 7  # of the cache files: a new version reads every transcript again
+VERSION = 8  # of the cache files: a new version reads every transcript again
 
 
 @dataclass
@@ -309,6 +309,8 @@ def _read(f: Facts, path: Path):
                     parsers._note_tool(s, name, args)
                     if name == "Bash":
                         pending[blk.get("id", "")] = [args.get("command", ""), cwd, b]
+                    elif name in ("Grep", "Glob") and not args.get("path"):
+                        _looked(f, cwd)  # a search with no path searches the session's folder
                     elif name in EDIT_TOOLS:
                         _written(f, args)
                     elif name == "Artifact" and args.get("action", "publish") == "publish" and not args.get("asset"):
@@ -335,7 +337,11 @@ def _read(f: Facts, path: Path):
                     cmd, bcwd, recorded = pending.pop(blk["tool_use_id"])
                     rc = blk.get("content")
                     out = " ".join(x.get("text", "") for x in rc if isinstance(x, dict)) if isinstance(rc, list) else str(rc or "")
-                    _git_write(f, gt.shell_code(cmd), bcwd, recorded, out)
+                    code = gt.shell_code(cmd)
+                    _git_write(f, code, bcwd, recorded, out)
+                    if GIT_CALL.search(code):
+                        cd = gt.CD.search(code)
+                        _looked(f, os.path.expanduser(cd.group(1)) if cd else bcwd)
             c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
         if isinstance(c, str):
             before = len(s.turns)
@@ -486,6 +492,17 @@ def _written(f: Facts, args: dict):
                 f.written.append([file_path, line])
 
 
+GIT_CALL = re.compile(r"(?:^|[\s;&|(])(?:git|gh)\s+[a-z]")
+
+
+def _looked(f: Facts, folder: str):
+    """Note a folder that the session searched, or ran git or gh in: with the files it read or edited, the sign
+    that it worked in a checkout (worked_in)."""
+    seen = f.state.setdefault("looked", [])
+    if folder and folder not in seen:
+        seen.append(folder)
+
+
 def _git_write(f: Facts, cmd: str, cwd: str, recorded: str, out: str):
     """The branch and pull request writes of one Bash call, as extract/git_tools reads them, kept incrementally:
     the checkout state of the session lives in f.state."""
@@ -554,6 +571,17 @@ def written(path: str) -> tuple:
     """The (file, line) pairs a transcript wrote with an edit tool."""
     f = facts(path) if path else None
     return tuple((a, b) for a, b in f.written) if f else ()
+
+
+def worked_in(path: str, root: str) -> bool:
+    """Whether a transcript worked in a checkout: it read or edited a file there, searched there, or ran git or gh
+    there. A session that only started in the checkout did not."""
+    f = facts(path) if path else None
+    if not f or not root:
+        return False
+    prefix = root.rstrip("/") + "/"
+    return any(p.startswith(prefix) for p in (*f.read, *f.edited)) or \
+        any((d.rstrip("/") + "/").startswith(prefix) for d in f.state.get("looked", []))
 
 
 def branches(path: str) -> dict[tuple[str, str], float]:
