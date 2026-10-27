@@ -111,7 +111,7 @@ _index_dirty = False
 
 def _load(path: str) -> Facts | None:
     try:
-        d = json.loads(_cache_path(path).read_text())
+        d = json.loads(_cache_path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if d.get("v") != VERSION or d.get("path") != path:
@@ -123,7 +123,7 @@ def _save(f: Facts):
     p = _cache_path(f.path)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(asdict(f), ensure_ascii=False))
+    tmp.write_text(json.dumps(asdict(f), ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, p)
     _note(f)
 
@@ -146,7 +146,7 @@ def _load_index():
     if _index_loaded:
         return
     try:
-        d = json.loads(_index_path().read_text())
+        d = json.loads(_index_path().read_text(encoding="utf-8"))
         if d.get("v") == VERSION:
             _index.update(d.get("files", {}))
     except (OSError, ValueError):
@@ -161,7 +161,7 @@ def _save_index():
     p = _index_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"v": VERSION, "files": _index}))
+    tmp.write_text(json.dumps({"v": VERSION, "files": _index}), encoding="utf-8")
     os.replace(tmp, p)
     _index_dirty = False
 
