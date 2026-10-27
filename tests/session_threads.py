@@ -94,8 +94,13 @@ def run():
     results.append(check("edits in a checkout that the task does not list (a worktree) are work on its branch",
                          st.on_branch(dict(places=[]), s4), [("branch", "feat")]))
     work._git_root, gits = git_root, {}
-    results.append(check("a session that wrote nothing on a feature branch ran on it",
-                         (st.ran_on(dict(branch="feat")), st.ran_on(dict(branch="main"))), ([("branch", "feat")], [])))
+    transcripts.branches = lambda path: {(ROOT, "feat"): 1.0, (ROOT, "main"): 1.0}
+    transcripts.worked_in = lambda path, root: path == "/x/looked.jsonl" and root == ROOT
+    results.append(check("a session that wrote nothing but worked in a checkout on a feature branch ran on it",
+                         (st.ran_on(dict(branch="feat", path="/x/looked.jsonl")),
+                          st.ran_on(dict(branch="main", path="/x/looked.jsonl"))), ([("branch", "feat")], [])))
+    results.append(check("a session that only started in a checkout on a feature branch did not run on it",
+                         st.ran_on(dict(branch="feat", path="/x/weather.jsonl")), []))
 
     # a session that did work on two branches: one thread on each, with that branch's sinks, places and files
     sink_status.pr_info = lambda key: {"state": "OPEN", "head": "feat-b"} if key == "org/app#2" else {}
@@ -118,6 +123,8 @@ def run():
     st.writes = lambda path: []
     thought = st.split([dict(two, places=[])])
     results.append(check("a session with no work on a branch keeps its own id", [t["id"] for t in thought], [st.thread_id("s9")]))
+    transcripts.branches = lambda path: {("/code/feat-a", "feat-a"): 1.0}
+    transcripts.worked_in = lambda path, root: root == "/code/feat-a"
     seen = st.split([dict(two, places=[], _sessions=[dict(two["_sessions"][0], branch="feat-a")])])
     results.append(check("a session that only ran on a feature branch is a review of it, and one that wrote is not",
                          ([(t["_branch"], t["review"]) for t in seen], a["review"]), ([("feat-a", True)], False)))

@@ -117,6 +117,31 @@ def run():
     named = next(a for a in arts if a["url"] == "https://claude.ai/artifact/abc")
     results.append(check("an Artifact only named in the text has no title or time",
                          (named["name"], named["created"], named["updated"]), ("Artifact", 0, 0)))
+
+    # worked_in: a session worked in a checkout when it read, searched or ran git there, not when it only started there
+    repo = "/code/app"
+
+    def session(name, calls):
+        out = [dict(rec("user", "go", 1), cwd=repo)]
+        for n, (tool, args) in enumerate(calls, 2):
+            out += [dict(rec("assistant", [{"type": "tool_use", "id": f"w{n}", "name": tool, "input": args}], n), cwd=repo),
+                    dict(rec("user", [{"type": "tool_result", "tool_use_id": f"w{n}", "content": "ok"}], n), cwd=repo)]
+        p = DATA / f"{name}.jsonl"
+        p.write_text("\n".join(json.dumps(x) for x in out) + "\n")
+        return transcripts.worked_in(str(p), repo)
+    results.append(check("a session that only answered a question did not work in the checkout",
+                         session("weather", [("WebSearch", {"query": "weather"})]), False))
+    results.append(check("a session that wrote only outside the checkout did not work in it",
+                         session("scratch", [("Write", {"file_path": "/tmp/pad/mk.py", "content": "x"}),
+                                             ("Bash", {"command": "cd /tmp/pad && python mk.py"})]), False))
+    results.append(check("a file read in the checkout is work in it",
+                         session("read", [("Read", {"file_path": f"{repo}/x.py"})]), True))
+    results.append(check("a search with no path searches the checkout", session("grep", [("Grep", {"pattern": "x"})]), True))
+    results.append(check("a git call in the checkout is work in it", session("git", [("Bash", {"command": "git log -3"})]), True))
+    results.append(check("a git call after cd counts in the folder it went to",
+                         session("cd", [("Bash", {"command": "cd /code/other && git status"})]), False))
+    results.append(check("git named only in a quoted string is not a git call",
+                         session("quoted", [("Bash", {"command": 'echo "git log"'})]), False))
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 
