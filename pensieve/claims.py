@@ -1,11 +1,12 @@
 """Which session holds a branch's work, when several sessions wrote to it.
 
 A session claims the lines it wrote with its edit tools (Edit, Write, MultiEdit). A line counts when it is still on the
-branch's current version of the file. A surviving line belongs to the latest session that wrote it. The session with the
+branch's current version of the file: in the checkout, with its uncommitted lines, when the branch is open there. A surviving line belongs to the latest session that wrote it. The session with the
 most surviving lines holds the branch (on a tie, the later one). The others lose it: the branch is not active on their
 threads, and each thread's other sinks still decide its state."""
 import subprocess
 from functools import lru_cache
+from pathlib import Path
 
 
 def written(path: str) -> tuple:
@@ -21,8 +22,15 @@ def _at_tip(root: str, tip: str, rel: str) -> str:
 
 
 def _at_branch(root: str, branch: str, rel: str) -> str:
-    """A file's text on a branch, cached by the branch's tip: a commit on the branch reads the file again."""
+    """A file's text on a branch. When the checkout at `root` has the branch open, the file in the checkout, with its
+    uncommitted lines: the work of sessions that did not commit yet. Else the file at the branch's tip, cached by the
+    tip: a commit on the branch reads the file again."""
     from pensieve import work
+    if work._git(root, "branch", "--show-current", ttl=30) == branch:
+        try:
+            return (Path(root) / rel).read_text(errors="replace")
+        except OSError:
+            return ""  # a file removed in the checkout keeps none of its lines
     tip = work._git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", ttl=30)
     return _at_tip(root, tip, rel) if tip else ""
 
