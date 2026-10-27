@@ -5315,8 +5315,13 @@ function applyAppearance(mode, persist = false) {
 const toggleTheme = () => applyAppearance(theme() === 'dark' ? 'light' : 'dark', true);
 const syncThemeLabel = () => $$('[data-app]').forEach(b => b.classList.toggle('on', b.dataset.app === appearance));
 $$('#appseg [data-app]').forEach(b => b.onclick = () => applyAppearance(b.dataset.app, true));
+// The saved appearance and mode. index.html starts in Threads mode.
 async function loadAppearance() {
-  try { const r = await api('/api/settings'); if (APPEARANCES.includes(r.settings.appearance) && r.settings.appearance !== appearance) applyAppearance(r.settings.appearance); } catch {}
+  try {
+    const r = await api('/api/settings');
+    if (APPEARANCES.includes(r.settings.appearance) && r.settings.appearance !== appearance) applyAppearance(r.settings.appearance);
+    applyMode(r.settings.mode);
+  } catch {}
 }
 // Fit and auto-rotate sit beside the ••• menu, on every map view
 const syncRotateBtn = () => { const b = $('#rotbtn'); b.classList.toggle('on', gl.controls.autoRotate); b.setAttribute('aria-pressed', String(gl.controls.autoRotate)); };
@@ -5480,6 +5485,7 @@ const reloadFilesSoon = debounce(async () => {
 const pollStatus = debounce(async () => { try { Object.assign(S.status, await api('/api/status')); renderStatus(); renderSyncing(); } catch {} }, 300);
 
 async function init() {
+  loadAppearance();  // not awaited: the tabs of the mode show without waiting for the loads below
   // first, so the map never shows before it: Threads, or the page tab that the link names
   await setView({people: 'people', insights: 'insights', settings: 'settings'}[location.hash.slice(1)] || 'work');
   try {
@@ -5496,7 +5502,7 @@ async function init() {
   connect();
   await loadRepos().catch(() => {});
   loadUpstream();
-  loadScopes(); loadAppearance(); syncThemeLabel();
+  loadScopes(); syncThemeLabel();
   if (location.hash.length > 1) await route();
 }
 init();
