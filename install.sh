@@ -89,8 +89,8 @@ install_from_source() {
     bold "Building the Pensieve app (about a minute)…"
     mkdir -p "$HOME/.pensieve"
     rm -rf "$SRC" && git clone -q --depth 1 --branch "$REF" "$REPO_URL" "$SRC"
-    if sh "$SRC/mac/build.sh" --install; then
-      APP="$HOME/Applications/Pensieve.app"
+    if PENSIEVE_APP="$(app_dest)" sh "$SRC/mac/build.sh" --install; then
+      APP="$(app_dest)"
     else
       echo "Couldn't build the Mac app; the backend and browser visualizer still work."
     fi
