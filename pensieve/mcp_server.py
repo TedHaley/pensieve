@@ -777,9 +777,9 @@ def _on_branch(t: dict, branch: str) -> bool:
         or any(b["branch"] == branch for b in (t.get("contributed") or {}).get("branches", []))
 
 
-def _branch_threads(branch: str) -> list[dict]:
-    """The threads of one branch within this connection's scope, newest session first."""
-    ts = [t for t in _tasks_in_scope() if _on_branch(t, branch)]
+def _branch_threads(branch: str, tasks: list[dict] | None = None) -> list[dict]:
+    """The threads of one branch within this connection's scope (or among `tasks`), newest session first."""
+    ts = [t for t in (_tasks_in_scope() if tasks is None else tasks) if _on_branch(t, branch)]
     return sorted(ts, key=lambda t: -((t.get("sessions") or [{}])[0].get("updated") or t["updated"]))
 
 

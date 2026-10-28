@@ -4212,13 +4212,22 @@ function wkCardBtns(t) {
     + `<button class="wk-btn icon" data-wk-save="${esc(t.id)}" title="Save this thread as an HTML page in Downloads, to share it">${WK_IC.download}</button>`;
 }
 // The page in an iframe's srcdoc: the Mac app's web view can't open a second window
-async function openPreview(load, title) {
+async function openPreview(load, title, save) {
   const m = document.createElement('div');
   m.className = 'modal'; m.id = 'previewmodal';
-  m.innerHTML = `<div class="palette preview-dlg"><div class="sh-head"><h3>${esc(title)}</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+  m.innerHTML = `<div class="palette preview-dlg"><div class="sh-head"><h3>${esc(title)}</h3>${save ? '<button class="wk-btn" data-pv-save title="Save this page as an HTML file in Downloads, to share it">Save</button>' : ''}<button class="iconbtn" data-close aria-label="Close">✕</button></div>
     <div class="pv-body"><div class="shimmer" style="height:240px;margin:18px"></div></div></div>`;
   document.body.append(m);
   m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
+  const sv = $('[data-pv-save]', m);
+  if (sv) sv.onclick = async () => {
+    sv.disabled = true;
+    try {
+      const r = await api('/api/thread/save', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(save)});
+      toast(`Saved ${r.file.split('/').pop()} in Downloads`);
+    } catch (e) { toast('Could not save it: ' + e.message); }
+    sv.disabled = false;
+  };
   try {
     const r = await load();
     if (!r.ok) throw new Error(`${r.status}`);
@@ -4658,8 +4667,8 @@ function renderWork() {
       const resume = r ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(r.session)}" ${missing ? `disabled title="${esc(missing)}"` : `title="Resume “${esc(r.title)}”, the session that holds ${esc(c.branch)}, in ${esc(wkResumeName(r))}"`}>${WK_IC.play}Resume</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(r.command)}" aria-label="Copy the resume command" title="Copy the command that resumes the session that holds the branch">${WK_IC.copy}</button></span>` : '';
       return head + `<section class="wk-cluster" data-branch="${esc(c.branch)}" style="--acc:${wkModel(c.state).color}"><div class="wk-cluster-t">${esc(wkClusterTitle(c))}</div><header class="wk-cluster-h">${repo ?`<span class="wk-where-repo" title="${esc(p.path || '')}">${esc(repo)}</span>` : ''}${link}${p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : ''}<span class="wk-cl-btns">${resume}${wkResolveBtns(c)}
         <span class="wk-split"><button class="wk-btn" data-wk-revive-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open ${esc(wkTerm())} and start a new ${esc(S.agents?.startName || 'agent')} session that reads all ${c.tasks.length} threads of this branch first">${WK_IC.spark}Fork from all ${c.tasks.length}</button><button class="wk-btn copy" data-wk-revive-cluster-copy="${esc(ids)}" data-branch="${esc(c.branch)}" aria-label="Copy a prompt with every thread of this branch in it" title="Copy a prompt with every thread of this branch in it, to start the work in any agent">${WK_IC.copy}</button></span>
-        <button class="wk-btn icon" data-wk-preview-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Preview the ${c.tasks.length} threads of this branch as one page">${WK_IC.eye}</button>
-        <button class="wk-btn icon" data-wk-save-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Save the ${c.tasks.length} threads of this branch as one HTML page in Downloads, to share it">${WK_IC.download}</button></span></header>${c.tasks.map(t => `<div class="wk-twig${wkHolds(t, c.branch) ? ' lead' : ''}">${wkCard(t, d, c.branch)}</div>`).join('')}</section>`;
+        <span class="wk-cl-icons"><button class="wk-btn icon" data-wk-preview-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Preview the ${c.tasks.length} threads of this branch as one page">${WK_IC.eye}</button>
+        <button class="wk-btn icon" data-wk-save-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Save the ${c.tasks.length} threads of this branch as one HTML page in Downloads, to share it">${WK_IC.download}</button></span></span></header>${c.tasks.map(t => `<div class="wk-twig${wkHolds(t, c.branch) ? ' lead' : ''}">${wkCard(t, d, c.branch)}</div>`).join('')}</section>`;
     }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.threads.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
@@ -4758,7 +4767,8 @@ function wkBind(el, d) {
   $$('[data-wk-preview-cluster]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
     const q = cluster(b);
-    openPreview(() => fetch(`/api/thread?ids=${enc(q.ids.join(','))}&branch=${enc(q.branch)}&days=${S.work.days}`), `${q.branch}: ${plural(q.ids.length, 'thread')}`);
+    openPreview(() => fetch(`/api/thread?ids=${enc(q.ids.join(','))}&branch=${enc(q.branch)}&days=${S.work.days}`), `${q.branch}: ${plural(q.ids.length, 'thread')}`,
+      {ids: q.ids, branch: q.branch, days: S.work.days});
   });
   $$('[data-wk-revive-cluster]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
@@ -4782,7 +4792,8 @@ function wkBind(el, d) {
   $$('[data-wk-preview]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
     const t = d.threads.find(x => x.id === b.dataset.wkPreview);
-    openPreview(() => fetch(`/api/thread?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Thread');
+    openPreview(() => fetch(`/api/thread?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Thread',
+      {id: b.dataset.wkPreview, days: S.work.days});
   });
   $$('.wk-task[data-id]', el).forEach(a => a.onclick = e => {  // a click on the card, not on its controls or its open details
     if (e.target.closest('button, a, select, input, .wk-detail')) return;

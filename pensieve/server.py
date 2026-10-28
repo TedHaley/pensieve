@@ -1682,11 +1682,11 @@ def refresh_threads(req: RefreshReq):
 def get_thread(id: str = "", format: str = "html", days: int = 30, ids: str = "", branch: str = ""):
     """One thread (pensieve-thread/2): the id of a thread on the Threads tab. `format`: html (the page for people,
     which holds the JSON), agent (compact JSON with a line on how to read it) or json. `ids` (comma-separated) with
-    `branch`: the threads of one branch on one page, newest first."""
+    `branch`: the threads of one branch on one page, newest first. `branch` alone: every thread of that branch."""
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     from pensieve import cards
-    if ids:
-        got = [_local_card(i, days) for i in _csv(ids)]
+    if ids or (branch and not id):
+        got = _cluster_cards(_csv(ids), branch, days)
         if format == "html":
             return HTMLResponse(cards.render_cluster_html(got, branch))
         return PlainTextResponse(cards._cluster_text(got)) if format == "agent" else JSONResponse(got)
@@ -1704,10 +1704,20 @@ def _local_card(task_id: str, days: int) -> dict:
     return cards.build(t, task_states.history(store, task_id))
 
 
+def _cluster_cards(ids: list[str], branch: str, days: int) -> list[dict]:
+    """The cards of a cluster: the threads `ids`, or every thread of `branch` (newest session first)."""
+    if ids:
+        return [_local_card(i, days) for i in ids]
+    ts = mcp_server._branch_threads(branch, work.tasks(store, days))
+    if not ts:
+        raise HTTPException(404, f"no thread of the last {days} days wrote to branch {branch}")
+    return [_local_card(t["id"], days) for t in ts]
+
+
 class SavePageReq(BaseModel):
     id: str = ""  # a thread
     ids: list[str] = []  # or a cluster: its threads, newest first
-    branch: str = ""  # the cluster's branch
+    branch: str = ""  # the cluster's branch; alone, every thread of it
     days: int = 30
 
 
@@ -1717,8 +1727,8 @@ def save_thread_page(req: SavePageReq):
     import subprocess
     from pathlib import Path
     from pensieve import cards
-    if req.ids:
-        page, name = cards.render_cluster_html([_local_card(i, req.days) for i in req.ids], req.branch), req.branch
+    if req.ids or (req.branch and not req.id):
+        page, name = cards.render_cluster_html(_cluster_cards(req.ids, req.branch, req.days), req.branch), req.branch
     else:
         card = _local_card(req.id, req.days)
         page, name = cards.render_html(card), card.get("title") or req.id
