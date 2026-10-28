@@ -1956,10 +1956,28 @@ def _outside_env() -> dict:
     return {k: v for k, v in os.environ.items() if k not in AGENT_MARKERS and not k.startswith("PENSIEVE_")}
 
 
+# A tab in the Ghostty that runs (1.4 and later), not a second copy of the app: macOS joins tabs only within one copy.
+# The command goes in as the shell's first input, so the shell stays open after it, as in Terminal.
+GHOSTTY_TAB = """on run argv
+    if application "Ghostty" is not running then return "start"
+    tell application "Ghostty"
+        set cfg to {initial input:(item 1 of argv) & linefeed}
+        if (count of windows) is 0 then
+            new window with configuration cfg
+        else
+            new tab in front window with configuration cfg
+        end if
+        activate
+    end tell
+    return "ok"
+end run"""
+
+
 def _terminal(cmd: str):
     """Run a shell command in a new window of the user's terminal app (Settings → terminal), as a session of its own:
     not a child of the agent that started this server (see _outside_env). Terminal and iTerm take the command over
-    AppleScript, Ghostty as its -e command; any other app opens it as a .command file."""
+    AppleScript; Ghostty takes it over AppleScript as a new tab when it runs, else as its -e command; any other app
+    opens it as a .command file."""
     import subprocess
     import tempfile
     cmd = f"unset {' '.join(AGENT_MARKERS)}; {cmd}"
@@ -1971,9 +1989,12 @@ def _terminal(cmd: str):
     elif app == "iTerm":
         run("osascript", "-e", 'tell application "iTerm"', "-e", "activate", "-e", "set w to (create window with default profile)",
             "-e", f'tell current session of w to write text "{script}"', "-e", "end tell")
-    elif app == "Ghostty":  # the shell stays open after the command, as in Terminal
-        shell = env.get("SHELL") or "/bin/zsh"
-        run("open", "-na", "Ghostty", "--args", "-e", shell, "-lc", f'{cmd}; exec "{shell}" -l')
+    elif app == "Ghostty":
+        tab = run("osascript", "-e", GHOSTTY_TAB, cmd)
+        if tab.stdout.strip() != b"ok":  # Ghostty is not running, or takes no AppleScript (before 1.4, or not allowed)
+            shell = env.get("SHELL") or "/bin/zsh"  # the shell stays open after the command, as in Terminal
+            new = "-a" if tab.stdout.strip() == b"start" else "-na"  # -a gives its args only to an app it starts
+            run("open", new, "Ghostty", "--args", "-e", shell, "-lc", f'{cmd}; exec "{shell}" -l')
     else:
         with tempfile.NamedTemporaryFile("w", suffix=".command", delete=False) as f:
             f.write(f'#!/bin/zsh -l\nrm -f "$0"\n{cmd}\n')

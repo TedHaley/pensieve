@@ -1,7 +1,7 @@
 #!/bin/sh
 # Pensieve installer — https://pensieve.tools
 #   curl -fsSL https://pensieve.tools/install.sh | sh
-# On a Mac: downloads the latest Pensieve.dmg, copies the app to Applications, and installs the `pensieve` backend
+# On a Mac: downloads the latest Pensieve.dmg, copies the app to ~/Applications, and installs the `pensieve` backend
 # from the wheel inside the app with the app's own uv. Nothing else is needed: no git, Xcode tools or Python.
 # Elsewhere, or with PENSIEVE_REF=main: installs uv if needed and the backend from source (git), and on a Mac with
 # the Xcode command-line tools builds the app.
@@ -15,12 +15,25 @@ bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 APP=""
 BIN=""
 
-# The app the user already has keeps its place; a new install goes to ~/Applications, which needs no admin rights.
-# PENSIEVE_APP=/path/Pensieve.app picks the place.
+# The app goes to ~/Applications, which needs no admin rights. PENSIEVE_APP=/path/Pensieve.app picks the place.
 app_dest() {
-  if [ -n "${PENSIEVE_APP:-}" ]; then echo "$PENSIEVE_APP"
-  elif [ -d /Applications/Pensieve.app ] && [ -w /Applications ]; then echo /Applications/Pensieve.app
-  else echo "$HOME/Applications/Pensieve.app"; fi
+  echo "${PENSIEVE_APP:-$HOME/Applications/Pensieve.app}"
+}
+
+# One copy of the app: removes the copy in /Applications that an earlier install made. Call it after the new copy
+# is in place.
+remove_old_app() {
+  old=/Applications/Pensieve.app
+  [ -d "$old" ] && [ "$old" != "$APP" ] || return 0
+  if pgrep -qf "$old/Contents/MacOS/Pensieve"; then
+    osascript -e "tell application \"$old\" to quit" >/dev/null 2>&1 || true
+    sleep 2
+  fi
+  if rm -rf "$old" 2>/dev/null; then
+    echo "Removed the old copy of the app in /Applications."
+  else
+    echo "Couldn't remove the old copy of the app. Remove it with: sudo rm -rf $old"
+  fi
 }
 
 # A backend left running keeps the old code in memory while its files are replaced. The app starts the new one.
@@ -42,7 +55,7 @@ install_from_dmg() {
   dest="$(app_dest)"
   # replacing a running app's files can crash it; quit it and open it again afterwards
   running=""
-  if pgrep -qf "$dest/Contents/MacOS/Pensieve"; then
+  if pgrep -qf "Pensieve.app/Contents/MacOS/Pensieve"; then  # this copy or the old one in /Applications
     running=1
     osascript -e 'tell application id "ca.tedhaley.pensieve" to quit' >/dev/null 2>&1 || true
     sleep 2
@@ -53,6 +66,7 @@ install_from_dmg() {
   hdiutil detach -quiet "$tmp/mnt" || true
   rm -rf "$tmp"
   APP="$dest"
+  remove_old_app
 
   bold "Installing the Pensieve backend (Python 3.12 and its packages)…"
   wheel="$(ls "$APP"/Contents/Resources/backend/*.whl | head -1)"
@@ -91,6 +105,7 @@ install_from_source() {
     rm -rf "$SRC" && git clone -q --depth 1 --branch "$REF" "$REPO_URL" "$SRC"
     if PENSIEVE_APP="$(app_dest)" sh "$SRC/mac/build.sh" --install; then
       APP="$(app_dest)"
+      remove_old_app
     else
       echo "Couldn't build the Mac app; the backend and browser visualizer still work."
     fi

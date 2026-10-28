@@ -287,8 +287,7 @@ def _read(f: Facts, path: Path):
     pending = st.setdefault("bash", {})        # tool_use id -> [command, cwd, recorded branch]
     for d in parsers._lines(path, s):
         t = d.get("type")
-        if t == "ai-title":
-            s.title = d.get("aiTitle") or d.get("title") or s.title
+        s.title = parsers.title_line(d, st, s.title)
         if t not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
             continue
         if d.get("entrypoint") and "entry" not in st:
