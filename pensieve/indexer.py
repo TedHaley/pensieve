@@ -43,29 +43,21 @@ def ensure_downloaded(name):
     from huggingface_hub import try_to_load_from_cache
     cfg = try_to_load_from_cache(name, "config.json")
     env = {k: v for k, v in os.environ.items() if k != "HF_HUB_OFFLINE"}
-    if name == config.GEMMA:  # its text weights only (gemma_mlx.download_text), unless the whole model is here
-        from pensieve.gemma_mlx import TEXT_WEIGHTS
-        if isinstance(cfg, str) and any((Path(cfg).parent / f).exists() for f in (TEXT_WEIGHTS, "model.safetensors")):
-            return
-        subprocess.run([sys.executable, "-m", "pensieve.gemma_mlx", name], env=env, check=True)
+    from pensieve.gemma_mlx import TEXT_WEIGHTS
+    if isinstance(cfg, str) and any((Path(cfg).parent / f).exists() for f in (TEXT_WEIGHTS, "model.safetensors")):
         return
-    if isinstance(cfg, str):
-        return
-    subprocess.run([sys.executable, "-c", "import sys; from huggingface_hub import snapshot_download; "
-                    "snapshot_download(sys.argv[1])", name], env=env, check=True)
+    subprocess.run([sys.executable, "-m", "pensieve.gemma_mlx", name], env=env, check=True)  # the text weights only
 
 
 def _load_embedder(name):
     try:
-        if name == config.GEMMA:
-            from pensieve.gemma_mlx import MLXGemmaEmbedder
-            return MLXGemmaEmbedder(name, config.EMBED_MAX_TOKENS)
-        return MLXEmbedder(name, config.EMBED_MAX_TOKENS)
+        from pensieve.gemma_mlx import MLXGemmaEmbedder
+        return MLXGemmaEmbedder(name, config.EMBED_MAX_TOKENS)
     except (ImportError, ValueError) as e:
         print(f"embedding model {name}: no MLX ({e!r}); using sentence-transformers", flush=True)
         from sentence_transformers import SentenceTransformer
-        kw = {"config_kwargs": {"vision_config": None, "audio_config": None}} if name == config.GEMMA else {}
-        m = SentenceTransformer(name, device=config.device(), **kw)
+        m = SentenceTransformer(name, device=config.device(),
+                                config_kwargs={"vision_config": None, "audio_config": None})
         m.max_seq_length = config.EMBED_MAX_TOKENS
         return m
 
@@ -78,18 +70,16 @@ def embedder():
     return _embedder[1]
 
 
-def model_texts(texts, query=False, titles=None, name=None, m=None):
-    """The texts as model `name` (the index's model by default) reads them. A query gets the model's instruction:
-    `query` is True (general search), an instruction string such as CODE_QUERY, or one of those per text. A document
-    gets the model's document format, with its title (a path) when there is one."""
-    name = name or config.EMBED_MODEL
-    gemma = name == config.GEMMA
+def model_texts(texts, query=False, titles=None, m=None):
+    """The texts as EmbeddingGemma reads them. A query gets the model's instruction: `query` is True (general
+    search), an instruction string such as CODE_QUERY, or one of those per text. A document gets the model's document
+    format, with its title (a path) when there is one."""
     general = ""
     if (any(query) if isinstance(query, list) else query):  # only a query needs the loaded model, for its prompt
         general = (getattr(m or embedder(), "prompts", None) or {}).get("query", "")
 
     def instruction(p):
-        if p is True or (gemma and p == CODE_QUERY):  # EmbeddingGemma: its search query beat its code query
+        if p is True or p == CODE_QUERY:  # EmbeddingGemma: its search query beat its code query
             return general
         return p or None
 
@@ -97,70 +87,8 @@ def model_texts(texts, query=False, titles=None, name=None, m=None):
     out = []
     for i, (p, t) in enumerate(zip(ps, texts)):
         title = titles[i] if titles else None
-        if p is not None:
-            out.append(p + t)
-        elif gemma:
-            out.append(f"title: {title or 'none'} | text: {t}")
-        else:
-            out.append(f"{title}\n{t}" if title else t)
+        out.append(p + t if p is not None else f"title: {title or 'none'} | text: {t}")
     return out
-
-
-class MLXEmbedder:
-    """Qwen3-Embedding on Apple's MLX, without torch. Same vectors as sentence-transformers (cosine 0.998 or more
-    on code chunks), so an index built with either one keeps working. `encode` takes the arguments that
-    SentenceTransformer.encode takes here."""
-
-    def __init__(self, name, max_tokens):
-        import mlx.core as mx
-        from huggingface_hub import snapshot_download
-        from mlx_lm.models import qwen3
-        from transformers import AutoTokenizer
-        path = Path(snapshot_download(name))
-        cfg = json.loads((path / "config.json").read_text())
-        if cfg.get("model_type") != "qwen3":
-            raise ValueError(f"MLX embedder only runs qwen3 models, not {cfg.get('model_type')}")
-        st = path / "config_sentence_transformers.json"
-        self.prompts = json.loads(st.read_text()).get("prompts", {}) if st.exists() else {}
-        self.mx, self.max_tokens = mx, max_tokens
-        self.model = qwen3.Qwen3Model(qwen3.ModelArgs.from_dict(cfg))
-        self.model.load_weights(list(mx.load(str(path / "model.safetensors")).items()))
-        mx.eval(self.model.parameters())
-        self.tok = AutoTokenizer.from_pretrained(str(path))
-        self.tok.padding_side = "left"  # the last position is then every text's last token
-
-    def get_sentence_embedding_dimension(self):
-        return self.model.args.hidden_size
-
-    def encode(self, texts, batch_size=16, normalize_embeddings=True, show_progress_bar=False, prompt=None,
-               prompt_name=None):
-        mx = self.mx
-        prompt = prompt if prompt is not None else self.prompts.get(prompt_name, "") if prompt_name else ""
-        texts = [prompt + t for t in texts]
-        order = sorted(range(len(texts)), key=lambda i: -len(texts[i]))  # similar lengths: less padding
-        out = np.zeros((len(texts), self.get_sentence_embedding_dimension()), np.float32)
-        for i in range(0, len(order), batch_size):
-            idx = order[i:i + batch_size]
-            enc = self.tok([texts[j] for j in idx], padding=True, truncation=True, max_length=self.max_tokens,
-                           return_tensors="np")
-            h = self.model.embed_tokens(mx.array(enc["input_ids"]))
-            mask = self._mask(mx.array(enc["attention_mask"]), h.dtype)
-            for layer in self.model.layers:
-                h = layer(h, mask, None)
-            v = self.model.norm(h)[:, -1, :].astype(mx.float32)
-            if normalize_embeddings:
-                v = v / mx.linalg.norm(v, axis=-1, keepdims=True)
-            out[idx] = np.array(v)
-        mx.clear_cache()  # MLX keeps freed buffers for reuse; between calls they only hold memory
-        return out
-
-    def _mask(self, attn, dtype):
-        """Causal attention that skips the left padding. Each position also sees itself, so padding rows stay finite."""
-        mx = self.mx
-        n = attn.shape[1]
-        keep = mx.tril(mx.ones((n, n), dtype=mx.bool_))[None, None] & attn.astype(mx.bool_)[:, None, None, :]
-        keep = keep | mx.eye(n, dtype=mx.bool_)[None, None]
-        return mx.where(keep, 0.0, -mx.inf).astype(dtype)
 
 
 CODE_QUERY = "Instruct: Given a description of what some code does, retrieve the source code that implements it\nQuery:"
@@ -196,18 +124,18 @@ def yield_to_searches():
 BULK_SLICE = 8  # indexing texts per model call: 16 runs ~10% faster, but a search could then wait twice as long
 
 
-def embed(texts, query=False, titles=None, model=None) -> np.ndarray:
+def embed(texts, query=False, titles=None) -> np.ndarray:
     """`query`: True for the model's general search instruction, an instruction string (e.g. CODE_QUERY), or a list
     with one of those per text, so a search gets its differently-instructed vectors from one model call. `titles`:
-    a document's path, for the models that take it apart. `model`: (name, loaded model) instead of the index's.
-    Indexing embeds its texts BULK_SLICE at a time and steps aside between slices while a search waits, so a search
-    during indexing waits for one slice (a quarter second at most), not for a whole batch of files."""
+    a document's path, which the model reads with it. Indexing embeds its texts BULK_SLICE at a time and steps aside
+    between slices while a search waits, so a search during indexing waits for one slice (a quarter second at most),
+    not for a whole batch of files."""
     searching = bool(query) if not isinstance(query, list) else any(query)
-    name, m = model if model else (config.EMBED_MODEL, None)
+    name, m = config.EMBED_MODEL, None
     kw = dict(batch_size=16, normalize_embeddings=True, show_progress_bar=False)
     if searching:
-        m = m or embedder()
-        texts = model_texts(texts, query, titles, name, m)
+        m = embedder()
+        texts = model_texts(texts, query, titles, m)
         queries_waiting.add(1)
         try:
             with _embed_lock:
@@ -217,9 +145,8 @@ def embed(texts, query=False, titles=None, model=None) -> np.ndarray:
     from pensieve import migrate
     if migrate.started and not migrate.cache_ready.is_set():  # the first start of v2: v1's vectors fill the cache
         migrate.cache_ready.wait(migrate.CACHE_WAIT)
-    texts = model_texts(texts, query, titles, name, m)
-    out = np.zeros((len(texts), config.EMBED_MODELS[name]["dim"] if name in config.EMBED_MODELS else config.EMBED_DIM),
-                   np.float32)
+    texts = model_texts(texts, query, titles)
+    out = np.zeros((len(texts), config.EMBED_DIM), np.float32)
     # each distinct text is embedded once: a text in the cache, or twice in this call, is not embedded again
     from pensieve import embedcache
     cache = embedcache.get()

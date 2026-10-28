@@ -78,6 +78,28 @@ def run():
                          db.conn.execute("SELECT version FROM schema_version").fetchone()[0], schema.STORE_VERSION))
     results.append(check("a store of this version stays", reset.settle_schema(), None))
 
+    def index(*sizes):
+        p = DATA / "v2" / "index.db"
+        p.unlink(missing_ok=True)
+        con = sqlite3.connect(p)
+        con.execute("CREATE TABLE code_chunks (id INTEGER PRIMARY KEY, vec BLOB)")
+        con.execute("CREATE TABLE doc_chunks (id INTEGER PRIMARY KEY, vec BLOB)")
+        con.executemany("INSERT INTO code_chunks (vec) VALUES (?)", [(b"\0" * n,) for n in sizes])
+        con.commit()
+        con.close()
+        return p
+    (DATA / "v2" / "embed_model").write_text("Qwen/Qwen3-Embedding-0.6B\n")
+    p = index(1536, 1536)
+    results.append(check("an index of EmbeddingGemma 2 vectors stays", (reset.settle_embeddings(), p.exists()), (False, True)))
+    results.append(check("and the model file of older versions goes", (DATA / "v2" / "embed_model").exists(), False))
+    p = index(2048)
+    results.append(check("an index of Qwen vectors (1024 dims) goes", (reset.settle_embeddings(), p.exists()), (True, False)))
+    p = index(1536, 2048)
+    results.append(check("an index with one vector of another model goes", (reset.settle_embeddings(), p.exists()), (True, False)))
+    results.append(check("no index: nothing to do", reset.settle_embeddings(), False))
+    p = index()
+    results.append(check("an empty index stays", (reset.settle_embeddings(), p.exists()), (False, True)))
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 
