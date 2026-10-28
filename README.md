@@ -26,7 +26,7 @@ Everything runs on your Mac. In Developer mode, text is embedded with the search
 curl -fsSL https://pensieve.tools/install.sh | sh
 ```
 
-On an Apple Silicon Mac, the script downloads the latest `Pensieve.dmg` and copies the app to Applications. Then it installs the `pensieve` backend with the installer inside the app. You do not need git, the Xcode tools or Python. The app starts when you run the script in a terminal. When an agent runs it, the script installs only.
+On an Apple Silicon Mac, the script downloads the latest `Pensieve.dmg` and copies the app to `~/Applications`. Then it installs the `pensieve` backend with the installer inside the app. You do not need git, the Xcode tools or Python. The app starts when you run the script in a terminal. When an agent runs it, the script installs only.
 
 Then connect your agents:
 

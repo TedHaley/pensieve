@@ -164,7 +164,7 @@ installs only and does not open the app.</p>
 
 <h3 id="what-the-script-does">What the install script does</h3>
 <ul>
-  <li><strong>On an Apple Silicon Mac:</strong> it downloads the latest <code>Pensieve.dmg</code> from GitHub Releases and copies the app to Applications. Then it installs the <code>pensieve</code> backend from the package inside the app. You do not need git, the Xcode tools or Python.</li>
+  <li><strong>On an Apple Silicon Mac:</strong> it downloads the latest <code>Pensieve.dmg</code> from GitHub Releases and copies the app to <code>~/Applications</code>. Then it installs the <code>pensieve</code> backend from the package inside the app. You do not need git, the Xcode tools or Python.</li>
   <li><strong>On Linux and Intel Macs:</strong> it installs <a href="https://docs.astral.sh/uv/">uv</a> if it is not there. Then it installs the backend from source with git, starts the backend and opens the Map at <code>http://localhost:8765</code>.</li>
   <li>The <code>pensieve</code> command goes in <code>~/.local/bin</code>.</li>
 </ul>
