@@ -40,7 +40,8 @@ DEFAULTS = {
     # Named slices of the index for agents: {"payments": {"sources": ["repos/<root>", "files/~/specs"], "description": ""}}
     "scopes": {},
     "default_scope": "",       # scope for search in the app and the Map ("" = everything)
-    "editor": "default",       # how code results open: default | vscode | cursor | zed
+    "editor": "default",       # how code results open: default | vscode | cursor | zed | an installed app's name
+    "terminal": "Terminal",    # where sessions and commands start: an installed app's name (Terminal, iTerm, Ghostty…)
     "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
     "embed_model": "",         # the embedding model to index with (config.EMBED_MODELS); "" = the index's own
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
@@ -88,7 +89,8 @@ DESCRIPTIONS = {
     "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
     "scopes": "Named slices of the index that agents work within (manage in Scopes).",
     "default_scope": "Scope used by search in the app and on the Map; empty means everything.",
-    "editor": "Where code results open: default, vscode, cursor or zed.",
+    "editor": "Where code results open: default, vscode, cursor, zed or an app on this Mac.",
+    "terminal": "The terminal app where new sessions, resumed sessions and to-dos start.",
     "mode": "Session: only your agent sessions, as threads. Developer: also your repos and files, indexed, and the Map, People and Insights.",
     "appearance": "System, light or dark. System follows macOS.",
     "embed_model": "The model that turns text into vectors for search. Switching embeds the text already indexed "
@@ -235,8 +237,10 @@ def update(changes: dict) -> dict:
             raise ValueError("llm_url must start with http:// or https://, e.g. http://localhost:1234/v1")
         if k == "engine_rate" and not 1 <= v <= 600:
             raise ValueError("engine_rate must be between 1 and 600 jobs a minute")
-        if k == "editor" and v not in ("default", "vscode", "cursor", "zed"):
-            raise ValueError("editor must be default, vscode, cursor or zed")
+        if k == "editor" and v not in ("default", "vscode", "cursor", "zed") and v not in installed_apps():
+            raise ValueError("editor must be default, vscode, cursor, zed or the name of an app on this Mac")
+        if k == "terminal" and v not in installed_apps():
+            raise ValueError("terminal must be the name of an app on this Mac")
         if k == "default_agent":
             from pensieve import agents
             if v not in ("", agents.CUSTOM, *agents.AGENTS):
@@ -257,6 +261,16 @@ def public(s: dict) -> dict:
     with empty values, and the model server's API key only as whether one is saved."""
     mcp = [{**c, **{f: {n: "" for n in c[f]} for f in ("headers", "env") if f in c}} for c in s.get("mcp_servers", [])]
     return {**s, "mcp_servers": mcp, "llm_key": "", "llm_key_set": bool(s.get("llm_key"))}
+
+
+APP_FOLDERS = ("/Applications", "/Applications/Utilities", "/System/Applications", "/System/Applications/Utilities",
+               "~/Applications")
+
+
+def installed_apps() -> list[str]:
+    """The names of the apps on this Mac (as `open -a` takes them), sorted: the choices for editor and terminal."""
+    names = {p.stem for f in APP_FOLDERS for p in Path(f).expanduser().glob("*.app")}
+    return sorted(names, key=str.lower)
 
 
 def _mcp_servers(v, cur: list) -> list:

@@ -177,8 +177,10 @@ def open_item(id: str, action="open"):
         if action == "editor" and editor in ("vscode", "cursor", "zed"):
             if _open_url(f"{editor}://file{urllib.parse.quote(r['path'])}"):
                 return dict(ok=True, path=r["path"], editor=editor)
-        subprocess.run(["open", "-a", "Terminal" if action == "terminal" else "Finder", r["path"]], check=False)
-        return dict(ok=True, path=r["path"])
+        app = settings.get("terminal") or "Terminal" if action == "terminal" \
+            else editor if editor not in ("default", "vscode", "cursor", "zed") else "Finder"
+        subprocess.run(["open", "-a", app, r["path"]], check=False)
+        return dict(ok=True, path=r["path"], editor=app)
     if action == "visualize" or r["kind"] in ("session", "person"):
         return visualize(id=id)
     if r["kind"] == "folder" and action == "open":  # a folder opens in Finder
@@ -191,5 +193,8 @@ def open_item(id: str, action="open"):
     if r["line"] and editor in ("vscode", "cursor", "zed"):
         if _open_url(f"{editor}://file{urllib.parse.quote(r['path'])}:{r['line']}"):
             return dict(ok=True, path=r["path"], line=r["line"], editor=editor)
+    if editor not in ("default", "vscode", "cursor", "zed"):  # another app on this Mac: it opens the file, at its top
+        subprocess.run(["open", "-a", editor, r["path"]], check=False)
+        return dict(ok=True, path=r["path"], editor=editor)
     subprocess.run(["open", r["path"]], check=False)
     return dict(ok=True, path=r["path"])
