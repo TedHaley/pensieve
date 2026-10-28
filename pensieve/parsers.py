@@ -72,6 +72,22 @@ def _note_tool(s: Session, name: str, args):
             s.touched[v] = s.touched.get(v, False) or edited
 
 
+# The names Claude Code gives a session, first wins: an agent's name, the name from /rename, the ai-title.
+_TITLE_KEYS = {"agent-name": "agentName", "custom-title": "customTitle", "ai-title": "aiTitle"}
+
+
+def title_line(d: dict, state: dict, title: str) -> str:
+    """The session's title after transcript line d. The last line of each kind wins, also after Claude Code writes its
+    ai-title again, and an empty one clears that name (/rename to nothing). With no name left, the title from the
+    first prompt comes back (parse)."""
+    key = _TITLE_KEYS.get(d.get("type"))
+    if key is None:
+        return title
+    names = state.setdefault("titles", {})
+    names[key] = d.get(key) or d.get("title") or ""
+    return next((names[k] for k in _TITLE_KEYS.values() if names.get(k)), state.get("auto_title", ""))
+
+
 def parse_claude(path: Path, s: Session | None = None) -> Session:
     s = s or Session(id=f"claude:{path.stem}", source="claude", path=str(path))
     mcp_uses = s.state.setdefault("mcp_uses", {})
@@ -79,8 +95,7 @@ def parse_claude(path: Path, s: Session | None = None) -> Session:
     for d in _lines(path, s):
         t = d.get("type")
         tokens.claude_line(d, tok)
-        if t == "ai-title":
-            s.title = d.get("aiTitle") or d.get("title") or s.title
+        s.title = title_line(d, s.state, s.title)
         if t not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
             continue
         s.project = s.project or d.get("cwd", "")
@@ -221,7 +236,7 @@ def parse(source: str, path: Path, resume: Session | None = None) -> Session:
         if resume is not None and (resume.path != str(path) or path.stat().st_size < resume.offset):
             resume = None
         s = PARSERS[source](path, resume)
-    if not s.title or s.state.get("auto_title") == s.title:  # a title from the first prompt: a later ai-title wins
+    if not s.title or s.state.get("auto_title") == s.title:  # a title from the first prompt: a later name wins
         first = next((t for r, t in s.turns if r == "user"), "")
         s.title = " ".join(first.split())[:80] or path.stem
         s.state["auto_title"] = s.title
