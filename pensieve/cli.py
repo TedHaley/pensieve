@@ -32,6 +32,7 @@ def main():
     ap.add_argument("--json", action="store_true", help="thread only: the thread as JSON instead of an HTML page")
     ap.add_argument("--agent", action="store_true", help="thread only: the thread for an agent (compact JSON)")
     ap.add_argument("-o", "--out", help="thread only: the file to write (default: print it)")
+    ap.add_argument("--branch", help="thread only: the page of every thread of this branch (a cluster)")
     ap.add_argument("--kind", help="search only: code, doc, session, folder, repo or person")
     ap.add_argument("--limit", type=int, default=8, help="search only: how many results")
     ap.add_argument("--chars", type=int, default=60000,
@@ -67,7 +68,7 @@ def main():
     if a.command == "search":
         return search(a.port, " ".join(a.items), a.kind, a.limit, a.scope)
     if a.command == "thread":
-        return thread(a.port, " ".join(a.items), "json" if a.json else "agent" if a.agent else "html", a.out)
+        return thread(a.port, " ".join(a.items), "json" if a.json else "agent" if a.agent else "html", a.out, a.branch)
     if a.command == "transcript":
         return transcript(" ".join(a.items).strip(), a.chars)
     if a.command == "open":  # names under .localhost reach this Mac in Chrome, Firefox and curl
@@ -324,15 +325,18 @@ def search(port, query, kind=None, limit=8, scope="auto"):
         sys.exit(1)
 
 
-def thread(port, thread_id, fmt="html", out=None):
-    """A thread as an HTML page, JSON or the agent's text, from the running server."""
+def thread(port, thread_id, fmt="html", out=None, branch=None):
+    """A thread, or every thread of a branch (a cluster), as an HTML page, JSON or the agent's text, from the running
+    server."""
     import httpx
-    if not thread_id.strip():
-        sys.exit("usage: pensieve thread <id> [--json | --agent] [-o thread.html]   (ids: the threads MCP tool)")
+    if not thread_id.strip() and not branch:
+        sys.exit("usage: pensieve thread <id> | --branch <name> [--json | --agent] [-o thread.html]"
+                 "   (ids: the threads MCP tool)")
     base = f"http://127.0.0.1:{port}"
     _start_server(base, port)
     try:
-        r = httpx.get(f"{base}/api/thread", params=dict(id=thread_id, format=fmt), timeout=120)
+        q = dict(branch=branch) if branch and not thread_id.strip() else dict(id=thread_id)
+        r = httpx.get(f"{base}/api/thread", params=dict(q, format=fmt), timeout=120)
     except httpx.HTTPError as e:
         sys.exit(f"Couldn't reach Pensieve ({e}). Open the Pensieve app, then try again.")
     if r.status_code >= 400:

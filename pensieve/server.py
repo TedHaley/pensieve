@@ -1682,11 +1682,11 @@ def refresh_threads(req: RefreshReq):
 def get_thread(id: str = "", format: str = "html", days: int = 30, ids: str = "", branch: str = ""):
     """One thread (pensieve-thread/2): the id of a thread on the Threads tab. `format`: html (the page for people,
     which holds the JSON), agent (compact JSON with a line on how to read it) or json. `ids` (comma-separated) with
-    `branch`: the threads of one branch on one page, newest first."""
+    `branch`: the threads of one branch on one page, newest first. `branch` alone: every thread of that branch."""
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     from pensieve import cards
-    if ids:
-        got = [_local_card(i, days) for i in _csv(ids)]
+    if ids or (branch and not id):
+        got = _cluster_cards(_csv(ids), branch, days)
         if format == "html":
             return HTMLResponse(cards.render_cluster_html(got, branch))
         return PlainTextResponse(cards._cluster_text(got)) if format == "agent" else JSONResponse(got)
@@ -1702,6 +1702,39 @@ def _local_card(task_id: str, days: int) -> dict:
     if not t:
         raise HTTPException(404, f"no thread {task_id}")
     return cards.build(t, task_states.history(store, task_id))
+
+
+def _cluster_cards(ids: list[str], branch: str, days: int) -> list[dict]:
+    """The cards of a cluster: the threads `ids`, or every thread of `branch` (newest session first)."""
+    if ids:
+        return [_local_card(i, days) for i in ids]
+    ts = mcp_server._branch_threads(branch, work.tasks(store, days))
+    if not ts:
+        raise HTTPException(404, f"no thread of the last {days} days wrote to branch {branch}")
+    return [_local_card(t["id"], days) for t in ts]
+
+
+class SavePageReq(BaseModel):
+    id: str = ""  # a thread
+    ids: list[str] = []  # or a cluster: its threads, newest first
+    branch: str = ""  # the cluster's branch; alone, every thread of it
+    days: int = 30
+
+
+@app.post("/api/thread/save")
+def save_thread_page(req: SavePageReq):
+    """Save the page of a thread or of a cluster in ~/Downloads, as the preview shows it, and show it in Finder."""
+    import subprocess
+    from pathlib import Path
+    from pensieve import cards
+    if req.ids or (req.branch and not req.id):
+        page, name = cards.render_cluster_html(_cluster_cards(req.ids, req.branch, req.days), req.branch), req.branch
+    else:
+        card = _local_card(req.id, req.days)
+        page, name = cards.render_html(card), card.get("title") or req.id
+    path = cards.save_page(page, name, Path.home() / "Downloads")
+    subprocess.run(["open", "-R", path], check=False)
+    return {"file": path}
 
 
 def _repo_rows():
@@ -1924,13 +1957,28 @@ def _outside_env() -> dict:
 
 
 def _terminal(cmd: str):
-    """Run a shell command in a new Terminal window, as a session of its own: not a child of the agent that started
-    this server (see _outside_env)."""
+    """Run a shell command in a new window of the user's terminal app (Settings → terminal), as a session of its own:
+    not a child of the agent that started this server (see _outside_env). Terminal and iTerm take the command over
+    AppleScript, Ghostty as its -e command; any other app opens it as a .command file."""
     import subprocess
+    import tempfile
     cmd = f"unset {' '.join(AGENT_MARKERS)}; {cmd}"
+    app, env = settings.get("terminal") or "Terminal", _outside_env()
+    run = lambda *a: subprocess.run(list(a), check=False, capture_output=True, env=env)
     script = cmd.replace("\\", "\\\\").replace('"', '\\"')
-    subprocess.run(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
-                    "-e", 'tell application "Terminal" to activate'], check=False, capture_output=True, env=_outside_env())
+    if app == "Terminal":
+        run("osascript", "-e", f'tell application "Terminal" to do script "{script}"', "-e", 'tell application "Terminal" to activate')
+    elif app == "iTerm":
+        run("osascript", "-e", 'tell application "iTerm"', "-e", "activate", "-e", "set w to (create window with default profile)",
+            "-e", f'tell current session of w to write text "{script}"', "-e", "end tell")
+    elif app == "Ghostty":  # the shell stays open after the command, as in Terminal
+        shell = env.get("SHELL") or "/bin/zsh"
+        run("open", "-na", "Ghostty", "--args", "-e", shell, "-lc", f'{cmd}; exec "{shell}" -l')
+    else:
+        with tempfile.NamedTemporaryFile("w", suffix=".command", delete=False) as f:
+            f.write(f'#!/bin/zsh -l\nrm -f "$0"\n{cmd}\n')
+        os.chmod(f.name, 0o700)
+        run("open", "-a", app, f.name)
 
 
 class ReviveReq(BaseModel):
@@ -1949,7 +1997,7 @@ def list_agents():
     harness's commands."""
     from pensieve import agents
     return {"agents": agents.listing(settings.get("default_agent")), "default": settings.get("default_agent") or "",
-            "custom": settings.get("custom_agent")}
+            "custom": settings.get("custom_agent"), "terminal": settings.get("terminal") or "Terminal"}
 
 
 class NewSessionReq(BaseModel):
@@ -2267,7 +2315,8 @@ async def engine_models(url: str, key: str = ""):
 
 @app.get("/api/settings")
 def get_settings():
-    return {"settings": settings.public(settings.load()), "defaults": settings.DEFAULTS, "descriptions": settings.DESCRIPTIONS}
+    return {"settings": settings.public(settings.load()), "defaults": settings.DEFAULTS, "descriptions": settings.DESCRIPTIONS,
+            "apps": settings.installed_apps()}
 
 
 @app.put("/api/settings")

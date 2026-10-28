@@ -2680,7 +2680,7 @@ async function loadSettings(force = false) {
   // boxes show a placeholder until they arrive.
   const rest = Promise.all([api('/api/status').catch(() => null), loadSources(), loadScopes()]);
   const r = await api('/api/settings');
-  S.set = {orig: r.settings, draft: structuredClone(r.settings), defaults: r.defaults, desc: r.descriptions, err: null, errKey: null};
+  S.set = {orig: r.settings, draft: structuredClone(r.settings), defaults: r.defaults, desc: r.descriptions, apps: r.apps, err: null, errKey: null};
   applyMode(r.settings.mode);
   rest.then(([st]) => {
     if (st) Object.assign(S.status, st);
@@ -2707,7 +2707,13 @@ function setField(k) {
       <div class="set-add"><input class="set-in" id="${id}" placeholder="${k === 'repos' ? '~/code/some-repo' : '~/path/to/folder'}" data-ladd-in="${k}"><button class="btn" data-ladd="${k}">Add</button></div>`;
   }
   if (d && typeof d === 'object') return Object.keys({...d, ...v}).map(n => `<label class="tog"><input type="checkbox" data-sobj="${k}" data-n="${n}" ${v[n] !== false ? 'checked' : ''}>${esc(AGENT_NAME[n] || n)}</label>`).join('');
-  if (k === 'editor') return `<select class="set-in" data-sk="${k}" style="max-width:200px">${[['default', 'Default app'], ['vscode', 'VS Code'], ['cursor', 'Cursor'], ['zed', 'Zed']].map(([o, l]) => `<option value="${o}" ${v === o ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  if (k === 'editor' || k === 'terminal') {  // the usual choices first, then every other app on this Mac
+    const apps = S.set.apps || [], opt = ([o, l]) => `<option value="${esc(o)}" ${v === o ? 'selected' : ''}>${esc(l)}</option>`;
+    const top = k === 'editor' ? [['default', 'Default app'], ['vscode', 'VS Code'], ['cursor', 'Cursor'], ['zed', 'Zed']]
+      : ['Terminal', 'iTerm', 'Ghostty'].filter(a => apps.includes(a)).map(a => [a, a === 'iTerm' ? 'iTerm2' : a]);
+    const rest = apps.filter(a => !top.some(([o]) => o === a)).map(a => [a, a]);
+    return `<select class="set-in" data-sk="${k}" style="max-width:220px">${top.map(opt).join('')}<optgroup label="Other apps on this Mac">${rest.map(opt).join('')}</optgroup></select>`;
+  }
   return `<input class="set-in" data-sk="${k}" value="${esc(v)}">`;
 }
 // Settings is a System-Settings-style sheet: a list on the left, one section at a time on the right.
@@ -2966,7 +2972,7 @@ async function renderSettings() {
       <p class="sc-p" style="margin-top:8px">To limit an agent to a named slice, use the per-scope commands in <a href="#scopes">Scopes</a>.</p>
     </div>
     <div class="set-card" id="set-Harness"><h3>Harness</h3>
-      <p class="sc-p">The agent that runs the sessions Pensieve starts in Terminal: Resume, Fork and Start. A session another agent wrote is taken over: your harness reads its transcript first, with <code>pensieve transcript</code>.</p>
+      <p class="sc-p">The agent that runs the sessions Pensieve starts in ${esc(wkTerm())}: Resume, Fork and Start. A session another agent wrote is taken over: your harness reads its transcript first, with <code>pensieve transcript</code>.</p>
       <div id="agentpick"><div class="spinner" style="margin:8px 0"></div></div></div>
     <div class="set-card" id="set-Agent-add-ons"><h3>Agent add-ons</h3><div id="igbox"><div class="spinner" style="margin:8px 0"></div></div></div>`;
   else if (tab === 'ai') body = bar('Models', 'An embedding model finds things by meaning. The built-in model, a command-line agent or a model server writes the summaries. MCP servers bring in tickets and messages.') + `
@@ -2984,7 +2990,7 @@ async function renderSettings() {
   else if (tab === 'usage') body = bar('Usage', 'How your agents use Pensieve over MCP. The log stays on this Mac, in ~/.pensieve/v2/store.db.') + '<div id="usagebox"><div class="spinner" style="margin:8px 0"></div></div>';
   else if (tab === 'feedback') body = bar('Feedback', 'Bugs and ideas from you and your agents. They stay on this Mac until you send one to GitHub.') + '<div id="fbbox"><div class="spinner" style="margin:8px 0"></div></div>';
   else body = bar('General', 'The Mac app, this version and its index, updates, and starting over.') + `
-    <div class="set-card" id="set-Mac-app"><h3>Mac app</h3><div class="dev-only">${setRow('editor')}</div>
+    <div class="set-card" id="set-Mac-app"><h3>Mac app</h3>${setRow('terminal')}<div class="dev-only">${setRow('editor')}</div>
       <div class="set-row"><div><div class="k">Appearance</div><div class="d">System follows your Mac's light or dark setting as it changes.</div></div>
       <div><div class="seg app-seg" role="radiogroup" aria-label="Appearance">${APPEARANCES.map(m => `<button data-app="${m}" class="${appearance === m ? 'on' : ''}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div></div></div></div>
     <div class="set-card" id="set-About"><h3>About</h3><div id="aboutbox"><div class="spinner" style="margin:8px 0"></div></div>
@@ -3028,7 +3034,7 @@ async function renderSettings() {
   $$('#setmain > .set-card [data-copy]', el).forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copied'); });
   renderSources(); renderScopes(); renderSyncing();
 }
-const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Ask before indexing found repos larger than (files)', repos: 'Extra repos', editor: 'Open code in'};
+const SET_LABEL = {exclude: 'Skip folders named', exclude_files: 'Skip files matching', max_file_mb: 'Largest document (MB)', skip_temp_sessions: 'Skip sessions in temp folders', sweep_roots: 'Look for repos under', sweep_depth: 'Folder depth', max_repo_files: 'Ask before indexing found repos larger than (files)', repos: 'Extra repos', editor: 'Open code in', terminal: 'Open commands in'};
 async function saveSettings() {
   const ks = setDirty(); if (!ks.length) return;
   const body = Object.fromEntries(ks.map(k => [k, S.set.draft[k]]));
@@ -3039,6 +3045,7 @@ async function saveSettings() {
     S.set.err = msg; S.set.errKey = ks.find(k => msg.startsWith(k + ' ') || msg.includes(`'${k}'`)) || (ks.length === 1 ? ks[0] : null);
   } else {
     S.set.orig = j.settings; S.set.draft = structuredClone(j.settings); S.set.err = S.set.errKey = null;
+    if (ks.includes('terminal')) loadAgents();  // the Threads tab names the terminal app in its buttons
     toast(`Saved ${ks.join(', ')}`);
   }
   if (S.view === 'settings') renderSettings();
@@ -4109,6 +4116,7 @@ const WK_IC = {
   play:'<svg viewBox="0 0 24 24" width="12" height="12"><path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/></svg>',
   share: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 14.5V3.5M8 7.5l4-4 4 4M7.5 10.5H6.5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   spark: '<svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1-5.1-1.9 5.1-1.9ZM18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8Z" fill="currentColor"/></svg>',
+  download: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   eye: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
   rows: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
   cards: '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="3.5" y="4" width="17" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3.5" y="13" width="17" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
@@ -4164,6 +4172,8 @@ async function renderAgentPick() {
     save({custom_agent: v, default_agent: 'custom'});
   });
 }
+// The terminal app where Pensieve starts sessions (Settings → terminal)
+const wkTerm = () => S.agents?.terminal || 'Terminal';
 async function loadAgents() {
   try {
     const d = await api('/api/agents');
@@ -4176,8 +4186,8 @@ function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header 
   const r = t.resume, missing = r && wkAgentMissing(r);
   const how = r && (r.handoff ? `take over “${esc(r.title)}” (a ${esc(wkAgentName(r.session))} session) in ${esc(wkResumeName(r))}: it reads the transcript first`
     : `resume “${esc(r.title)}” in ${esc(wkResumeName(r))}`);
-  const resume = r ? `<span class="wk-split${lead}"><button class="wk-btn primary" data-wk-resume="${esc(r.session)}" ${missing ? `disabled title="${esc(missing)}"` : `title="Open Terminal in ${esc(homeTilde(r.command.split(' && ')[0].slice(3)))} and ${how}"`}>${WK_IC.play}Resume session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(r.command)}" aria-label="Copy the resume command" title="Copy the command that runs it in ${esc(wkResumeName(r))} (change the harness in Settings → Agents)">${WK_IC.copy}</button></span>` : '';
-  const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
+  const resume = r ? `<span class="wk-split${lead}"><button class="wk-btn primary" data-wk-resume="${esc(r.session)}" ${missing ? `disabled title="${esc(missing)}"` : `title="Open ${esc(wkTerm())} in ${esc(homeTilde(r.command.split(' && ')[0].slice(3)))} and ${how}"`}>${WK_IC.play}Resume session</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(r.command)}" aria-label="Copy the resume command" title="Copy the command that runs it in ${esc(wkResumeName(r))} (change the harness in Settings → Agents)">${WK_IC.copy}</button></span>` : '';
+  const fresh = `<span class="wk-split"><button class="wk-btn" data-wk-revive="${esc(t.id)}" title="Open ${esc(wkTerm())} and start a new ${esc(S.agents?.startName || 'agent')} session that reads this thread first (change the agent in Settings → Agents)">${WK_IC.spark}Fork session</button><button class="wk-btn copy" data-wk-revive-copy="${esc(t.id)}" aria-label="Copy a prompt with this thread in it" title="Copy a prompt with this thread in it, to start the work in any agent">${WK_IC.copy}</button></span>`;
   const held = [...new Set((t.branches || []).map(b => b.branch).filter(b => !WK_DEFAULT_BRANCHES.has(b)))];
   const first = t.claim?.holds && held.includes(t.claim.branch) ? t.claim.branch : held[0];
   const own = {key: `thread|${t.id}`, state: t.state, branch: held.length > 1 ? first : '', pick: held.length > 1 ? held : null, tasks: [t]};
@@ -4190,21 +4200,34 @@ function wkActions(t, d, cluster = '') {  // in a cluster, the cluster's header 
 }
 const wkCap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 const wkTitle = t => t.title || t.anchor?.title || '';
+// In a cluster, a card's title is its own session's: the cluster's header has the PR or ticket title, which all its
+// cards share
+const wkCardTitle = (t, cluster) => (cluster && t.sessions?.[0]?.title) || wkTitle(t);
 const WK_WHO = {agent: ['agent', 'An agent can do this in a session'], you: ['you', 'Only you can do this'],
   parent: ['tracker', 'A step in the system the item lives in: Pensieve only reads']};
 const wkTickets = t => [...t.tickets.map(k => ({...k, ref: false})), ...(t.ticket_refs || []).map(k => ({...k, ref: true}))];
 function wkCardBtns(t) {
   return `<button class="wk-btn icon" data-wk-copy-id="${esc(t.id)}" title="Thread ${esc(t.id)}: copy its id, for Pensieve's thread tool">${WK_IC.thread}</button>`
-    + `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this thread as a page">${WK_IC.eye}</button>`;
+    + `<button class="wk-btn icon" data-wk-preview="${esc(t.id)}" title="Preview this thread as a page">${WK_IC.eye}</button>`
+    + `<button class="wk-btn icon" data-wk-save="${esc(t.id)}" title="Save this thread as an HTML page in Downloads, to share it">${WK_IC.download}</button>`;
 }
 // The page in an iframe's srcdoc: the Mac app's web view can't open a second window
-async function openPreview(load, title) {
+async function openPreview(load, title, save) {
   const m = document.createElement('div');
   m.className = 'modal'; m.id = 'previewmodal';
-  m.innerHTML = `<div class="palette preview-dlg"><div class="sh-head"><h3>${esc(title)}</h3><button class="iconbtn" data-close aria-label="Close">✕</button></div>
+  m.innerHTML = `<div class="palette preview-dlg"><div class="sh-head"><h3>${esc(title)}</h3>${save ? '<button class="wk-btn" data-pv-save title="Save this page as an HTML file in Downloads, to share it">Save</button>' : ''}<button class="iconbtn" data-close aria-label="Close">✕</button></div>
     <div class="pv-body"><div class="shimmer" style="height:240px;margin:18px"></div></div></div>`;
   document.body.append(m);
   m.onclick = e => { if (e.target === m || e.target.closest('[data-close]')) m.remove(); };
+  const sv = $('[data-pv-save]', m);
+  if (sv) sv.onclick = async () => {
+    sv.disabled = true;
+    try {
+      const r = await api('/api/thread/save', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(save)});
+      toast(`Saved ${r.file.split('/').pop()} in Downloads`);
+    } catch (e) { toast('Could not save it: ' + e.message); }
+    sv.disabled = false;
+  };
   try {
     const r = await load();
     if (!r.ok) throw new Error(`${r.status}`);
@@ -4248,9 +4271,9 @@ function wkSections(t) {
     const st = [claim, commits, p.head ? wkSt(`checked out: ${p.head}`, 'warn') : '', p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : '',
       p.ahead ? wkSt(`${p.ahead} ahead`, 'warn') : '', p.behind ? wkSt(`${p.behind} behind`) : ''].join('');
     const clean = p.git && !p.head && !p.changed && !p.ahead && !p.behind ? wkSt('clean', 'ok') : '';
-    if (!p.git) return t.sessions[0] ? `<div class="wk-row"><button class="nm linkbtn subtle" data-wk-resume="${esc(t.sessions[0].id)}" title="Resume this session in Terminal">${WK_IC.play}${esc(t.sessions[0].title)}</button></div>` : '';
+    if (!p.git) return t.sessions[0] ? `<div class="wk-row"><button class="nm linkbtn subtle" data-wk-resume="${esc(t.sessions[0].id)}" title="Resume this session in ${esc(wkTerm())}">${WK_IC.play}${esc(t.sessions[0].title)}</button></div>` : '';
     return `<div class="wk-row wk-where"><div class="l1">${p.branch ? (p.remote_url ? `<a class="wk-branch" href="${esc(p.remote_url)}" target="_blank" rel="noopener">${WK_IC.branch}${esc(p.branch)}</a>` : `<span class="wk-branch">${WK_IC.branch}${esc(p.branch)}</span>`) : ''}<span class="wk-path" title="${esc(p.path)}">${esc(p.path.split('/').pop())}</span>${p.worktree ? wkSt('worktree') : ''}${st}${clean}
-      <span class="wk-icons"><button class="wk-btn icon" data-wk-folder="${esc(p.path)}" data-act="terminal" title="Open in Terminal">${WK_IC.term}</button><button class="wk-btn icon" data-wk-folder="${esc(p.path)}" data-act="open" title="Show in Finder">${WK_IC.folder}</button><button class="wk-btn icon" data-wk-copy="${esc(p.path)}" data-what="Path" title="Copy the path">${WK_IC.copy}</button></span></div></div>`;
+      <span class="wk-icons"><button class="wk-btn icon" data-wk-folder="${esc(p.path)}" data-act="terminal" title="Open in ${esc(wkTerm())}">${WK_IC.term}</button><button class="wk-btn icon" data-wk-folder="${esc(p.path)}" data-act="open" title="Show in Finder">${WK_IC.folder}</button><button class="wk-btn icon" data-wk-copy="${esc(p.path)}" data-what="Path" title="Copy the path">${WK_IC.copy}</button></span></div></div>`;
   }).join('');
   const prs = [...t.prs].sort((a, b) => (PR_ORDER[a.state] ?? 4) - (PR_ORDER[b.state] ?? 4)).map(r => `<div class="wk-row">
       <a class="nm" href="${esc(r.url)}" target="_blank" rel="noopener">${WK_IC.pr}#${esc(prNum(r.url) || '')}</a><span class="ttl" title="${esc(r.title || r.url)}">${esc(r.title || r.url.replace(/^https:\/\//, ''))}</span>
@@ -4303,7 +4326,7 @@ const wkPageTasks =() => wkShown().slice(S.work.page * wkPageSize(), (S.work.pag
 const wkDate = ts => new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
 function wkEvent(e) {
   const link = e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title)}</a>` :
-    e.source === 'session' ? `<button class="linkbtn subtle" data-wk-resume="${esc(e.ref)}" title="Resume this session in Terminal">${esc(e.title)}</button>` :
+    e.source === 'session' ? `<button class="linkbtn subtle" data-wk-resume="${esc(e.ref)}" title="Resume this session in ${esc(wkTerm())}">${esc(e.title)}</button>` :
     e.ref && e.source !== 'commit' ? `<button class="linkbtn subtle" data-wk-file="${esc(e.ref)}">${esc(e.title)}</button>` : esc(e.title);
   return `<li class="${e.source}"><span class="what" title="${esc(e.title + (e.detail ? ' · ' + e.detail : ''))}">${link}</span>
     <span class="src">${WK_SRC[e.source] || e.source}</span><span class="when">${wkDate(e.ts)}</span></li>`;
@@ -4332,8 +4355,8 @@ function wkNext(t) {
 const wkClaimOf = (t, branch) => t.claims?.[branch] || (t.claim?.branch === branch ? t.claim : null);
 function wkHolds(t, branch) {
   const c = wkClaimOf(t, branch);
-  // with no claim, a review (its session only ran on the branch) leaves the branch to the session that wrote to it
-  return c ? !c.lost : !t.review && (t.branches || []).some(b => b.branch === branch);
+  // with no claim, the newest session of the cluster that wrote to the branch holds it (wkClusters sets t.leadOf)
+  return c ? !c.lost : t.leadOf === branch;
 }
 function wkShare(t, branch) {
   const c = wkClaimOf(t, branch);
@@ -4362,7 +4385,7 @@ function wkCard(t, d, cluster = '') {
   const open = S.work.view === 'expanded' ? !S.work.collapsed.has(t.id) : S.work.details.has(t.id);
   const when = cluster ? wkOwnTime(t) : t.updated;  // in a cluster, the session's own time: the cards go by it
   const head = `<header class="wk-head">
-      <div class="wk-hcol"><h4 class="wk-title" title="${esc(t.title)}">${esc(wkTitle(t))}</h4>${cluster ? wkShare(t, cluster) : wkWorking(t)}</div>
+      <div class="wk-hcol"><h4 class="wk-title" title="${esc(wkCardTitle(t, cluster))}">${esc(wkCardTitle(t, cluster))}</h4>${cluster ? wkShare(t, cluster) : wkWorking(t)}</div>
       <div class="wk-when"><time title="${esc(new Date(when * 1000).toLocaleString())}">${fmtWhen(when)}</time>${wkNext(t)}</div>${wkStateSel(t, d)}</header>`;
   return `<article class="wk-task${open ? '' : ' wk-compact'}" data-id="${esc(t.id)}" style="--acc:${wkModel(t.state).color}">
       <div class="wk-main">${head}
@@ -4460,7 +4483,7 @@ function openResolve(key, intent) {
       <ul class="wk-wrap-steps">${steps.length ? steps.map(s => `<li>${s.ref && s.ref.startsWith('http') ? `<a href="${esc(s.ref)}" target="_blank" rel="noopener">${esc(s.text)}</a>` : esc(s.text)}</li>`).join('')
         : '<li class="muted">Nothing left: every step is done</li>'}</ul></div>
     <div class="wk-resolve-foot"><button class="wk-btn" data-close>Cancel</button>${WRAP_STATES.has(c.state)
-      ? `<button class="wk-btn primary${intent === 'discard' ? ' danger' : ''}" data-go title="Open Terminal and resume the session that holds this work with these steps, so the request is in its conversation. It asks you before each of yours. An agent that can't resume with a request starts a new session instead">${WK_IC.spark}${r.start}</button>`
+      ? `<button class="wk-btn primary${intent === 'discard' ? ' danger' : ''}" data-go title="Open ${esc(wkTerm())} and resume the session that holds this work with these steps, so the request is in its conversation. It asks you before each of yours. An agent that can't resume with a request starts a new session instead">${WK_IC.spark}${r.start}</button>`
       : `<span class="muted">${esc(wkModel(c.state).label)}: nothing left</span>`}</div></div>`;
   document.body.append(m);
   const close = () => { m.remove(); document.removeEventListener('keydown', esc_); };
@@ -4472,7 +4495,7 @@ function openResolve(key, intent) {
   if (go) go.onclick = async () => {
     go.disabled = true;
     const body = {ids: c.tasks.map(t => t.id), branch: c.branch, days: S.work.days, intent};
-    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}); close(); toast(`Asking the session that holds ${c.branch || 'this thread'} to ${r.verb} it, in Terminal`); }
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}); close(); toast(`Asking the session that holds ${c.branch || 'this thread'} to ${r.verb} it, in ${wkTerm()}`);}
     catch (err) { go.disabled = false; toast('Could not start it: ' + err.message); }
   };
 }
@@ -4500,7 +4523,7 @@ async function startTodo(id, repo = '', run = true) {  // run false: make the wo
   try {
     const r = await api('/api/thread/start', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id, days: S.work.days, repo, run})});
     if (r.choose) return chooseRepo(id, r, run);
-    if (run) return toast(`Starting ${r.key} on ${r.branch} in Terminal`);
+    if (run) return toast(`Starting ${r.key} on ${r.branch} in ${wkTerm()}`);
     navigator.clipboard?.writeText(r.command); toast(`Worktree ready on ${r.branch}: start command copied`);
   } catch (err) { toast('Could not start it: ' + err.message); }
 }
@@ -4535,6 +4558,12 @@ function wkClusters(tasks) {
     else { const c = {state: t.state, branch: k ? branch(t) : '', tasks: [t]}; items.push(c); if (k) at.set(k, c); }
   }
   for (const c of items) if (c.tasks.length > 1) c.tasks.sort((a, b) => own(b) - own(a)); else c.branch = '';
+  // with no claim on the branch, the newest session that wrote to it holds it (t.leadOf): one holder, not each card
+  for (const c of items) {
+    if (!c.branch || c.tasks.some(t => wkClaimOf(t, c.branch))) continue;
+    const lead = c.tasks.find(t => !t.review && (t.branches || []).some(b => b.branch === c.branch));
+    for (const t of c.tasks) t.leadOf = t === lead ? c.branch : '';
+  }
   return items;
 }
 function wkHolder(c) {
@@ -4623,7 +4652,7 @@ function renderWork() {
   el.innerHTML = `<div class="wk-head"><h2>Threads</h2>
       <div class="wk-ctl"><div class="seg wk-view" role="radiogroup" aria-label="View">${[['expanded', 'Expanded', WK_IC.cards], ['compact', 'Compact', WK_IC.rows]].map(([v, l, ic]) =>
         `<button data-wk-view="${v}" class="${S.work.view === v ? 'on' : ''}" role="radio" aria-checked="${S.work.view === v}" title="${l} view">${ic}${l}</button>`).join('')}</div>${filter}<select class="wk-days" data-wk-days>${[7, 30, 90].map(n => `<option value="${n}" ${S.work.days === n ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select><button class="btn wk-refresh" data-wk-refresh title="Load the threads again">${WK_IC.refresh}Refresh</button></div></div>
-    <div class="wk-searchrow"><span class="wk-split"><button class="wk-btn primary" data-wk-new title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session in a folder you choose (change the agent in Settings → Agents)">${WK_IC.play}New session</button><button class="wk-btn primary copy" data-wk-new-copy aria-label="Copy the command that starts a new session" title="Copy the command that starts a new session in a folder you choose">${WK_IC.copy}</button></span>${search}</div>
+    <div class="wk-searchrow"><span class="wk-split"><button class="wk-btn primary" data-wk-new title="Open ${esc(wkTerm())} and start a new ${esc(S.agents?.startName || 'agent')} session in a folder you choose (change the agent in Settings → Agents)">${WK_IC.play}New session</button><button class="wk-btn primary copy" data-wk-new-copy aria-label="Copy the command that starts a new session" title="Copy the command that starts a new session in a folder you choose">${WK_IC.copy}</button></span>${search}</div>
     ${tasks.length ? wkClusters(tasks).map((c, i, items) => {
       const prev = i ? items[i - 1] : shown[first - 1];
       const head = many && (!prev || prev.state !== c.state) ? `<h3 class="wk-group" style="--acc:${wkModel(c.state).color}" title="${esc(def(wkModel(c.state)))}">${esc(wkModel(c.state).label)}<span>${count(c.state)}</span></h3>` : '';
@@ -4637,8 +4666,9 @@ function renderWork() {
       const r = wkHolder(c).resume, missing = r && wkAgentMissing(r);
       const resume = r ? `<span class="wk-split"><button class="wk-btn primary" data-wk-resume="${esc(r.session)}" ${missing ? `disabled title="${esc(missing)}"` : `title="Resume “${esc(r.title)}”, the session that holds ${esc(c.branch)}, in ${esc(wkResumeName(r))}"`}>${WK_IC.play}Resume</button><button class="wk-btn primary copy" data-wk-resume-copy="${esc(r.command)}" aria-label="Copy the resume command" title="Copy the command that resumes the session that holds the branch">${WK_IC.copy}</button></span>` : '';
       return head + `<section class="wk-cluster" data-branch="${esc(c.branch)}" style="--acc:${wkModel(c.state).color}"><div class="wk-cluster-t">${esc(wkClusterTitle(c))}</div><header class="wk-cluster-h">${repo ?`<span class="wk-where-repo" title="${esc(p.path || '')}">${esc(repo)}</span>` : ''}${link}${p.changed ? wkSt(plural(p.changed, 'uncommitted file'), 'warn') : ''}<span class="wk-cl-btns">${resume}${wkResolveBtns(c)}
-        <span class="wk-split"><button class="wk-btn" data-wk-revive-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open Terminal and start a new ${esc(S.agents?.startName || 'agent')} session that reads all ${c.tasks.length} threads of this branch first">${WK_IC.spark}Fork from all ${c.tasks.length}</button><button class="wk-btn copy" data-wk-revive-cluster-copy="${esc(ids)}" data-branch="${esc(c.branch)}" aria-label="Copy a prompt with every thread of this branch in it" title="Copy a prompt with every thread of this branch in it, to start the work in any agent">${WK_IC.copy}</button></span>
-        <button class="wk-btn icon" data-wk-preview-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Preview the ${c.tasks.length} threads of this branch as one page">${WK_IC.eye}</button></span></header>${c.tasks.map(t => `<div class="wk-twig${wkHolds(t, c.branch) ? ' lead' : ''}">${wkCard(t, d, c.branch)}</div>`).join('')}</section>`;
+        <span class="wk-split"><button class="wk-btn" data-wk-revive-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Open ${esc(wkTerm())} and start a new ${esc(S.agents?.startName || 'agent')} session that reads all ${c.tasks.length} threads of this branch first">${WK_IC.spark}Fork from all ${c.tasks.length}</button><button class="wk-btn copy" data-wk-revive-cluster-copy="${esc(ids)}" data-branch="${esc(c.branch)}" aria-label="Copy a prompt with every thread of this branch in it" title="Copy a prompt with every thread of this branch in it, to start the work in any agent">${WK_IC.copy}</button></span>
+        <span class="wk-cl-icons"><button class="wk-btn icon" data-wk-preview-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Preview the ${c.tasks.length} threads of this branch as one page">${WK_IC.eye}</button>
+        <button class="wk-btn icon" data-wk-save-cluster="${esc(ids)}" data-branch="${esc(c.branch)}" title="Save the ${c.tasks.length} threads of this branch as one HTML page in Downloads, to share it">${WK_IC.download}</button></span></span></header>${c.tasks.map(t => `<div class="wk-twig${wkHolds(t, c.branch) ? ' lead' : ''}">${wkCard(t, d, c.branch)}</div>`).join('')}</section>`;
     }).join('') + pager : `<div class="empty">${S.work.hits ? `No threads of the last ${S.work.days} days match “${esc(S.work.q.trim())}”.` : d.threads.length ? 'No threads in the states you chose for this period.' : 'No threads in this period. Threads come from your agent sessions, your connections (Settings → Sources) and commits that name a ticket.'}</div>`}`;
   const flashed = fl && $(`.wk-task[data-id="${CSS.escape(fl.id)}"]`, el);
   if (flashed) {
@@ -4705,19 +4735,30 @@ function wkBind(el, d) {
     } catch (e) { toast('Could not change it: ' + e.message); }
   });
   $$('[data-wk-resume]', el).forEach(b => b.onclick = async () => {
-    try { await api('/api/thread/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast('Resuming it in Terminal'); }
+    try { await api('/api/thread/resume', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({session: b.dataset.wkResume})}); toast(`Resuming it in ${wkTerm()}`); }
     catch (e) { toast('Could not resume it: ' + e.message); }
   });
   $$('[data-wk-jump]', el).forEach(b => b.onclick = e => { e.stopPropagation(); goThread(b.dataset.wkJump); });
   $$('[data-wk-revive]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
-    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkRevive, days: S.work.days})}); toast('Starting a new session from this thread in Terminal'); }
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({id: b.dataset.wkRevive, days: S.work.days})}); toast(`Starting a new session from this thread in ${wkTerm()}`); }
     catch (err) { toast('Could not start it: ' + err.message); }
   });
   $$('[data-wk-resume-copy]', el).forEach(b => b.onclick = e => {
     e.stopPropagation(); navigator.clipboard?.writeText(b.dataset.wkResumeCopy); toast('Resume command copied');
   });
-  const cluster = b => ({ids: (b.dataset.wkReviveCluster || b.dataset.wkReviveClusterCopy || b.dataset.wkPreviewCluster).split(','), branch: b.dataset.branch, days: S.work.days});
+  const cluster = b => ({ids: (b.dataset.wkReviveCluster || b.dataset.wkReviveClusterCopy || b.dataset.wkPreviewCluster || b.dataset.wkSaveCluster).split(','), branch: b.dataset.branch, days: S.work.days});
+  // the page of a thread or a cluster, as the preview shows it, saved in Downloads
+  const savePage = async (b, req) => {
+    b.disabled = true;
+    try {
+      const r = await api('/api/thread/save', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(req)});
+      toast(`Saved ${r.file.split('/').pop()} in Downloads`);
+    } catch (err) { toast('Could not save it: ' + err.message); }
+    b.disabled = false;
+  };
+  $$('[data-wk-save]', el).forEach(b => b.onclick = e => { e.stopPropagation(); savePage(b, {id: b.dataset.wkSave, days: S.work.days}); });
+  $$('[data-wk-save-cluster]', el).forEach(b => b.onclick = e => { e.stopPropagation(); savePage(b, cluster(b)); });
   $$('[data-wk-resolve]', el).forEach(b => b.onclick = e => { e.stopPropagation(); openResolve(b.dataset.wkResolve, b.dataset.intent); });
   $$('[data-wk-start-todo]', el).forEach(b => b.onclick = e => { e.stopPropagation(); startTodo(b.dataset.wkStartTodo); });
   $('[data-wk-new]', el)?.addEventListener('click', () => newSession());
@@ -4726,11 +4767,12 @@ function wkBind(el, d) {
   $$('[data-wk-preview-cluster]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
     const q = cluster(b);
-    openPreview(() => fetch(`/api/thread?ids=${enc(q.ids.join(','))}&branch=${enc(q.branch)}&days=${S.work.days}`), `${q.branch}: ${plural(q.ids.length, 'thread')}`);
+    openPreview(() => fetch(`/api/thread?ids=${enc(q.ids.join(','))}&branch=${enc(q.branch)}&days=${S.work.days}`), `${q.branch}: ${plural(q.ids.length, 'thread')}`,
+      {ids: q.ids, branch: q.branch, days: S.work.days});
   });
   $$('[data-wk-revive-cluster]', el).forEach(b => b.onclick = async e => {
     e.stopPropagation();
-    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(cluster(b))}); toast(`Starting a new session from the ${cluster(b).ids.length} threads of ${b.dataset.branch} in Terminal`); }
+    try { await api('/api/thread/revive', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(cluster(b))}); toast(`Starting a new session from the ${cluster(b).ids.length} threads of ${b.dataset.branch} in ${wkTerm()}`);}
     catch (err) { toast('Could not start it: ' + err.message); }
   });
   $$('[data-wk-revive-cluster-copy]', el).forEach(b => b.onclick = async e => {
@@ -4750,7 +4792,8 @@ function wkBind(el, d) {
   $$('[data-wk-preview]', el).forEach(b => b.onclick = e => {
     e.stopPropagation();
     const t = d.threads.find(x => x.id === b.dataset.wkPreview);
-    openPreview(() => fetch(`/api/thread?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Thread');
+    openPreview(() => fetch(`/api/thread?id=${enc(b.dataset.wkPreview)}&days=${S.work.days}`), t ? t.title : 'Thread',
+      {id: b.dataset.wkPreview, days: S.work.days});
   });
   $$('.wk-task[data-id]', el).forEach(a => a.onclick = e => {  // a click on the card, not on its controls or its open details
     if (e.target.closest('button, a, select, input, .wk-detail')) return;

@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let visualizer = VisualizerController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if handOverToRunningCopy() { return }
         NSApp.setActivationPolicy(.accessory)
         Brand.registerFonts()
         NSApp.mainMenu = Self.mainMenu()  // key equivalents (copy, paste, ⌘W …) need a main menu even when hidden
@@ -59,6 +60,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Launch at Login is on by default: turned on once, the first time an installed copy runs. Turning it off
     /// in the menu afterwards sticks.
+    /// One Pensieve at a time: when another copy of the app runs (a second install, in /Applications and in
+    /// ~/Applications), this one opens that copy's window and quits before it adds a menu bar item or starts a
+    /// backend. A debug build (PENSIEVE_DEBUG) runs next to the installed app, for tests.
+    private func handOverToRunningCopy() -> Bool {
+        guard !Debug.enabled, let id = Bundle.main.bundleIdentifier else { return false }
+        let me = ProcessInfo.processInfo.processIdentifier
+        guard let other = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            .first(where: { $0.processIdentifier != me && !$0.isTerminated }) else { return false }
+        if let app = other.bundleURL {  // to that copy, not to whichever copy Launch Services picks for the link
+            NSWorkspace.shared.open([URL(string: "pensieve://open")!], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        }
+        Self.quitting = true
+        NSApp.terminate(nil)
+        return true
+    }
+
     private func defaultLaunchAtLogin() {
         let installed = ["/Applications/", NSHomeDirectory() + "/Applications/"].contains { Bundle.main.bundlePath.hasPrefix($0) }
         guard installed, !Debug.enabled, !Prefs.store.bool(forKey: "launchAtLoginDefaulted") else { return }

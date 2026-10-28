@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds Pensieve.app from source with the Swift command-line tools (no Xcode needed).
 #   mac/build.sh             -> mac/build/Pensieve.app
-#   mac/build.sh --install   -> also copies it to ~/Applications
+#   mac/build.sh --install   -> also copies it to $PENSIEVE_APP (default ~/Applications/Pensieve.app)
 set -eu
 cd "$(dirname "$0")"
 
@@ -35,10 +35,10 @@ cp ../pensieve/static/InterTight.woff2 ../pensieve/static/JetBrainsMono.woff2 "$
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 DEST="$APP"
 if [ "${1:-}" = "--install" ]; then
-  mkdir -p "$HOME/Applications"
-  rm -rf "$HOME/Applications/Pensieve.app"
-  cp -R "$APP" "$HOME/Applications/"
-  DEST="$HOME/Applications/Pensieve.app"
+  DEST="${PENSIEVE_APP:-$HOME/Applications/Pensieve.app}"
+  mkdir -p "$(dirname "$DEST")"
+  rm -rf "$DEST"
+  cp -R "$APP" "$DEST"
 fi
 # so pensieve:// links open this copy (PENSIEVE_NO_REGISTER=1 for dev builds next to an installed app)
 [ -n "${PENSIEVE_NO_REGISTER:-}" ] || "$LSREGISTER" -f "$DEST"

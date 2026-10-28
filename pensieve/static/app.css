@@ -777,7 +777,9 @@ svg.hl .pp-pl.on{stroke-opacity:.55}
 .wk-twig .wk-task::before{display:none}  /* the twig marks the card: no edge of its own */
 .wk-twig.lead::before{border-color:var(--acc);--dot:var(--acc)}
 .wk-cluster-h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:4px 12px 10px;font-size:12.5px;color:var(--text-2)}
-.wk-cluster-h .wk-cl-btns{margin-left:auto;display:inline-flex;align-items:center;gap:8px}
+/* the cluster's buttons on a row of their own, from the left as on a card; the preview and save icons on the right */
+.wk-cluster-h .wk-cl-btns{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px}
+.wk-cluster-h .wk-cl-icons{margin-left:auto;display:inline-flex;gap:2px}
 .wk-resolve .wk-n{margin-left:6px;font-size:11px;padding:0 6px;border-radius:999px;background:var(--card);color:var(--text-3)}
 .wk-resolve-dlg{width:min(560px,calc(100vw - 32px))}
 .wk-cluster-t{margin-left:-20px;padding:6px 12px 2px;font:600 15px var(--sans);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
