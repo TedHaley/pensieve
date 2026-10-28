@@ -12,7 +12,7 @@ import sys
 from pensieve import config
 
 MARK = config.DATA_DIR / "reset-pending"
-INDEX = ["v2/index.db", "v2/index.db-wal", "v2/index.db-shm", "v2/embed_model", "v2/vectors/docs.tv",
+INDEX = ["v2/index.db", "v2/index.db-wal", "v2/index.db-shm", "v2/vectors/docs.tv",
          "v2/vectors/sessions.tv", "v2/vectors/files.tv", "v2/vectors/code.tv"]  # v2: store.db stays
 EXPORTS = "apps"  # copies of app content made for indexing
 
@@ -46,7 +46,6 @@ def apply_pending() -> str | None:
             f.write_text(json.dumps({**s, "setup_done": False}, indent=2))
         except (OSError, ValueError):
             pass
-    config.use_model(config._index_model())  # the new index's model: the one chosen in Settings, else the default
     MARK.unlink(missing_ok=True)
     return what
 
@@ -110,6 +109,36 @@ def settle_schema() -> str | None:
             (config.DATA_DIR / f).unlink(missing_ok=True)
         return "index"
     return None
+
+
+VECTOR_TABLES = ("chunks", "code_chunks", "file_chunks", "doc_chunks")  # the tables of index.db that hold vectors
+
+
+def _vector_sizes(path) -> set[int]:
+    """The byte sizes of the vectors in an index.db."""
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            have = {n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            return {n for t in VECTOR_TABLES if t in have
+                    for (n,) in con.execute(f"SELECT DISTINCT length(vec) FROM {t} WHERE vec IS NOT NULL")}
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return set()
+
+
+def settle_embeddings() -> bool:
+    """Before anything opens the database: an index with a vector of another model than EmbeddingGemma 2 (not
+    EMBED_DIM float16 values) goes, and Pensieve indexes again with EmbeddingGemma 2. The sources and settings stay.
+    Returns whether the index went."""
+    (config.V2_DIR / "embed_model").unlink(missing_ok=True)  # older versions recorded the model here
+    if not config.DB_PATH.exists() or not _vector_sizes(config.DB_PATH) - {2 * config.EMBED_DIM}:
+        return False
+    for f in INDEX:
+        (config.DATA_DIR / f).unlink(missing_ok=True)
+    return True
 
 
 def settle_version() -> str | None:

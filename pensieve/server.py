@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from pensieve import actions, config, connections, content, llm, mcp_server, migrate, onboarding,places as places_mod, reembed, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, task_states, usage, work
+from pensieve import actions, config, connections, content, llm, mcp_server, migrate, onboarding,places as places_mod, scopes, stale as stale_mod, search as search_mod, settings, sources, summarize, task_states, usage, work
 from pensieve.datamap import DataMap
 from pensieve.files import Files
 from pensieve.indexer import Store, embed
@@ -132,7 +132,6 @@ async def watcher():
     watch.configure(repos.checkouts())
     asyncio.create_task(repo_watcher())
     asyncio.create_task(upstream_watcher())
-    asyncio.create_task(model_switcher())
     asyncio.create_task(connections_worker())
     asyncio.create_task(doc_worker())
     asyncio.create_task(session_watcher())
@@ -515,7 +514,7 @@ async def lifespan(app):
     loop = asyncio.get_running_loop()
 
     def changed(keys):  # settings edited from the UI or MCP: re-sweep promptly, tell the Mac app and the UI
-        if "file_types" in keys or "embed_model" in keys:  # images, video or audio switched on: install their parts
+        if "file_types" in keys:  # images, video or audio switched on: install their parts
             content.resume()
         repos._extra = None  # re-run the repo sweep with the new folders/roots
         watch.force_full()
@@ -634,47 +633,13 @@ def _syncing() -> list[dict]:
         p = getattr(src, "progress", None)
         if p:
             out.append({"kind": kind, **p})
-    if reembed.progress:
-        p = reembed.progress
-        out.append({"kind": "model", "name": config.EMBED_MODELS[p["model"]]["label"], **p})
     return out
-
-
-wake_model = asyncio.Event()
-
-
-async def model_switcher():
-    """Embeds the index with the model chosen in Settings, in the background (see reembed). Ends in a restart."""
-    loop = asyncio.get_running_loop()
-    while True:
-        if settings.get("setup_done") and settings.get("mode") == "developer" and reembed.wanted() != config.EMBED_MODEL \
-                or store.meta("next_model"):
-            try:
-                if reembed.switch_empty(store, [store, repos, files]):
-                    broadcast({"type": "status", **status})
-                    await _wait(wake_model, 600)
-                    continue
-                await _run(reembed.run, store, lambda: loop.call_soon_threadsafe(
-                    broadcast, {"type": "status", **status, "syncing": _syncing()}))
-            except Exception:
-                import traceback
-                traceback.print_exc()
-        await _wait(wake_model, 600)
-
-
-@app.get("/api/embed_models")
-def embed_models():
-    """The models the index can use: the index's own, the one chosen, and how long switching takes on this Mac."""
-    n = sum(store.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in reembed.TABLES)
-    return {"current": config.EMBED_MODEL, "wanted": reembed.wanted(), "chunks": n, "progress": reembed.progress,
-            "models": [dict(id=k, label=m["label"], about=m["about"], dim=m["dim"],
-                            switch_seconds=round(n / repos.embed_rate(k))) for k, m in config.EMBED_MODELS.items()]}
 
 
 @app.get("/api/content")
 def get_content():
     """What the search model reads: text always; images, video and audio when switched on, with their install."""
-    return {"kinds": content.status(), "model": config.EMBED_MODEL, "needs_model": config.GEMMA}
+    return {"kinds": content.status(), "model": config.EMBED_MODEL}
 
 
 class ContentReq(BaseModel):
@@ -1434,8 +1399,7 @@ def get_setup(fresh: bool = False, categories: str | None = None, scan: bool = T
 class SetupReq(BaseModel):
     sources: list[str] | None = None  # ids to index; None with recommended=true takes the pre-checked ones
     recommended: bool = False
-    embed_model: str | None = None  # the search model (config.EMBED_MODELS)
-    content: list[str] | None = None  # images, video, audio: read by content (needs EmbeddingGemma 2)
+    content: list[str] | None = None  # images, video, audio: read by content
     text_engine: str | None = None  # what writes notes and summaries (onboarding.engines)
     mode: str | None = None  # session (threads only, no index) or developer; default: developer when a repo is chosen
     agent: str | None = None  # the harness: the coding agent the user works in (agents.known())
@@ -1448,15 +1412,14 @@ async def post_setup(req: SetupReq):
     """Choose the sources and the mode: every other candidate is switched off. In developer mode indexing starts; in
     session mode the threads read the transcripts themselves and nothing is indexed."""
     try:
-        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.embed_model, req.content,
-                                                  req.text_engine, req.mode, req.agent, req.custom_agent, req.connect))
+        res = await _run(lambda: onboarding.start(req.sources, req.recommended, req.content, req.text_engine, req.mode,
+                                                  req.agent, req.custom_agent, req.connect))
     except ValueError as e:
         raise HTTPException(400, str(e))
     wake_files.set()
     wake_sessions.set()
     if settings.get("mode") == "developer":
         wake_repos.set()
-        wake_model.set()
     return res
 
 
@@ -2313,8 +2276,6 @@ def put_settings(changes: dict):
         out = {"settings": settings.public(settings.update(changes))}
     except ValueError as e:
         raise HTTPException(400, str(e))
-    if "embed_model" in changes:
-        wake_model.set()
     if "default_agent" in changes or "text_engine" in changes:  # the cli engine runs the user's harness
         from pensieve import engine
         engine.match_agent()

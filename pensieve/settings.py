@@ -42,7 +42,6 @@ DEFAULTS = {
     "default_scope": "",       # scope for search in the app and the Map ("" = everything)
     "editor": "default",       # how code results open: default | vscode | cursor | zed
     "appearance": "system",    # system | light | dark (the Mac app and the visualizer follow it)
-    "embed_model": "",         # the embedding model to index with (config.EMBED_MODELS); "" = the index's own
     "insights_auto": True,     # rewrite insights when they're out of date (at most every 6 hours)
     "search_gate_holdout": 5,  # the search gate (gate.py) leaves 1 session in this many unblocked, as a control; 0 = none
     # What writes the notes, summaries and insights (engine.py): builtin | cli | server. "" = not chosen: load() picks one
@@ -91,8 +90,6 @@ DESCRIPTIONS = {
     "editor": "Where code results open: default, vscode, cursor or zed.",
     "mode": "Session: only your agent sessions, as threads. Developer: also your repos and files, indexed, and the Map, People and Insights.",
     "appearance": "System, light or dark. System follows macOS.",
-    "embed_model": "The model that turns text into vectors for search. Switching embeds the text already indexed "
-                   "again with the new model, in the background; search keeps working meanwhile.",
     "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
     "search_gate_holdout": "The search gate (Claude Code add-on) leaves one session in this many unblocked, so you can compare Pensieve with grep. 0 blocks every session.",
     "text_engine": "What writes summaries and insights in the background: builtin (Qwen 3.5 9B on this Mac, which Pensieve starts when there is work), cli (a command-line agent, once per job) or server (a model server that you run, local or hosted).",
@@ -182,10 +179,6 @@ def update(changes: dict) -> dict:
         elif isinstance(d, list):
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
                 raise ValueError(f"{k} must be a list of strings")
-        elif k == "embed_model":
-            from pensieve import config
-            if v and v not in config.EMBED_MODELS:
-                raise ValueError(f"embed_model must be one of: {', '.join(config.EMBED_MODELS)}")
         elif k == "scopes":
             if not isinstance(v, dict):
                 raise ValueError("scopes must map names to {sources: [...], description: ''}")

@@ -96,22 +96,10 @@ def get() -> EmbedCache | None:
     return _cache or None
 
 
-def _v1_model(db_path: Path) -> str:
-    """The model of a v1 index: the name in `embed_model` next to its database, Qwen for an index from before models
-    could be chosen (as `config._index_model` reads it)."""
-    try:
-        name = (db_path.parent / "embed_model").read_text().strip()
-        if name in config.EMBED_MODELS:
-            return name
-    except OSError:
-        pass
-    return config.QWEN
-
-
 def _v1_rows(db):
     """(text, title, stored vector) of each v1 chunk whose vector was made from its text. Titles are what indexing
-    passed to `embed` (as `reembed._rows` reads them). Left out: chunks whose vector came from an image, a video or a
-    sound, because their text only names the file."""
+    passed to `embed`. Left out: chunks whose vector came from an image, a video or a sound, because their text only
+    names the file."""
     from pensieve import content
     from pensieve.files import READ_IMAGE_EXT, type_of
     have = {n for (n,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -137,19 +125,20 @@ def _v1_rows(db):
         yield text or "", title, v
 
 
-def fill_from_v1(v1_db_path, cache: EmbedCache | None = None, model: str | None = None, batch=2000) -> int:
-    """Store the vectors of a v1 database (`code_chunks`, `file_chunks`, `chunks`) in the cache, by the hash of the
-    text that the model read for each chunk. Opens the v1 database read-only. Returns the vectors read."""
+def fill_from_v1(v1_db_path, cache: EmbedCache | None = None, batch=2000) -> int:
+    """Store the EmbeddingGemma vectors of a v1 database (`code_chunks`, `file_chunks`, `chunks`) in the cache, by the
+    hash of the text that the model read for each chunk; a v1 index of another model gives none. Opens the v1
+    database read-only. Returns the vectors read."""
     from pensieve.indexer import model_texts
     v1_db_path = Path(v1_db_path)
-    model = model or _v1_model(v1_db_path)
+    model = config.EMBED_MODEL
     cache = cache or get()
-    dim = config.EMBED_MODELS[model]["dim"]
+    dim = config.EMBED_DIM
     db = sqlite3.connect(f"file:{v1_db_path}?mode=ro", uri=True)
     n, todo = 0, []
 
     def flush():
-        texts = model_texts([t for t, _, _ in todo], titles=[ti for _, ti, _ in todo], name=model)
+        texts = model_texts([t for t, _, _ in todo], titles=[ti for _, ti, _ in todo])
         cache.put(model, [(key(m), np.frombuffer(v, np.float16)) for m, (_, _, v) in zip(texts, todo)], wait=True)
         todo.clear()
     try:

@@ -75,8 +75,6 @@ def guide() -> dict:
             "custom_agent": settings.get("custom_agent"),
             "categories": [dict(id=c, label=label, description=desc, reads=reads(c)) for c, (label, desc) in cats.items()],
             "energy": ENERGY_NOTE, "files_per_minute": REPO_FILES_PER_MINUTE,
-            "embed_model": config.EMBED_MODEL,
-            "embed_models": [dict(id=k, label=m["label"], about=m["about"]) for k, m in config.EMBED_MODELS.items()],
             "content": content_types(), "text_engine": settings.get("text_engine"), "engines": engines()}
 
 
@@ -108,7 +106,7 @@ def content_types() -> list[dict]:
         o = dict(id=k["id"], label=k["label"], on=k["on"], description=k["description"],
                  available=k["id"] == "text" or k.get("needs") != "decoder")
         if k["id"] != "text":
-            o.update(needs_model=k["needs_model"], note=CONTENT_NOTES[k["id"]])
+            o["note"] = CONTENT_NOTES[k["id"]]
         if k.get("needs") == "decoder":
             o["note"] = "Needs the Pensieve app (its video and sound decoder), or PyAV: pip install av."
         out.append(o)
@@ -282,15 +280,12 @@ def index(path: str, cwd=None) -> dict:
             else "Pensieve isn't set up yet, so nothing is indexed until setup is done (setup_guide)."}
 
 
-def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_engine=None, mode=None,
+def start(chosen=None, recommended=False, kinds=None, text_engine=None, mode=None,
           agent=None, custom_agent=None, connect=False) -> dict:
     """Index exactly the chosen source ids (or, with `recommended`, what the scan pre-checked): every other source is
-    switched off, then indexing starts. Categories that were never scanned are switched off whole. `embed_model` picks
-    the search model (guide()["embed_models"]).
-    On an empty index the search model changes at once; otherwise the switch runs in the background (reembed).
+    switched off, then indexing starts. Categories that were never scanned are switched off whole.
     `kinds`: which of images, video and audio to read by content (content.KINDS); the others are found by name. None
-    leaves them as they are. They need the EmbeddingGemma 2 search model: with kinds and no `embed_model`, that
-    model is chosen. Their model parts download in the background. `text_engine`: what writes notes (engines()).
+    leaves them as they are. Their model parts download in the background. `text_engine`: what writes notes (engines()).
     `mode`: session (threads only: the agent sources, no index) or developer; by default developer when a repo is
     chosen. `agent`: the harness, the coding agent the user works in (agents.AGENTS, or "custom" with
     `custom_agent`: {name, start, resume}). The sessions Pensieve starts run in it, and a CLI text engine runs it.
@@ -319,20 +314,9 @@ def start(chosen=None, recommended=False, embed_model=None, kinds=None, text_eng
     unknown = set(kinds or ()) - set(content.KINDS)
     if unknown:
         raise ValueError(f"unknown content {', '.join(sorted(unknown))}; one of: {', '.join(content.KINDS)}")
-    if kinds and (embed_model or config.EMBED_MODEL) != config.GEMMA:
-        if embed_model:
-            raise ValueError(f"{', '.join(kinds)} need the {config.GEMMA} search model, not {embed_model}")
-        embed_model = config.GEMMA
     if kinds is not None:
         settings.update({"file_types": {k: {"index": "content" if k in kinds else "name", "map": k in kinds}
                                         for k in content.KINDS}})
-    if embed_model:
-        if embed_model not in config.EMBED_MODELS:
-            raise ValueError(f"unknown search model {embed_model!r}; one of: {', '.join(config.EMBED_MODELS)}")
-        from pensieve import reembed
-        settings.update({"embed_model": embed_model})
-        c = actions.ctx
-        reembed.switch_empty(c["store"], [c["store"], c["repos"], c["files"]])
     if _scanned:
         cats = scan(sorted(_scanned))
     elif (chosen is None or chosen) and not _added:  # `pensieve setup <ids>` chooses without a scan first

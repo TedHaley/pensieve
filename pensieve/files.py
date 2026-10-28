@@ -87,8 +87,8 @@ def level_of(path: Path) -> str:
 
 
 def readable(t) -> bool:
-    """Whether files of type t can be read for content: images, video and sound only with a model that embeds them."""
-    return t != "other" and (t not in content.KINDS or content.gemma())
+    """Whether files of type t can be read for content."""
+    return t != "other"
 
 
 def images_on() -> bool:
