@@ -1,6 +1,6 @@
 [project]
 name = "pensieve"
-version = "0.21.0"
+version = "0.21.1"
 description = "One place for all your information, for context engineering: search your documents, git repos, AI agent sessions, tickets and messages, with an MCP server for agents."
 readme = "README.md"
 license = "MIT"
