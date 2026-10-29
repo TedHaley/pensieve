@@ -85,6 +85,15 @@ def _fallback_env() -> dict | None:
     return _other[0]
 
 
+def gh(args: list[str], cwd: str | None = None, timeout: int = 15) -> subprocess.CompletedProcess:
+    """Run gh as the active account, and again as the other account when it fails: a work repo that only a second
+    account can read."""
+    r = subprocess.run(["gh", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    if r.returncode and _fallback_env():
+        r = subprocess.run(["gh", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout, env=_fallback_env())
+    return r
+
+
 def pr_info(key: str) -> dict:
     """{state, head} of a PR, from gh, cached for BRANCH_TTL (and whatever its age while the build is offline,
     work._net). state is MERGED, CLOSED or OPEN; {} when gh cannot answer, or offline with nothing cached."""
@@ -97,13 +106,10 @@ def pr_info(key: str) -> dict:
         return {}
     repo, _, num = key.partition("#")
     value = {}
-    for env in (None, _fallback_env()):
-        r = subprocess.run(["gh", "pr", "view", num, "-R", repo, "--json", "state,headRefName"], capture_output=True,
-                           text=True, env=env)
-        if r.returncode == 0 and r.stdout.strip():
-            d = json.loads(r.stdout)
-            value = {"state": d.get("state", ""), "head": d.get("headRefName", "")}
-            break
+    r = gh(["pr", "view", num, "-R", repo, "--json", "state,headRefName"])
+    if r.returncode == 0 and r.stdout.strip():
+        d = json.loads(r.stdout)
+        value = {"state": d.get("state", ""), "head": d.get("headRefName", "")}
     cache = _load()
     cache[f"pr {key}"] = dict(value=value, at=time.time())
     _save(cache)

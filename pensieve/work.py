@@ -1492,8 +1492,9 @@ def _gh_prs(root: str, branch: str) -> list[dict]:
         return out
     if shutil.which("gh"):
         try:
-            r = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "all", "--limit", "3", "--json",
-                                "number,title,state,url,isDraft,mergedAt"], cwd=root, capture_output=True, text=True, timeout=15)
+            from pensieve import sink_status
+            r = sink_status.gh(["pr", "list", "--head", branch, "--state", "all", "--limit", "3", "--json",
+                                "number,title,state,url,isDraft,mergedAt"], cwd=root)
             out = [dict(url=p["url"], title=p["title"], state="draft" if p.get("isDraft") and p["state"] == "OPEN"
                         else p["state"].lower(), source="GitHub", head=branch,
                         merged_at=_ts(p["mergedAt"]) if p.get("mergedAt") else 0) for p in json.loads(r.stdout or "[]")]
@@ -1524,9 +1525,9 @@ def _gh_pr(url: str) -> dict:
         return out
     if shutil.which("gh"):
         try:
-            r = subprocess.run(["gh", "pr", "view", url, "--json",
-                                "state,title,isDraft,reviewDecision,statusCheckRollup,headRefName,mergedAt"],
-                               capture_output=True, text=True, timeout=15)
+            from pensieve import sink_status
+            r = sink_status.gh(["pr", "view", url, "--json",
+                                "state,title,isDraft,reviewDecision,statusCheckRollup,headRefName,mergedAt"])
             p = json.loads(r.stdout or "{}")
             if p:
                 out = dict(title=p["title"], state="draft" if p.get("isDraft") and p["state"] == "OPEN" else p["state"].lower(),
@@ -1608,7 +1609,8 @@ def poll_open(tasks) -> list[str]:
             continue
         query = f"query {{ repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{ {' '.join(parts)} }} }}"
         try:
-            r = subprocess.run(["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, timeout=20)
+            from pensieve import sink_status
+            r = sink_status.gh(["api", "graphql", "-f", f"query={query}"], timeout=20)
             repo = (json.loads(r.stdout or "{}").get("data") or {}).get("repository") or {}
         except (OSError, subprocess.TimeoutExpired, ValueError):
             continue

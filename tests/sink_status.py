@@ -70,6 +70,30 @@ def run():
 
     results.append(check("no sinks: no state from sinks", ss.task_state(task())[0], None))
 
+    # a work repo that only the second gh account can read: gh asks again as that account
+    import subprocess
+    from pensieve import work
+    calls = []
+
+    def fake_run(args, env=None, **kw):
+        calls.append((env or {}).get("GH_TOKEN", "active"))
+        if env is None:
+            return subprocess.CompletedProcess(args, 1, "", "Could not resolve to a Repository")
+        return subprocess.CompletedProcess(args, 0, json.dumps(dict(
+            title="Seed the stats", state="MERGED", isDraft=False, headRefName="feature-x", mergedAt="2026-10-29T00:07:57Z",
+            statusCheckRollup=[], reviewDecision="APPROVED")), "")
+    real_run, ss._other[:] = subprocess.run, [{"GH_TOKEN": "work"}]
+    subprocess.run = fake_run
+    try:
+        r = ss.gh(["pr", "view", "1"])
+        results.append(check("gh: the other account after the active one fails", (r.returncode, calls), (0, ["active", "work"])))
+        work._net["off"] = False
+        pr = work._gh_pr("https://github.com/org/work-repo/pull/7")
+        results.append(check("PR of a work repo: merged, with its head branch", (pr.get("state"), pr.get("head")),
+                             ("merged", "feature-x")))
+    finally:
+        subprocess.run, ss._other[:] = real_run, []
+
     print(f"\n{sum(results)} of {len(results)} passed")
     return all(results)
 
