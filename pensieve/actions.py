@@ -132,9 +132,18 @@ def read(id: str, max_chars=20000) -> dict:
             text = extract(Path(r["path"]))
         return dict(id=id, kind="file", path=r["path"], text=text[:max_chars], truncated=len(text) > max_chars)
     if r["kind"] == "code":
+        from pensieve import codectx
         c = r["chunk"]
         owners = sorted(c["authors"].items(), key=lambda kv: -kv[1])[:5]
-        return dict(id=id, kind="code", path=r["path"], repo=c["repo"], branch=c["branch"], lines=[c["start"], c["end"]], text=c["text"][:max_chars],
+        # the whole definition the chunk sits in, from disk, in place of the chunk alone: a chunk can start mid-call
+        d = codectx.enclosing(r["path"], c["start"])
+        code = dict(definition=d["name"], lines=[d["start"], d["end"]], text=d["text"][:max_chars],
+                    truncated=d["truncated"] or len(d["text"]) > max_chars) if d else \
+            dict(lines=[c["start"], c["end"]], text=c["text"][:max_chars])
+        jobs = codectx.bundle_jobs(r["path"])
+        return dict(id=id, kind="code", path=r["path"], repo=c["repo"], branch=c["branch"],
+                    about=codectx.about(r["path"]), **code, next_to_it=codectx.siblings(r["path"]),
+                    **({"databricks_jobs": [j["key"] for j in jobs]} if jobs else {}),
                     owners=[dict(author=a, lines=n) for a, n in owners], recent_commits=c["commits"][:5],
                     sessions=[dict(id=f"session:{s['id']}", title=s["title"]) for s in c["sessions"][:5]])
     s = r["session"]

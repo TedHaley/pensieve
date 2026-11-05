@@ -107,10 +107,14 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     names you'd guess it uses ("retry failed webhook delivery with backoff retryWebhook"); a bare name or an error
     string also works. "quotes" = exact, -word excludes, ext:py, in:<path>, by:<person>, person:<name>,
     kind:code|doc|session|folder|repo|person, since:/until: (2026-10-01, 3d, 2w, yesterday), project:<name>
-    (sessions of that project). kind:session since:yesterday alone lists those sessions, newest first. One line per hit, best first: path:line  enclosing definition ▸ the
+    (sessions of that project). kind:session since:yesterday alone lists those sessions, newest first. With no
+    kind: or project:, search looks only in code and files: in this repo, or in every repo outside one.
+    kind:session searches past agent sessions; kind:doc tickets and PRs. One line per hit, best first: path:line  enclosing definition ▸ the
     line that matched  [id for read/similar]. If those lines show what you need, use the hit: no grep to confirm."""
     sc = _scope()
-    r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc)
+    code_only = _code_only(sc, query, kind)
+    r = _c()["searcher"].find(f"{query} kind:{kind}" if kind else query, limit, scope=sc,
+                              kinds=["code", "file"] if code_only else None)
     cwd = (agent_cwd.get() or "").rstrip("/")
     s = _c()["searcher"]
     wts = [p for (p,) in s.db.execute("SELECT path FROM worktrees")]
@@ -129,7 +133,22 @@ def search(query: str, limit: int = 8, kind: str | None = None) -> str:
     found = _lines(res)
     if getattr(sc, "unindexed", False):  # only past sessions in this repo can match; its code isn't indexed
         return (f"{sc.description}. `pensieve repo index` indexes it." + (f"\n{found}" if found else ""))
+    if code_only and not found:
+        return "No matches in code. kind:session searches past agent sessions; kind:doc tickets and PRs."
     return found or "No matches."
+
+
+# a query that asks for something other than code: a kind, or the sessions of a project
+_NOT_CODE = re.compile(r"(?:^|\s)-?(?:kind|project):", re.I)
+
+
+def _code_only(sc, query, kind) -> bool:
+    """True when a search names no kind or project and its scope has code: one repo that Pensieve indexes, or
+    everything. An agent that calls search is looking for code, and sessions, tickets and PRs that share its words
+    push the code down. A scope with no repos (only documents or sessions) and an unindexed repo stay wide."""
+    if kind or _NOT_CODE.search(query) or getattr(sc, "unindexed", False):
+        return False
+    return sc is None or getattr(sc, "repos", None) is None or bool(sc.repos)
 
 
 LIVE_SECONDS = 300  # a session in the agent's folder written to this recently is the agent's own conversation
@@ -202,7 +221,7 @@ def _lines(results):
     """Grep-sized results: what an agent re-reads on every later turn, so only what it needs to act on."""
     import os
     import re
-    cwd, home, out = agent_cwd.get(), os.path.expanduser("~"), []
+    cwd, home, out, seen_dirs = agent_cwd.get(), os.path.expanduser("~"), [], set()
     for x in results:
         path = x.get("path") or ""
         if cwd and path.startswith(cwd.rstrip("/") + "/"):
@@ -233,13 +252,53 @@ def _lines(results):
         out.append(f"{where}  {snip}  [{x.get('id')}]".replace("    ", "  "))
         if x.get("excerpt"):  # the top hits: a few numbered lines, as Read would show them
             out += [f"    {n}│ {t.rstrip()}" for n, t in x["excerpt"]]
+            out += _context(x.get("path") or "", seen_dirs)
     return "\n".join(out)
+
+
+def _context(path, seen_dirs):
+    """Under a top code hit: what its file says it is, and, once per folder, the files next to it and the
+    Databricks jobs they define. The answer is often in a sibling that search did not rank: a job YAML, a README."""
+    from pensieve import codectx
+    if not path or not Path(path).is_file():
+        return []
+    out = []
+    head = codectx.about(path)
+    if head:
+        out.append(f"    about: {head}")
+    folder = str(Path(path).parent)
+    if folder not in seen_dirs:
+        seen_dirs.add(folder)
+        near = codectx.siblings(path)
+        if near:
+            out.append(f"    next to it: {', '.join(near)}")
+        jobs = codectx.bundle_jobs(path)
+        if jobs:
+            out.append(f"    defines Databricks job {', '.join(j['key'] for j in jobs)}: jobs(path) shows if it is "
+                       f"deployed, paused and its last run")
+    return out
+
+
+@tool()
+def jobs(path: str) -> dict:
+    """Whether the Databricks bundle jobs defined at path (a job YAML, or a code file next to one) are deployed, in
+    each workspace that the bundle's databricks.yml targets: job id, trigger, paused or not, and the last run. Reads
+    live state with the `databricks` CLI and the ~/.databrickscfg profiles, so it answers "is this job running?",
+    which the code cannot. A relative path is from the agent's folder."""
+    from pensieve import codectx
+    p = Path(path).expanduser()
+    if not p.is_absolute() and agent_cwd.get():
+        p = Path(agent_cwd.get()) / p
+    if not p.exists():
+        raise KeyError(f"{path}: no such file")
+    return codectx.job_state(str(p))
 
 
 @tool()
 def read(id: str, max_chars: int = 12000) -> dict:
-    """Full text of a search result id: code with its owners and recent commits, a document, or a session. Several
-    ids, separated by spaces, are read in one call ("code:12 code:40 session:…"), sharing max_chars."""
+    """Full text of a search result id. Code: the whole function or class that the hit sits in (Python), the
+    file's summary, the files next to it, its owners and recent commits. Also a document, a ticket or a session.
+    Several ids, separated by spaces, are read in one call ("code:12 code:40 session:…"), sharing max_chars."""
     ids = [migrate.compat_id(i) for i in id.replace(",", " ").split() if i]  # old file ids of connection items too
     if len(ids) <= 1:
         id = ids[0] if ids else id.strip()
