@@ -1,11 +1,5 @@
-.venv/
-__pycache__/
-*.pyc
-data/
-.idea/
+/target
+crates/*/target
+/mac/build
 .DS_Store
-dist/
-build/
-*.egg-info/
-bench/out/
 .claude/worktrees/

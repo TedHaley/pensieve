@@ -1,14 +1,12 @@
-// swift-tools-version:5.10
-// The native macOS shell for Pensieve: a menu-bar item and a window hosting the web app. The Python backend does
-// all indexing and search.
+// swift-tools-version:6.2
+// The menu bar item of Pensieve. It shows what the daemon does and changes its settings.
+// The daemon (the Rust binary) does all indexing and search. This app only calls its /status and /settings routes.
 import PackageDescription
 
 let package = Package(
     name: "Pensieve",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     targets: [
-        .executableTarget(name: "Pensieve", path: "Sources/Pensieve"),
-        // decodes video frames and sound for the backend (Contents/MacOS/pensieve-media)
-        .executableTarget(name: "pensieve-media", path: "Sources/PensieveMedia"),
+        .executableTarget(name: "Pensieve", path: "Sources/Pensieve", swiftSettings: [.swiftLanguageMode(.v5)]),
     ]
 )
