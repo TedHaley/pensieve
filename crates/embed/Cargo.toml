@@ -1,0 +1,22 @@
+[package]
+name = "embed"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+store = { path = "../store" }
+candle-core = { version = "0.11.1", features = ["metal"] }
+candle-nn = { version = "0.11.1", features = ["metal"] }
+tokenizers = { version = "0.22.2", default-features = false, features = ["onig"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+rustfft = "6"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha1 = "0.11.0"
+half = "2"
+ureq = "3"
+anyhow = "1.0.104"
+objc2 = "0.6"
+objc2-metal = "0.3.2"
+objc2-metal-performance-shaders = "0.3.2"
+objc2-foundation = "0.3.2"

@@ -1,0 +1,173 @@
+[
+ {
+  "name": "search",
+  "description": "Find code (or docs, past agent sessions) in one call; use before Grep/Glob. Best query: what the code does plus\nnames you'd guess it uses (\"retry failed webhook delivery with backoff retryWebhook\"); a bare name or an error\nstring also works. \"quotes\" = exact, -word excludes, ext:py, in:<path>, by:<person>, person:<name>,\nkind:code|doc|session|folder|repo|person, since:/until: (2026-10-01, 3d, 2w, yesterday), project:<name>\n(sessions of that project). kind:session since:yesterday alone lists those sessions, newest first. One line per hit, best first: path:line  enclosing definition ▸ the\nline that matched  [id for read/similar]. If those lines show what you need, use the hit: no grep to confirm.",
+  "inputSchema": {
+   "properties": {
+    "query": {
+     "title": "Query",
+     "type": "string"
+    },
+    "limit": {
+     "default": 8,
+     "title": "Limit",
+     "type": "integer"
+    },
+    "kind": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Kind"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "title": "searchArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "read",
+  "description": "Full text of a search result id: code with its owners and recent commits, a document, or a session. Several\nids, separated by spaces, are read in one call (\"code:12 code:40 session:…\"), sharing max_chars.",
+  "inputSchema": {
+   "properties": {
+    "id": {
+     "title": "Id",
+     "type": "string"
+    },
+    "max_chars": {
+     "default": 12000,
+     "title": "Max Chars",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "id"
+   ],
+   "title": "readArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "similar",
+  "description": "Items most similar in meaning to a search result id (e.g. other code that does the same thing).",
+  "inputSchema": {
+   "properties": {
+    "id": {
+     "title": "Id",
+     "type": "string"
+    },
+    "limit": {
+     "default": 8,
+     "title": "Limit",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "id"
+   ],
+   "title": "similarArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "list_repos",
+  "description": "Indexed git repos (in this connection's scope) with their size and how many agent sessions ran in each.",
+  "inputSchema": {
+   "properties": {},
+   "title": "list_reposArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "repo",
+  "description": "One repo. part:\n- overview: where things are, in one call: size, languages, top folders, the README's start, dependencies, the\n  largest files, then topics (files grouped by meaning) with their files and authors. It does not say what the\n  code does: read a topic's main files before you describe it. repo: the one you are in by default.\n- gaps: areas mostly written (git blame) by people with no commits in `inactive_days`: who wrote each, who active\n  knows it best (`ask`), and its bus factor.\n- unexplored: areas next to the user's own work that their agent sessions haven't touched yet, and who owns them.",
+  "inputSchema": {
+   "properties": {
+    "repo": {
+     "default": "",
+     "title": "Repo",
+     "type": "string"
+    },
+    "part": {
+     "default": "overview",
+     "title": "Part",
+     "type": "string"
+    },
+    "inactive_days": {
+     "default": 180,
+     "title": "Inactive Days",
+     "type": "integer"
+    }
+   },
+   "title": "repoArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "recall",
+  "description": "The context of one thought: a piece of work that the user explored, joined across their agent sessions. Returns\neach session's part in time order, with the user's prompts, the files and where the last reply ended. thought: a\nthought id (th_...), a link that the user pasted (pensieve://thought/... for the thought, pensieve://session/...\nfor all the parts of one session), or words that describe the work (\"the retry logic for webhooks\"). Call it when\nthe user refers to earlier work that this session does not hold, or pastes a pensieve:// link.",
+  "inputSchema": {
+   "properties": {
+    "thought": {
+     "title": "Thought",
+     "type": "string"
+    }
+   },
+   "required": [
+    "thought"
+   ],
+   "title": "recallArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "thoughts",
+  "description": "The user's thoughts: pieces of work that Pensieve joined across their agent sessions. Returns JSON, one card\nfor each thought: its name, the user's own words at its start (asked) and at its end (left_off), how the last reply\nended, the session titles, the pull requests, tickets and files that the sessions name, a command that resumes\nthe newest session (resume), a command that starts a new session on the thought (start), and the links that the\nuser can paste to recall the thought (link) or its newest session (session_link). query: words that describe the\nwork, or one thought id or pensieve:// link for the card of that thought. Without a query, the newest thoughts\ncome first. Call it\nwhen the user asks what they worked on, where they left off, or which work a pull request, ticket or file belongs\nto. The pensieve-thoughts skill tells you how to show the cards. Call recall(id) for the full context of one card.",
+  "inputSchema": {
+   "properties": {
+    "query": {
+     "default": "",
+     "title": "Query",
+     "type": "string"
+    },
+    "limit": {
+     "default": 8,
+     "title": "Limit",
+     "type": "integer"
+    }
+   },
+   "title": "thoughtsArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "name_thought",
+  "description": "Save a name for one thought. The name stays when Pensieve builds the thoughts again. id: the thought id\n(th_...). name: 3 to 6 words that say what the work is, in the user's words. An empty name gives the thought its\nautomatic name back. Call it when the user gives a thought a name. Also call it after recall, when the card's\n`named` is false and its name does not say what the work is.",
+  "inputSchema": {
+   "properties": {
+    "id": {
+     "title": "Id",
+     "type": "string"
+    },
+    "name": {
+     "title": "Name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "name"
+   ],
+   "title": "nameThoughtArguments",
+   "type": "object"
+  }
+ }
+]

@@ -1,0 +1,26 @@
+[workspace]
+members = [".", "crates/store", "crates/embed", "crates/index"]
+resolver = "3"
+
+[workspace.dependencies]
+store = { path = "crates/store" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+regex = "1.13.1"
+
+[package]
+name = "pensieve"
+version = "0.22.0"
+edition = "2024"
+
+[dependencies]
+store.workspace = true
+embed = { path = "crates/embed" }
+index = { path = "crates/index" }
+libc = "0.2"
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[profile.release]
+debug = "line-tables-only"

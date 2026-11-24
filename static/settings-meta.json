@@ -1,0 +1,162 @@
+{
+ "defaults": {
+  "folders": [
+   "~/Documents",
+   "~/Desktop",
+   "~/Downloads"
+  ],
+  "sweep_roots": [
+   "~"
+  ],
+  "sweep_depth": 4,
+  "max_repo_files": 5000,
+  "repos": [],
+  "exclude": [
+   "node_modules",
+   ".venv",
+   "venv",
+   "__pycache__",
+   "Library",
+   ".Trash",
+   "dist",
+   "build",
+   "target",
+   ".cache",
+   "Applications",
+   "Pictures",
+   "Music",
+   "Movies"
+  ],
+  "exclude_files": [
+   "*emergency kit*",
+   "*recovery*code*",
+   "*.pem",
+   "*.key",
+   "*.p12",
+   "*.pfx",
+   "*.kdbx",
+   "*.keychain*",
+   ".env*",
+   "*credential*",
+   "*secret*",
+   "*password*",
+   "id_rsa*",
+   "id_ed25519*",
+   "*.ovpn"
+  ],
+  "disabled": [],
+  "max_file_mb": 20,
+  "file_types": {
+   "text": {
+    "index": "content",
+    "map": true
+   },
+   "pdf": {
+    "index": "content",
+    "map": true
+   },
+   "office": {
+    "index": "content",
+    "map": true
+   },
+   "data": {
+    "index": "content",
+    "map": true
+   },
+   "code": {
+    "index": "content",
+    "map": true
+   },
+   "images": {
+    "index": "content",
+    "map": true
+   },
+   "video": {
+    "index": "content",
+    "map": true
+   },
+   "audio": {
+    "index": "content",
+    "map": true
+   },
+   "other": {
+    "index": "name",
+    "map": false
+   }
+  },
+  "off_map": [],
+  "chunk_chars": 1500,
+  "max_chunks": 2000,
+  "skip_temp_sessions": true,
+  "session_folders": [],
+  "scopes": {},
+  "default_scope": "",
+  "editor": "default",
+  "terminal": "Terminal",
+  "appearance": "system",
+  "insights_auto": true,
+  "search_gate_holdout": 5,
+  "mode": "session",
+  "ticket_repos": {},
+  "text_engine": "",
+  "cli_command": "",
+  "llm_url": "http://localhost:1234/v1",
+  "llm_model": "",
+  "llm_key": "",
+  "engine_rate": 20,
+  "auto_update_check": true,
+  "setup_done": false,
+  "connections_on": [],
+  "mcp_servers": [],
+  "connections_every_hours": 6,
+  "default_agent": "",
+  "custom_agent": {
+   "name": "",
+   "start": "",
+   "resume": ""
+  },
+  "connections_days": 30,
+  "projects_stale_days": 21
+ },
+ "descriptions": {
+  "folders": "Folders whose documents are indexed for search (text, Markdown, code, PDF, Word).",
+  "sweep_roots": "Where to look for git repos.",
+  "sweep_depth": "How many folder levels below each sweep root to look for repos.",
+  "max_repo_files": "Repos that discovery finds with more tracked files than this, and that no agent has used, are listed for you to choose instead of indexed on their own. Repos your agents work in and repos you add are indexed at any size.",
+  "repos": "Repos, or folders of repos, added in Sources. Always indexed, whatever their size.",
+  "exclude": "Folder names never indexed or descended into.",
+  "exclude_files": "File name patterns never indexed (secrets, keys, password exports). Case-insensitive globs.",
+  "disabled": "Sources that are switched off (whole categories or single items). Easier to change from Sources.",
+  "max_file_mb": "Skip documents larger than this.",
+  "file_types": "For each file type: read its content, index only its name, or skip it; and whether it shows on the map.",
+  "off_map": "Sources that are searchable but do not show on the map.",
+  "chunk_chars": "Characters in each piece of a document. Larger pieces keep more context together in one result.",
+  "max_chunks": "Pieces read from each document (0 = all). Text after this limit is not searchable.",
+  "session_folders": "More folders of agent sessions, as agent:path (claude, codex or qwen). Easier to add from Sources.",
+  "ticket_repos": "Which repo a ticket project's work starts in, by its key prefix (ABC): a to-do's worktree is made there. Set the first time you start one.",
+  "skip_temp_sessions": "Don't index agent sessions that ran in a temp folder (scripts, tests, and Pensieve's own AI calls through Claude Code or Codex).",
+  "scopes": "Named slices of the index that agents work within (manage in Scopes).",
+  "default_scope": "Scope used by search in the app and on the Map; empty means everything.",
+  "editor": "Where code results open: default, vscode, cursor, zed or an app on this Mac.",
+  "terminal": "The terminal app where new sessions, resumed sessions and to-dos start.",
+  "mode": "Session: only your agent sessions, as threads. Developer: also your repos and files, indexed, and the Map, People and Insights.",
+  "appearance": "System, light or dark. System follows macOS.",
+  "insights_auto": "Rewrite insights when the sessions or topics behind them have changed a lot (at most every 6 hours).",
+  "search_gate_holdout": "The search gate (Claude Code add-on) leaves one session in this many unblocked, so you can compare Pensieve with grep. 0 blocks every session.",
+  "text_engine": "What writes summaries and insights in the background: builtin (Qwen 3.5 9B on this Mac, which Pensieve starts when there is work), cli (a command-line agent, once per job) or server (a model server that you run, local or hosted).",
+  "cli_command": "The command-line agent that writes them when text_engine is cli. It gets the prompt on stdin, or in place of {prompt}; {out} is a file it can write its answer to.",
+  "llm_url": "The OpenAI-compatible URL of a model server that you run, when text_engine is server: LM Studio (http://localhost:1234/v1), Ollama (http://localhost:11434/v1) or a hosted API.",
+  "llm_model": "The model on that server.",
+  "llm_key": "An API key for a hosted server. Pensieve sends it only to llm_url and never shows it again.",
+  "engine_rate": "At most this many jobs a minute for the command-line agent or the model server.",
+  "auto_update_check": "Check for new versions of Pensieve once a day. Updates are only installed when you choose.",
+  "setup_done": "Whether the sources to index were chosen. Pensieve indexes nothing until they are.",
+  "connections_on": "Connections switched on by hand (easier to change in Sources). A connection that Pensieve holds data from is on too, unless it is in disabled.",
+  "mcp_servers": "MCP servers that Pensieve connects to itself, with a URL and headers, or a command and environment.",
+  "connections_every_hours": "How often Pensieve collects from each connection that is on (0 = only when you ask).",
+  "default_agent": "The harness: the coding agent that runs the sessions Pensieve starts in Terminal (new, forked and resumed): claude, codex, qwen, gemini, cursor, or custom (custom_agent). A session another agent wrote is taken over: the harness reads its transcript first. Empty: automatic, so a session resumes in the agent that wrote it, and a new one starts in the thread's own agent, else the first one installed.",
+  "custom_agent": "Your own harness, for default_agent custom: a name, the command that starts a session with {prompt} where the first prompt goes, and optionally the command that resumes one of its own sessions with {sid}.",
+  "connections_days": "How many days back the first collection from a connection goes.",
+  "projects_stale_days": "In Projects, a project with no activity for this many days goes under Show older."
+ }
+}
